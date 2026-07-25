@@ -199,6 +199,7 @@ from moonmind.workflows.temporal.step_executions import (
 )
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
+    resolve_resume_checkpoint_step_id,
 )
 from moonmind.workflows.temporal.recovery_state import (
     CheckpointRecoveryContract,
@@ -3861,6 +3862,11 @@ class MoonMindRunWorkflow:
             dict(row) for row in carried_rows if isinstance(row, Mapping)
         ]
         self._rebuild_step_ledger_index()
+        carried_head = continuation.get("workspaceHead")
+        if isinstance(carried_head, Mapping):
+            self._remediation_workspace_head = (
+                RemediationWorkspaceHead.model_validate(carried_head)
+            )
         self._remediation_loop_state = state.model_copy(
             update={
                 "source_run_id": workflow.info().run_id,
@@ -3879,12 +3885,22 @@ class MoonMindRunWorkflow:
         if state is None:
             raise ValueError("remediation loop is not initialized")
         payload = dict(self._original_input_payload)
-        payload["remediation_loop_continuation"] = {
+        continuation: dict[str, Any] = {
             "schemaVersion": 1,
             "state": state.model_dump(by_alias=True, mode="json"),
             "orderedNodes": [dict(node) for node in ordered_nodes],
             "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
         }
+        head = self._remediation_workspace_head
+        if head is not None:
+            # The head contract is compact and ref-only precisely so it can cross
+            # Continue-As-New. Dropping it would make the next run misread an
+            # opted-in loop as headless and skip the head authority checks. The
+            # key is additive, so histories written without it still restore.
+            continuation["workspaceHead"] = head.model_dump(
+                by_alias=True, mode="json"
+            )
+        payload["remediation_loop_continuation"] = continuation
         return cast(RunWorkflowInput, payload)
 
     def _sync_remediation_loop_projection(self) -> None:
@@ -6340,6 +6356,29 @@ class MoonMindRunWorkflow:
         node_inputs["remediationWorkspaceHead"] = project_head(head)
         node_inputs["readOnlyWorkspaceHead"] = True
 
+    def _advance_headless_remediation_attempt(
+        self,
+        *,
+        node: Mapping[str, Any],
+    ) -> None:
+        """Move a completed headless attempt from remediation to verification.
+
+        Only the loop's own admitted attempt advances the phase. An authored
+        remediation step that is not the active dynamic attempt leaves the loop
+        untouched; attempt identity stays enforced at the verification gate.
+        """
+
+        state = self._remediation_loop_state
+        if state is None:
+            return
+        if state.phase != RemediationLoopPhase.REMEDIATION_RUNNING:
+            return
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt != state.attempt_ordinal:
+            return
+        self._remediation_loop_state = capture_remediation_candidate(state)
+        self._sync_remediation_loop_projection()
+
     def _advance_remediation_workspace_head(
         self,
         *,
@@ -6352,6 +6391,11 @@ class MoonMindRunWorkflow:
         if not self._is_moonspec_remediation_step(node):
             return
         if self._remediation_workspace_head is None:
+            # A headless attempt has no cumulative candidate to advance, but the
+            # loop must still leave remediation. Otherwise the phase stays
+            # REMEDIATION_RUNNING, the verifier runs anyway, and
+            # record_verification_evidence rejects the evidence it produced.
+            self._advance_headless_remediation_attempt(node=node)
             return
         attempt_payload = node_inputs.get("remediationAttemptInput")
         if not isinstance(attempt_payload, Mapping):
@@ -10247,13 +10291,26 @@ class MoonMindRunWorkflow:
                         node=node,
                         node_inputs=node_inputs,
                     )
-                except RemediationHeadError as exc:
-                    # This authority check runs before the Step Execution is
-                    # launched, so nothing else would attribute the failure to a
-                    # step. Without a failed Step Execution the recovery manifest
-                    # reports ``no_failed_step_execution_to_resume`` and the run
-                    # loses checkpoint-based recovery even though the prior
-                    # accepted attempt captured valid checkpoints.
+                except (RemediationHeadError, ValidationError) as exc:
+                    # These authority and contract checks run before the Step
+                    # Execution is launched, so nothing else would attribute the
+                    # failure to a step. Without a failed Step Execution the
+                    # recovery manifest reports
+                    # ``no_failed_step_execution_to_resume`` and the run loses
+                    # checkpoint-based recovery even though the prior accepted
+                    # attempt captured valid checkpoints. A malformed head
+                    # mapping raises ValidationError rather than
+                    # RemediationHeadError and must be attributed the same way.
+                    #
+                    # The rejection is a real Step Execution, so allocate its
+                    # execution identity here; _mark_step_running never runs for
+                    # a step rejected before launch, and a failed row left at
+                    # ordinal 0 projects as a failed step with zero executions.
+                    self._try_update_step_row(
+                        node_id,
+                        updated_at=workflow.now(),
+                        increment_attempt=True,
+                    )
                     self._record_step_execution_exception(
                         exc,
                         logical_step_id=node_id,
@@ -19813,8 +19870,24 @@ class MoonMindRunWorkflow:
             failed_step_id = self._recovery_failed_step_id or self._coerce_text(
                 (self._failure_diagnostic or {}).get("stepId"), max_chars=200
             )
+            # A step rejected before launch captured no workspace of its own, so
+            # its capability snapshot and checkpoint kind live on the accepted
+            # step whose checkpoint the manifest resumes from. Resolve that step
+            # with the manifest's own rule so both stay in agreement.
+            capture_step_id = (
+                resolve_resume_checkpoint_step_id(
+                    step_ledger_rows=self._step_ledger_rows,
+                    terminal_dispositions=self._step_terminal_dispositions,
+                    checkpoint_refs_by_boundary=(
+                        self._step_checkpoint_refs_by_boundary
+                    ),
+                    failure_diagnostic=self._failure_diagnostic,
+                    recovery_failed_step_id=self._recovery_failed_step_id,
+                )
+                or failed_step_id
+            )
             capture_input = self._step_workspace_capture_inputs.get(
-                failed_step_id or "", {}
+                capture_step_id or "", {}
             )
             capability_payload = capture_input.get("runtimeCapabilities")
             capabilities = (
