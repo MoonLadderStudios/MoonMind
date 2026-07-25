@@ -1,0 +1,16 @@
+{
+  "invariant": "a materialized remediation-loop attempt executes on the run's resolved managed runtime; the auto selection sentinel never reaches external adapter dispatch",
+  "attemptOrdinal": 1,
+  "materializedNodeIds": [
+    "mm:dab3b32b-1e75-4706-aee2-d92acaa49ce4:019f9584-5c1a-780e-9bc2-6350bd556d67:issue-implementation-remediation:remediation:1",
+    "mm:dab3b32b-1e75-4706-aee2-d92acaa49ce4:019f9584-5c1a-780e-9bc2-6350bd556d67:issue-implementation-remediation:verification:1"
+  ],
+  "toolName": "codex_cli",
+  "agentId": "codex_cli",
+  "agentKind": "managed",
+  "executionProfileRef": "codex_openai_oauth",
+  "model": "gpt-5.6-sol",
+  "effort": "high",
+  "rejectedAgentId": "auto",
+  "rejectedDispatchError": "No external adapter registered for agent_id='auto'"
+}

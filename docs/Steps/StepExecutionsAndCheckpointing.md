@@ -943,6 +943,8 @@ For Jira Orchestrate, the MoonSpec remediation loop is represented as bounded pl
 
 Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation"` plus attempt and maximum-attempt metadata. Verification steps carry `annotations.jiraOrchestrateRole = "moonspec-verification-gate"` and mark only the final remediation verification as `moonSpecFinalRemediationGate`.
 
+A workflow-owned remediation loop authors its remediation and verification tools as `auto`, meaning the loop inherits the run's runtime selection. `auto` is a planning-time selection sentinel and never a runtime identity: each materialized attempt names the run's resolved agent runtime and carries that runtime's model, effort, and provider profile, so loop attempts route exactly like the authored steps of the same run. A loop whose controller step carries no resolved runtime fails when an attempt is admitted rather than routing to a substitute runtime or provider adapter.
+
 `ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then skips downstream promotion and trusted handoff steps. Non-retryable blocking verdicts such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE` stop before publication unless an explicit environment-blocked draft policy applies.
 
 ---

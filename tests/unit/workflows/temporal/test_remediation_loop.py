@@ -15,10 +15,18 @@ from moonmind.workflows.temporal.remediation_loop import (
     record_semantic_progress,
     record_verification_evidence,
     remediation_step_execution_id,
+    resolve_loop_runtime,
     should_continue_as_new,
     start_remediation_attempt,
     start_verification,
 )
+
+_LOOP_RUNTIME = {
+    "mode": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "executionProfileRef": "codex_openai_oauth",
+}
 
 
 def _spec(max_attempts: int = 2) -> RemediationLoopSpec:
@@ -207,6 +215,7 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
         run_id="run",
         ordinal=2,
         workspace_head_ref="artifact://workspace/C1",
+        runtime=_LOOP_RUNTIME,
     )
 
     assert remediation["id"] == (
@@ -216,10 +225,46 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
         "wf:run:issue-implementation-remediation:verification:2"
     )
     assert verification["dependsOn"] == [remediation["id"]]
-    assert remediation["tool"] == {"type": "agent_runtime", "name": "auto"}
     assert remediation["inputs"]["selectedSkill"] == "auto"
     assert verification["inputs"]["selectedSkill"] == "moonspec-verify"
     assert verification["inputs"]["readOnlyWorkspaceHead"] is True
+
+
+def test_materialized_attempts_route_to_the_runs_resolved_runtime() -> None:
+    """``auto`` loop tools inherit the run's runtime; they never route to adapters."""
+
+    remediation, verification = materialize_attempt_nodes(
+        spec=_spec(6),
+        workflow_id="wf",
+        run_id="run",
+        ordinal=1,
+        workspace_head_ref="artifact://workspace/C1",
+        runtime=_LOOP_RUNTIME,
+    )
+
+    for node in (remediation, verification):
+        assert node["tool"] == {"type": "agent_runtime", "name": "codex_cli"}
+        assert node["inputs"]["runtime"] == _LOOP_RUNTIME
+
+
+@pytest.mark.parametrize("runtime", [None, {}, {"mode": "auto"}, {"mode": " "}])
+def test_materialization_requires_a_resolved_runtime(runtime) -> None:
+    with pytest.raises(ValueError, match="resolved agent runtime"):
+        materialize_attempt_nodes(
+            spec=_spec(6),
+            workflow_id="wf",
+            run_id="run",
+            ordinal=1,
+            workspace_head_ref="artifact://workspace/C1",
+            runtime=runtime,
+        )
+
+
+def test_resolve_loop_runtime_normalizes_agent_id_aliases() -> None:
+    runtime_id, block = resolve_loop_runtime({"agentId": "claude_code"})
+
+    assert runtime_id == "claude_code"
+    assert block == {"agentId": "claude_code", "mode": "claude_code"}
 
 
 def test_continue_as_new_preserves_consumed_budget_threshold() -> None:

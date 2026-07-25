@@ -15,6 +15,8 @@ from typing import Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.schemas.agent_runtime_models import AUTO_RUNTIME_SENTINEL
+
 
 class _Contract(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -375,6 +377,31 @@ def project_remediation_loop(
     }
 
 
+def resolve_loop_runtime(
+    runtime: Mapping[str, object] | None,
+) -> tuple[str, dict[str, object]]:
+    """Return the loop's concrete runtime id and its compact runtime block.
+
+    Loop tool descriptors authored as ``name: auto`` inherit the run's selected
+    runtime; ``auto`` is a selection sentinel and never a runtime identity.  The
+    materialized attempt nodes must name the resolved runtime so they route
+    exactly like the authored plan nodes of the same run.
+    """
+
+    block = dict(runtime) if isinstance(runtime, Mapping) else {}
+    runtime_id = str(
+        block.get("mode") or block.get("agentId") or block.get("agent_id") or ""
+    ).strip()
+    if not runtime_id or runtime_id.lower() == AUTO_RUNTIME_SENTINEL:
+        raise ValueError(
+            "remediation loop requires the run's resolved agent runtime "
+            "(inputs.runtime.mode on the loop controller plan node); "
+            f"got {runtime_id or 'none'!r}"
+        )
+    block["mode"] = runtime_id
+    return runtime_id, block
+
+
 def materialize_attempt_nodes(
     *,
     spec: RemediationLoopSpec,
@@ -382,10 +409,12 @@ def materialize_attempt_nodes(
     run_id: str,
     ordinal: int,
     workspace_head_ref: str | None,
+    runtime: Mapping[str, object],
     verification_inputs: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build only the admitted attempt pair with deterministic lineage."""
 
+    runtime_id, runtime_block = resolve_loop_runtime(runtime)
     remediation_id = remediation_step_execution_id(
         workflow_id, run_id, spec.loop_id, "remediation", ordinal
     )
@@ -417,10 +446,12 @@ def materialize_attempt_nodes(
     )
     remediation_inputs.setdefault("selectedSkill", spec.remediation_tool.name)
     verifier_inputs.setdefault("selectedSkill", spec.verification_tool.name)
+    remediation_inputs["runtime"] = dict(runtime_block)
+    verifier_inputs["runtime"] = dict(runtime_block)
     remediation = {
         "id": remediation_id,
         "title": f"Remediate verification gaps (attempt {ordinal})",
-        "tool": {"type": "agent_runtime", "name": "auto"},
+        "tool": {"type": "agent_runtime", "name": runtime_id},
         "inputs": remediation_inputs,
         "annotations": {
             **common_annotations,
@@ -430,7 +461,7 @@ def materialize_attempt_nodes(
     verification = {
         "id": verification_id,
         "title": f"Verify remediation (attempt {ordinal})",
-        "tool": {"type": "agent_runtime", "name": "auto"},
+        "tool": {"type": "agent_runtime", "name": runtime_id},
         "inputs": verifier_inputs,
         "annotations": {
             **common_annotations,

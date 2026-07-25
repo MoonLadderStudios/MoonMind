@@ -27,6 +27,9 @@ from moonmind.schemas.workload_models import parse_cpu_units, parse_size_bytes
 
 AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
+# ``auto`` selects the run's runtime (and skill) at planning time. It is never a
+# runtime identity: an execution request must always name the resolved runtime.
+AUTO_RUNTIME_SENTINEL = "auto"
 AgentRunState = Literal[
     "queued",
     "awaiting_slot",
@@ -635,7 +638,7 @@ class AgentExecutionRequest(BaseModel):
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         if self.execution_profile_ref is not None:
-            if self.execution_profile_ref.strip().lower() == "auto":
+            if self.execution_profile_ref.strip().lower() == AUTO_RUNTIME_SENTINEL:
                 self.execution_profile_ref = None
             else:
                 self.execution_profile_ref = require_non_blank(
