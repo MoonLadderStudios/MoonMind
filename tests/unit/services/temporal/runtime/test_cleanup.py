@@ -351,7 +351,7 @@ def test_unreadable_owner_record_is_retained_when_record_cleanup_is_disabled(
         run_store=run_store,
         session_store=session_store,
         config=replace(_config(root, dry_run=False), record_retention=None),
-        docker_reference_provider=lambda: DockerReferenceState(),
+        docker_reference_provider=DockerReferenceState,
         now=lambda: NOW,
     ).run()
 
