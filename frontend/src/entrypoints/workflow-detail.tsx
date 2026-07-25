@@ -8055,6 +8055,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   );
   const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [continuationMaxAttempts, setContinuationMaxAttempts] = useState(1);
+  const [
+    continuationMaxConsecutiveNoProgressAttempts,
+    setContinuationMaxConsecutiveNoProgressAttempts,
+  ] = useState(1);
   const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
 
   const detailQuery = useQuery(
@@ -8211,6 +8216,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     staleTime: evidenceStaleTime,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
+  const continueRemediationEvidence =
+    execution?.actions?.actionEvidence?.continueRemediation;
+  const authorizedContinuationBudget =
+    continueRemediationEvidence?.continuationBudget;
+  useEffect(() => {
+    if (!authorizedContinuationBudget) return;
+    setContinuationMaxAttempts(authorizedContinuationBudget.maxAttempts);
+    setContinuationMaxConsecutiveNoProgressAttempts(
+      authorizedContinuationBudget.maxConsecutiveNoProgressAttempts,
+    );
+  }, [
+    authorizedContinuationBudget?.grantId,
+    authorizedContinuationBudget?.maxAttempts,
+    authorizedContinuationBudget?.maxConsecutiveNoProgressAttempts,
+  ]);
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
   const selectedRecoveryOptions = useMemo(() => {
     const failedStepId = execution?.resume?.failedStepId || '';
@@ -8556,13 +8576,24 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
   const continueRemediationMutation = useMutation({
     mutationFn: async () => {
+      if (!authorizedContinuationBudget?.grantId) {
+        throw new Error(
+          'Continue remediation requires an authorized continuation budget.',
+        );
+      }
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
         {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({}),
+          body: JSON.stringify({
+            proposedContinuationBudget: {
+              maxAttempts: continuationMaxAttempts,
+              maxConsecutiveNoProgressAttempts:
+                continuationMaxConsecutiveNoProgressAttempts,
+            },
+          }),
         },
       );
       if (!response.ok) {
@@ -9441,7 +9472,107 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     <Fact label="Authoritative remaining work">
                       <code className="text-xs break-all">{runSummary.controlStop.remainingWorkRef || '—'}</code>
                     </Fact>
+                    {continueRemediationEvidence?.sourceBudget ? (
+                      <Fact label="Exhausted source budget">
+                        {continueRemediationEvidence.sourceBudget.consumedAttempts}
+                        {' / '}
+                        {continueRemediationEvidence.sourceBudget.maxAttempts}
+                        {' · '}
+                        {formatStatusLabel(
+                          continueRemediationEvidence.sourceBudget.exhaustedDimension,
+                        )}
+                      </Fact>
+                    ) : null}
+                    {authorizedContinuationBudget ? (
+                      <Fact label="Authorized continuation grant">
+                        {authorizedContinuationBudget.maxAttempts} attempts
+                        {' · '}
+                        {authorizedContinuationBudget.maxConsecutiveNoProgressAttempts}
+                        {' consecutive no-progress'}
+                      </Fact>
+                    ) : null}
+                    {continueRemediationEvidence?.destinationWorkflowId ? (
+                      <Fact label="Linked continuation">
+                        <a
+                          href={`/workflows/${encodeURIComponent(
+                            continueRemediationEvidence.destinationWorkflowId,
+                          )}/overview?source=temporal`}
+                        >
+                          <code className="text-xs break-all">
+                            {continueRemediationEvidence.destinationWorkflowId}
+                          </code>
+                        </a>
+                      </Fact>
+                    ) : null}
+                    {continueRemediationEvidence?.restorationEvidenceRef ? (
+                      <Fact label="Restoration provenance">
+                        <code className="text-xs break-all">
+                          {continueRemediationEvidence.restorationEvidenceRef}
+                        </code>
+                      </Fact>
+                    ) : null}
                   </FlatFactGrid>
+                  {authorizedContinuationBudget ? (
+                    <fieldset className="stack td-continuation-budget">
+                      <legend>Proposed continuation budget</legend>
+                      <label>
+                        Maximum attempts
+                        <input
+                          aria-label="Continuation maximum attempts"
+                          type="number"
+                          min={1}
+                          max={authorizedContinuationBudget.maxAttempts}
+                          value={continuationMaxAttempts}
+                          onChange={(event) =>
+                            setContinuationMaxAttempts(
+                              Math.max(
+                                1,
+                                Math.min(
+                                  authorizedContinuationBudget.maxAttempts,
+                                  Number(event.target.value) || 1,
+                                ),
+                              ),
+                            )}
+                        />
+                      </label>
+                      <label>
+                        Consecutive no-progress attempts
+                        <input
+                          aria-label="Continuation consecutive no-progress attempts"
+                          type="number"
+                          min={1}
+                          max={
+                            authorizedContinuationBudget
+                              .maxConsecutiveNoProgressAttempts
+                          }
+                          value={continuationMaxConsecutiveNoProgressAttempts}
+                          onChange={(event) =>
+                            setContinuationMaxConsecutiveNoProgressAttempts(
+                              Math.max(
+                                1,
+                                Math.min(
+                                  authorizedContinuationBudget
+                                    .maxConsecutiveNoProgressAttempts,
+                                  Number(event.target.value) || 1,
+                                ),
+                              ),
+                            )}
+                        />
+                      </label>
+                    </fieldset>
+                  ) : null}
+                  {continueRemediationEvidence?.hostSessionLifecycle ? (
+                    <details>
+                      <summary>Host/session lifecycle evidence</summary>
+                      <pre className="text-xs break-all">
+                        {JSON.stringify(
+                          continueRemediationEvidence.hostSessionLifecycle,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  ) : null}
                   <p className="small">
                     Edit for rerun and Full retry reuse the original task input. Continue remediation,
                     when admitted, consumes the preserved candidate and remaining-work evidence.

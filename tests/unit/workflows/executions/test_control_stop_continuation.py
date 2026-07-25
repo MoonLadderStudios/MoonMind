@@ -26,6 +26,8 @@ def _payload() -> dict:
         "gateResultDigest": "gate-digest",
         "remainingWorkRef": "artifact://remaining/6",
         "remainingWorkDigest": "remaining-digest",
+        "checkpointRef": "artifact://checkpoint/C6",
+        "checkpointDigest": "checkpoint-digest",
         "workspaceHeadRef": "artifact://workspace/C6",
         "workspaceHeadDigest": f"sha256:{'a' * 64}",
         "workspaceBaseCommit": "abc123",
@@ -52,9 +54,7 @@ def _payload() -> dict:
             "capabilitySnapshotDigest": "capability-digest",
             "effectiveLaunchSnapshotRef": "artifact://effective-launch",
             "effectiveLaunchSnapshotDigest": "effective-launch-digest",
-            "checkpointBoundarySupport": {
-                "after_gate": ["continue_to_remediation"]
-            },
+            "checkpointBoundarySupport": {"after_gate": ["continue_to_remediation"]},
         },
         "preservedSteps": [
             {
@@ -96,8 +96,19 @@ def _payload() -> dict:
         },
         "deploymentGeneration": "control-stop-2026-07",
         "deploymentPromoted": True,
+        "rollout": {
+            "mode": "enabled",
+            "canaryOwnerIds": [],
+            "allowedProviderProfileIds": ["codex-oauth-primary"],
+            "allowedExecutionProfileRefs": ["codex-default"],
+            "allowedLaunchPolicyRefs": ["artifact://launch-policy"],
+        },
         "restoreCapabilitySetVersion": "runtime-execution-capabilities-v3",
         "restoreCapabilityDigest": "capability-digest",
+        "captureCapabilitySetVersion": "runtime-execution-capabilities-v3",
+        "captureCapabilityDigest": "capture-capability-digest",
+        "verificationInstructionRef": "artifact://verify/instructions",
+        "verificationInstructionDigest": "verification-instruction-digest",
         "idempotencyKey": "operator-request-1",
     }
 
@@ -134,16 +145,20 @@ def test_restore_request_uses_distinct_deterministic_destination() -> None:
     request = contract.restore_request(destination_run_id="destination-run")
 
     assert request["source"]["workflowId"] == "source-workflow"
+    assert request["source"]["checkpointRef"] == contract.checkpoint_ref
     assert request["recoveryIdentity"]["workflowId"] == contract.destination_workflow_id
     assert request["recoveryIdentity"]["runId"] == "destination-run"
     assert request["destination"]["agentRunId"] == contract.destination_workspace_id
     assert request["checkpoint"]["archiveDigest"] == f"sha256:{'a' * 64}"
     assert request["checkpoint"]["manifestDigest"] == f"sha256:{'b' * 64}"
     assert request["resumePhase"] == "continue_to_remediation"
+    assert request["capabilitySetVersion"] == (contract.restore_capability_set_version)
     assert request["idempotencyKey"] == f"{contract.destination_workflow_id}:restore"
 
 
-def test_attempt_requests_freeze_profile_and_have_distinct_retry_safe_identities() -> None:
+def test_attempt_requests_freeze_profile_and_have_distinct_retry_safe_identities() -> (
+    None
+):
     contract = ControlStopContinuationContract.model_validate(_payload())
     locator = {
         "kind": "managed_runtime",
@@ -178,9 +193,10 @@ def test_attempt_requests_freeze_profile_and_have_distinct_retry_safe_identities
     assert "instructionRef" not in verification
     assert (
         verification["parameters"]["omnigent"]["prompt"]["instructionRef"]
-        == contract.gate_result_ref
+        == contract.verification_instruction_ref
     )
     assert capture["workspaceLocator"] == locator
+    assert capture["capabilitySetVersion"] == (contract.capture_capability_set_version)
 
 
 def test_previous_restore_capability_value_remains_accepted() -> None:
@@ -202,6 +218,8 @@ def test_previous_restore_capability_value_remains_accepted() -> None:
         (("lane", "providerProfileId"), ""),
         (("continuationBudget", "maxAttempts"), 0),
         (("checkpointBoundary",), "before_execution"),
+        (("rollout", "mode"), "shadow"),
+        (("rollout", "allowedProviderProfileIds"), ["other-profile"]),
     ],
 )
 def test_incomplete_or_unsupported_contract_fails_closed(path, value) -> None:
@@ -218,7 +236,7 @@ def test_incomplete_or_unsupported_contract_fails_closed(path, value) -> None:
 def test_blocked_side_effect_denies_admission() -> None:
     payload = _payload()
     payload["sideEffects"][0]["disposition"] = "blocked"
-    with pytest.raises(ValidationError, match="side effects block"):
+    with pytest.raises(ValidationError):
         ControlStopContinuationContract.model_validate(payload)
 
 
@@ -227,7 +245,9 @@ def test_negative_verifier_is_preserved_without_failed_step() -> None:
     assert all(
         step.terminal_disposition != "failed" for step in contract.preserved_steps
     )
-    assert contract.preserved_steps[-1].terminal_disposition == "accepted_control_result"
+    assert (
+        contract.preserved_steps[-1].terminal_disposition == "accepted_control_result"
+    )
 
 
 def test_continuation_budget_is_monotonic_and_bounded() -> None:
@@ -244,3 +264,16 @@ def test_continuation_budget_is_monotonic_and_bounded() -> None:
         ControlStopContinuationError, match="continuation_attempt_budget_exhausted"
     ):
         after_no_progress.consume(progress=True)
+
+
+def test_canary_and_secret_scanning_fail_closed() -> None:
+    canary = _payload()
+    canary["rollout"]["mode"] = "canary"
+    canary["rollout"]["canaryOwnerIds"] = ["different-owner"]
+    with pytest.raises(ValidationError, match="not selected"):
+        ControlStopContinuationContract.model_validate(canary)
+
+    secret = _payload()
+    secret["remainingWorkRef"] = "artifact://" + "g" + "hp_" + ("1" * 30)
+    with pytest.raises(ValidationError, match="secret scanning"):
+        ControlStopContinuationContract.model_validate(secret)

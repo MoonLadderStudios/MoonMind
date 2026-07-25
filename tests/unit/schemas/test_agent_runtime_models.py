@@ -153,7 +153,7 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
 def test_agent_execution_request_decodes_historical_auto_selection_sentinel(
     agent_id: str,
 ) -> None:
-    """Historical workflow inputs must remain decodable during replay."""
+    """In-flight AgentRun inputs using the old sentinel remain replay-decodable."""
 
     request = AgentExecutionRequest(
         agentKind="managed",

@@ -8,13 +8,15 @@ the same reserved destination.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from moonmind.workflows.executions.control_stop_continuation import (
     ContinuationBudgetGrant,
     ControlStopContinuationContract,
     ControlStopContinuationError,
+    ControlStopContinuationWorkflowInput,
 )
 
 
@@ -65,6 +67,7 @@ def _assert_authoritative_evidence(
     required = {
         contract.gate_result_ref: contract.gate_result_digest,
         contract.remaining_work_ref: contract.remaining_work_digest,
+        contract.checkpoint_ref: contract.checkpoint_digest,
         contract.workspace_head_ref: contract.workspace_head_digest,
         contract.workspace_manifest_ref: contract.workspace_manifest_digest,
         contract.task_input_snapshot_ref: contract.task_input_snapshot_digest,
@@ -74,7 +77,12 @@ def _assert_authoritative_evidence(
         contract.lane.effective_launch_snapshot_ref: (
             contract.lane.effective_launch_snapshot_digest
         ),
+        contract.verification_instruction_ref: (
+            contract.verification_instruction_digest
+        ),
     }
+    if contract.instruction_changes_ref and contract.instruction_changes_digest:
+        required[contract.instruction_changes_ref] = contract.instruction_changes_digest
     stale = [
         ref
         for ref, expected_digest in required.items()
@@ -92,6 +100,35 @@ def _assert_authoritative_evidence(
         raise ControlStopContinuationError(
             "control-stop continuation deployment is not currently promoted"
         )
+
+
+def _select_continuation_budget(
+    *,
+    authorized: ContinuationBudgetGrant,
+    requested: ContinuationBudgetGrant,
+) -> ContinuationBudgetGrant:
+    """Validate an explicit operator selection within the frozen grant ceiling."""
+
+    if requested.grant_id != authorized.grant_id:
+        raise ControlStopContinuationError(
+            "requested continuation budget uses a different grant identity"
+        )
+    if (
+        requested.consumed_attempts != 0
+        or requested.consecutive_no_progress_attempts != 0
+    ):
+        raise ControlStopContinuationError(
+            "a new continuation budget must begin with zero consumption"
+        )
+    if (
+        requested.max_attempts > authorized.max_attempts
+        or requested.max_consecutive_no_progress_attempts
+        > authorized.max_consecutive_no_progress_attempts
+    ):
+        raise ControlStopContinuationError(
+            "requested continuation budget exceeds the authorized frozen grant"
+        )
+    return requested
 
 
 async def admit_control_stop_continuation(
@@ -127,10 +164,10 @@ async def admit_control_stop_continuation(
         raise ControlStopContinuationError(
             "requested source identity does not match authoritative evidence"
         )
-    if contract.continuation_budget != continuation_budget:
-        raise ControlStopContinuationError(
-            "requested continuation budget does not match the authorized frozen grant"
-        )
+    selected_budget = _select_continuation_budget(
+        authorized=contract.continuation_budget,
+        requested=continuation_budget,
+    )
     if (
         contract.instruction_changes_ref != instruction_changes_ref
         or contract.instruction_changes_digest != instruction_changes_digest
@@ -138,6 +175,7 @@ async def admit_control_stop_continuation(
         raise ControlStopContinuationError(
             "requested instruction changes do not match authoritative evidence"
         )
+    contract = contract.model_copy(update={"continuation_budget": selected_budget})
     _assert_authoritative_evidence(contract, evidence)
 
     reservation = await repository.reserve_destination(contract=contract)
@@ -154,6 +192,8 @@ async def admit_control_stop_continuation(
         )
     await starter.start_or_reconcile(
         workflow_id=contract.destination_workflow_id,
-        input_payload=contract.model_dump(by_alias=True, mode="json"),
+        input_payload=ControlStopContinuationWorkflowInput.initial(contract).model_dump(
+            by_alias=True, mode="json"
+        ),
     )
     return reservation

@@ -6099,10 +6099,21 @@ export interface components {
             };
         };
         /**
+         * ContinueRemediationBudgetProposal
+         * @description Operator-selected limits bounded by the server-owned grant.
+         */
+        ContinueRemediationBudgetProposal: {
+            /** Maxattempts */
+            maxAttempts: number;
+            /** Maxconsecutivenoprogressattempts */
+            maxConsecutiveNoProgressAttempts: number;
+        };
+        /**
          * ContinueRemediationRequest
          * @description Select the frozen control-stop evidence owned by the source execution.
          */
         ContinueRemediationRequest: {
+            proposedContinuationBudget?: components["schemas"]["ContinueRemediationBudgetProposal"] | null;
             /** Instructionchangesref */
             instructionChangesRef?: string | null;
             /** Instructionchangesdigest */

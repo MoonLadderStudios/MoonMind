@@ -8735,6 +8735,30 @@ button.workflow-workspace-sidebar-row:active {
   overflow-wrap: anywhere;
 }
 
+.td-continuation-budget {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0.9rem;
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.42);
+}
+
+.td-continuation-budget legend {
+  padding-inline: 0.35rem;
+  color: rgb(var(--mm-ink));
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.td-continuation-budget input {
+  width: 100%;
+  min-width: 0;
+}
+
 .td-remediation-list {
   display: grid;
   gap: 0.75rem;
@@ -9238,6 +9262,10 @@ button.workflow-workspace-sidebar-row:active {
 @media (max-width: 720px) {
   .td-remediation-region {
     padding: 0.7rem;
+  }
+
+  .td-continuation-budget {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .td-remediation-list {

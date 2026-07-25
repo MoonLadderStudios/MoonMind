@@ -10,8 +10,14 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
     return select_suites(paths, event_name="pull_request", **kwargs).as_outputs()
 
 
-def test_docs_only_change_does_not_select_heavy_backend_suites() -> None:
-    outputs = _outputs(["docs/Development/PreCommitWorkflow.md"])
+@pytest.mark.parametrize(
+    "changed_path",
+    ["AGENTS.md", "docs/Development/PreCommitWorkflow.md"],
+)
+def test_docs_only_change_does_not_select_heavy_backend_suites(
+    changed_path: str,
+) -> None:
+    outputs = _outputs([changed_path])
 
     assert outputs == {
         "unit_fast": "false",
