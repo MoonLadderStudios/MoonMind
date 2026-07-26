@@ -89,10 +89,11 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         if step.get("name") == "Write publication manifest"
     )
     assert "expected six passing reports" in manifest["run"]
+    assert '"issue": "MoonLadderStudios/MoonMind#3508"' in manifest["run"]
+    assert '"parentIssue": "MoonLadderStudios/MoonMind#3448"' in manifest["run"]
+    assert '"priorAcceptanceIssue": "MoonLadderStudios/MoonMind#3456"' in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3480" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3471" in manifest["run"]
-    assert "MoonLadderStudios/MoonMind#3456" in manifest["run"]
-    assert "MoonLadderStudios/MoonMind#3448" in manifest["run"]
     assert "moonmind.omnigent.product-acceptance/v1" in manifest["run"]
     assert '"commit": os.environ["GITHUB_SHA"]' in manifest["run"]
     assert "product evidence lacks independently resolved production records" in manifest["run"]
@@ -126,13 +127,14 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         step
         for step in job["steps"]
         if step.get("name") == (
-            "Link passing acceptance report from issues 3480, 3471, 3456, and 3448"
+            "Link passing acceptance report from issues 3508, 3448, 3480, 3471, and 3456"
         )
     )
+    assert "gh issue comment 3508" in link["run"]
+    assert "gh issue comment 3448" in link["run"]
     assert "gh issue comment 3480" in link["run"]
     assert "gh issue comment 3471" in link["run"]
     assert "gh issue comment 3456" in link["run"]
-    assert "gh issue comment 3448" in link["run"]
     assert "github.run_id" in link["run"]
     assert "github.run_attempt" in link["run"]
     assert "github.sha" in link["run"]
