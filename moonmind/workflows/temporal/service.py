@@ -811,6 +811,33 @@ class TemporalExecutionService:
                 f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
+        target_state = str(
+            target_record.state.value
+            if hasattr(target_record.state, "value")
+            else target_record.state
+        )
+        policy_snapshot = {
+            "schemaVersion": "v1",
+            "actionPolicyRef": action_policy_ref or None,
+            "approvalPolicy": dict(remediation.get("approvalPolicy") or {}),
+            "authorityMode": authority_mode,
+        }
+        approval_state = None
+        if authority_mode == "approval_gated":
+            approval_state = {
+                "requestId": f"{new_workflow_id}:approval",
+                "decision": "not_requested",
+                "canDecide": False,
+                "expectedState": {
+                    "workflowId": target_record.workflow_id,
+                    "runId": target_record.run_id,
+                    "status": target_state,
+                },
+                "policySnapshot": policy_snapshot,
+                "expiresAt": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
+                "approvalLevel": "standard",
+            }
+        automatic_origin = trigger_type not in {None, "manual"}
         return TemporalExecutionRemediationLink(
             remediation_workflow_id=new_workflow_id,
             remediation_run_id=new_run_id,
@@ -821,6 +848,26 @@ class TemporalExecutionService:
             authority_mode=authority_mode,
             status="created",
             trigger_type=trigger_type,
+            approval_state=approval_state,
+            operator_state={
+                "phase": "collecting_evidence",
+                "actionResults": [],
+                "verificationResults": [],
+                "immediateRepair": {"attempted": False, "outcome": "not_attempted"},
+                "prevention": {"identified": False, "verification": "not_run"},
+                "guard": {
+                    "nestedRemediationAllowed": False,
+                    "mutationOwnerScope": "target_execution",
+                },
+                "cleanup": {
+                    "state": "pending",
+                    "leaseRelease": "pending",
+                    "janitor": "pending",
+                },
+                "autonomousOrigin": automatic_origin,
+                "rolloutGate": "disabled",
+                "operatorTakeoverAvailable": True,
+            },
         )
 
     @classmethod
@@ -1017,6 +1064,7 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        approval_level: str | None = None,
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise TemporalExecutionValidationError(
@@ -1027,15 +1075,84 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
+        approval = dict(link.approval_state or {}) if link is not None else {}
+        expected_request_id = str(
+            approval.get("requestId") or f"{remediation_workflow_id}:approval"
+        )
         if (
             link is None
             or link.authority_mode != "approval_gated"
-            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
             or request_id != expected_request_id
         ):
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
+            )
+        if approval.get("requestId") not in {None, request_id}:
+            raise TemporalExecutionValidationError("approval request identity changed.")
+        prior_decision = approval.get("decision")
+        if prior_decision in {"approved", "rejected"}:
+            if prior_decision != decision:
+                raise TemporalExecutionValidationError("approval decision is immutable.")
+            return {
+                "accepted": True,
+                "workflowId": remediation_workflow_id,
+                "requestId": request_id,
+                "decision": decision,
+            }
+        if link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES:
+            raise TemporalExecutionValidationError(
+                "request_id must reference a pending approval-gated remediation."
+            )
+        now = _utc_now()
+        expires_at = approval.get("expiresAt")
+        if expires_at:
+            parsed_expiry = datetime.fromisoformat(
+                str(expires_at).replace("Z", "+00:00")
+            )
+            if parsed_expiry <= now:
+                approval.update(
+                    {
+                        "decision": "expired",
+                        "canDecide": False,
+                        "staleReason": "approval_expired",
+                    }
+                )
+                link.approval_state = approval
+                await self._session.commit()
+                raise TemporalExecutionValidationError("approval request expired.")
+        target = await self._require_source_execution(link.target_workflow_id)
+        expected_state = approval.get("expectedState") or {}
+        stale_fields = []
+        if expected_state.get("runId") not in {None, target.run_id}:
+            stale_fields.append("target_run")
+        expected_status = expected_state.get("status")
+        current_status = str(
+            target.state.value if hasattr(target.state, "value") else target.state
+        )
+        if expected_status not in {None, current_status}:
+            stale_fields.append("target_state")
+        if stale_fields:
+            approval.update(
+                {
+                    "decision": "stale",
+                    "canDecide": False,
+                    "staleReason": ",".join(stale_fields),
+                }
+            )
+            link.approval_state = approval
+            await self._session.commit()
+            raise TemporalExecutionValidationError("approval request is stale: " + ", ".join(stale_fields))
+        required_level = approval.get("approvalLevel") or "standard"
+        if approval_level not in {None, "standard", "strong"}:
+            raise TemporalExecutionValidationError("unsupported approval level.")
+        if approval.get("actionKind") in {
+            "force_terminate",
+            "execution.force_terminate",
+            "session.terminate",
+            "workflow.force_terminate",
+        } and (required_level != "strong" or approval_level != "strong"):
+            raise TemporalExecutionValidationError(
+                "force termination requires explicit strong approval."
             )
         detail_parts = [f"requestId={request_id}"]
         if actor:
@@ -1049,6 +1166,18 @@ class TemporalExecutionService:
             summary=f"Remediation approval {decision}.",
             detail="; ".join(detail_parts),
         )
+        approval.update(
+            {
+                "requestId": request_id,
+                "decision": decision,
+                "decisionActor": actor,
+                "decisionAt": now.isoformat(),
+                "rationale": comment[:500] if comment else None,
+                "approvalLevel": approval_level or required_level,
+                "canDecide": False,
+            }
+        )
+        link.approval_state = approval
         await self._session.commit()
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)

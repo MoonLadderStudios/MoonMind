@@ -5336,6 +5336,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                     "auditRef": None,
                 },
                 "checkpointBranches": [],
+                "operatorState": None,
                 "createdAt": now.isoformat().replace("+00:00", "Z"),
                 "updatedAt": now.isoformat().replace("+00:00", "Z"),
             }
@@ -5400,6 +5401,7 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "lockOutcome": None,
         "approvalState": None,
         "checkpointBranches": [],
+        "operatorState": None,
         "createdAt": now.isoformat().replace("+00:00", "Z"),
         "updatedAt": now.isoformat().replace("+00:00", "Z"),
     }
@@ -5527,6 +5529,12 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
         "decisionAt": None,
         "canDecide": True,
         "auditRef": "audit-rich",
+        "expectedState": None,
+        "policySnapshot": None,
+        "expiresAt": None,
+        "rationale": None,
+        "approvalLevel": None,
+        "staleReason": None,
     }
     assert item["checkpointBranches"] == [
         {
@@ -5558,6 +5566,7 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             "createdAt": None,
         }
     ]
+    assert item["operatorState"] is None
     assert "/var/lib/moonmind/raw-context.json" not in json.dumps(item)
     service.list_remediation_targets.assert_awaited_once_with("mm:remediation-rich")
     service.list_remediations_for_target.assert_not_called()
@@ -5610,6 +5619,7 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        approval_level=None,
     )
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(

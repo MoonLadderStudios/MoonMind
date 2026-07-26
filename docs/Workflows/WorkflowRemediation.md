@@ -4,6 +4,7 @@
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
 **Last Updated:** 2026-07-03
+**Source Traceability:** MoonLadderStudios/MoonMind#3512
 **Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
 
 ---
@@ -1577,3 +1578,45 @@ Keep these rules stable even as implementation evolves:
 10. **The dashboard must make the relationship visible in both directions.**
 11. **Immediate repair and long-term prevention are separate outputs; a remediator may do either or both, but it must record its decision.**
 12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original Workflow input.**
+
+## Appendix D. Operator acceptance and autonomous rollout contract
+
+Autonomous or scheduled remediation is fail-closed. Merely setting a workflow's
+`remediationPolicy.enabled` field does not create a remediator or grant
+`admin_auto`. A deployment may open an autonomous rollout gate only when one
+production-shaped acceptance run has durable evidence for every scenario below.
+The dashboard must expose the gate state and autonomous origin, and operators must
+retain takeover and cancellation controls.
+
+| Scenario | Required terminal evidence |
+| --- | --- |
+| Diagnosis only | Context and diagnosis artifacts; zero mutation action results |
+| Evidence-gated resume | Before, immediate-after, stabilized-after, and `verified_resolved` evidence linked to the exact action result |
+| Corrected-instruction Checkpoint Branch | Source checkpoint, branch/turn identity, cumulative head, comparison state, and separate verification |
+| Denial and approval gate | Expiring expected-state-bound request, actor-attributed immutable decision, and no action after denial |
+| Stale target, approval, or lock | Named stale field or lock holder and a rejected mutation |
+| Interrupt, cancel, and cleanup | Typed action result, verification, lease release, cleanup, and janitor state |
+| Ineffective repair | `verified_no_change` or `still_failed`, cooldown, bounded escalation, and unchanged original target outcome |
+| Cumulative attempts | Monotonic workspace head and changed-evidence digest across worker restart |
+| Prevention change | Reviewable branch or PR plus prevention verification, reported separately from immediate repair |
+| Missing historical evidence | Named unavailable evidence classes and bounded `evidence_unavailable` completion |
+| Cancellation or restart in each phase | Replay-safe diagnosis, action, and verification records with no duplicate idempotency key |
+
+The acceptance export must also prove that the remediator received no raw host,
+Docker, SQL, or secret authority. Secret scanning and redaction apply to the export.
+Passing nearby unit tests is necessary implementation evidence but is not a
+substitute for this production-shaped acceptance run.
+
+The rollout gate requires versioned action and approval policies; durable lock,
+budget, cooldown, and no-progress state; before/after/verification evidence for
+every side effect; and metrics or alerts for action rate, repeat failure, lock
+conflict, denial, escalation, and unverified mutation. Its initial enabled policy
+is diagnosis-only or an explicit allowlist of low/medium-risk idempotent actions.
+Force termination always requires an explicit strong approval and never inherits
+ordinary `admin_auto` authority.
+
+### Rationale
+
+The matrix is an authority-handoff proof, not a feature checklist. Keeping the
+gate closed until evidence exists prevents a configuration hint or successful
+action delivery from being mistaken for permission or verified repair.

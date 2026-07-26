@@ -1005,6 +1005,12 @@ const RemediationApprovalStateSchema = z
     decisionAt: z.string().nullable().optional(),
     canDecide: z.boolean().default(false),
     auditRef: z.string().nullable().optional(),
+    expectedState: z.record(z.string(), z.unknown()).nullable().optional(),
+    policySnapshot: z.record(z.string(), z.unknown()).nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    rationale: z.string().nullable().optional(),
+    approvalLevel: z.string().nullable().optional(),
+    staleReason: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -1049,6 +1055,18 @@ const RemediationLinkSchema = z
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
     lockOutcome: RemediationLockOutcomeSchema.nullable().optional(),
     approvalState: RemediationApprovalStateSchema.nullable().optional(),
+    operatorState: z.object({
+      phase: z.string().nullable().optional(),
+      actionResults: z.array(z.record(z.string(), z.unknown())).optional(),
+      verificationResults: z.array(z.record(z.string(), z.unknown())).optional(),
+      immediateRepair: z.record(z.string(), z.unknown()).nullable().optional(),
+      prevention: z.record(z.string(), z.unknown()).nullable().optional(),
+      guard: z.record(z.string(), z.unknown()).nullable().optional(),
+      cleanup: z.record(z.string(), z.unknown()).nullable().optional(),
+      autonomousOrigin: z.boolean().optional(),
+      rolloutGate: z.string().optional(),
+      operatorTakeoverAvailable: z.boolean().optional(),
+    }).nullable().optional(),
     checkpointBranches: z
       .array(
         z
@@ -7366,10 +7384,41 @@ function RemediationApprovalSummary({
         <Card label="Audit">{approval.auditRef || '—'}</Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        <Card label="Approval level">{approval.approvalLevel || 'standard'}</Card>
+        <Card label="Expires">{approval.expiresAt ? formatWhen(approval.expiresAt) : '—'}</Card>
+        <Card label="Actor">{approval.decisionActor || '—'}</Card>
+        <Card label="Rationale">{approval.rationale || '—'}</Card>
+        <Card label="Expected state"><code className="text-xs break-all">{approval.expectedState ? JSON.stringify(approval.expectedState) : '—'}</code></Card>
+        <Card label="Policy snapshot"><code className="text-xs break-all">{approval.policySnapshot ? JSON.stringify(approval.policySnapshot) : '—'}</code></Card>
       </div>
+      {approval.staleReason ? <p className="notice error">Approval stale: {approval.staleReason}</p> : null}
       {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}
+    </div>
+  );
+}
+
+function RemediationOperatorSummary({ item }: { item: z.infer<typeof RemediationLinkSchema> }) {
+  const state = item.operatorState;
+  if (!state) return null;
+  const immediate = state.immediateRepair || {};
+  const prevention = state.prevention || {};
+  const cleanupState = state.cleanup || {};
+  return (
+    <div className="stack">
+      {state.autonomousOrigin ? <p className="notice error">Autonomous remediation origin · rollout {state.rolloutGate || 'disabled'}</p> : null}
+      <div className="grid-2">
+        <Card label="Phase">{state.phase || '—'}</Card>
+        <Card label="Action results">{state.actionResults?.length ?? 0}</Card>
+        <Card label="Verification results">{state.verificationResults?.length ?? 0}</Card>
+        <Card label="Immediate repair">{String(immediate.outcome || (immediate.attempted ? 'attempted' : 'not_attempted'))}</Card>
+        <Card label="Prevention">{String(prevention.verification || (prevention.identified ? 'identified' : 'not_identified'))}</Card>
+        <Card label="Cleanup">{String(cleanupState.state || '—')}</Card>
+        <Card label="Lease release">{String(cleanupState.leaseRelease || '—')}</Card>
+        <Card label="Janitor">{String(cleanupState.janitor || '—')}</Card>
+      </div>
+      {state.operatorTakeoverAvailable ? <p className="small">Operator takeover and cancellation are available.</p> : null}
     </div>
   );
 }
@@ -7387,7 +7436,7 @@ function RemediationRelationshipsPanel({
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected', approvalLevel?: string | null) => void;
   approvalBusy: boolean;
   showEmpty: boolean;
 }) {
@@ -7429,6 +7478,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationOperatorSummary item={item} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
                   <div className="actions">
@@ -7436,9 +7486,9 @@ function RemediationRelationshipsPanel({
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved', item.approvalState!.approvalLevel)}
                     >
-                      Approve remediation action
+                      {item.approvalState.approvalLevel === 'strong' ? 'Strongly approve remediation action' : 'Approve remediation action'}
                     </button>
                     <button
                       type="button"
@@ -7503,6 +7553,7 @@ function RemediationRelationshipsPanel({
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationOperatorSummary item={item} />
                 {item.mode?.includes('follow') && !item.contextArtifactRef ? (
                   <p className="notice subtle">
                     Live follow is unavailable; durable remediation artifacts remain authoritative.
@@ -7515,9 +7566,9 @@ function RemediationRelationshipsPanel({
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved', item.approvalState!.approvalLevel)}
                     >
-                      Approve remediation action
+                      {item.approvalState.approvalLevel === 'strong' ? 'Strongly approve remediation action' : 'Approve remediation action'}
                     </button>
                     <button
                       type="button"
@@ -8676,17 +8727,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      approvalLevel,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      approvalLevel?: string | null;
     }) => {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify({ decision, approvalLevel }),
         },
       );
       if (!response.ok) {
@@ -10023,9 +10076,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, approvalLevel) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision, approvalLevel });
               }}
             />
           ) : null}

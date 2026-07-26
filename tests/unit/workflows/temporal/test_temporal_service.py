@@ -1394,6 +1394,24 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["summary"] == "Remediation approval approved."
         assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
+        await session.refresh(link)
+        assert link.approval_state["decision"] == "approved"
+        assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["rationale"] == "Reviewed blast radius."
+        assert link.approval_state["canDecide"] is False
+
+        # A Temporal/API retry observes the same immutable decision and does not
+        # reinterpret it or append a second decision.
+        duplicate = await service.record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=f"{remediation.workflow_id}:approval",
+            decision="approved",
+            comment="retry",
+            actor="other@example.com",
+        )
+        assert duplicate["decision"] == "approved"
+        await session.refresh(link)
+        assert link.approval_state["decisionActor"] == "ops@example.com"
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
