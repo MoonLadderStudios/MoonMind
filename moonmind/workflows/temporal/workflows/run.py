@@ -131,6 +131,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.remediation_workspace_head import (
         REMEDIATION_HEAD_MISMATCH,
+        REMEDIATION_HEAD_RESTORE_INVALID,
         RemediationAttemptInput,
         RemediationAttemptOutput,
         RemediationHeadError,
@@ -750,6 +751,12 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 # payloads during replay.
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
+)
+# Let a dynamic remediation Step prove that it is still reading the active
+# workflow-scoped managed workspace before launch.  Older histories reached
+# this boundary without a locator and must retain that command sequence.
+RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH = (
+    "run-remediation-managed-session-locator-v1"
 )
 
 
@@ -5588,6 +5595,49 @@ class MoonMindRunWorkflow:
 
         if capture_input:
             self._step_workspace_capture_inputs[logical_step_id] = capture_input
+
+    def _inject_remediation_managed_session_workspace_locator(
+        self,
+        *,
+        node: Mapping[str, Any],
+        capture_input_source: dict[str, Any],
+    ) -> None:
+        """Address the active managed workspace for pre-launch head validation."""
+
+        if not self._is_moonspec_remediation_step(node):
+            return
+        binding = self._codex_session_binding
+        if binding is None:
+            return
+        runtime_id = canonical_managed_session_runtime_id(
+            self._agent_id_from_runtime_inputs(
+                node_inputs=capture_input_source,
+                fallback_name=None,
+            )
+        )
+        if runtime_id != binding.runtime_id:
+            return
+        workspace_spec = capture_input_source.get("workspaceSpec") or (
+            capture_input_source.get("workspace_spec")
+        )
+        existing_locator = capture_input_source.get("workspaceLocator") or (
+            capture_input_source.get("workspace_locator")
+        )
+        if isinstance(existing_locator, Mapping) or (
+            isinstance(workspace_spec, Mapping)
+            and isinstance(
+                workspace_spec.get("workspaceLocator")
+                or workspace_spec.get("workspace_locator"),
+                Mapping,
+            )
+        ):
+            return
+        capture_input_source["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": binding.runtime_id,
+            "agentRunId": binding.agent_run_id,
+            "relativePath": "repo",
+        }
 
     async def _capture_canonical_step_checkpoint_workspace(
         self,
@@ -10624,6 +10674,13 @@ class MoonMindRunWorkflow:
                 ):
                     capture_input_source["workspaceSpec"] = dict(
                         workflow_workspace_spec
+                    )
+                if workflow.patched(
+                    RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH
+                ):
+                    self._inject_remediation_managed_session_workspace_locator(
+                        node=node,
+                        capture_input_source=capture_input_source,
                     )
                 self._record_step_workspace_capture_input(
                     node_id,
