@@ -131,6 +131,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.remediation_workspace_head import (
         REMEDIATION_HEAD_MISMATCH,
+        REMEDIATION_HEAD_RESTORE_INVALID,
         RemediationAttemptInput,
         RemediationAttemptOutput,
         RemediationHeadError,
@@ -750,6 +751,9 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 # payloads during replay.
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
+)
+RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
+    "run-managed-session-checkpoint-locator-v1"
 )
 
 
@@ -5485,7 +5489,26 @@ class MoonMindRunWorkflow:
                 capture_input["criticality"] = (
                     capabilities.post_execution_checkpoint_criticality
                 )
-                if capabilities.runtime_id == "omnigent":
+                binding = self._codex_session_binding
+                if (
+                    capabilities.workspace_authority == "managed_runtime"
+                    and binding is not None
+                    and binding.runtime_id == capabilities.runtime_id
+                    and workflow.patched(
+                        RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH
+                    )
+                ):
+                    # A workflow-scoped managed session keeps one stable
+                    # workspace across plan steps. Reuse its typed identity so
+                    # a dynamic remediation step can capture and validate the
+                    # current loop head before launching its next AgentRun.
+                    capture_input["workspaceLocator"] = {
+                        "kind": "managed_runtime",
+                        "runtimeId": binding.runtime_id,
+                        "agentRunId": binding.agent_run_id,
+                        "relativePath": "repo",
+                    }
+                elif capabilities.runtime_id == "omnigent":
                     try:
                         wf_info = workflow.info()
                         identity = StepExecutionIdentityModel(

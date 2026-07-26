@@ -19,12 +19,14 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
@@ -48,6 +50,7 @@ from moonmind.workflows.temporal.recovery_manifest import (
 )
 from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_HEAD_MISMATCH,
+    REMEDIATION_HEAD_RESTORE_INVALID,
     RemediationHeadError,
     RemediationWorkspaceHead,
 )
@@ -5258,6 +5261,94 @@ def test_workflow_owned_remediation_rejects_different_captured_workspace(
 
     assert exc.value.code == REMEDIATION_HEAD_MISMATCH
     assert "workspace identity" in str(exc.value)
+
+
+def test_workflow_owned_remediation_rejects_missing_materialization_evidence(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """Regression for workflow mm:e231ca44-2322-40a0-9142-13420f2591ee."""
+
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+
+    with pytest.raises(RemediationHeadError) as exc:
+        mock_run_workflow._validate_remediation_workspace_materialization(
+            "remediation-1"
+        )
+
+    assert exc.value.code == REMEDIATION_HEAD_RESTORE_INVALID
+    assert "not checkpointed before execution" in str(exc.value)
+
+
+def test_existing_managed_session_supplies_remediation_checkpoint_locator(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later managed step can checkpoint the workflow-scoped workspace."""
+
+    mock_run_workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="session-workflow",
+        agentRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        sessionEpoch=2,
+        runtimeId="codex_cli",
+        executionProfileRef="codex_openai_oauth",
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+            RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
+        },
+    )
+
+    mock_run_workflow._record_step_workspace_capture_input(
+        "remediation-1",
+        {"runtime": {"mode": "codex_cli"}},
+    )
+
+    capture_input = mock_run_workflow._step_workspace_capture_inputs[
+        "remediation-1"
+    ]
+    assert capture_input["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-1",
+        "relativePath": "repo",
+    }
+    assert capture_input["captureAuthority"] == "managed_runtime"
+
+
+def test_existing_managed_session_keeps_prior_checkpoint_shape_during_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Histories without the locator patch retain their recorded commands."""
+
+    mock_run_workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="session-workflow",
+        agentRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        runtimeId="codex_cli",
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+    )
+
+    mock_run_workflow._record_step_workspace_capture_input(
+        "remediation-1",
+        {"runtime": {"mode": "codex_cli"}},
+    )
+
+    capture_input = mock_run_workflow._step_workspace_capture_inputs[
+        "remediation-1"
+    ]
+    assert "workspaceLocator" not in capture_input
 
 
 def test_remediation_head_uses_archive_not_git_patch_checkpoint(

@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
+    RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
@@ -159,6 +160,22 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
                 "headWorkspaceDigest": "sha256:c1",
             }
         return continuation
+
+
+@workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
+class _LegacyManagedSessionCheckpointLocatorReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        return "locator_deferred"
+
+
+@workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
+class _CurrentManagedSessionCheckpointLocatorReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        if workflow.patched(RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH):
+            return "binding_locator"
+        return "locator_deferred"
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -535,6 +552,45 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     )
     replayer = Replayer(
         workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_managed_session_checkpoint_locator_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-managed-session-locator-legacy-replay",
+            workflows=[_LegacyManagedSessionCheckpointLocatorReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyManagedSessionCheckpointLocatorReplayFixture.run,
+                id="test-managed-session-locator-legacy",
+                task_queue="test-managed-session-locator-legacy-replay",
+            )
+            assert await legacy_handle.result() == "locator_deferred"
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-managed-session-locator-current-replay",
+            workflows=[_CurrentManagedSessionCheckpointLocatorReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentManagedSessionCheckpointLocatorReplayFixture.run,
+                id="test-managed-session-locator-current",
+                task_queue="test-managed-session-locator-current-replay",
+            )
+            assert await current_handle.result() == "binding_locator"
+            current_history = await current_handle.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentManagedSessionCheckpointLocatorReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
