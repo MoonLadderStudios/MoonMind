@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Owners:** MoonMind Engineering
-**Last Updated:** 2026-05-05
+**Last Updated:** 2026-07-26
 
 > **See also:**
 > - [ManagedAgentArchitecture.md](../ManagedAgents/ManagedAgentArchitecture.md)
@@ -146,6 +146,28 @@ In the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInj
 
 If retrieval is unavailable or skipped for allowed reasons, local workspace fallback search may be used instead.
 
+Profile-bound Codex-through-Omnigent uses the same service after MoonMind has
+resolved the policy-authorized workspace and host, but before the bridge prepares
+the first message. Authored RAG settings and the immutable Step Execution
+instructions form the retrieval request; repository, tenant, collection, run,
+workspace, and overlay scope are resolved by MoonMind rather than by the host.
+Gateway transport is preferred when MoonMind owns embedding or Qdrant
+credentials, so those credentials are never materialized into the Omnigent host.
+
+The resulting `ContextPack` is written beneath `artifacts/context/`. Its stable
+ref, digest, bounded source identities, budgets, scope, transport, truncation,
+and degraded reason are attached to the Step Execution input refs and bridge
+lifecycle evidence. The bounded rendered context uses the standard untrusted
+reference-data framing and is composed into the original first message; it is
+not posted as a second chat message. Only after this composition does the bridge
+calculate and persist the first-message digest.
+
+Activity retry checks the deterministic ContextPack artifact before retrieval.
+When it exists, MoonMind reconstructs the exact framed instruction from that
+artifact and reuses it. The existing bridge idempotency record then either
+reattaches to the posted message or posts that exact prepared message once;
+retry never performs a fresh retrieval that could change the digest.
+
 ### 5.3 Retrieval transports
 
 Two retrieval transports exist today:
@@ -177,6 +199,22 @@ Results from canonical collections are merged by score before the final
 ### 6.1 Context belongs behind refs and artifacts
 
 Managed-session contracts should reference retrieval results through `contextRefs` or artifact refs.
+
+For Omnigent initial retrieval, bridge and workflow projections expose
+`initial_context_retrieval` as started followed by completed, degraded, or
+failed evidence. The evidence includes the context ref and digest linkage,
+result/source counts, selected scope, budgets, transport, truncation,
+fallback/denial reason, persisted-context reuse, and whether the first message
+consumed the ref. Large retrieved bodies are not copied into lifecycle events or
+the chat timeline.
+
+Unavailable retrieval follows authored policy: required retrieval fails before
+first-message preparation; optional retrieval records a disabled/degraded
+outcome and continues; bounded local workspace fallback is used only when
+authorized; stale canonical context is used only when the freshness policy
+allows it. No fallback may broaden tenant, repository, collection, run,
+workspace, or overlay scope, and retrieved text cannot change profile, host,
+tool, publish, approval, or credential authority.
 
 Large retrieved bodies should not be copied into durable workflow payloads. The authoritative durable surfaces remain:
 

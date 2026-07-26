@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -103,36 +104,63 @@ class ContextInjectionService:
             return PromptContextResolution(instruction="")
 
         retrieval_skip_reason: str | None = None
-        try:
-            retrieval_result = await asyncio.to_thread(
-                self._retrieve_context_pack,
-                request,
-            )
-            if isinstance(retrieval_result, tuple) and len(retrieval_result) == 2:
-                pack, retrieval_skip_reason = retrieval_result
-            else:
-                pack = retrieval_result
-                retrieval_skip_reason = None
-        except Exception as exc:
-            retrieval_skip_reason = self._normalize_retrieval_failure_reason(exc)
-            logger.info("[rag] retrieval skipped: %s", exc)
-            fallback_pack = self._build_local_fallback_pack(
-                instruction=instruction_ref,
-                workspace_path=workspace_path,
-            )
-            if fallback_pack is None:
-                self._record_disabled_context_metadata(
-                    request=request,
-                    reason=retrieval_skip_reason,
-                    initiation_mode="automatic",
+        artifact_path = self._context_pack_path(
+            request=request,
+            instruction=instruction_ref,
+            workspace_path=workspace_path,
+        )
+        pack = self._load_context_pack(artifact_path)
+        reused = pack is not None
+        if pack is None:
+            try:
+                retrieval_result = await asyncio.to_thread(
+                    self._retrieve_context_pack,
+                    request,
                 )
-                return PromptContextResolution(instruction=instruction_ref)
-            pack = fallback_pack
-            retrieval_skip_reason = "local_fallback_after_retrieval_error"
+                if isinstance(retrieval_result, tuple) and len(retrieval_result) == 2:
+                    pack, retrieval_skip_reason = retrieval_result
+                else:
+                    pack = retrieval_result
+                    retrieval_skip_reason = None
+            except Exception as exc:
+                retrieval_skip_reason = self._normalize_retrieval_failure_reason(exc)
+                logger.info("[rag] retrieval skipped: %s", exc)
+                if self._retrieval_required(request):
+                    self._record_disabled_context_metadata(
+                        request=request,
+                        reason=retrieval_skip_reason,
+                        initiation_mode="automatic",
+                    )
+                    raise RuntimeError(
+                        f"required initial context retrieval unavailable: {retrieval_skip_reason}"
+                    ) from exc
+                fallback_pack = self._build_local_fallback_pack(
+                    instruction=instruction_ref,
+                    workspace_path=workspace_path,
+                )
+                if fallback_pack is None:
+                    self._record_disabled_context_metadata(
+                        request=request,
+                        reason=retrieval_skip_reason,
+                        initiation_mode="automatic",
+                    )
+                    return PromptContextResolution(instruction=instruction_ref)
+                pack = fallback_pack
+                retrieval_skip_reason = "local_fallback_after_retrieval_error"
 
         if pack is None:
             if retrieval_skip_reason:
                 logger.info("[rag] retrieval skipped: %s", retrieval_skip_reason)
+            if self._retrieval_required(request):
+                self._record_disabled_context_metadata(
+                    request=request,
+                    reason=retrieval_skip_reason or "retrieval_unavailable",
+                    initiation_mode="automatic",
+                )
+                raise RuntimeError(
+                    "required initial context retrieval unavailable: "
+                    f"{retrieval_skip_reason or 'retrieval_unavailable'}"
+                )
             if not self._should_use_local_fallback(retrieval_skip_reason):
                 self._record_disabled_context_metadata(
                     request=request,
@@ -153,11 +181,12 @@ class ContextInjectionService:
                 return PromptContextResolution(instruction=instruction_ref)
             pack = fallback_pack
 
-        artifact_path = self._persist_context_pack(
-            request=request,
-            pack=pack,
-            workspace_path=workspace_path,
-        )
+        if not reused:
+            artifact_path = self._persist_context_pack(
+                request=request,
+                pack=pack,
+                workspace_path=workspace_path,
+            )
         artifact_ref = self._artifact_ref_for_workspace(
             artifact_path=artifact_path,
             workspace_path=workspace_path,
@@ -170,6 +199,7 @@ class ContextInjectionService:
             items_count=items_count,
             degraded_reason=retrieval_skip_reason,
             pack=pack,
+            reused=reused,
         )
         logger.info("[rag] retrieval completed via %s; items=%d", pack.transport, items_count)
 
@@ -228,7 +258,7 @@ class ContextInjectionService:
         )
         return (
             service.retrieve(
-                query=request.instruction_ref or "",
+                query=self._retrieval_query(request),
                 filters=filters,
                 top_k=settings.similarity_top_k,
                 overlay_policy=self._resolve_rag_overlay_policy(),
@@ -247,23 +277,51 @@ class ContextInjectionService:
         pack: ContextPack,
         workspace_path: Path,
     ) -> Path:
-        artifacts_dir = workspace_path / "artifacts"
-        context_dir = artifacts_dir / "context"
+        path = self._context_pack_path(
+            request=request,
+            instruction=request.instruction_ref or "",
+            workspace_path=workspace_path,
+        )
+        context_dir = path.parent
         context_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(pack.to_json() + "\n", encoding="utf-8")
+        return path
 
-        job_id = request.correlation_id
+    @staticmethod
+    def _context_pack_path(
+        *,
+        request: AgentExecutionRequest,
+        instruction: str,
+        workspace_path: Path,
+    ) -> Path:
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         repo = parameters.get("repository", "")
-        instruction = request.instruction_ref or ""
-
-        digest_input = f"{job_id}:{repo}:{instruction}".encode(
+        digest_input = f"{request.correlation_id}:{repo}:{instruction}".encode(
             "utf-8", errors="replace"
         )
         digest = hashlib.sha256(digest_input).hexdigest()[:12]
-        file_name = f"rag-context-{digest}.json"
-        path = context_dir / file_name
-        path.write_text(pack.to_json() + "\n", encoding="utf-8")
-        return path
+        return workspace_path / "artifacts" / "context" / f"rag-context-{digest}.json"
+
+    @staticmethod
+    def _load_context_pack(path: Path) -> ContextPack | None:
+        """Load retry-stable retrieval evidence without executing retrieval again."""
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return ContextPack(
+                items=[ContextItem(**item) for item in payload["items"]],
+                filters=dict(payload.get("filters") or {}),
+                budgets=dict(payload.get("budgets") or {}),
+                usage=dict(payload.get("usage") or {}),
+                transport=str(payload["transport"]),
+                context_text=str(payload["context_text"]),
+                retrieved_at=str(payload["retrieved_at"]),
+                telemetry_id=str(payload["telemetry_id"]),
+                initiation_mode=str(payload.get("initiation_mode") or "automatic"),
+                truncated=bool(payload.get("truncated", False)),
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None
 
     @staticmethod
     def _artifact_ref_for_workspace(
@@ -309,6 +367,7 @@ class ContextInjectionService:
         items_count: int,
         degraded_reason: str | None = None,
         pack: ContextPack | None = None,
+        reused: bool = False,
     ) -> None:
         moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
         normalized_transport = str(transport or "").strip()
@@ -325,6 +384,21 @@ class ContextInjectionService:
         moonmind_meta["sessionContinuityCacheStatus"] = "advisory_only"
         moonmind_meta["retrievalInitiationMode"] = initiation_mode
         moonmind_meta["retrievalContextTruncated"] = truncated
+        moonmind_meta["retrievalReusedPersistedContext"] = bool(reused)
+        if pack is not None:
+            moonmind_meta["retrievedContextDigest"] = (
+                "sha256:"
+                + hashlib.sha256((pack.to_json() + "\n").encode("utf-8")).hexdigest()
+            )
+            moonmind_meta["retrievedContextSources"] = [
+                str(item.source)[:256] for item in pack.items[:32]
+            ]
+            moonmind_meta["retrievalBudgets"] = dict(pack.budgets)
+            moonmind_meta["retrievalScope"] = dict(pack.filters)
+            query = ContextInjectionService._retrieval_query(request)
+            moonmind_meta["retrievalQueryDigest"] = (
+                "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest()
+            )
         moonmind_meta.pop("retrievalDisabledReason", None)
         if normalized_transport == "local_fallback":
             moonmind_meta["retrievalMode"] = "degraded_local_fallback"
@@ -353,6 +427,12 @@ class ContextInjectionService:
             "retrievalDurabilityAuthority",
             "sessionContinuityCacheStatus",
             "retrievalDegradedReason",
+            "retrievedContextDigest",
+            "retrievedContextSources",
+            "retrievalBudgets",
+            "retrievalScope",
+            "retrievalReusedPersistedContext",
+            "retrievalQueryDigest",
         ):
             moonmind_meta.pop(key, None)
         moonmind_meta["retrievalMode"] = "disabled"
@@ -376,6 +456,25 @@ class ContextInjectionService:
         if value.endswith(".git"):
             value = value[:-4]
         return value.strip("/")
+
+    @staticmethod
+    def _rag_options(request: AgentExecutionRequest) -> dict[str, object]:
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        value = parameters.get("rag") or parameters.get("retrieval")
+        return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _retrieval_query(request: AgentExecutionRequest) -> str:
+        options = ContextInjectionService._rag_options(request)
+        override = str(
+            options.get("query") or options.get("queryOverride") or ""
+        ).strip()
+        return override or str(request.instruction_ref or "")
+
+    @staticmethod
+    def _retrieval_required(request: AgentExecutionRequest) -> bool:
+        options = ContextInjectionService._rag_options(request)
+        return bool(options.get("required", False))
 
     def _resolve_rag_overlay_policy(self) -> str:
         policy = (

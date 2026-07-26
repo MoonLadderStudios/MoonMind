@@ -269,10 +269,13 @@ The coordinator:
 10. resolves exactly one online host advertising `codex-native`;
 11. updates bridge authorization with the host identity;
 12. creates or reattaches the session on that host;
-13. persists session and first-message evidence before posting;
-14. streams events and harvests terminal resources;
-15. stops or drains the session and host;
-16. releases Provider Profile capacity only after cleanup.
+13. resolves and persists any policy-authorized initial `ContextPack`, reusing
+    the artifact on Activity retry;
+14. composes the bounded safety-framed context into the single first message,
+    then persists its digest and session evidence before posting;
+15. streams events and harvests terminal resources;
+16. stops or drains the session and host;
+17. releases Provider Profile capacity only after cleanup.
 
 A caller cannot supply an arbitrary profile-bound host id, Docker volume, or credential. The coordinator injects the exact host and safe authorization envelope immediately before session creation.
 

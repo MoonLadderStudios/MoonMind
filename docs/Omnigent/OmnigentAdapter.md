@@ -142,7 +142,14 @@ Rules:
 - The coordinator injects `hostType=external`, the exact registered host id, the resolved workspace path, `codex-native`, and a safe profile-authorization envelope immediately before session creation.
 - Raw credentials, host registration tokens, Docker volume names, and absolute daemon paths never enter workflow-authored parameters.
 
-Large instructions and inputs remain artifact-backed. The bridge posts the first message only after durable authorization and session identity are persisted.
+Large instructions and inputs remain artifact-backed. For a RAG-enabled
+profile-bound step, MoonMind resolves and persists the initial `ContextPack`
+after workspace authorization and before first-message preparation. Its bounded,
+safety-framed rendering is part of the original message, while the canonical
+body remains behind a context ref. The bridge calculates the message digest
+only after that rendering is final and posts the first message only after
+durable authorization and session identity are persisted. Retry reuses the
+persisted ContextPack and exact composed input instead of retrieving again.
 
 ---
 

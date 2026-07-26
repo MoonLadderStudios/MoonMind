@@ -359,6 +359,89 @@ def test_persisted_context_artifact_uses_workspace_context_directory(mock_reques
     assert '"transport": "direct"' in artifact_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_retry_reuses_persisted_context_pack_before_first_message_digest(
+    mock_retrieve,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    pack = ContextPack(
+        items=[ContextItem(score=0.9, source="docs/spec.md", text="stable context")],
+        filters={"repo": "test-repo"},
+        budgets={"tokens": 500},
+        usage={"tokens": 20},
+        transport="gateway",
+        context_text="### Retrieved Context\nstable context",
+        retrieved_at="2026-07-26T00:00:00Z",
+        telemetry_id="telemetry-stable",
+        initiation_mode="automatic",
+        truncated=False,
+    )
+    mock_retrieve.return_value = (pack, None)
+
+    first = await service.inject_context(
+        request=mock_request,
+        workspace_path=tmp_path,
+    )
+    original_instruction = "Original instruction"
+    retry_request = mock_request.model_copy(
+        deep=True,
+        update={"instruction_ref": original_instruction, "parameters": {}},
+    )
+    second = await service.inject_context(
+        request=retry_request,
+        workspace_path=tmp_path,
+    )
+
+    assert first.instruction == second.instruction
+    assert mock_retrieve.call_count == 1
+    retry_metadata = retry_request.parameters["metadata"]["moonmind"]
+    assert retry_metadata["retrievalReusedPersistedContext"] is True
+    assert retry_metadata["retrievedContextDigest"].startswith("sha256:")
+    assert retry_metadata["retrievedContextSources"] == ["docs/spec.md"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
+    side_effect=RuntimeError("gateway unavailable"),
+)
+async def test_required_retrieval_fails_before_message_preparation(
+    _mock_retrieve,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    mock_request.parameters["rag"] = {"required": True}
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+
+    with pytest.raises(
+        RuntimeError,
+        match="required initial context retrieval unavailable",
+    ):
+        await service.inject_context(
+            request=mock_request,
+            workspace_path=tmp_path,
+        )
+
+    metadata = mock_request.parameters["metadata"]["moonmind"]
+    assert metadata["retrievalMode"] == "disabled"
+    assert metadata["retrievalDisabledReason"] == "retrieval_gateway_unavailable"
+
+
+def test_authored_query_override_is_used_without_replacing_instruction(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {"queryOverride": "bounded retrieval query"}
+
+    assert (
+        ContextInjectionService._retrieval_query(mock_request)
+        == "bounded retrieval query"
+    )
+    assert mock_request.instruction_ref == "Original instruction"
+
+
 
 def test_record_context_metadata_marks_disabled_retrieval_state(
     mock_request: AgentExecutionRequest,
