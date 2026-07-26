@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
@@ -4370,6 +4371,60 @@ def test_continue_as_new_preserves_the_tracked_workspace_head_authority(
     assert "remediationWorkspaceHead" in inputs
 
 
+def test_continue_as_new_preserves_the_workflow_scoped_managed_session(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    spec = RemediationLoopSpec.model_validate(_dynamic_loop_spec_payload())
+    mock_run_workflow._remediation_loop_spec = spec
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId=spec.loop_id,
+        attemptOrdinal=3,
+        phase=RemediationLoopPhase.REMEDIATION_PENDING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=3),
+    )
+    mock_run_workflow._original_input_payload = {}
+    binding = CodexManagedSessionBinding(
+        workflowId="wf-1:session:codex_cli",
+        agentRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        sessionEpoch=4,
+        runtimeId="codex_cli",
+        executionProfileRef="codex_openai_oauth",
+    )
+    mock_run_workflow._codex_session_binding = binding
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ),
+    )
+
+    carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )["remediation_loop_continuation"]
+
+    assert carried["managedSessionBinding"] == binding.model_dump(
+        by_alias=True,
+        mode="json",
+        exclude_none=True,
+    )
+
+    mock_run_workflow._codex_session_binding = None
+    mock_run_workflow._remediation_loop_continuation = carried
+    mock_run_workflow._restore_remediation_loop_continuation(ordered_nodes=[])
+
+    assert mock_run_workflow._codex_session_binding == binding
+
+
 def test_continuation_written_without_a_head_still_restores(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -5317,7 +5372,7 @@ def test_existing_managed_session_supplies_remediation_checkpoint_locator(
         "kind": "managed_runtime",
         "runtimeId": "codex_cli",
         "agentRunId": "wf-1",
-        "relativePath": "repo",
+        "relativePath": ".",
     }
     assert capture_input["captureAuthority"] == "managed_runtime"
 

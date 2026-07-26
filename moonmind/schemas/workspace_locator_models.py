@@ -25,6 +25,13 @@ def _relative_subpath(value: str) -> str:
     return str(path)
 
 
+def _managed_relative_subpath(value: str) -> str:
+    candidate = str(value).strip().replace("\\", "/")
+    if candidate == ".":
+        return candidate
+    return _relative_subpath(candidate)
+
+
 class SandboxWorkspaceLocator(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -43,7 +50,9 @@ class ManagedWorkspaceLocator(BaseModel):
     agent_run_id: str = Field(..., alias="agentRunId", min_length=1, max_length=300)
     relative_path: str = Field("repo", alias="relativePath", max_length=1000)
 
-    _validate_relative_path = field_validator("relative_path", mode="before")(_relative_subpath)
+    _validate_relative_path = field_validator("relative_path", mode="before")(
+        _managed_relative_subpath
+    )
 
 
 class ExternalStateLocator(BaseModel):

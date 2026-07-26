@@ -755,6 +755,9 @@ RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
 RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
     "run-managed-session-checkpoint-locator-v1"
 )
+RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
+    "run-remediation-continue-managed-session-v1"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3881,6 +3884,24 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head = (
                 RemediationWorkspaceHead.model_validate(carried_head)
             )
+        carried_session = continuation.get("managedSessionBinding")
+        if isinstance(carried_session, Mapping) and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            binding = CodexManagedSessionBinding.model_validate(carried_session)
+            expected_agent_run_id = workflow.info().workflow_id
+            expected_session_workflow_id = self._workflow_scoped_session_workflow_id(
+                binding.runtime_id
+            )
+            if (
+                binding.agent_run_id != expected_agent_run_id
+                or binding.workflow_id != expected_session_workflow_id
+            ):
+                raise ValueError(
+                    "remediation loop continuation managed session belongs to "
+                    "another workflow"
+                )
+            self._codex_session_binding = binding
         self._remediation_loop_state = state.model_copy(
             update={
                 "source_run_id": workflow.info().run_id,
@@ -3913,6 +3934,15 @@ class MoonMindRunWorkflow:
             # key is additive, so histories written without it still restore.
             continuation["workspaceHead"] = head.model_dump(
                 by_alias=True, mode="json"
+            )
+        binding = self._codex_session_binding
+        if binding is not None and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            continuation["managedSessionBinding"] = binding.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
             )
         payload["remediation_loop_continuation"] = continuation
         return cast(RunWorkflowInput, payload)
@@ -5506,7 +5536,7 @@ class MoonMindRunWorkflow:
                         "kind": "managed_runtime",
                         "runtimeId": binding.runtime_id,
                         "agentRunId": binding.agent_run_id,
-                        "relativePath": "repo",
+                        "relativePath": ".",
                     }
                 elif capabilities.runtime_id == "omnigent":
                     try:

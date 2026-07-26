@@ -189,7 +189,8 @@ def resolve_managed_workspace_locator(
         )
     workspace = (
         workspace_root
-        if locator.relative_path == "repo" and workspace_root.name == "repo"
+        if locator.relative_path == "."
+        or (locator.relative_path == "repo" and workspace_root.name == "repo")
         else (workspace_root / locator.relative_path).resolve()
     )
     if not workspace.is_relative_to(workspace_root):

@@ -7546,7 +7546,25 @@ class TemporalAgentRuntimeActivities:
                     and correlation["executionOrdinal"] + 1
                     == expected_correlation["executionOrdinal"]
                 )
-                if not exact_execution_match and not prior_execution_baseline_match:
+                workflow_scoped_session_baseline_match = (
+                    model.boundary == "before_execution"
+                    and record.session_id is not None
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and record.run_id == locator.agent_run_id
+                    and record.runtime_id == locator.runtime_id
+                    and correlation["workflowId"]
+                    == expected_correlation["workflowId"]
+                    and correlation["logicalStepId"]
+                    != expected_correlation["logicalStepId"]
+                    and expected_correlation["executionOrdinal"] == 1
+                )
+                if (
+                    not exact_execution_match
+                    and not prior_execution_baseline_match
+                    and not workflow_scoped_session_baseline_match
+                ):
                     logger.warning("managed_checkpoint_capture_authority_rejected")
                     raise temporal_exceptions.ApplicationError(
                         "managed run record does not belong to the source Step Execution",
@@ -7556,6 +7574,10 @@ class TemporalAgentRuntimeActivities:
                 if prior_execution_baseline_match:
                     logger.info(
                         "managed_checkpoint_capture_prior_execution_baseline_accepted"
+                    )
+                elif workflow_scoped_session_baseline_match:
+                    logger.info(
+                        "managed_checkpoint_capture_workflow_session_baseline_accepted"
                     )
                 try:
                     workspace = resolve_managed_workspace_locator(
