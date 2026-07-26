@@ -16,6 +16,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH,
+    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
+    RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
@@ -162,6 +164,22 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
         if workflow.patched(RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH):
             continuation["managedSessionWorkspaceLocator"] = {
                 "kind": "managed_runtime",
+                "runtimeId": "codex_cli",
+            }
+        if workflow.patched(
+            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
+        ):
+            continuation["sourceIdentity"] = {
+                "workflowId": "wf-1",
+                "runId": "run-1",
+                "logicalStepId": "verify-1",
+                "executionOrdinal": 1,
+            }
+        if workflow.patched(
+            RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
+        ):
+            continuation["managedSessionBinding"] = {
+                "agentRunId": "wf-1",
                 "runtimeId": "codex_cli",
             }
         return continuation
@@ -541,6 +559,11 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     )
     assert current_result["managedSessionWorkspaceLocator"] == {
         "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+    }
+    assert current_result["sourceIdentity"]["logicalStepId"] == "verify-1"
+    assert current_result["managedSessionBinding"] == {
+        "agentRunId": "wf-1",
         "runtimeId": "codex_cli",
     }
     replayer = Replayer(

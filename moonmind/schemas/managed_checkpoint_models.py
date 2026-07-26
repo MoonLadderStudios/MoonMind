@@ -33,6 +33,9 @@ class ManagedWorkspaceCheckpointCaptureInput(BaseModel):
 
     schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
     identity: StepExecutionIdentityModel
+    source_identity: StepExecutionIdentityModel | None = Field(
+        None, alias="sourceIdentity"
+    )
     boundary: StepExecutionCheckpointBoundary
     checkpoint_kind: Literal["worktree_archive"] = Field(
         "worktree_archive", alias="checkpointKind"
@@ -67,6 +70,15 @@ class ManagedWorkspaceCheckpointCaptureInput(BaseModel):
     def _runtime_matches(self) -> "ManagedWorkspaceCheckpointCaptureInput":
         if self.workspace_locator.runtime_id != self.expected_runtime_id:
             raise ValueError("WORKSPACE_IDENTITY_MISMATCH: locator runtime does not match")
+        if self.source_identity is not None:
+            if self.boundary != "before_execution":
+                raise ValueError(
+                    "sourceIdentity is only valid for before_execution capture"
+                )
+            if self.source_identity.workflow_id != self.identity.workflow_id:
+                raise ValueError(
+                    "WORKSPACE_IDENTITY_MISMATCH: source workflow does not match"
+                )
         return self
 
 

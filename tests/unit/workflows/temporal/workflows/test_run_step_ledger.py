@@ -156,6 +156,12 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         "annotations": {
             "issueImplementRole": "moonspec-remediation",
             "moonSpecRemediationAttempt": 1,
+            "workspaceCaptureSourceIdentity": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "initial-verification",
+                "executionOrdinal": 1,
+            },
         },
     }
     workflow._initialize_step_ledger(
@@ -223,6 +229,12 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         "runtimeId": "codex_cli",
         "agentRunId": "wf-run-1",
         "relativePath": "repo",
+    }
+    assert captured[0]["payload"]["sourceIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
     }
     assert materialized == {
         "checkpointRef": "artifact://workspace/C0",

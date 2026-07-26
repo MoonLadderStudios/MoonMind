@@ -758,6 +758,17 @@ RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
 RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH = (
     "run-remediation-managed-session-locator-v1"
 )
+# Bind a managed remediation checkpoint to the terminal verifier Step Execution
+# that last owned the shared session record. Older histories omitted this
+# source identity and must retain their original Activity payloads during replay.
+RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH = (
+    "run-remediation-managed-session-source-identity-v1"
+)
+# Carry the compact managed-session binding across remediation-loop
+# Continue-As-New. Older histories wrote continuation payloads without it.
+RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH = (
+    "run-remediation-continue-as-new-session-binding-v1"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3884,6 +3895,14 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head = (
                 RemediationWorkspaceHead.model_validate(carried_head)
             )
+        if workflow.patched(
+            RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
+        ):
+            carried_binding = continuation.get("managedSessionBinding")
+            if isinstance(carried_binding, Mapping):
+                self._codex_session_binding = (
+                    CodexManagedSessionBinding.model_validate(carried_binding)
+                )
         self._remediation_loop_state = state.model_copy(
             update={
                 "source_run_id": workflow.info().run_id,
@@ -3916,6 +3935,15 @@ class MoonMindRunWorkflow:
             # key is additive, so histories written without it still restore.
             continuation["workspaceHead"] = head.model_dump(
                 by_alias=True, mode="json"
+            )
+        if (
+            workflow.patched(
+                RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
+            )
+            and self._codex_session_binding is not None
+        ):
+            continuation["managedSessionBinding"] = (
+                self._codex_session_binding.model_dump(by_alias=True, mode="json")
             )
         payload["remediation_loop_continuation"] = continuation
         return cast(RunWorkflowInput, payload)
@@ -4128,6 +4156,23 @@ class MoonMindRunWorkflow:
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
             )
+            if (
+                workflow.patched(
+                    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
+                )
+                and logical_step_id
+            ):
+                source_identity = self._canonical_step_checkpoint_identity(
+                    logical_step_id
+                )
+                if source_identity is not None:
+                    remediation_annotations = dict(
+                        remediation.get("annotations") or {}
+                    )
+                    remediation_annotations["workspaceCaptureSourceIdentity"] = (
+                        source_identity.model_dump(by_alias=True, mode="json")
+                    )
+                    remediation["annotations"] = remediation_annotations
             pair = [remediation, verification]
             insertion_index = (
                 len(ordered_nodes)
@@ -5463,6 +5508,11 @@ class MoonMindRunWorkflow:
                     candidates.append(nested_workload)
 
         capture_input: dict[str, Any] = {}
+        source_identity = outputs.get("sourceIdentity") or outputs.get(
+            "source_identity"
+        )
+        if isinstance(source_identity, Mapping):
+            capture_input["sourceIdentity"] = dict(source_identity)
         previous_capture = self._step_workspace_capture_inputs.get(
             logical_step_id, {}
         )
@@ -5606,6 +5656,11 @@ class MoonMindRunWorkflow:
 
         if not self._is_moonspec_remediation_step(node):
             return
+        source_identity = self._node_annotations_mapping(node).get(
+            "workspaceCaptureSourceIdentity"
+        )
+        if isinstance(source_identity, Mapping):
+            capture_input_source["sourceIdentity"] = dict(source_identity)
         binding = self._codex_session_binding
         if binding is None:
             return
@@ -5774,6 +5829,8 @@ class MoonMindRunWorkflow:
             capabilities = RuntimeExecutionCapabilities.model_validate(
                 capture_input["runtimeCapabilities"]
             )
+            if isinstance(capture_input.get("sourceIdentity"), Mapping):
+                payload["sourceIdentity"] = dict(capture_input["sourceIdentity"])
             payload.update(
                 {
                     "schemaVersion": "v1",

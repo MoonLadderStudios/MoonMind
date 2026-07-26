@@ -7482,7 +7482,11 @@ class TemporalAgentRuntimeActivities:
             try:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 record_path = record_root / f"{record_name}.json"
-                immutable = model.model_dump(by_alias=True, mode="json")
+                # Keep the pre-sourceIdentity digest stable for in-flight
+                # idempotency records while still hashing the field when present.
+                immutable = model.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                )
                 immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
                 if record_path.exists():
                     saved = json.loads(record_path.read_text(encoding="utf-8"))
@@ -7531,6 +7535,26 @@ class TemporalAgentRuntimeActivities:
                     "executionOrdinal": model.identity.execution_ordinal,
                 }
                 exact_execution_match = correlation == expected_correlation
+                source_correlation = (
+                    {
+                        "workflowId": model.source_identity.workflow_id,
+                        "ownerRunId": model.source_identity.run_id,
+                        "logicalStepId": model.source_identity.logical_step_id,
+                        "executionOrdinal": (
+                            model.source_identity.execution_ordinal
+                        ),
+                    }
+                    if model.source_identity is not None
+                    else None
+                )
+                terminal_source_execution_match = (
+                    model.boundary == "before_execution"
+                    and source_correlation is not None
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and correlation == source_correlation
+                )
                 prior_execution_baseline_match = (
                     model.boundary == "before_execution"
                     and record.status
@@ -7546,7 +7570,11 @@ class TemporalAgentRuntimeActivities:
                     and correlation["executionOrdinal"] + 1
                     == expected_correlation["executionOrdinal"]
                 )
-                if not exact_execution_match and not prior_execution_baseline_match:
+                if (
+                    not exact_execution_match
+                    and not prior_execution_baseline_match
+                    and not terminal_source_execution_match
+                ):
                     logger.warning("managed_checkpoint_capture_authority_rejected")
                     raise temporal_exceptions.ApplicationError(
                         "managed run record does not belong to the source Step Execution",
@@ -7556,6 +7584,10 @@ class TemporalAgentRuntimeActivities:
                 if prior_execution_baseline_match:
                     logger.info(
                         "managed_checkpoint_capture_prior_execution_baseline_accepted"
+                    )
+                elif terminal_source_execution_match:
+                    logger.info(
+                        "managed_checkpoint_capture_terminal_source_execution_accepted"
                     )
                 try:
                     workspace = resolve_managed_workspace_locator(

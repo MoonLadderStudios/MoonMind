@@ -25,6 +25,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH,
+    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
@@ -3660,7 +3662,11 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
+        },
     )
     ordered_nodes: list[dict[str, Any]] = []
 
@@ -3687,6 +3693,12 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     assert ordered_nodes[0]["inputs"]["remediationWorkspaceHeadRef"] == (
         "artifact://art_initial_checkpoint"
     )
+    assert ordered_nodes[0]["annotations"]["workspaceCaptureSourceIdentity"] == {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -4302,6 +4314,7 @@ def test_authored_remediation_step_does_not_advance_another_loop_attempt(
 
 def test_continue_as_new_preserves_the_tracked_workspace_head_authority(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A tracked head must survive Continue-As-New.
 
@@ -4332,6 +4345,20 @@ def test_continue_as_new_preserves_the_tracked_workspace_head_authority(
         RemediationWorkspaceHead.model_validate(head_payload)
     )
     mock_run_workflow._original_input_payload = {}
+    mock_run_workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-1:session:codex_cli",
+        agentRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        sessionEpoch=3,
+        runtimeId="codex_cli",
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
+        ),
+    )
 
     carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
         ordered_nodes=[],
@@ -4340,10 +4367,13 @@ def test_continue_as_new_preserves_the_tracked_workspace_head_authority(
     assert carried["workspaceHead"]["headCheckpointRef"] == (
         "artifact://workspace/C1"
     )
+    assert carried["managedSessionBinding"]["agentRunId"] == "wf-1"
+    assert carried["managedSessionBinding"]["sessionEpoch"] == 3
 
     # Restore into a fresh run and prove the head authority is back in force.
     restored = mock_run_workflow
     restored._remediation_workspace_head = None
+    restored._codex_session_binding = None
     restored._remediation_loop_continuation = carried
     restored._restore_remediation_loop_continuation(ordered_nodes=[])
 
@@ -4351,6 +4381,9 @@ def test_continue_as_new_preserves_the_tracked_workspace_head_authority(
     assert restored._remediation_workspace_head.head_checkpoint_ref == (
         "artifact://workspace/C1"
     )
+    assert restored._codex_session_binding is not None
+    assert restored._codex_session_binding.agent_run_id == "wf-1"
+    assert restored._codex_session_binding.session_epoch == 3
     gate_node = {
         "id": "wf:run:loop:verification:9",
         "annotations": {
