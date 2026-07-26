@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -646,27 +647,89 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             current_stage = "session_creation"
             await emit(current_stage, "started", metadata={"omnigentHostId": host_id})
+            bound_request = _bind_exact_host(
+                request,
+                host_id=host_id,
+                workspace_path=str(preflight["workspacePath"]),
+                profile_authorization={
+                    "providerProfileId": profile_id,
+                    "credentialGeneration": host_lease.credential_generation,
+                    "providerLeaseRef": provider_lease.lease_id,
+                    "hostBindingRef": binding.binding_ref,
+                    "hostLeaseRef": host_lease.lease_id,
+                    "endpointRef": binding.endpoint_ref,
+                    "omnigentHostId": host_id,
+                    "bridgeSessionId": bridge.bridge_session_id,
+                    "effectiveLaunchRef": effective_launch["snapshotRef"],
+                },
+            )
+            await emit("initial_context_retrieval", "started")
+            from moonmind.rag.context_injection import ContextInjectionService
+
+            context_resolution = await ContextInjectionService().inject_context(
+                request=bound_request,
+                workspace_path=Path(str(preflight["workspacePath"])),
+            )
+            context_metadata = (
+                ((bound_request.parameters or {}).get("metadata") or {}).get(
+                    "moonmind"
+                )
+                or {}
+            )
+            context_ref = str(
+                context_metadata.get("latestContextPackRef") or ""
+            ).strip()
+            if context_ref:
+                bound_request.input_refs = list(
+                    dict.fromkeys([*bound_request.input_refs, context_ref])
+                )
+            retrieval_mode = str(
+                context_metadata.get("retrievalMode") or "disabled"
+            )
+            await emit(
+                "initial_context_retrieval",
+                (
+                    "degraded"
+                    if retrieval_mode == "degraded_local_fallback"
+                    else "completed"
+                ),
+                metadata={
+                    "state": retrieval_mode,
+                    "contextRef": context_ref or None,
+                    "contextDigest": context_metadata.get(
+                        "retrievedContextDigest"
+                    ),
+                    "queryDigest": context_metadata.get("retrievalQueryDigest"),
+                    "resultCount": context_resolution.items_count,
+                    "sourceIdentities": context_metadata.get(
+                        "retrievedContextSources", []
+                    ),
+                    "scope": context_metadata.get("retrievalScope", {}),
+                    "budgets": context_metadata.get("retrievalBudgets", {}),
+                    "transport": context_metadata.get(
+                        "retrievedContextTransport"
+                    ),
+                    "truncated": bool(
+                        context_metadata.get("retrievalContextTruncated", False)
+                    ),
+                    "reusedPersistedContext": bool(
+                        context_metadata.get(
+                            "retrievalReusedPersistedContext", False
+                        )
+                    ),
+                    "fallbackOrDenialReason": (
+                        context_metadata.get("retrievalDegradedReason")
+                        or context_metadata.get("retrievalDisabledReason")
+                    ),
+                    "firstMessageConsumesContextRef": bool(context_ref),
+                },
+            )
             await emit("first_message_prepare", "started")
             await emit("first_message_post", "started")
             await emit("session_running", "started")
             await emit("resource_harvest", "started")
             result = await self._execute(
-                _bind_exact_host(
-                    request,
-                    host_id=host_id,
-                    workspace_path=str(preflight["workspacePath"]),
-                profile_authorization={
-                        "providerProfileId": profile_id,
-                        "credentialGeneration": host_lease.credential_generation,
-                        "providerLeaseRef": provider_lease.lease_id,
-                        "hostBindingRef": binding.binding_ref,
-                        "hostLeaseRef": host_lease.lease_id,
-                        "endpointRef": binding.endpoint_ref,
-                        "omnigentHostId": host_id,
-                        "bridgeSessionId": bridge.bridge_session_id,
-                        "effectiveLaunchRef": effective_launch["snapshotRef"],
-                    },
-                ),
+                bound_request,
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
