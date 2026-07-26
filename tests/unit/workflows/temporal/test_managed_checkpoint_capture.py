@@ -566,8 +566,9 @@ async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["after_prepare", "before_execution"])
 async def test_managed_capture_accepts_cross_step_workflow_session_baseline(
-    tmp_path,
+    tmp_path, boundary: str,
 ) -> None:
     repo = tmp_path / "managed_runs" / "wf-1" / "custom-checkout"
     repo.mkdir(parents=True)
@@ -618,14 +619,14 @@ async def test_managed_capture_accepts_cross_step_workflow_session_baseline(
         "logicalStepId": "remediation-1",
         "executionOrdinal": 1,
     }
-    request["boundary"] = "before_execution"
+    request["boundary"] = boundary
     request["workspaceLocator"] = {
         "kind": "managed_runtime",
         "runtimeId": "codex_cli",
         "agentRunId": "wf-1",
         "relativePath": ".",
     }
-    request["idempotencyKey"] = "remediation-1:before_execution:capture"
+    request["idempotencyKey"] = f"remediation-1:{boundary}:capture"
 
     result = await activities.agent_runtime_capture_workspace_checkpoint(request)
 

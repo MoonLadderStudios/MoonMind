@@ -44,6 +44,10 @@ JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
+# The status tool runs inside a 60-second activity. One fetch plus the PATCH and
+# optional comment must leave enough time for the activity to classify results.
+_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
+_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
 JIRA_STORY_TOOL_NAMES = frozenset(
     {
         JIRA_CREATE_ISSUES_TOOL_NAME,
@@ -4421,7 +4425,7 @@ async def _fetch_github_issue(
     if not token:
         return None, resolution_error or "GitHub issue lookup is unavailable."
     headers = service._github_headers(token)
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
         try:
             response = await client.get(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -5230,7 +5234,11 @@ async def update_github_issue_status(
     if actions.get("closeIssue"):
         patch_payload["state"] = "closed"
     applied: list[str] = []
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    warnings: list[str] = []
+    comment_body = ""
+    async with httpx.AsyncClient(
+        timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
+    ) as client:
         try:
             response = await client.patch(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -5240,13 +5248,38 @@ async def update_github_issue_status(
             response.raise_for_status()
             updated = response.json()
             applied.append("patch_issue")
-            comment_body = ""
-            pr_url = pull_request_url
-            if actions.get("commentPullRequestUrl") and pr_url:
-                comment_body = f"Implementation pull request: {pr_url}"
-            elif actions.get("comment"):
-                comment_body = f"MoonMind started implementation for {issue_ref}."
-            if comment_body:
+            updated_issue = _github_issue_payload(updated, repository)
+            issue_url = updated_issue.get("url") or issue.get("url")
+        except httpx.HTTPStatusError as exc:
+            summary = service._github_permission_summary(exc.response)
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "summary": (
+                        "GitHub issue update failed with HTTP "
+                        f"{exc.response.status_code}. {summary}"
+                    ).strip(),
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "summary": (
+                        f"GitHub issue update failed: {exc.__class__.__name__}"
+                    ),
+                },
+            )
+
+        pr_url = pull_request_url
+        if actions.get("commentPullRequestUrl") and pr_url:
+            comment_body = f"Implementation pull request: {pr_url}"
+        elif actions.get("comment"):
+            comment_body = f"MoonMind started implementation for {issue_ref}."
+        if comment_body:
+            try:
                 comment_response = await client.post(
                     f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
                     headers=headers,
@@ -5254,37 +5287,55 @@ async def update_github_issue_status(
                 )
                 comment_response.raise_for_status()
                 applied.append("comment")
-        except httpx.HTTPStatusError as exc:
-            summary = service._github_permission_summary(exc.response)
-            return ToolResult(
-                status="FAILED",
-                outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed with HTTP {exc.response.status_code}. {summary}".strip()},
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed: {exc.__class__.__name__}"})
-    updated_issue = _github_issue_payload(updated, repository)
-    issue_url = updated_issue.get("url") or issue.get("url")
+            except httpx.HTTPStatusError as exc:
+                summary = service._github_permission_summary(exc.response)
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": issue_url,
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": updated_issue.get("labels"),
+                        "commentStatus": "rejected",
+                        "summary": (
+                            "GitHub issue status was updated, but the automation "
+                            f"comment failed with HTTP {exc.response.status_code}. "
+                            f"{summary}"
+                        ).strip(),
+                    },
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                warnings.append(
+                    "GitHub issue status was updated, but the automation comment "
+                    f"result could not be confirmed after {exc.__class__.__name__}; "
+                    "the comment was not retried to avoid a duplicate."
+                )
     summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
+    outputs: dict[str, Any] = {
+        "issueUrl": issue_url,
+        "appliedActions": applied,
+        "confirmedState": updated_issue.get("state"),
+        "confirmedLabels": updated_issue.get("labels"),
+        "summary": summary,
+        "sideEffect": {
+            "effectClass": "external_non_idempotent",
+            "kind": "github",
+            "operation": (
+                "github.issue.close"
+                if actions.get("closeIssue")
+                else "github.issue.update"
+            ),
+            "target": issue_url,
+            "summary": summary,
+        },
+    }
+    if warnings:
+        outputs["warnings"] = warnings
+        outputs["commentStatus"] = "unconfirmed"
     return ToolResult(
         status="COMPLETED",
-        outputs={
-            "issueUrl": issue_url,
-            "appliedActions": applied,
-            "confirmedState": updated_issue.get("state"),
-            "confirmedLabels": updated_issue.get("labels"),
-            "summary": summary,
-            "sideEffect": {
-                "effectClass": "external_non_idempotent",
-                "kind": "github",
-                "operation": (
-                    "github.issue.close"
-                    if actions.get("closeIssue")
-                    else "github.issue.update"
-                ),
-                "target": issue_url,
-                "summary": summary,
-            },
-        },
+        outputs=outputs,
     )
 
 

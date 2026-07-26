@@ -5821,7 +5821,9 @@ class MoonMindRunWorkflow:
             capabilities = RuntimeExecutionCapabilities.model_validate(
                 capture_input["runtimeCapabilities"]
             )
-            if isinstance(capture_input.get("sourceIdentity"), Mapping):
+            if boundary == "before_execution" and isinstance(
+                capture_input.get("sourceIdentity"), Mapping
+            ):
                 payload["sourceIdentity"] = dict(capture_input["sourceIdentity"])
             payload.update(
                 {
