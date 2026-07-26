@@ -48,6 +48,42 @@ from moonmind.workflows.temporal.remediation_context import (
     normalize_remediation_phase,
     normalize_remediation_resolution,
 )
+
+
+def test_omnigent_evidence_index_is_complete_bounded_and_explicitly_degraded():
+    index = RemediationContextBuilder._omnigent_evidence_index(
+        {
+            "generatedAt": "2026-07-26T12:00:00Z",
+            "bridgeEventPageRefs": ["art_bridge_page"],
+            "hostLeaseRef": {"artifact_id": "art_host_lease"},
+        }
+    )
+
+    by_class = {entry["class"]: entry for entry in index}
+    assert by_class["bridge_events"] == {
+        "class": "bridge_events",
+        "status": "available",
+        "bounded": True,
+        "contentsIncluded": False,
+        "refs": [
+            {
+                "artifact_id": "art_bridge_page",
+                "kind": "bridgeEventPageRefs",
+            }
+        ],
+        "observedAt": "2026-07-26T12:00:00Z",
+        "freshness": "source_reported",
+    }
+    assert by_class["provider_and_leases"]["status"] == "available"
+    assert by_class["provider_and_leases"]["refs"][0]["artifact_id"] == (
+        "art_host_lease"
+    )
+    assert by_class["prior_remediation"]["status"] == "missing"
+    assert by_class["prior_remediation"]["bounded"] is True
+    assert by_class["prior_remediation"]["freshness"] == "source_reported"
+    assert by_class["prior_remediation"]["degradedReason"] == (
+        "historical evidence was not recorded"
+    )
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
