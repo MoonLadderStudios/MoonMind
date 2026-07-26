@@ -752,11 +752,8 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
 )
-# Let a dynamic remediation Step prove that it is still reading the active
-# workflow-scoped managed workspace before launch.  Older histories reached
-# this boundary without a locator and must retain that command sequence.
-RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH = (
-    "run-remediation-managed-session-locator-v1"
+RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
+    "run-managed-session-checkpoint-locator-v1"
 )
 # Bind a managed remediation checkpoint to the terminal verifier Step Execution
 # that last owned the shared session record. Older histories omitted this
@@ -764,10 +761,8 @@ RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH = (
 RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH = (
     "run-remediation-managed-session-source-identity-v1"
 )
-# Carry the compact managed-session binding across remediation-loop
-# Continue-As-New. Older histories wrote continuation payloads without it.
-RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH = (
-    "run-remediation-continue-as-new-session-binding-v1"
+RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
+    "run-remediation-continue-managed-session-v1"
 )
 
 
@@ -3895,14 +3890,24 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head = (
                 RemediationWorkspaceHead.model_validate(carried_head)
             )
-        if workflow.patched(
-            RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
+        carried_session = continuation.get("managedSessionBinding")
+        if isinstance(carried_session, Mapping) and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
         ):
-            carried_binding = continuation.get("managedSessionBinding")
-            if isinstance(carried_binding, Mapping):
-                self._codex_session_binding = (
-                    CodexManagedSessionBinding.model_validate(carried_binding)
+            binding = CodexManagedSessionBinding.model_validate(carried_session)
+            expected_agent_run_id = workflow.info().workflow_id
+            expected_session_workflow_id = self._workflow_scoped_session_workflow_id(
+                binding.runtime_id
+            )
+            if (
+                binding.agent_run_id != expected_agent_run_id
+                or binding.workflow_id != expected_session_workflow_id
+            ):
+                raise ValueError(
+                    "remediation loop continuation managed session belongs to "
+                    "another workflow"
                 )
+            self._codex_session_binding = binding
         self._remediation_loop_state = state.model_copy(
             update={
                 "source_run_id": workflow.info().run_id,
@@ -3936,14 +3941,14 @@ class MoonMindRunWorkflow:
             continuation["workspaceHead"] = head.model_dump(
                 by_alias=True, mode="json"
             )
-        if (
-            workflow.patched(
-                RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
-            )
-            and self._codex_session_binding is not None
+        binding = self._codex_session_binding
+        if binding is not None and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
         ):
-            continuation["managedSessionBinding"] = (
-                self._codex_session_binding.model_dump(by_alias=True, mode="json")
+            continuation["managedSessionBinding"] = binding.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
             )
         payload["remediation_loop_continuation"] = continuation
         return cast(RunWorkflowInput, payload)
@@ -5542,7 +5547,26 @@ class MoonMindRunWorkflow:
                 capture_input["criticality"] = (
                     capabilities.post_execution_checkpoint_criticality
                 )
-                if capabilities.runtime_id == "omnigent":
+                binding = self._codex_session_binding
+                if (
+                    capabilities.workspace_authority == "managed_runtime"
+                    and binding is not None
+                    and binding.runtime_id == capabilities.runtime_id
+                    and workflow.patched(
+                        RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH
+                    )
+                ):
+                    # A workflow-scoped managed session keeps one stable
+                    # workspace across plan steps. Reuse its typed identity so
+                    # a dynamic remediation step can capture and validate the
+                    # current loop head before launching its next AgentRun.
+                    capture_input["workspaceLocator"] = {
+                        "kind": "managed_runtime",
+                        "runtimeId": binding.runtime_id,
+                        "agentRunId": binding.agent_run_id,
+                        "relativePath": ".",
+                    }
+                elif capabilities.runtime_id == "omnigent":
                     try:
                         wf_info = workflow.info()
                         identity = StepExecutionIdentityModel(
@@ -5646,13 +5670,13 @@ class MoonMindRunWorkflow:
         if capture_input:
             self._step_workspace_capture_inputs[logical_step_id] = capture_input
 
-    def _inject_remediation_managed_session_workspace_locator(
+    def _inject_remediation_managed_session_checkpoint_source_identity(
         self,
         *,
         node: Mapping[str, Any],
         capture_input_source: dict[str, Any],
     ) -> None:
-        """Address the active managed workspace for pre-launch head validation."""
+        """Bind pre-launch capture to the verifier that admitted remediation."""
 
         if not self._is_moonspec_remediation_step(node):
             return
@@ -5661,38 +5685,6 @@ class MoonMindRunWorkflow:
         )
         if isinstance(source_identity, Mapping):
             capture_input_source["sourceIdentity"] = dict(source_identity)
-        binding = self._codex_session_binding
-        if binding is None:
-            return
-        runtime_id = canonical_managed_session_runtime_id(
-            self._agent_id_from_runtime_inputs(
-                node_inputs=capture_input_source,
-                fallback_name=None,
-            )
-        )
-        if runtime_id != binding.runtime_id:
-            return
-        workspace_spec = capture_input_source.get("workspaceSpec") or (
-            capture_input_source.get("workspace_spec")
-        )
-        existing_locator = capture_input_source.get("workspaceLocator") or (
-            capture_input_source.get("workspace_locator")
-        )
-        if isinstance(existing_locator, Mapping) or (
-            isinstance(workspace_spec, Mapping)
-            and isinstance(
-                workspace_spec.get("workspaceLocator")
-                or workspace_spec.get("workspace_locator"),
-                Mapping,
-            )
-        ):
-            return
-        capture_input_source["workspaceLocator"] = {
-            "kind": "managed_runtime",
-            "runtimeId": binding.runtime_id,
-            "agentRunId": binding.agent_run_id,
-            "relativePath": "repo",
-        }
 
     async def _capture_canonical_step_checkpoint_workspace(
         self,
@@ -10733,9 +10725,9 @@ class MoonMindRunWorkflow:
                         workflow_workspace_spec
                     )
                 if workflow.patched(
-                    RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH
+                    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
                 ):
-                    self._inject_remediation_managed_session_workspace_locator(
+                    self._inject_remediation_managed_session_checkpoint_source_identity(
                         node=node,
                         capture_input_source=capture_input_source,
                     )

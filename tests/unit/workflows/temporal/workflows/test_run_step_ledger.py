@@ -192,7 +192,7 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         headWorkspaceIdentityDigest="sha256:" + ("c" * 64),
     )
     capture_input_source = dict(node["inputs"])
-    workflow._inject_remediation_managed_session_workspace_locator(
+    workflow._inject_remediation_managed_session_checkpoint_source_identity(
         node=node,
         capture_input_source=capture_input_source,
     )
@@ -228,7 +228,7 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         "kind": "managed_runtime",
         "runtimeId": "codex_cli",
         "agentRunId": "wf-run-1",
-        "relativePath": "repo",
+        "relativePath": ".",
     }
     assert captured[0]["payload"]["sourceIdentity"] == {
         "workflowId": "wf-run-1",

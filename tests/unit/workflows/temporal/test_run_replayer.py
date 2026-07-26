@@ -12,12 +12,12 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
+    RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
-    RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
-    RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH,
+    RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
@@ -161,28 +161,40 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
                 "headCheckpointRef": "artifact://workspace/C1",
                 "headWorkspaceDigest": "sha256:c1",
             }
-        if workflow.patched(RUN_REMEDIATION_MANAGED_SESSION_LOCATOR_PATCH):
-            continuation["managedSessionWorkspaceLocator"] = {
-                "kind": "managed_runtime",
-                "runtimeId": "codex_cli",
-            }
-        if workflow.patched(
-            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
-        ):
-            continuation["sourceIdentity"] = {
-                "workflowId": "wf-1",
-                "runId": "run-1",
-                "logicalStepId": "verify-1",
-                "executionOrdinal": 1,
-            }
-        if workflow.patched(
-            RUN_REMEDIATION_CONTINUE_AS_NEW_SESSION_BINDING_PATCH
-        ):
-            continuation["managedSessionBinding"] = {
-                "agentRunId": "wf-1",
-                "runtimeId": "codex_cli",
-            }
         return continuation
+
+
+@workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
+class _LegacyManagedSessionCheckpointLocatorReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        return {
+            "locator": "locator_deferred",
+            "bindingCarried": False,
+            "sourceIdentityCarried": False,
+        }
+
+
+@workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
+class _CurrentManagedSessionCheckpointLocatorReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        locator = (
+            "binding_locator"
+            if workflow.patched(RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH)
+            else "locator_deferred"
+        )
+        binding_carried = workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        )
+        source_identity_carried = workflow.patched(
+            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
+        )
+        return {
+            "locator": locator,
+            "bindingCarried": binding_carried,
+            "sourceIdentityCarried": source_identity_carried,
+        }
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -557,17 +569,55 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     assert current_result["workspaceHead"]["headCheckpointRef"] == (
         "artifact://workspace/C1"
     )
-    assert current_result["managedSessionWorkspaceLocator"] == {
-        "kind": "managed_runtime",
-        "runtimeId": "codex_cli",
-    }
-    assert current_result["sourceIdentity"]["logicalStepId"] == "verify-1"
-    assert current_result["managedSessionBinding"] == {
-        "agentRunId": "wf-1",
-        "runtimeId": "codex_cli",
-    }
     replayer = Replayer(
         workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_managed_session_checkpoint_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-managed-session-locator-legacy-replay",
+            workflows=[_LegacyManagedSessionCheckpointLocatorReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyManagedSessionCheckpointLocatorReplayFixture.run,
+                id="test-managed-session-locator-legacy",
+                task_queue="test-managed-session-locator-legacy-replay",
+            )
+            assert await legacy_handle.result() == {
+                "locator": "locator_deferred",
+                "bindingCarried": False,
+                "sourceIdentityCarried": False,
+            }
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-managed-session-locator-current-replay",
+            workflows=[_CurrentManagedSessionCheckpointLocatorReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentManagedSessionCheckpointLocatorReplayFixture.run,
+                id="test-managed-session-locator-current",
+                task_queue="test-managed-session-locator-current-replay",
+            )
+            assert await current_handle.result() == {
+                "locator": "binding_locator",
+                "bindingCarried": True,
+                "sourceIdentityCarried": True,
+            }
+            current_history = await current_handle.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentManagedSessionCheckpointLocatorReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
