@@ -286,6 +286,52 @@ def _resolve_last_accepted_step(
     return last_accepted
 
 
+def resolve_resume_checkpoint_step_id(
+    *,
+    step_ledger_rows: Sequence[Mapping[str, Any]] = (),
+    terminal_dispositions: Mapping[str, str] | None = None,
+    checkpoint_refs_by_boundary: Mapping[str, Mapping[str, str]] | None = None,
+    failure_diagnostic: Mapping[str, Any] | None = None,
+    recovery_failed_step_id: str | None = None,
+) -> str | None:
+    """Return the step whose checkpoint evidence a resume would restore.
+
+    This is the single expression of the failed-step-then-last-accepted-step
+    rule that :func:`build_failed_run_recovery_manifest` applies when it selects
+    ``resume_refs``. Callers that must resolve evidence attached to that same
+    step -- notably the runtime capability snapshot and checkpoint kind, without
+    which :func:`decide_checkpoint_recovery` rejects resume as
+    ``CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING`` -- use this instead of assuming
+    the failed step owns it. A step rejected before launch never captured a
+    workspace, so its capability snapshot lives on the accepted step that did.
+    """
+
+    rows = [row for row in step_ledger_rows if isinstance(row, Mapping)]
+    rows_by_id: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        logical_step_id = _text(row.get("logicalStepId"))
+        if logical_step_id:
+            rows_by_id.setdefault(logical_step_id, row)
+    checkpoint_refs_by_boundary = dict(checkpoint_refs_by_boundary or {})
+    failed_step_id, _ = _resolve_failed_step(
+        rows=rows,
+        failure_diagnostic=failure_diagnostic,
+        recovery_failed_step_id=recovery_failed_step_id,
+    )
+    if _checkpoint_refs_for_step(
+        failed_step_id,
+        rows_by_id=rows_by_id,
+        checkpoint_refs_by_boundary=checkpoint_refs_by_boundary,
+    ):
+        return failed_step_id
+    last_accepted_step = _resolve_last_accepted_step(
+        rows=rows, terminal_dispositions=dict(terminal_dispositions or {})
+    )
+    if last_accepted_step is None:
+        return failed_step_id
+    return last_accepted_step.logical_step_id or failed_step_id
+
+
 def build_failed_run_recovery_manifest(
     *,
     workflow_id: str,
