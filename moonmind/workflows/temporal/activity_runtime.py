@@ -7571,7 +7571,7 @@ class TemporalAgentRuntimeActivities:
                     == expected_correlation["executionOrdinal"]
                 )
                 workflow_scoped_session_baseline_match = (
-                    model.boundary == "before_execution"
+                    model.boundary in {"after_prepare", "before_execution"}
                     and model.source_identity is None
                     and record.session_id is not None
                     and record.status

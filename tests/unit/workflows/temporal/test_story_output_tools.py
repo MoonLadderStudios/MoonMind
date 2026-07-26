@@ -230,6 +230,15 @@ class _FakeHttpClient:
         return _FakeHttpResponse({"id": 1})
 
 
+class _CommentReadTimeoutHttpClient(_FakeHttpClient):
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        raise story_tools.httpx.ReadTimeout(
+            "response timed out after GitHub accepted the comment",
+            request=story_tools.httpx.Request("POST", url),
+        )
+
+
 @pytest.mark.asyncio
 async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -418,6 +427,37 @@ async def test_update_github_issue_status_declares_completed_close_side_effect(
             "Updated GitHub issue MoonLadderStudios/MoonMind#1067 with mode done."
         ),
     }
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_preserves_patch_when_comment_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        story_tools.httpx,
+        "AsyncClient",
+        _CommentReadTimeoutHttpClient,
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2355,
+            "mode": "start",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["commentStatus"] == "unconfirmed"
+    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert result.outputs["warnings"] == [
+        "GitHub issue status was updated, but the automation comment result "
+        "could not be confirmed after ReadTimeout; the comment was not retried "
+        "to avoid a duplicate."
+    ]
 
 
 @pytest.mark.asyncio
