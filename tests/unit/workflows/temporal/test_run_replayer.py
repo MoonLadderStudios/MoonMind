@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
+    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
@@ -167,7 +168,11 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
 class _LegacyManagedSessionCheckpointLocatorReplayFixture:
     @workflow.run
     async def run(self) -> dict[str, Any]:
-        return {"locator": "locator_deferred", "bindingCarried": False}
+        return {
+            "locator": "locator_deferred",
+            "bindingCarried": False,
+            "sourceIdentityCarried": False,
+        }
 
 
 @workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
@@ -182,7 +187,14 @@ class _CurrentManagedSessionCheckpointLocatorReplayFixture:
         binding_carried = workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
         )
-        return {"locator": locator, "bindingCarried": binding_carried}
+        source_identity_carried = workflow.patched(
+            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
+        )
+        return {
+            "locator": locator,
+            "bindingCarried": binding_carried,
+            "sourceIdentityCarried": source_identity_carried,
+        }
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -582,6 +594,7 @@ async def test_managed_session_checkpoint_histories_replay() -> None:
             assert await legacy_handle.result() == {
                 "locator": "locator_deferred",
                 "bindingCarried": False,
+                "sourceIdentityCarried": False,
             }
             legacy_history = await legacy_handle.fetch_history()
 
@@ -599,6 +612,7 @@ async def test_managed_session_checkpoint_histories_replay() -> None:
             assert await current_handle.result() == {
                 "locator": "binding_locator",
                 "bindingCarried": True,
+                "sourceIdentityCarried": True,
             }
             current_history = await current_handle.fetch_history()
 

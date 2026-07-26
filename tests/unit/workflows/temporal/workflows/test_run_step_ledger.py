@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
@@ -17,6 +18,9 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.workflows.executions.prepared_context import (
     build_durable_retrieval_manifest_artifact,
+)
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    RemediationWorkspaceHead,
 )
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import (
@@ -132,6 +136,110 @@ def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
         },
         "diagnosticRefs": ["artifact://managed/manifest"],
         "idempotencyKey": payload["idempotencyKey"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_dynamic_remediation_validates_active_managed_session_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 25, 18, 0, tzinfo=UTC)
+    node = {
+        "id": "remediation-1",
+        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+        "inputs": {
+            "runtime": {"mode": "codex_cli"},
+        },
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+            "workspaceCaptureSourceIdentity": {
+                "workflowId": "wf-run-1",
+                "runId": "run-1",
+                "logicalStepId": "initial-verification",
+                "executionOrdinal": 1,
+            },
+        },
+    }
+    workflow._initialize_step_ledger(
+        ordered_nodes=[node],
+        dependency_map={"remediation-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "remediation-1",
+        updated_at=now,
+        summary="Remediating",
+    )
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        agentRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=2,
+        runtimeId="codex_cli",
+    )
+    workflow._remediation_workspace_head = RemediationWorkspaceHead(
+        loopId="loop-1",
+        branchRef="checkpoint-branch:loop-1",
+        rootCheckpointRef="artifact://workspace/C0",
+        rootWorkspaceDigest="sha256:" + ("d" * 64),
+        rootWorkspaceIdentityDigest="sha256:" + ("c" * 64),
+        headCheckpointRef="artifact://workspace/C0",
+        headWorkspaceDigest="sha256:" + ("d" * 64),
+        headWorkspaceIdentityDigest="sha256:" + ("c" * 64),
+    )
+    capture_input_source = dict(node["inputs"])
+    workflow._inject_remediation_managed_session_checkpoint_source_identity(
+        node=node,
+        capture_input_source=capture_input_source,
+    )
+    workflow._record_step_workspace_capture_input(
+        "remediation-1",
+        capture_input_source,
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        if activity == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        assert activity == "step_checkpoint.create"
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    await workflow._record_canonical_step_checkpoint(
+        "remediation-1",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    materialized = workflow._validate_remediation_workspace_materialization(
+        "remediation-1"
+    )
+    assert captured[0]["payload"]["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-run-1",
+        "relativePath": ".",
+    }
+    assert captured[0]["payload"]["sourceIdentity"] == {
+        "workflowId": "wf-run-1",
+        "runId": "run-1",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
+    }
+    assert materialized == {
+        "checkpointRef": "artifact://workspace/C0",
+        "workspaceDigest": "sha256:" + ("d" * 64),
+        "workspaceIdentityDigest": "sha256:" + ("c" * 64),
     }
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import subprocess
 import tarfile
@@ -208,6 +209,46 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
         assert archive.extractfile("binary.bin").read() == b"\x00\xff\x01"
         assert archive.getmember("tracked.sh").mode & 0o111
         assert archive.getmember("safe-link").issym()
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_reuses_pre_source_identity_idempotency_record(
+    tmp_path,
+) -> None:
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+    request = _request(
+        digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
+    )
+    model = ManagedWorkspaceCheckpointCaptureInput.model_validate(request)
+    legacy_immutable = model.model_dump(
+        by_alias=True,
+        mode="json",
+        exclude={"source_identity"},
+    )
+    immutable_digest = hashlib.sha256(
+        activity_runtime_module._json_bytes(legacy_immutable)
+    ).hexdigest()
+    expected = {
+        "status": "captured",
+        "idempotencyKey": model.idempotency_key,
+    }
+    record_root = store.store_root / "checkpoint_captures"
+    record_root.mkdir(parents=True)
+    record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
+    (record_root / f"{record_name}.json").write_text(
+        json.dumps(
+            {"immutableDigest": immutable_digest, "result": expected}
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        await activities.agent_runtime_capture_workspace_checkpoint(request)
+        == expected
+    )
 
 
 @pytest.mark.asyncio
@@ -651,6 +692,86 @@ async def test_managed_capture_accepts_terminal_prior_execution_as_retry_baselin
 
     assert result["status"] == "captured"
     assert result["workspace"]["kind"] == "worktree_archive"
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_accepts_terminal_verifier_as_remediation_baseline(
+    tmp_path,
+) -> None:
+    repo = tmp_path / "managed_runs" / "wf-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c",
+            "user.email=test@example.invalid", "commit", "--allow-empty",
+            "-qm", "base",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    now = datetime.now(UTC)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="wf-1",
+            workflowId="wf-1:agent:verify",
+            sessionId="sess:wf-1:codex_cli",
+            ownerRunId="source-run",
+            logicalStepId="initial-verification",
+            executionOrdinal=1,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=now,
+            finishedAt=now,
+            workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    activities._put_managed_checkpoint_artifact = put
+    request = _request(
+        digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
+    )
+    request["identity"] = {
+        "workflowId": "wf-1",
+        "runId": "continued-run",
+        "logicalStepId": "remediation-1",
+        "executionOrdinal": 1,
+    }
+    request["sourceIdentity"] = {
+        "workflowId": "wf-1",
+        "runId": "source-run",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
+    }
+    request["boundary"] = "before_execution"
+    request["workspaceLocator"] = {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-1",
+        "relativePath": ".",
+    }
+    request["idempotencyKey"] = "remediation-1:before_execution:capture"
+
+    result = await activities.agent_runtime_capture_workspace_checkpoint(request)
+
+    assert result["status"] == "captured"
+    assert result["workspace"]["kind"] == "worktree_archive"
+
+    request["sourceIdentity"] = {
+        **request["sourceIdentity"],
+        "runId": "unrelated-run",
+    }
+    request["idempotencyKey"] = "remediation-1:wrong-source:capture"
+    with pytest.raises(Exception, match="source Step Execution"):
+        await activities.agent_runtime_capture_workspace_checkpoint(request)
 
 
 @pytest.mark.asyncio

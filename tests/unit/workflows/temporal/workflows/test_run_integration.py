@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
@@ -3663,7 +3664,11 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
+        },
     )
     ordered_nodes: list[dict[str, Any]] = []
 
@@ -3690,6 +3695,12 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     assert ordered_nodes[0]["inputs"]["remediationWorkspaceHeadRef"] == (
         "artifact://art_initial_checkpoint"
     )
+    assert ordered_nodes[0]["annotations"]["workspaceCaptureSourceIdentity"] == {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "initial-verification",
+        "executionOrdinal": 1,
+    }
 
 
 @pytest.mark.asyncio
