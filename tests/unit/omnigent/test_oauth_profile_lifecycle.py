@@ -643,7 +643,7 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
+async def test_host_preparation_materializes_normal_workflow_workspace(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=workspace_root
@@ -652,15 +652,87 @@ async def test_host_preparation_rejects_unmaterialized_workspace_without_mutatio
     runtime._run = AsyncMock(return_value=(0, "", ""))
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
-        await runtime._prepare_workspace(
-            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
-            current_workflow_id="workflow-1",
-            current_step_execution_id="step-1",
-        )
+    workspace = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        workspace_intent={
+            "inputRefs": ["artifact://attachment/1"],
+            "resolvedSkillsetRef": "artifact://skills/1",
+            "publishMode": "pull_request",
+        },
+    )
 
-    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
-    assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+    manifest = json.loads(
+        (workspace.parent / "workspace-manifest.json").read_text()
+    )
+    assert manifest["issueRef"] == "MoonLadderStudios/MoonMind#3507"
+    assert manifest["inputRefs"] == ["artifact://attachment/1"]
+    assert manifest["resolvedSkillsetRef"] == "artifact://skills/1"
+    assert manifest["publishMode"] == "pull_request"
+    runtime._run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_preparation_clones_authored_branch_once_and_records_source(
+    tmp_path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+
+    async def run(*args, **_kwargs):
+        if args[:2] == ("git", "clone"):
+            destination = Path(args[-1])
+            (destination / ".git").mkdir(parents=True)
+            return 0, "", ""
+        staging = (
+            workspace_root
+            / "temporal_sandbox"
+            / workspace_id
+            / ".repo.materializing"
+        )
+        if args[:3] == ("git", "-C", str(staging)):
+            return 0, "abc123\n", ""
+        return 0, "", ""
+
+    runtime._run = AsyncMock(side_effect=run)
+    workspace = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        workspace_intent={
+            "repository": "owner/repo",
+            "startingBranch": "feature/authored",
+            "targetBranch": "feature/output",
+        },
+    )
+    first_call = runtime._run.await_args_list[0].args
+    assert first_call == (
+        "git",
+        "clone",
+        "--no-tags",
+        "--branch",
+        "feature/authored",
+        "https://github.com/owner/repo.git",
+        str(workspace.parent / ".repo.materializing"),
+    )
+    manifest = json.loads(
+        (workspace.parent / "workspace-manifest.json").read_text()
+    )
+    assert manifest["sourceCommit"] == "abc123"
+    assert manifest["targetBranch"] == "feature/output"
+
+    runtime._run.reset_mock()
+    retried = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        workspace_intent={"repository": "owner/repo", "startingBranch": "main"},
+    )
+    assert retried == workspace
     runtime._run.assert_not_awaited()
 
 
@@ -730,6 +802,60 @@ def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:
                 }
             }
         )
+    )
+
+
+def test_workspace_intent_combines_normal_and_prepared_refs_without_paths() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="workflow-1",
+        idempotencyKey="idem-1",
+        inputRefs=["artifact://attachment/1"],
+        resolvedSkillsetRef="artifact://skills/1",
+        workspaceSpec={
+            "repository": "owner/repo",
+            "startingBranch": "feature/authored",
+            "targetBranch": "feature/output",
+        },
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "workflow-1:run-1:implement:execution:1",
+            "reason": "initial_execution",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "preparedInputRefs": [
+                "artifact://attachment/1",
+                "artifact://context/1",
+            ],
+            "runtimeSelection": {},
+            "skillSourcePolicy": {},
+        },
+        parameters={
+            "publishMode": "pull_request",
+            "requiredCapabilities": ["gh"],
+        },
+    )
+
+    intent = OmnigentProfileBoundExecutionCoordinator._workspace_intent(request)
+
+    assert intent == {
+        "repository": "owner/repo",
+        "startingBranch": "feature/authored",
+        "targetBranch": "feature/output",
+        "publishMode": "pull_request",
+        "inputRefs": [
+            "artifact://attachment/1",
+            "artifact://context/1",
+        ],
+        "resolvedSkillsetRef": "artifact://skills/1",
+        "requiredCapabilities": ["gh"],
+    }
+    assert not any(
+        key.lower().endswith(("path", "volume", "bindsource")) for key in intent
     )
 
 

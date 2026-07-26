@@ -575,6 +575,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
+                workspace_intent=self._workspace_intent(request),
             )
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")
@@ -1028,6 +1029,28 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code="WORKSPACE_LOCATOR_REQUIRED",
             )
         return dict(locator)
+
+    @classmethod
+    def _workspace_intent(cls, request: AgentExecutionRequest) -> dict[str, Any]:
+        """Compile refs and operator intent without carrying local path authority."""
+        spec = request.workspace_spec
+        parameters = request.parameters or {}
+        input_refs = list(request.input_refs)
+        if request.step_execution is not None:
+            input_refs.extend(request.step_execution.prepared_input_refs)
+        return {
+            "repository": (
+                spec.get("repository")
+                or spec.get("repo")
+                or parameters.get("repository")
+            ),
+            "startingBranch": spec.get("startingBranch") or spec.get("branch"),
+            "targetBranch": spec.get("targetBranch"),
+            "publishMode": parameters.get("publishMode"),
+            "inputRefs": list(dict.fromkeys(input_refs)),
+            "resolvedSkillsetRef": request.resolved_skillset_ref,
+            "requiredCapabilities": list(cls._required_capabilities(request)),
+        }
 
     @staticmethod
     def _remediation_workspace(

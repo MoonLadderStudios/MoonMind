@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -122,6 +124,7 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
+        workspace_intent: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -137,6 +140,7 @@ class OmnigentOAuthHostRuntime:
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
+            workspace_intent=workspace_intent,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -207,8 +211,32 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
         )
         validated["workspacePath"] = result["workspacePath"]
-        validated["activeSkillsPath"] = str(skill_projection)
+        validated["activeSkillsPath"] = "/opt/moonmind-skills"
         validated["mountedTools"] = mounted_tool_evidence
+        manifest_path = workspace_source.parent / "workspace-manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            validated["workspaceEvidence"] = {
+                key: manifest.get(key)
+                for key in (
+                    "repository",
+                    "startingBranch",
+                    "targetBranch",
+                    "sourceCommit",
+                    "inputRefs",
+                    "resolvedSkillsetRef",
+                    "requiredCapabilities",
+                )
+            }
+        validated["effectiveLaunchRef"] = launch["snapshotRef"]
+        validated["mountClasses"] = [
+            "workspace",
+            "oauth",
+            "omnigent_state",
+            "skills_tools",
+            "artifacts",
+            "cache",
+        ]
         return validated
 
     @staticmethod
@@ -757,6 +785,7 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
+        workspace_intent: Mapping[str, Any] | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
@@ -767,24 +796,37 @@ class OmnigentOAuthHostRuntime:
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
-        # Validate the workflow-derived identity and containment before writing
-        # even the owner record.
-        resolve_sandbox_workspace_locator(
+        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+        authoritative_record = record_store.load(locator.workspace_id)
+        expected_record = SandboxWorkspaceRecord(
+            workspace_id=locator.workspace_id,
+            workflow_id=current_workflow_id,
+            step_execution_id=current_step_execution_id,
+            relative_path=locator.relative_path,
+        )
+        if authoritative_record is not None and authoritative_record != expected_record:
+            # Ownership is checked before clone, checkout, restore, or any host
+            # mutation. A retry may only reuse its exact prior record.
+            record_store.ensure(expected_record)
+        workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
-            must_exist=True,
+            owner_record=authoritative_record,
+            expected_workflow_id=current_workflow_id,
+            expected_step_execution_id=current_step_execution_id,
+            must_exist=False,
         )
-        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
-        authoritative_record = record_store.load(locator.workspace_id)
         if authoritative_record is None:
-            authoritative_record = SandboxWorkspaceRecord(
-                workspace_id=locator.workspace_id,
+            record_store.ensure(expected_record)
+            authoritative_record = expected_record
+        if not workspace.is_dir():
+            await self._materialize_workspace(
+                workspace=workspace,
+                intent=workspace_intent or {},
                 workflow_id=current_workflow_id,
                 step_execution_id=current_step_execution_id,
-                relative_path=locator.relative_path,
             )
-            record_store.ensure(authoritative_record)
         workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
@@ -795,6 +837,81 @@ class OmnigentOAuthHostRuntime:
             must_exist=True,
         )
         return workspace
+
+    async def _materialize_workspace(
+        self,
+        *,
+        workspace: Path,
+        intent: Mapping[str, Any],
+        workflow_id: str,
+        step_execution_id: str,
+    ) -> None:
+        """Materialize normal workflow intent once at the owning worker boundary."""
+        repository = str(intent.get("repository") or intent.get("repo") or "").strip()
+        starting_branch = str(
+            intent.get("startingBranch") or intent.get("branch") or ""
+        ).strip()
+        staging = workspace.parent / f".{workspace.name}.materializing"
+        if staging.is_symlink():
+            raise OmnigentOAuthHostError(
+                "workspace materialization staging path is a symlink",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            if repository:
+                clone_source = (
+                    repository
+                    if "://" in repository or repository.startswith("git@")
+                    else f"https://github.com/{repository.removesuffix('.git')}.git"
+                )
+                command = ["git", "clone", "--no-tags"]
+                if starting_branch:
+                    command.extend(["--branch", starting_branch])
+                command.extend([clone_source, str(staging)])
+                code, _stdout, stderr = await self._run(*command, check=False)
+                if code != 0:
+                    raise OmnigentOAuthHostError(
+                        f"authorized workspace repository materialization failed: {stderr[:500]}",
+                        code="WORKSPACE_MATERIALIZATION_FAILED",
+                    )
+            else:
+                staging.mkdir(mode=0o700)
+
+            head_commit = ""
+            if (staging / ".git").is_dir():
+                code, stdout, _stderr = await self._run(
+                    "git", "-C", str(staging), "rev-parse", "HEAD", check=False
+                )
+                if code == 0:
+                    head_commit = stdout.strip()
+            evidence = {
+                "schemaVersion": "v1",
+                "issueRef": "MoonLadderStudios/MoonMind#3507",
+                "workflowId": workflow_id,
+                "stepExecutionId": step_execution_id,
+                "repository": repository or None,
+                "startingBranch": starting_branch or None,
+                "targetBranch": intent.get("targetBranch"),
+                "publishMode": intent.get("publishMode"),
+                "sourceCommit": head_commit or None,
+                "inputRefs": list(intent.get("inputRefs") or []),
+                "resolvedSkillsetRef": intent.get("resolvedSkillsetRef"),
+                "requiredCapabilities": list(intent.get("requiredCapabilities") or []),
+            }
+            (workspace.parent / "workspace-manifest.json").write_text(
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            # Atomic publication makes retries observe either no workspace or the
+            # complete authoritative workspace, never a partial clone.
+            staging.rename(workspace)
+        except Exception:
+            if staging.exists():
+                shutil.rmtree(staging)
+            raise
 
     async def _initialize_required_tools(self) -> None:
         await self._run(
