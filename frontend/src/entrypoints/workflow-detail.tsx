@@ -727,6 +727,16 @@ const RecoveryEligibilitySchema = z
     supportsSameSessionContinuation: z.boolean().nullable().optional(),
     sessionRecoverable: z.boolean().nullable().optional(),
     workspaceRecoverable: z.boolean().nullable().optional(),
+    branchCreationAvailable: z.boolean().nullable().optional(),
+    liveReattachReason: z.string().nullable().optional(),
+    workspaceRestoreReason: z.string().nullable().optional(),
+    branchCreationReason: z.string().nullable().optional(),
+    requiredProfileRef: z.string().nullable().optional(),
+    requiredPolicyRef: z.string().nullable().optional(),
+    capacityBlocked: z.boolean().nullable().optional(),
+    readinessBlocked: z.boolean().nullable().optional(),
+    checkpointDigests: z.record(z.string(), z.string()).default({}),
+    checkpointValidationStatus: z.string().nullable().optional(),
     authoritativeWorkspaceCheckpointKind: z.string().nullable().optional(),
     partialRecoveryReason: z.string().nullable().optional(),
     operatorGuidance: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume', 'needs_human']),
@@ -6698,10 +6708,28 @@ function RecoveryEvidencePanel({
           <li><strong>Checkpoint kind:</strong> {formatStatusLabel(recovery.checkpointKind)}</li>
         ) : null}
         {recovery?.sessionRecoverable != null ? (
-          <li><strong>Session reattach:</strong> {recovery.sessionRecoverable ? 'supported' : 'unavailable'}</li>
+          <li><strong>Session reattach:</strong> {recovery.sessionRecoverable ? 'supported' : `unavailable${recovery.liveReattachReason ? ` — ${formatStatusLabel(recovery.liveReattachReason)}` : ''}`}</li>
         ) : null}
         {recovery?.workspaceRecoverable != null ? (
-          <li><strong>Workspace restore:</strong> {recovery.workspaceRecoverable ? 'supported' : 'unavailable'}</li>
+          <li><strong>Workspace restore:</strong> {recovery.workspaceRecoverable ? 'supported' : `unavailable${recovery.workspaceRestoreReason ? ` — ${formatStatusLabel(recovery.workspaceRestoreReason)}` : ''}`}</li>
+        ) : null}
+        {recovery?.branchCreationAvailable != null ? (
+          <li><strong>Checkpoint branch:</strong> {recovery.branchCreationAvailable ? 'supported' : `unavailable${recovery.branchCreationReason ? ` — ${formatStatusLabel(recovery.branchCreationReason)}` : ''}`}</li>
+        ) : null}
+        {recovery?.checkpointValidationStatus ? (
+          <li><strong>Checkpoint validation:</strong> {formatStatusLabel(recovery.checkpointValidationStatus)}</li>
+        ) : null}
+        {recovery?.requiredProfileRef ? (
+          <li><strong>Required profile:</strong> <code className="text-xs break-all">{recovery.requiredProfileRef}</code></li>
+        ) : null}
+        {recovery?.requiredPolicyRef ? (
+          <li><strong>Required policy:</strong> <code className="text-xs break-all">{recovery.requiredPolicyRef}</code></li>
+        ) : null}
+        {recovery?.capacityBlocked ? (
+          <li><strong>Capacity:</strong> blocked</li>
+        ) : null}
+        {recovery?.readinessBlocked ? (
+          <li><strong>Readiness:</strong> blocked</li>
         ) : null}
         {recovery?.authoritativeWorkspaceCheckpointKind ? (
           <li><strong>Authoritative workspace checkpoint:</strong> {formatStatusLabel(recovery.authoritativeWorkspaceCheckpointKind)}</li>

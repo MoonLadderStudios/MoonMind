@@ -2403,7 +2403,12 @@ describe('Workflow Detail Entrypoint', () => {
               sourceWorkflowId: 'wf-source',
               sourceRunId: 'run-source',
               sessionRecoverable: false,
+              liveReattachReason: 'host_lease_expired',
               workspaceRecoverable: true,
+              branchCreationAvailable: false,
+              branchCreationReason: 'capacity_unavailable',
+              checkpointValidationStatus: 'valid',
+              requiredProfileRef: 'profile://codex',
               authoritativeWorkspaceCheckpointKind: 'worktree_archive',
               operatorGuidance: 'resume',
               evidence: [
@@ -2442,7 +2447,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText(/Resume from checkpoint is the default recovery action/)).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint/before')).toBeTruthy();
     expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('unavailable');
+    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('host lease expired');
     expect(screen.getByText('Workspace restore:').parentElement?.textContent).toContain('supported');
+    expect(screen.getByText('Checkpoint branch:').parentElement?.textContent).toContain('capacity unavailable');
+    expect(screen.getByText('Checkpoint validation:').parentElement?.textContent).toContain('valid');
+    expect(screen.getByText('Required profile:').parentElement?.textContent).toContain('profile://codex');
     expect(screen.getByText('Authoritative workspace checkpoint:').parentElement?.textContent).toContain('worktree archive');
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',

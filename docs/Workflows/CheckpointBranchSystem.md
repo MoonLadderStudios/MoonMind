@@ -1043,11 +1043,15 @@ fresh_omnigent_session_from_checkpoint
 
 Flow:
 
-1. validate the source checkpoint;
-2. restore or synthesize an isolated git work branch/workspace from MoonMind evidence;
+1. validate the complete source manifest, including artifact digests, lineage,
+   repository baseline/head, Provider Profile, and credential generation;
+2. restore an isolated clean workspace from its pinned baseline and
+   MoonMind-owned checkpoint/diff/head evidence;
 3. create a new Omnigent session;
-4. pass branch-turn instructions through `parameters.omnigent.prompt.instructionRef`;
-5. include prior Omnigent capture refs as evidence refs;
+4. restore immutable instruction/context refs and pass branch-turn instructions
+   through `parameters.omnigent.prompt.instructionRef`;
+5. pass the external-state artifact to the fresh session and retain the source
+   policy/effective-launch evidence while selecting a new authorized host;
 6. capture the new Omnigent session output into MoonMind artifacts;
 7. bind the new Omnigent result to the branch turn evidence.
 
@@ -1058,6 +1062,12 @@ The branch must use a new Omnigent idempotency key:
 ```
 
 It must not reuse the parent Omnigent attempt's idempotency key because branch-turn instructions produce a different first-message digest.
+
+Branch creation is unavailable unless the manifest's independent
+`branchCreationAvailable` projection is true. A live session alone cannot
+authorize a branch: workspace cold-restore authority must also be complete.
+Capacity/readiness blocks are reported separately from permanent evidence
+denials, and neither case may be presented as resumable.
 
 ### 12.2 v2 branch mode: provider continuation
 

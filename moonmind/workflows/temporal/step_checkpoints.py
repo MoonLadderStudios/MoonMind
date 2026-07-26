@@ -19,6 +19,7 @@ from moonmind.schemas.temporal_models import (
     WorkspaceCheckpointKind,
     WorkspacePolicy,
 )
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 
 _POLICY_CHECKPOINT_KINDS: dict[WorkspacePolicy, tuple[WorkspaceCheckpointKind, ...]] = {
     "restore_pre_execution": (
@@ -76,6 +77,7 @@ def build_step_checkpoint_payload(
     plan_digest: str | None = None,
     prepared_input_refs: list[str] | tuple[str, ...] = (),
     step_outputs: Mapping[str, Any] | None = None,
+    omnigent_checkpoint: OmnigentCheckpointIdentity | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable checkpoint artifact payload."""
 
@@ -91,10 +93,13 @@ def build_step_checkpoint_payload(
         planDigest=plan_digest,
         preparedInputRefs=list(prepared_input_refs),
         workspace=dict(workspace),
+        omnigentCheckpoint=omnigent_checkpoint,
         stepOutputs=dict(step_outputs or {}),
         createdAt=created_at,
     )
     payload = checkpoint.model_dump(by_alias=True, mode="json")
+    if checkpoint.omnigent is None:
+        payload.pop("omnigentCheckpoint", None)
     payload["workspace"] = checkpoint.workspace.model_dump(
         by_alias=True,
         mode="json",
