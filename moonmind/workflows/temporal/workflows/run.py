@@ -744,6 +744,13 @@ RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = (
 RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
     "run-remediation-loop-artifact-ref-normalization-v1"
 )
+# Promote canonical checkpoint Activity evidence into cumulative remediation
+# authority and carry that compact head through Continue-As-New. Histories that
+# already admitted remediation without this evidence retain their prior command
+# payloads during replay.
+RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
+    "run-workflow-owned-remediation-head-v1"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1414,6 +1421,9 @@ class MoonMindRunWorkflow:
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
+        self._step_checkpoint_workspace_evidence_by_boundary: dict[
+            str, dict[str, dict[str, str]]
+        ] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
         self._step_checkpoint_capture_outcomes: dict[str, dict[str, Any]] = {}
         self._step_external_agent_ids: dict[str, str] = {}
@@ -3972,6 +3982,7 @@ class MoonMindRunWorkflow:
         gate_result_ref: str | None,
         remaining_work_ref: str | None,
         current_index: int | None = None,
+        logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
         workspace_head: Mapping[str, Any] | None = None,
     ) -> bool:
@@ -4008,10 +4019,29 @@ class MoonMindRunWorkflow:
                         "remaining-work result"
                     )
                 remaining_work_ref = normalized_remaining_work_ref
-        if self._remediation_workspace_head is None and workspace_head is not None:
-            self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
-                workspace_head
+        workflow_owned_head_enabled = workflow.patched(
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
+        )
+        if (
+            workflow_owned_head_enabled
+            and self._remediation_workspace_head is None
+            and logical_step_id
+            and gate_result_ref
+        ):
+            self._initialize_remediation_head_from_canonical_checkpoint(
+                logical_step_id=logical_step_id,
+                gate_result_ref=gate_result_ref,
+                verdict=verdict,
             )
+        if (
+            not workflow_owned_head_enabled
+            and self._remediation_workspace_head is None
+            and workspace_head is not None
+        ):
+            self._remediation_workspace_head = (
+                RemediationWorkspaceHead.model_validate(workspace_head)
+            )
+        if self._remediation_workspace_head is not None:
             state = state.model_copy(
                 update={
                     "workspace_head_ref": (
@@ -4067,6 +4097,15 @@ class MoonMindRunWorkflow:
             decision=decision,
             decision_ref=decision_ref,
         )
+        if (
+            workflow_owned_head_enabled
+            and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
+            and self._remediation_workspace_head is None
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic remediation admission has no canonical workspace checkpoint",
+            )
         continue_after_admission = (
             workflow.patched(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH)
             and should_continue_as_new(spec=spec, state=state)
@@ -4163,6 +4202,10 @@ class MoonMindRunWorkflow:
             )
         self._step_checkpoint_refs.pop(logical_step_id, None)
         self._step_checkpoint_refs_by_boundary.pop(logical_step_id, None)
+        self._step_checkpoint_workspace_evidence_by_boundary.pop(
+            logical_step_id,
+            None,
+        )
         try:
             clear_step_checkpoint_evidence(
                 self._step_ledger_rows,
@@ -5775,6 +5818,30 @@ class MoonMindRunWorkflow:
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:
             self._step_checkpoint_refs[logical_step_id] = checkpoint_ref
+            workspace = capture["workspace"]
+            workspace_kind = str(workspace.get("kind") or "").strip()
+            workspace_digest = str(
+                workspace.get("workspaceDigest") or workspace.get("archiveDigest") or ""
+            ).strip()
+            workspace_identity_digest = str(
+                workspace.get("workspaceIdentityDigest") or ""
+            ).strip()
+            checkpoint_manifest_ref = str(
+                workspace.get("manifestRef") or ""
+            ).strip()
+            evidence_by_boundary = (
+                self._step_checkpoint_workspace_evidence_by_boundary.setdefault(
+                    logical_step_id,
+                    {},
+                )
+            )
+            evidence_by_boundary[str(boundary)] = {
+                "checkpointRef": checkpoint_ref,
+                "workspaceKind": workspace_kind,
+                "workspaceDigest": workspace_digest,
+                "workspaceIdentityDigest": workspace_identity_digest,
+                "checkpointManifestRef": checkpoint_manifest_ref,
+            }
         return checkpoint_ref or None
 
     def _record_primary_execution_outcome(
@@ -5994,12 +6061,14 @@ class MoonMindRunWorkflow:
         *,
         publish_mode: str,
         updated_at: datetime,
+        required_for_remediation: bool = False,
     ) -> bool:
         """Return whether a required pre-publication checkpoint failed."""
 
         if (
             workflow.patched(RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH)
             and publish_mode == "none"
+            and not required_for_remediation
         ):
             return False
         try:
@@ -6259,6 +6328,135 @@ class MoonMindRunWorkflow:
             "remediate remaining gaps"
         )
 
+    def _canonical_remediation_checkpoint_evidence(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, str] | None:
+        """Return the latest workflow-owned workspace checkpoint for a Step."""
+
+        evidence_by_boundary = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        )
+        for boundary in ("before_publication", "after_execution"):
+            evidence = evidence_by_boundary.get(boundary)
+            if not isinstance(evidence, Mapping):
+                continue
+            checkpoint_ref = self._bounded_story_loop_artifact_ref(
+                evidence.get("checkpointRef")
+            )
+            workspace_kind = str(evidence.get("workspaceKind") or "").strip()
+            workspace_digest = str(
+                evidence.get("workspaceDigest") or ""
+            ).strip()
+            workspace_identity_digest = str(
+                evidence.get("workspaceIdentityDigest") or ""
+            ).strip()
+            checkpoint_manifest_ref = self._bounded_story_loop_artifact_ref(
+                evidence.get("checkpointManifestRef")
+            )
+            if (
+                workspace_kind == "worktree_archive"
+                and checkpoint_ref
+                and workspace_digest.startswith("sha256:")
+                and workspace_identity_digest.startswith("sha256:")
+                and checkpoint_manifest_ref
+            ):
+                return {
+                    "checkpointRef": checkpoint_ref,
+                    "workspaceDigest": workspace_digest,
+                    "workspaceIdentityDigest": workspace_identity_digest,
+                    "checkpointManifestRef": checkpoint_manifest_ref,
+                }
+        return None
+
+    def _initialize_remediation_head_from_canonical_checkpoint(
+        self,
+        *,
+        logical_step_id: str,
+        gate_result_ref: str,
+        verdict: str,
+    ) -> RemediationWorkspaceHead | None:
+        """Promote captured substrate evidence into the workflow-owned loop head."""
+
+        spec = self._remediation_loop_spec
+        if spec is None:
+            return None
+        evidence = self._canonical_remediation_checkpoint_evidence(logical_step_id)
+        if evidence is None:
+            return None
+        identity = self._canonical_step_checkpoint_identity(logical_step_id)
+        normalized_verdict = str(verdict or "").strip().upper()
+        head = RemediationWorkspaceHead(
+            loopId=spec.loop_id,
+            branchRef=f"checkpoint-branch:{spec.loop_id}",
+            rootCheckpointRef=evidence["checkpointRef"],
+            rootWorkspaceDigest=evidence["workspaceDigest"],
+            rootWorkspaceIdentityDigest=evidence["workspaceIdentityDigest"],
+            headCheckpointRef=evidence["checkpointRef"],
+            headWorkspaceDigest=evidence["workspaceDigest"],
+            headWorkspaceIdentityDigest=evidence["workspaceIdentityDigest"],
+            headStepExecutionId=(
+                build_step_execution_id(identity) if identity is not None else None
+            ),
+            latestVerificationRef=gate_result_ref,
+            latestVerificationVerdict=normalized_verdict,
+            status=(
+                "accepted"
+                if normalized_verdict == "FULLY_IMPLEMENTED"
+                else "verified_incomplete"
+            ),
+        )
+        self._remediation_workspace_head = head
+        return head
+
+    def _validate_remediation_workspace_materialization(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, str]:
+        """Require Activity-owned proof that a remediation reads the loop head."""
+
+        head = self._remediation_workspace_head
+        evidence_by_boundary = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(
+                logical_step_id
+            )
+            or {}
+        )
+        evidence = evidence_by_boundary.get("before_execution")
+        if head is None or not isinstance(evidence, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_RESTORE_INVALID,
+                "remediation workspace was not checkpointed before execution",
+            )
+        workspace_kind = str(evidence.get("workspaceKind") or "").strip()
+        workspace_digest = str(evidence.get("workspaceDigest") or "").strip()
+        workspace_identity_digest = str(
+            evidence.get("workspaceIdentityDigest") or ""
+        ).strip()
+        if (
+            workspace_kind != "worktree_archive"
+            or not workspace_digest.startswith("sha256:")
+            or not workspace_identity_digest.startswith("sha256:")
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_RESTORE_INVALID,
+                "remediation runtime cannot prove a restorable workspace before execution",
+            )
+        if (
+            workspace_digest != head.head_workspace_digest
+            or workspace_identity_digest != head.head_workspace_identity_digest
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "materialized remediation workspace does not match the current head",
+            )
+        return {
+            "checkpointRef": head.head_checkpoint_ref,
+            "workspaceDigest": workspace_digest,
+            "workspaceIdentityDigest": workspace_identity_digest,
+        }
+
     def _inject_remediation_workspace_baseline(
         self,
         *,
@@ -6409,10 +6607,65 @@ class MoonMindRunWorkflow:
             if isinstance(outputs, Mapping)
             else None
         )
+        workflow_owned_head_enabled = workflow.patched(
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
+        )
+        captured = (
+            self._canonical_remediation_checkpoint_evidence(
+                str(node.get("id") or "")
+            )
+            if workflow_owned_head_enabled
+            else None
+        )
+        if workflow_owned_head_enabled:
+            output_payload = None
+            materialized = self._validate_remediation_workspace_materialization(
+                str(node.get("id") or "")
+            )
+        else:
+            materialized = None
+        if captured is not None:
+            captured_workspace_identity_digest = captured.get(
+                "workspaceIdentityDigest"
+            )
+            if (
+                not captured_workspace_identity_digest
+                or captured_workspace_identity_digest
+                != self._remediation_workspace_head.head_workspace_identity_digest
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "captured candidate workspace identity does not match the current head",
+                )
+            checkpoint_manifest_ref = captured.get("checkpointManifestRef")
+            if (
+                captured["workspaceDigest"]
+                == attempt_payload.get("expectedBaseDigest")
+            ):
+                output_payload = {
+                    "attemptEvidenceRef": captured["checkpointRef"],
+                    "parentCheckpointRef": materialized["checkpointRef"],
+                    "parentWorkspaceDigest": materialized["workspaceDigest"],
+                    "outcome": "no_candidate_change",
+                }
+            elif checkpoint_manifest_ref:
+                output_payload = {
+                    "attemptEvidenceRef": captured["checkpointRef"],
+                    "parentCheckpointRef": materialized["checkpointRef"],
+                    "parentWorkspaceDigest": materialized["workspaceDigest"],
+                    "outputCheckpointRef": captured["checkpointRef"],
+                    "outputWorkspaceDigest": captured["workspaceDigest"],
+                    "checkpointManifestRef": checkpoint_manifest_ref,
+                    "outcome": "candidate_captured",
+                }
         if not isinstance(output_payload, Mapping):
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,
-                "completed remediation step has no captured attempt output",
+                (
+                    "completed remediation step has no authoritative checkpoint output"
+                    if workflow_owned_head_enabled
+                    else "completed remediation step has no captured attempt output"
+                ),
             )
         attempt = RemediationAttemptInput.model_validate(attempt_payload)
         output = RemediationAttemptOutput.model_validate(output_payload)
@@ -10408,6 +10661,15 @@ class MoonMindRunWorkflow:
                         boundary="before_execution",
                         updated_at=workflow.now(),
                     )
+                    if (
+                        workflow.patched(
+                            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
+                        )
+                        and self._is_moonspec_remediation_step(node)
+                    ):
+                        self._validate_remediation_workspace_materialization(
+                            node_id
+                        )
                     step_execution_naming_enabled = workflow.patched(
                         RUN_STEP_EXECUTION_NAMING_PATCH
                     )
@@ -11636,15 +11898,20 @@ class MoonMindRunWorkflow:
                     continue
                 continue
 
-            self._advance_remediation_workspace_head(
-                node=node,
-                node_inputs=node_inputs,
-                execution_result=execution_result,
-                step_execution_id=(
-                    f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
-                    f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
-                ),
+            workflow_owned_remediation_head = (
+                self._is_moonspec_remediation_step(node)
+                and workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
             )
+            if not workflow_owned_remediation_head:
+                self._advance_remediation_workspace_head(
+                    node=node,
+                    node_inputs=node_inputs,
+                    execution_result=execution_result,
+                    step_execution_id=(
+                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                    ),
+                )
             self._mark_step_terminal(
                 node_id,
                 status="completed",
@@ -11742,15 +12009,46 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            prepublication_checkpoint_failed = (
-                await self._record_prepublication_checkpoint(
-                    node_id,
-                    publish_mode=publish_mode,
-                    updated_at=workflow.now(),
+            remediation_checkpoint_required = (
+                workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+                and self._remediation_loop_spec is not None
+                and (
+                    workflow_owned_remediation_head
+                    or self._moonspec_step_role(node) == "moonspec-verification-gate"
                 )
             )
+            if remediation_checkpoint_required:
+                prepublication_checkpoint_failed = (
+                    await self._record_prepublication_checkpoint(
+                        node_id,
+                        publish_mode=publish_mode,
+                        updated_at=workflow.now(),
+                        required_for_remediation=True,
+                    )
+                )
+            else:
+                # Preserve the historical internal invocation shape for replayed
+                # paths and test/runtime adapters that predate remediation-owned
+                # checkpoint admission.
+                prepublication_checkpoint_failed = (
+                    await self._record_prepublication_checkpoint(
+                        node_id,
+                        publish_mode=publish_mode,
+                        updated_at=workflow.now(),
+                    )
+                )
             if prepublication_checkpoint_failed:
                 break
+            if workflow_owned_remediation_head:
+                self._advance_remediation_workspace_head(
+                    node=node,
+                    node_inputs=node_inputs,
+                    execution_result=execution_result,
+                    step_execution_id=(
+                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                    ),
+                )
             publication_raised = False
             try:
                 await self._record_publish_result_from_execution(
@@ -11817,6 +12115,7 @@ class MoonMindRunWorkflow:
                                     step_gate_result.remaining_work_ref
                                 ),
                                 current_index=index,
+                                logical_step_id=node_id,
                                 recoverable_evidence=(
                                     step_gate_result.recoverable_in_current_runtime
                                 ),

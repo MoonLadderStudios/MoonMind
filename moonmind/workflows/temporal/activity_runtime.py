@@ -303,6 +303,24 @@ def _sha256_file(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
+
+def _workspace_identity_digest(workspace: Path) -> str:
+    canonical_path = str(workspace.resolve())
+    payload = ("moonmind-workspace-identity/v1\0" + canonical_path).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
+    payload = json.dumps(
+        {
+            "schemaVersion": "moonmind-workspace-content/v1",
+            "entries": list(entries),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
@@ -3565,6 +3583,7 @@ class TemporalSandboxActivities:
         model: WorkspaceCheckpointCaptureInput,
         workspace: Path,
     ) -> WorkspaceCheckpointEvidenceModel:
+        workspace_identity_digest = _workspace_identity_digest(workspace)
         if model.kind == "git_patch":
             if model.include_untracked or model.include_ignored_files:
                 raise TemporalActivityRuntimeError(
@@ -3596,6 +3615,7 @@ class TemporalSandboxActivities:
                 kind="git_patch",
                 baseCommit=model.base_commit,
                 patchRef=patch_ref,
+                workspaceIdentityDigest=workspace_identity_digest,
                 manifestRef=manifest_ref,
                 includesUntracked=model.include_untracked,
                 includesIgnoredFiles=model.include_ignored_files,
@@ -3609,6 +3629,7 @@ class TemporalSandboxActivities:
                 kind="git_commit",
                 baseCommit=model.base_commit,
                 headCommit=head,
+                workspaceIdentityDigest=workspace_identity_digest,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "ephemeral_workspace_ref":
@@ -3627,10 +3648,12 @@ class TemporalSandboxActivities:
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
                 workspace_artifact_ref=workspace_ref,
+                workspaceIdentityDigest=workspace_identity_digest,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
             archive_payload, entries = self._build_worktree_archive(workspace)
+            workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
@@ -3642,6 +3665,7 @@ class TemporalSandboxActivities:
                 "baseCommit": model.base_commit,
                 "archiveRef": archive_ref,
                 "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "workspaceDigest": workspace_digest,
                 "entries": entries,
                 "pathCount": len(entries),
             }
@@ -3669,6 +3693,8 @@ class TemporalSandboxActivities:
                 baseCommit=model.base_commit,
                 archiveRef=archive_ref,
                 archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                workspaceDigest=workspace_digest,
+                workspaceIdentityDigest=workspace_identity_digest,
                 manifestRef=manifest_ref,
                 manifestDigest="sha256:" + hashlib.sha256(manifest_payload).hexdigest(),
                 createdAt=datetime.now(UTC),
@@ -7717,6 +7743,8 @@ class TemporalAgentRuntimeActivities:
             "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},
             "createdAt": created_at,
         }
+        workspace_digest = _workspace_content_digest(manifest["entries"])
+        manifest["workspaceDigest"] = workspace_digest
         manifest_payload = _json_bytes(manifest)
         scan = scan_outbound_bundle(
             [
@@ -7744,6 +7772,8 @@ class TemporalAgentRuntimeActivities:
                 "kind": "worktree_archive", "baseCommit": head,
                 "archiveRef": archive_ref, "archiveDigest": archive_digest,
                 "archiveBytes": len(archive_payload),
+                "workspaceDigest": workspace_digest,
+                "workspaceIdentityDigest": _workspace_identity_digest(workspace),
                 "manifestRef": manifest_ref, "manifestDigest": manifest_digest,
                 "includesUntracked": policy.include_untracked,
                 "includesIgnoredFiles": False,

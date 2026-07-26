@@ -63,8 +63,14 @@ class RemediationWorkspaceHead(_Contract):
     branch_ref: str = Field(alias="branchRef")
     root_checkpoint_ref: str = Field(alias="rootCheckpointRef")
     root_workspace_digest: str = Field(alias="rootWorkspaceDigest")
+    root_workspace_identity_digest: str | None = Field(
+        None, alias="rootWorkspaceIdentityDigest"
+    )
     head_checkpoint_ref: str = Field(alias="headCheckpointRef")
     head_workspace_digest: str = Field(alias="headWorkspaceDigest")
+    head_workspace_identity_digest: str | None = Field(
+        None, alias="headWorkspaceIdentityDigest"
+    )
     head_step_execution_id: str | None = Field(None, alias="headStepExecutionId")
     head_attempt_ordinal: int = Field(0, alias="headAttemptOrdinal", ge=0)
     head_version: int = Field(1, alias="headVersion", ge=1)
@@ -101,10 +107,15 @@ class RemediationWorkspaceHead(_Contract):
             raise ValueError("branchRef must be a checkpoint-branch ref")
         return value
 
-    @field_validator("root_workspace_digest", "head_workspace_digest")
+    @field_validator(
+        "root_workspace_digest",
+        "root_workspace_identity_digest",
+        "head_workspace_digest",
+        "head_workspace_identity_digest",
+    )
     @classmethod
-    def _digests_only(cls, value: str) -> str:
-        return _digest(value)
+    def _digests_only(cls, value: str | None) -> str | None:
+        return None if value is None else _digest(value)
 
 
 class RemediationAttemptInput(_Contract):
@@ -296,6 +307,19 @@ def advance_head(
             return head, transition
     if head.head_version != attempt.expected_head_version:
         raise RemediationHeadError(REMEDIATION_HEAD_STALE_VERSION, "head was advanced by another attempt")
+    if (
+        attempt.loop_id,
+        attempt.base_checkpoint_ref,
+        attempt.expected_base_digest,
+    ) != (
+        head.loop_id,
+        head.head_checkpoint_ref,
+        head.head_workspace_digest,
+    ):
+        raise RemediationHeadError(
+            REMEDIATION_HEAD_MISMATCH,
+            "attempt input does not match the current head",
+        )
     if (output.parent_checkpoint_ref, output.parent_workspace_digest) != (
         head.head_checkpoint_ref, head.head_workspace_digest
     ):

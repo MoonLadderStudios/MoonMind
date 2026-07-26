@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
@@ -136,6 +137,28 @@ class _CurrentRemediationArtifactRefReplayFixture:
                 or ""
             )
         return artifact_ref
+
+
+@workflow.defn(name="MMWorkflowOwnedRemediationHeadReplayFixture")
+class _LegacyWorkflowOwnedRemediationHeadReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        return {"state": {"workspaceHeadRef": "artifact://workspace/C1"}}
+
+
+@workflow.defn(name="MMWorkflowOwnedRemediationHeadReplayFixture")
+class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        continuation: dict[str, Any] = {
+            "state": {"workspaceHeadRef": "artifact://workspace/C1"}
+        }
+        if workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH):
+            continuation["workspaceHead"] = {
+                "headCheckpointRef": "artifact://workspace/C1",
+                "headWorkspaceDigest": "sha256:c1",
+            }
+        return continuation
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -469,6 +492,49 @@ async def test_remediation_artifact_ref_normalization_histories_replay() -> None
 
     replayer = Replayer(
         workflows=[_CurrentRemediationArtifactRefReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_workflow_owned_remediation_head_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-remediation-head-legacy-replay",
+            workflows=[_LegacyWorkflowOwnedRemediationHeadReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyWorkflowOwnedRemediationHeadReplayFixture.run,
+                id="test-remediation-head-legacy",
+                task_queue="test-remediation-head-legacy-replay",
+            )
+            legacy_result = await legacy_handle.result()
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-remediation-head-current-replay",
+            workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentWorkflowOwnedRemediationHeadReplayFixture.run,
+                id="test-remediation-head-current",
+                task_queue="test-remediation-head-current-replay",
+            )
+            current_result = await current_handle.result()
+            current_history = await current_handle.fetch_history()
+
+    assert "workspaceHead" not in legacy_result
+    assert current_result["workspaceHead"]["headCheckpointRef"] == (
+        "artifact://workspace/C1"
+    )
+    replayer = Replayer(
+        workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
