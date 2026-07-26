@@ -6,7 +6,7 @@
 >
 > **Document class:** this roadmap is an *imperative execution tracker*. Durable desired state lives in the canonical declarative `docs/` files named by each milestone. When this tracker and a canonical design disagree, the declarative design wins.
 >
-> Last updated: 2026-07-25
+> Last updated: 2026-07-26
 
 ---
 
@@ -98,7 +98,7 @@ These are shipped assumptions, not active milestones:
 - Static and on-demand hosts use complete image references, UID/GID `1000:1000`, `/home/app`, separate provider OAuth and Omnigent state, read-only root filesystems, bounded temporary storage, deterministic ownership labels, and explicit cleanup.
 - Host lifecycle controls, terminal harvest, cleanup evidence, credential-generation drain, and janitor reconciliation exist for expired, missing, orphaned, or stale-generation hosts.
 - The generic workload plane supplies canonical `WorkspaceLocator` semantics, daemon-visible resolution, bounded and redacted process output, runtime diagnostics, declared-output manifests, cancellation, and cleanup primitives. The Omnigent path has adopted part of this substrate but still has the completion work tracked by #3507.
-- The Codex OAuth host has been live-verified to reuse MoonMind-managed credentials and automatically register with the Omnigent server. That focused proof does not replace the full browser-to-host acceptance matrix in #3508.
+- The Codex OAuth host implements MoonMind-managed credential reuse and automatic Omnigent-server registration. Per the evidence rules above this remains **unverified substrate**: no independently resolvable, secret-scanned live-run artifact is linked here, so the behavior stays open until #3508 publishes that proof.
 - Host-independent checkpoint identity, split session/workspace authority, credential-generation validation, and live-reattach versus cold-restore decisions exist. The coordinator exposes recovery and branch methods, but production orchestration remains #3509 and #3510.
 - The run workflow records per-step Omnigent identity, so Omnigent checkpoint captures select the `external_state_ref` lane.
 - The Checkpoint Branch API and persistence model already support create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, immutable instruction digests, workspace policy, git binding, and remediation-created branches.
@@ -213,6 +213,7 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 - [ ] **6.2 Staged default and telemetry rollout** — move cohorts, Create defaults, schedules, and presets only when readiness, live evidence, and objective rollback thresholds pass.
 - [ ] **6.3 Historical and Temporal compatibility** — preserve truthful direct provenance, Workflow Detail reads, schema decoders, recorded histories, and mixed-version worker replay.
 - [ ] **6.4 Controlled retirement** — disable direct scheduling before removing launch/UI/configuration code; retain the compatibility event/read model until its explicit history and rollback gates pass.
+- [ ] **6.5 Public documentation and release-metadata reconciliation** — correct the public Omnigent story in #3518: `README.md` still promises Omnigent completion "by the end of July 2026" and still describes Omnigent-backed runtimes as future work. Reconcile the README, architecture and combined-stack docs, retire obsolete Omnigent documents, and align release metadata with the published support matrix.
 
 **Done means:** the repository tells one accurate Codex-through-Omnigent story, every supported row has evidence, explicit Omnigent selection never silently falls back, rollback remains available during migration, and direct code is removed only after historical and in-flight contracts are safe.
 
@@ -251,7 +252,12 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 
 Pentest remains de-scoped as a first-class product area. Any retained capability should be a thin skill or preset over the generic workload path, remain disabled by default and lab-oriented, or be removed cohesively with its docs and tests.
 
-The cross-project dependency retained in this roadmap is #3516: Docker `bridge` or a declared network ref is not restricted egress, and external targets stay gated until enforcement exists. Even after enforcement exists, external-target work requires an explicit reviewed egress profile, target scope, approval evidence, and operator-visible diagnostics.
+That disposition is a target state, not the current tree, so two concrete items stay open and must not be treated as closed by roadmap editing alone:
+
+- [ ] **Superseded Pentest stack disposition** — `moonmind/integrations/pentest/`, `moonmind/workflows/temporal/activities/pentest_activities.py`, `PentestSettings`, Pentest submission validation, and Pentest provider-lease machinery are still first-class surfaces. Replace them with a thin skill or preset over the generic workload path, or remove them cohesively with their docs and tests.
+- [ ] **External-target enablement fail-fast** — `PentestSettings.allow_external_targets` defaults to `True`, and an `external_authorized` scope is rejected only when that setting is false, so a manually approved external target can still launch on unrestricted Docker `bridge`. Make external-target enablement fail closed until #3516 attests validated restricted egress.
+
+The cross-project dependency retained in this roadmap is #3516: Docker `bridge` or a declared network ref is not restricted egress, and external targets stay gated until enforcement exists. That states the required target state rather than current runtime behavior; the fail-fast item above is the work that makes the gate real. Even after enforcement exists, external-target work requires an explicit reviewed egress profile, target scope, approval evidence, and operator-visible diagnostics.
 
 ---
 
@@ -273,6 +279,8 @@ The cross-project dependency retained in this roadmap is #3516: Docker `bridge` 
 | 🟡 P2 | #3518 | Complete Codex cutover, support matrix, and direct-runtime retirement |
 | 🔒 Later | #3519 | Graduate embedded compatibility mode with stock-host conformance |
 | 🔒 Later | #3520 | Add Claude Code parity after the Codex cutover |
+
+The two retained Pentest items — superseded-stack disposition and external-target enablement fail-fast — have no tracking issue yet. File them before treating this table as the complete remaining-work inventory; completing every issue above still leaves that work undone.
 
 ---
 
@@ -308,4 +316,4 @@ The cross-project dependency retained in this roadmap is #3516: Docker `bridge` 
 | Codex cutover | Evidence-gated staged migration and direct-runtime retirement are consolidated in #3518. |
 | Embedded mode | Implementation exists but remains experimental until #3519. |
 | Claude Code through Omnigent | Consolidated into gated #3520 after Codex cutover. |
-| PentestGPT | De-scoped; only the shared restricted-egress safety dependency remains in this Omnigent roadmap. |
+| PentestGPT | De-scoped as a product area, but the superseded first-class stack and the external-target fail-fast gate remain tracked alongside the shared restricted-egress dependency (#3516). |
