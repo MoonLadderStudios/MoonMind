@@ -5324,6 +5324,14 @@ export interface components {
             gitWorkBranch?: string | null;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Executionprofileref */
+            executionProfileRef?: string | null;
+            /** Launchpolicyref */
+            launchPolicyRef?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
         };
         /** CheckpointBranchForkRequest */
         CheckpointBranchForkRequest: {

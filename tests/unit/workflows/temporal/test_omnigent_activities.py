@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
 from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _checkpoint_execution_from_request,
     omnigent_execute_activity,
 )
 
@@ -59,3 +60,49 @@ def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:
         "GITHUB_TOKEN",
     ):
         assert disallowed not in source
+
+
+def test_checkpoint_execution_dispatch_is_typed_and_workflow_scoped() -> None:
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "executionProfileRef": "codex",
+            "correlationId": "workflow-1",
+            "idempotencyKey": "branch-turn-1",
+            "parameters": {
+                "metadata": {
+                    "moonmind": {
+                        "omnigentCheckpointExecution": {
+                            "action": "branch",
+                            "checkpoint": {
+                                "providerProfileId": "codex",
+                                "credentialGeneration": 3,
+                                "hostBindingRef": "artifact://host-binding",
+                                "endpointRef": "omnigent-endpoint:host-1",
+                                "bridgeSessionId": "bridge-1",
+                                "externalStateRef": "artifact://external-state",
+                                "idempotencyKey": "source-message-1",
+                            },
+                            "candidateWorkspace": {
+                                "loopId": "branch:turn-1",
+                                "attemptOrdinal": 1,
+                                "headRef": "artifact://head/1",
+                                "headDigest": "sha256:" + "a" * 64,
+                                "checkpointRef": "artifact://checkpoint/1",
+                                "checkpointDigest": "sha256:" + "b" * 64,
+                            },
+                            "currentCredentialGeneration": 3,
+                        }
+                    }
+                }
+            },
+        }
+    )
+
+    dispatch = _checkpoint_execution_from_request(request)
+
+    assert dispatch is not None
+    assert dispatch.action.value == "branch"
+    assert dispatch.checkpoint.idempotency_key == "source-message-1"
+    assert dispatch.candidate_workspace.checkpoint_ref == "artifact://checkpoint/1"

@@ -13153,6 +13153,20 @@ async def create_checkpoint_branch(
     branch.publish_status = "unpublished"
     branch.idempotency_key = payload.idempotency_key
     branch.created_by = getattr(user, "email", None) or _owner_id(user)
+    branch.diagnostics = {
+        **(branch.diagnostics or {}),
+        "requestedRuntimeSelection": {
+            key: value
+            for key, value in {
+                "executionProfileRef": payload.execution_profile_ref,
+                "launchPolicyRef": payload.launch_policy_ref,
+                "model": payload.model,
+                "effort": payload.effort,
+                "publishMode": payload.publish_mode,
+            }.items()
+            if value is not None
+        },
+    }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,

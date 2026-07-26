@@ -25,6 +25,8 @@ from api_service.db.models import (
 
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
+    OmnigentCheckpointAction,
+    OmnigentCheckpointExecution,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
     recovery_mode,
@@ -1086,6 +1088,26 @@ def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> No
             new_host_lease_ref="host-lease-1",
             new_session_id="session-2",
         )
+
+
+def test_checkpoint_branch_dispatch_rejects_source_lease_reuse() -> None:
+    payload = {
+        "action": OmnigentCheckpointAction.BRANCH,
+        "checkpoint": _checkpoint().model_dump(by_alias=True, mode="json"),
+        "candidateWorkspace": {
+            "loopId": "branch:turn-1",
+            "attemptOrdinal": 1,
+            "headRef": "artifact://candidate-head/1",
+            "headDigest": "sha256:" + "a" * 64,
+            "checkpointRef": "artifact://workspace-checkpoint/1",
+            "checkpointDigest": "sha256:" + "b" * 64,
+        },
+        "currentCredentialGeneration": 3,
+        "providerLease": {"active": True, "leaseId": "provider-lease-1"},
+    }
+
+    with pytest.raises(ValidationError, match="separate capacity"):
+        OmnigentCheckpointExecution.model_validate(payload)
 
 
 def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> None:

@@ -10,6 +10,23 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
+def _checkpoint_execution_from_request(request: AgentExecutionRequest):
+    """Read only workflow-owned checkpoint dispatch metadata."""
+
+    from moonmind.omnigent.checkpoints import OmnigentCheckpointExecution
+
+    metadata = (request.parameters or {}).get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    moonmind = metadata.get("moonmind")
+    if not isinstance(moonmind, dict):
+        return None
+    payload = moonmind.get("omnigentCheckpointExecution")
+    if payload is None:
+        return None
+    return OmnigentCheckpointExecution.model_validate(payload)
+
+
 @activity.defn(name="integration.omnigent.execute")
 async def omnigent_execute_activity(
     request: AgentExecutionRequest,
@@ -113,6 +130,36 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
+        checkpoint_execution = _checkpoint_execution_from_request(request)
+        if checkpoint_execution is not None:
+            if not request.execution_profile_ref:
+                raise ValueError(
+                    "checkpoint execution requires executionProfileRef"
+                )
+            if checkpoint_execution.action.value == "branch":
+                return await coordinator.branch_from_checkpoint(
+                    request=request,
+                    checkpoint=checkpoint_execution.checkpoint,
+                    current_credential_generation=(
+                        checkpoint_execution.current_credential_generation
+                    ),
+                    candidate_workspace=checkpoint_execution.candidate_workspace,
+                )
+            return await coordinator.recover_from_checkpoint(
+                request=request,
+                checkpoint=checkpoint_execution.checkpoint,
+                provider_lease=checkpoint_execution.provider_lease,
+                host_lease=checkpoint_execution.host_lease,
+                host_registered=checkpoint_execution.host_registered,
+                session_valid=checkpoint_execution.session_valid,
+                first_message_consistent=(
+                    checkpoint_execution.first_message_consistent
+                ),
+                current_credential_generation=(
+                    checkpoint_execution.current_credential_generation
+                ),
+                candidate_workspace=checkpoint_execution.candidate_workspace,
+            )
         return await coordinator.execute(request)
 
 

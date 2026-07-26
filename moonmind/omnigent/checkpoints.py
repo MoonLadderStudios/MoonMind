@@ -13,6 +13,13 @@ class OmnigentRecoveryMode(str, Enum):
     COLD_RESTORE = "cold_restore"
 
 
+class OmnigentCheckpointAction(str, Enum):
+    """Semantic execution requested at a checkpoint boundary."""
+
+    RESUME = "resume"
+    BRANCH = "branch"
+
+
 class CandidateWorkspaceAuthority(BaseModel):
     """MoonMind-owned repository checkpoint selected for continuation."""
 
@@ -70,6 +77,40 @@ class OmnigentCheckpointIdentity(BaseModel):
             lowered = value.lower()
             if any(marker in lowered for marker in ("bearer ", "token=", "password=")):
                 raise ValueError(f"{field} must be a reference, not credential data")
+        return self
+
+
+class OmnigentCheckpointExecution(BaseModel):
+    """Trusted, evidence-complete dispatch contract for production execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action: OmnigentCheckpointAction
+    checkpoint: OmnigentCheckpointIdentity
+    candidate_workspace: CandidateWorkspaceAuthority = Field(
+        ..., alias="candidateWorkspace"
+    )
+    current_credential_generation: int = Field(
+        ..., alias="currentCredentialGeneration", ge=1
+    )
+    provider_lease: dict[str, Any] | None = Field(None, alias="providerLease")
+    host_lease: dict[str, Any] | None = Field(None, alias="hostLease")
+    host_registered: bool = Field(False, alias="hostRegistered")
+    session_valid: bool = Field(False, alias="sessionValid")
+    first_message_consistent: bool = Field(False, alias="firstMessageConsistent")
+
+    @model_validator(mode="after")
+    def _resume_requires_live_authority_observations(
+        self,
+    ) -> "OmnigentCheckpointExecution":
+        if self.action == OmnigentCheckpointAction.BRANCH:
+            if self.provider_lease is not None or self.host_lease is not None:
+                raise ValueError(
+                    "checkpoint branch must acquire separate capacity, not reuse leases"
+                )
+            return self
+        # Missing observations are intentionally represented as false/None and
+        # drive a cold restore. They must never be inferred from host existence.
         return self
 
 
@@ -151,6 +192,8 @@ def validate_branch_identity(
 
 __all__ = [
     "CandidateWorkspaceAuthority",
+    "OmnigentCheckpointAction",
+    "OmnigentCheckpointExecution",
     "OmnigentCheckpointIdentity",
     "OmnigentRecoveryMode",
     "recovery_mode",

@@ -4487,6 +4487,10 @@ type BranchCreateDraft = {
   publishMode: string;
   gitWorkBranch: string;
   maxBudgetUsd: string;
+  executionProfileRef: string;
+  launchPolicyRef: string;
+  model: string;
+  effort: string;
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
@@ -4510,6 +4514,10 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
   publishMode: 'none',
   gitWorkBranch: '',
   maxBudgetUsd: '',
+  executionProfileRef: '',
+  launchPolicyRef: '',
+  model: '',
+  effort: '',
 };
 
 function stepCheckpointRef(row: StepLedgerRow): string | null {
@@ -4916,6 +4924,22 @@ function BranchExplorerPanel({
               <option value="reuse_session_new_epoch">Reuse session new epoch</option>
               <option value="reuse_session_same_epoch">Reuse session same epoch</option>
             </select>
+          </label>
+          <label>
+            Provider Profile
+            <input value={draft.executionProfileRef} disabled={busy} placeholder="Use source profile" onChange={(event) => setDraft((current) => ({ ...current, executionProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Execution profile / launch policy
+            <input value={draft.launchPolicyRef} disabled={busy} placeholder="Use source launch policy" onChange={(event) => setDraft((current) => ({ ...current, launchPolicyRef: event.target.value }))} />
+          </label>
+          <label>
+            Model
+            <input value={draft.model} disabled={busy} placeholder="Use profile default" onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} />
+          </label>
+          <label>
+            Effort
+            <input value={draft.effort} disabled={busy} placeholder="Use profile default" onChange={(event) => setDraft((current) => ({ ...current, effort: event.target.value }))} />
           </label>
           <label>
             Publish mode
@@ -8739,6 +8763,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
+          executionProfileRef: request.draft.executionProfileRef.trim() || null,
+          launchPolicyRef: request.draft.launchPolicyRef.trim() || null,
+          model: request.draft.model.trim() || null,
+          effort: request.draft.effort.trim() || null,
         };
       } else if (request.kind === 'continue') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/continue`;

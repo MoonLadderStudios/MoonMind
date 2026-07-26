@@ -2005,6 +2005,18 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
+    fireEvent.change(await screen.findByLabelText('Provider Profile'), {
+      target: { value: 'codex-oauth-primary' },
+    });
+    fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), {
+      target: { value: 'omnigent-codex-default' },
+    });
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'gpt-5-codex' },
+    });
+    fireEvent.change(screen.getByLabelText('Effort'), {
+      target: { value: 'high' },
+    });
     fireEvent.click(await screen.findByRole('button', { name: 'Create branch from checkpoint' }));
 
     await waitFor(() => {
@@ -2018,6 +2030,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(body.workspacePolicy).toBe('apply_previous_execution_diff_to_clean_baseline');
       expect(body.runtimeContextPolicy).toBe('fresh_agent_run');
       expect(body.publishMode).toBe('none');
+      expect(body.executionProfileRef).toBe('codex-oauth-primary');
+      expect(body.launchPolicyRef).toBe('omnigent-codex-default');
+      expect(body.model).toBe('gpt-5-codex');
+      expect(body.effort).toBe('high');
       expect(body.instructions.text).toContain('bounded alternative implementation');
       expect(body.idempotencyKey).toMatch(/^dashboard:create:test-123:apply:1:/);
     });

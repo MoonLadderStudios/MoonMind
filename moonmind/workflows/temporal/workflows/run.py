@@ -21,6 +21,10 @@ with workflow.unsafe.imports_passed_through():
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
     )
+    from moonmind.omnigent.checkpoints import (
+        OmnigentCheckpointAction,
+        OmnigentCheckpointExecution,
+    )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
@@ -651,6 +655,9 @@ RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v1"
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
+)
+RUN_OMNIGENT_CHECKPOINT_EXECUTION_DISPATCH_PATCH = (
+    "run-omnigent-checkpoint-execution-dispatch-v1"
 )
 RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
     "run-omnigent-authored-selection-compiler-v1"
@@ -4771,6 +4778,43 @@ class MoonMindRunWorkflow:
         prompt_payload["instructionRef"] = instruction_ref
         omnigent_payload["prompt"] = prompt_payload
         parameters["omnigent"] = omnigent_payload
+
+    def _apply_omnigent_checkpoint_execution_dispatch(
+        self,
+        *,
+        parameters: dict[str, Any],
+        source_payload: Mapping[str, Any],
+        expected_action: OmnigentCheckpointAction,
+    ) -> None:
+        """Attach a validated workflow-owned checkpoint dispatch contract.
+
+        Generic checkpoint refs are not enough to authorize Omnigent recovery.
+        The caller must supply the complete checkpoint identity and validated
+        candidate workspace evidence produced at the trusted workflow boundary.
+        """
+
+        raw_dispatch = source_payload.get("omnigentCheckpointExecution")
+        if raw_dispatch is None:
+            raw_dispatch = source_payload.get("omnigent_checkpoint_execution")
+        if raw_dispatch is None:
+            raise ValueError(
+                "Omnigent checkpoint execution requires "
+                "omnigentCheckpointExecution evidence"
+            )
+        dispatch = OmnigentCheckpointExecution.model_validate(raw_dispatch)
+        if dispatch.action != expected_action:
+            raise ValueError(
+                "Omnigent checkpoint execution action does not match workflow operation"
+            )
+        metadata = dict(parameters.get("metadata") or {})
+        moonmind = dict(metadata.get("moonmind") or {})
+        moonmind["omnigentCheckpointExecution"] = dispatch.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude_none=True,
+        )
+        metadata["moonmind"] = moonmind
+        parameters["metadata"] = metadata
 
     def _checkpoint_branch_turn_source_checkpoint(
         self,
@@ -18633,6 +18677,14 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 instruction_ref=branch_instruction_ref,
             )
+            if self._workflow_patch_enabled(
+                RUN_OMNIGENT_CHECKPOINT_EXECUTION_DISPATCH_PATCH
+            ):
+                self._apply_omnigent_checkpoint_execution_dispatch(
+                    parameters=parameters,
+                    source_payload=branch_turn_payload,
+                    expected_action=OmnigentCheckpointAction.BRANCH,
+                )
             if isinstance(branch_projection, Mapping):
                 git_work_branch = branch_projection.get("gitWorkBranch")
                 if isinstance(git_work_branch, str) and git_work_branch.strip():
@@ -18728,6 +18780,21 @@ class MoonMindRunWorkflow:
             }
             remediation_workspace["destinationWorkspaceLocator"] = destination
             workspace_spec["workspaceLocator"] = dict(destination)
+
+        if (
+            node_id == self._recovery_failed_step_id
+            and agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and isinstance(self._recovery_source, Mapping)
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_CHECKPOINT_EXECUTION_DISPATCH_PATCH
+            )
+        ):
+            self._apply_omnigent_checkpoint_execution_dispatch(
+                parameters=parameters,
+                source_payload=self._recovery_source,
+                expected_action=OmnigentCheckpointAction.RESUME,
+            )
 
         terminal_contract_payload: dict[str, Any] | None = None
         resolved_terminal_contract = (
