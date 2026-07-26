@@ -44,6 +44,10 @@ JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
+# The status tool runs inside a 60-second activity. One fetch plus the PATCH and
+# optional comment must leave enough time for the activity to classify results.
+_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
+_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
 JIRA_STORY_TOOL_NAMES = frozenset(
     {
         JIRA_CREATE_ISSUES_TOOL_NAME,
@@ -4421,7 +4425,7 @@ async def _fetch_github_issue(
     if not token:
         return None, resolution_error or "GitHub issue lookup is unavailable."
     headers = service._github_headers(token)
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
         try:
             response = await client.get(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -5232,7 +5236,9 @@ async def update_github_issue_status(
     applied: list[str] = []
     warnings: list[str] = []
     comment_body = ""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
+    ) as client:
         try:
             response = await client.patch(
                 f"https://api.github.com/repos/{repository}/issues/{issue_number}",
@@ -5242,6 +5248,8 @@ async def update_github_issue_status(
             response.raise_for_status()
             updated = response.json()
             applied.append("patch_issue")
+            updated_issue = _github_issue_payload(updated, repository)
+            issue_url = updated_issue.get("url") or issue.get("url")
         except httpx.HTTPStatusError as exc:
             summary = service._github_permission_summary(exc.response)
             return ToolResult(
@@ -5281,12 +5289,21 @@ async def update_github_issue_status(
                 applied.append("comment")
             except httpx.HTTPStatusError as exc:
                 summary = service._github_permission_summary(exc.response)
-                warnings.append(
-                    (
-                        "GitHub issue status was updated, but the automation "
-                        f"comment failed with HTTP {exc.response.status_code}. "
-                        f"{summary}"
-                    ).strip()
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": issue_url,
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": updated_issue.get("labels"),
+                        "commentStatus": "rejected",
+                        "summary": (
+                            "GitHub issue status was updated, but the automation "
+                            f"comment failed with HTTP {exc.response.status_code}. "
+                            f"{summary}"
+                        ).strip(),
+                    },
                 )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 warnings.append(
@@ -5294,8 +5311,6 @@ async def update_github_issue_status(
                     f"result could not be confirmed after {exc.__class__.__name__}; "
                     "the comment was not retried to avoid a duplicate."
                 )
-    updated_issue = _github_issue_payload(updated, repository)
-    issue_url = updated_issue.get("url") or issue.get("url")
     summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
     outputs: dict[str, Any] = {
         "issueUrl": issue_url,

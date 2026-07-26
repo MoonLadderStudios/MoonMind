@@ -215,6 +215,16 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
 
+    identity = workflow._canonical_step_checkpoint_identity("remediation-1")
+    assert identity is not None
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "remediation-1",
+        identity=identity,
+        boundary="after_prepare",
+    )
+    assert "sourceIdentity" not in captured[0]["payload"]
+    captured.clear()
+
     await workflow._record_canonical_step_checkpoint(
         "remediation-1",
         boundary="before_execution",

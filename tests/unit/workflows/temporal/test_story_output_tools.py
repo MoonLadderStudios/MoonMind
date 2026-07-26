@@ -231,11 +231,27 @@ class _FakeHttpClient:
 
 
 class _CommentReadTimeoutHttpClient(_FakeHttpClient):
+    timeouts: list[float] = []
+
+    def __init__(self, *args, timeout: float, **kwargs) -> None:
+        super().__init__(*args, timeout=timeout, **kwargs)
+        self.__class__.timeouts.append(timeout)
+
     async def post(self, url: str, **kwargs):
         self.requests.append(("POST", url, kwargs))
         raise story_tools.httpx.ReadTimeout(
             "response timed out after GitHub accepted the comment",
             request=story_tools.httpx.Request("POST", url),
+        )
+
+
+class _CommentHttpRejectedClient(_FakeHttpClient):
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        return story_tools.httpx.Response(
+            403,
+            request=story_tools.httpx.Request("POST", url),
+            json={"message": "secondary rate limit"},
         )
 
 
@@ -433,6 +449,7 @@ async def test_update_github_issue_status_declares_completed_close_side_effect(
 async def test_update_github_issue_status_preserves_patch_when_comment_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _CommentReadTimeoutHttpClient.timeouts = []
     monkeypatch.setattr(
         story_tools.httpx,
         "AsyncClient",
@@ -458,6 +475,42 @@ async def test_update_github_issue_status_preserves_patch_when_comment_times_out
         "could not be confirmed after ReadTimeout; the comment was not retried "
         "to avoid a duplicate."
     ]
+    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 15.0]
+    assert (
+        _CommentReadTimeoutHttpClient.timeouts[0]
+        + (2 * _CommentReadTimeoutHttpClient.timeouts[1])
+        < 60.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_retries_confirmed_comment_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        story_tools.httpx,
+        "AsyncClient",
+        _CommentHttpRejectedClient,
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2355,
+            "mode": "start",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["appliedActions"] == ["patch_issue"]
+    assert result.outputs["commentStatus"] == "rejected"
+    assert result.outputs["confirmedLabels"] == ["status: in-progress"]
+    assert result.outputs["summary"] == (
+        "GitHub issue status was updated, but the automation comment failed "
+        "with HTTP 403. github status 403"
+    )
 
 
 @pytest.mark.asyncio
