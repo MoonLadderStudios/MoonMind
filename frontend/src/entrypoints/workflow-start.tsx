@@ -11694,15 +11694,50 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </label>
               <label>
                 Remediation mode
-                <input value={remediationDraft.remediation.mode} readOnly />
+                <select
+                  value={remediationDraft.remediation.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as RemediationCreateDraft["remediation"]["mode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, mode },
+                    } : current);
+                  }}
+                >
+                  <option value="snapshot">Snapshot</option>
+                  <option value="live_follow">Live follow</option>
+                  <option value="snapshot_then_follow">Snapshot then follow</option>
+                </select>
               </label>
               <label>
                 Authority
-                <input value={remediationDraft.remediation.authorityMode} readOnly />
+                <select
+                  value={remediationDraft.remediation.authorityMode}
+                  onChange={(event) => {
+                    const authorityMode = event.target.value as RemediationCreateDraft["remediation"]["authorityMode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, authorityMode },
+                    } : current);
+                  }}
+                >
+                  <option value="observe_only">Observe only</option>
+                  <option value="approval_gated">Approval gated</option>
+                  <option value="admin_auto">Administrator automatic</option>
+                </select>
               </label>
               <label>
                 Action policy
-                <input value={remediationDraft.remediation.actionPolicyRef || ""} readOnly />
+                <input
+                  value={remediationDraft.remediation.actionPolicyRef || ""}
+                  onChange={(event) => {
+                    const actionPolicyRef = event.target.value;
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, actionPolicyRef },
+                    } : current);
+                  }}
+                />
               </label>
               <label>
                 Checkpoint refs
@@ -11715,6 +11750,37 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <p className="small">
               Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
             </p>
+            <div className="grid-2" aria-label="Remediation evidence controls">
+              {[
+                ["includeStepLedger", "Step execution ledger"],
+                ["includeDiagnostics", "Diagnostics"],
+                ["includeRecovery", "Recovery evidence"],
+                ["includeIncident", "Incident evidence"],
+                ["includeCheckpointBranches", "Checkpoint branches"],
+                ["includeAdapterRefs", "Runtime adapter evidence"],
+              ].map(([key, label]) => (
+                <label key={key} className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={remediationDraft.remediation.evidencePolicy?.[key] !== false}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setRemediationDraft((current) => current ? {
+                        ...current,
+                        remediation: {
+                          ...current.remediation,
+                          evidencePolicy: {
+                            ...current.remediation.evidencePolicy,
+                            [key]: checked,
+                          },
+                        },
+                      } : current);
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">
                 {remediationTargetFreshnessWarning}
