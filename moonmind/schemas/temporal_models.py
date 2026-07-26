@@ -1091,6 +1091,16 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     archive_ref: str | None = Field(None, alias="archiveRef")
     archive_digest: str | None = Field(None, alias="archiveDigest")
     archive_bytes: int | None = Field(None, alias="archiveBytes", ge=1)
+    workspace_digest: str | None = Field(
+        None,
+        alias="workspaceDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    workspace_identity_digest: str | None = Field(
+        None,
+        alias="workspaceIdentityDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
@@ -1121,6 +1131,8 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "patch_ref",
         "archive_ref",
         "archive_digest",
+        "workspace_digest",
+        "workspace_identity_digest",
         "workspace_ref",
         "workspace_artifact_ref",
         "external_state_ref",

@@ -120,6 +120,8 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
             "baseCommit": base,
         }
     )
+    assert capture["workspace"]["workspaceIdentityDigest"].startswith("sha256:")
+    assert capture["workspace"]["workspaceDigest"].startswith("sha256:")
     checkpoint = {
         "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
         "source": {

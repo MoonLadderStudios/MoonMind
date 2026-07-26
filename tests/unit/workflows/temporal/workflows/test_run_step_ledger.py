@@ -123,6 +123,8 @@ def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
             "baseCommit": "abc123",
             "archiveRef": "artifact://managed/archive",
             "archiveDigest": "sha256:" + ("a" * 64),
+            "workspaceDigest": "sha256:" + ("d" * 64),
+            "workspaceIdentityDigest": "sha256:" + ("c" * 64),
             "manifestRef": "artifact://managed/manifest",
             "manifestDigest": "sha256:" + ("b" * 64),
             "includesUntracked": True,
@@ -3184,6 +3186,7 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
                     "kind": "git_patch",
                     "baseCommit": payload["baseCommit"],
                     "patchRef": "artifact://patch/before_execution",
+                    "workspaceIdentityDigest": "sha256:" + ("c" * 64),
                     "manifestRef": "artifact://patch-manifest/before_execution",
                     "createdAt": "2026-06-13T12:00:00+00:00",
                 },
@@ -3216,6 +3219,19 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
     assert captured[1]["payload"]["workspace"]["patchRef"] == (
         "artifact://patch/before_execution"
     )
+    assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
+        "implement": {
+            "before_execution": {
+                "checkpointRef": "artifact://checkpoint/before_execution",
+                "workspaceKind": "git_patch",
+                "workspaceDigest": "",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": (
+                    "artifact://patch-manifest/before_execution"
+                ),
+            }
+        }
+    }
 
 
 @pytest.mark.asyncio
@@ -3683,6 +3699,38 @@ async def test_publish_none_skips_required_prepublication_checkpoint(
 
 
 @pytest.mark.asyncio
+async def test_remediation_requires_prepublication_checkpoint_without_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        calls.append(boundary)
+        return "artifact://checkpoint/before_publication"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "remediation-1",
+        publish_mode="none",
+        updated_at=now,
+        required_for_remediation=True,
+    )
+
+    assert failed is False
+    assert calls == ["before_publication"]
+
+
+@pytest.mark.asyncio
 async def test_legacy_history_preserves_prepublication_checkpoint_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3879,6 +3927,17 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
     assert "patchRef" not in captured[1]["payload"]["workspace"]
     assert "archiveRef" in captured[1]["payload"]["workspace"]
+    assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
+        "implement": {
+                "before_execution": {
+                    "checkpointRef": "artifact://checkpoint/before_execution",
+                    "workspaceKind": "worktree_archive",
+                    "workspaceDigest": "sha256:" + ("d" * 64),
+                    "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                    "checkpointManifestRef": "artifact://managed/manifest",
+            }
+        }
+    }
 
 
 def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:

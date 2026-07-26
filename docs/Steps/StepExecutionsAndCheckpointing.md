@@ -1147,6 +1147,10 @@ When an attempt fails or a gate requests more work, MoonMind must classify the n
 
 When a downstream step depends on a passing gate, the parent workflow must skip, block, invalidate, or revalidate that downstream step if the gate fails. Publication and external state transitions must not rely only on the downstream agent noticing the failed gate.
 
+A workflow-owned authority or contract check that rejects a step before its Step Execution launches must still record that step as a failed Step Execution, including allocating its execution ordinal. The failed logical step is the recovery manifest's key evidence: without it the manifest reports `no_failed_step_execution_to_resume`, and a run whose prior accepted attempt captured valid checkpoints loses checkpoint-based recovery even though the workspace evidence exists. A failed row left at ordinal `0` projects as a failed step with zero executions.
+
+A step rejected before launch captured no workspace of its own, so the runtime capability snapshot and checkpoint kind that govern resume belong to the step whose checkpoint the manifest actually restores. Resolve that step with the same failed-step-then-last-accepted-step rule the manifest uses to select its resume refs; selecting the checkpoint from one step and the capability snapshot from another leaves resume ineligible with `CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING`.
+
 ---
 
 ## 19. Security and Side-Effect Guardrails
