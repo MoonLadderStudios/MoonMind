@@ -521,6 +521,24 @@ class RemediationApprovalStateModel(BaseModel):
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None
+    expectedState: dict[str, Any] | None = None
+    policySnapshot: dict[str, Any] | None = None
+    expiresAt: datetime | None = None
+    rationale: str | None = None
+    approvalLevel: str | None = None
+    staleReason: str | None = None
+
+class RemediationOperatorStateModel(BaseModel):
+    phase: str | None = None
+    actionResults: list[dict[str, Any]] = Field(default_factory=list)
+    verificationResults: list[dict[str, Any]] = Field(default_factory=list)
+    immediateRepair: dict[str, Any] | None = None
+    prevention: dict[str, Any] | None = None
+    guard: dict[str, Any] | None = None
+    cleanup: dict[str, Any] | None = None
+    autonomousOrigin: bool = False
+    rolloutGate: str = "disabled"
+    operatorTakeoverAvailable: bool = True
 
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
@@ -619,6 +637,7 @@ class RemediationLinkSummaryModel(BaseModel):
     checkpointBranches: list[RemediationCheckpointBranchLinkModel] = Field(
         default_factory=list
     )
+    operatorState: RemediationOperatorStateModel | None = None
     createdAt: datetime
     updatedAt: datetime
 
@@ -648,6 +667,7 @@ class RemediationCollectionResponseModel(BaseModel):
 class RemediationApprovalDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
+    approvalLevel: Literal["standard", "strong"] | None = None
 
 class RemediationApprovalDecisionResponse(BaseModel):
     accepted: bool
@@ -11348,6 +11368,11 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         checkpointBranches=_bounded_checkpoint_branch_links(
             getattr(link, "checkpoint_branch_links", None)
         ),
+        operatorState=(
+            RemediationOperatorStateModel.model_validate(link.operator_state)
+            if isinstance(getattr(link, "operator_state", None), dict)
+            else None
+        ),
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
@@ -11766,6 +11791,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            approval_level=payload.approvalLevel,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

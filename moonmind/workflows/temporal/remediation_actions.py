@@ -651,6 +651,47 @@ class RemediationActionAuthorityService:
             security_profile=security_profile,
             approval_ref=approval_ref,
         )
+        if result.decision == "approval_required":
+            target = await self._session.get(
+                db_models.TemporalExecutionCanonicalRecord,
+                link.target_workflow_id,
+            )
+            target_state = None
+            if target is not None:
+                target_state = str(
+                    target.state.value if hasattr(target.state, "value") else target.state
+                )
+            request_id = f"{workflow_id}:approval:{idem}"
+            link.approval_state = {
+                "requestId": request_id,
+                "actionKind": normalized_action,
+                "riskTier": result.risk,
+                "decision": "pending",
+                "canDecide": True,
+                "expectedState": {
+                    "workflowId": link.target_workflow_id,
+                    "runId": link.target_run_id,
+                    "status": target_state,
+                    "checkpointRef": (parameters or {}).get("checkpointRef"),
+                    "sessionIdentity": (parameters or {}).get("sessionIdentity"),
+                    "credentialGeneration": (parameters or {}).get(
+                        "credentialGeneration"
+                    ),
+                },
+                "policySnapshot": {
+                    "schemaVersion": "v1",
+                    "authorityMode": link.authority_mode,
+                    "securityProfileRef": result.security_profile_ref,
+                    "reason": result.reason,
+                },
+                "expiresAt": (
+                    datetime.now(timezone.utc) + timedelta(minutes=30)
+                ).isoformat(),
+                "approvalLevel": "strong" if result.risk == "high" else "standard",
+                "idempotencyKey": idem,
+            }
+            link.status = "awaiting_approval"
+            await self._session.commit()
         self._request_shapes.setdefault(shape_key, request_shape_hash)
         self._decisions[cache_key] = result
         return result

@@ -2713,6 +2713,21 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert pending.decision == "approval_required"
         assert pending.reason == "approval_gated_requires_approval"
         assert pending.executable is False
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.status == "awaiting_approval"
+        assert link.approval_state["requestId"].endswith(
+            ":approval:gated-pending"
+        )
+        assert link.approval_state["decision"] == "pending"
+        assert link.approval_state["actionKind"] == (
+            "workload.restart_helper_container"
+        )
+        assert link.approval_state["expectedState"]["runId"] == link.target_run_id
+        assert link.approval_state["policySnapshot"]["schemaVersion"] == "v1"
+        assert link.approval_state["approvalLevel"] == "standard"
 
         approved = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
