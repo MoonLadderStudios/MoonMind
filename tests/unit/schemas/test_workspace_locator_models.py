@@ -228,6 +228,27 @@ def test_managed_locator_requires_current_identity_and_store_record(tmp_path):
     assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
 
 
+def test_managed_locator_dot_resolves_the_recorded_workspace_root(tmp_path):
+    workspace = tmp_path / "workspaces" / "run-1" / "custom-checkout"
+    workspace.mkdir(parents=True)
+    record = SimpleNamespace(
+        run_id="run-1", runtime_id="codex", workspace_path=str(workspace)
+    )
+    store = SimpleNamespace(
+        store_root=tmp_path / "managed_runs", load=lambda run_id: record
+    )
+    locator = ManagedWorkspaceLocator(
+        runtimeId="codex", agentRunId="run-1", relativePath="."
+    )
+
+    assert resolve_managed_workspace_locator(
+        locator,
+        store=store,
+        current_agent_run_id="run-1",
+        current_runtime_id="codex",
+    ) == workspace.resolve()
+
+
 def test_managed_locator_rejects_current_runtime_mismatch(tmp_path):
     workspace = tmp_path / "workspaces" / "run-1" / "repo"
     workspace.mkdir(parents=True)

@@ -131,6 +131,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.remediation_workspace_head import (
         REMEDIATION_HEAD_MISMATCH,
+        REMEDIATION_HEAD_RESTORE_INVALID,
         RemediationAttemptInput,
         RemediationAttemptOutput,
         RemediationHeadError,
@@ -750,6 +751,12 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 # payloads during replay.
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
+)
+RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
+    "run-managed-session-checkpoint-locator-v1"
+)
+RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
+    "run-remediation-continue-managed-session-v1"
 )
 
 
@@ -3877,6 +3884,24 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head = (
                 RemediationWorkspaceHead.model_validate(carried_head)
             )
+        carried_session = continuation.get("managedSessionBinding")
+        if isinstance(carried_session, Mapping) and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            binding = CodexManagedSessionBinding.model_validate(carried_session)
+            expected_agent_run_id = workflow.info().workflow_id
+            expected_session_workflow_id = self._workflow_scoped_session_workflow_id(
+                binding.runtime_id
+            )
+            if (
+                binding.agent_run_id != expected_agent_run_id
+                or binding.workflow_id != expected_session_workflow_id
+            ):
+                raise ValueError(
+                    "remediation loop continuation managed session belongs to "
+                    "another workflow"
+                )
+            self._codex_session_binding = binding
         self._remediation_loop_state = state.model_copy(
             update={
                 "source_run_id": workflow.info().run_id,
@@ -3909,6 +3934,15 @@ class MoonMindRunWorkflow:
             # key is additive, so histories written without it still restore.
             continuation["workspaceHead"] = head.model_dump(
                 by_alias=True, mode="json"
+            )
+        binding = self._codex_session_binding
+        if binding is not None and workflow.patched(
+            RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
+        ):
+            continuation["managedSessionBinding"] = binding.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
             )
         payload["remediation_loop_continuation"] = continuation
         return cast(RunWorkflowInput, payload)
@@ -5485,7 +5519,26 @@ class MoonMindRunWorkflow:
                 capture_input["criticality"] = (
                     capabilities.post_execution_checkpoint_criticality
                 )
-                if capabilities.runtime_id == "omnigent":
+                binding = self._codex_session_binding
+                if (
+                    capabilities.workspace_authority == "managed_runtime"
+                    and binding is not None
+                    and binding.runtime_id == capabilities.runtime_id
+                    and workflow.patched(
+                        RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH
+                    )
+                ):
+                    # A workflow-scoped managed session keeps one stable
+                    # workspace across plan steps. Reuse its typed identity so
+                    # a dynamic remediation step can capture and validate the
+                    # current loop head before launching its next AgentRun.
+                    capture_input["workspaceLocator"] = {
+                        "kind": "managed_runtime",
+                        "runtimeId": binding.runtime_id,
+                        "agentRunId": binding.agent_run_id,
+                        "relativePath": ".",
+                    }
+                elif capabilities.runtime_id == "omnigent":
                     try:
                         wf_info = workflow.info()
                         identity = StepExecutionIdentityModel(
