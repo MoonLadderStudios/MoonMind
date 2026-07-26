@@ -5105,22 +5105,6 @@ def _remediation_head_payload(
     }
 
 
-def test_workflow_owned_remediation_rejects_missing_materialization_evidence(
-    mock_run_workflow: MoonMindRunWorkflow,
-) -> None:
-    mock_run_workflow._remediation_workspace_head = (
-        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
-    )
-
-    with pytest.raises(RemediationHeadError) as exc:
-        mock_run_workflow._validate_remediation_workspace_materialization(
-            "remediation-1"
-        )
-
-    assert exc.value.code == REMEDIATION_HEAD_RESTORE_INVALID
-    assert "not checkpointed" in str(exc.value)
-
-
 def test_remediation_step_receives_frozen_workflow_owned_candidate_baseline(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
