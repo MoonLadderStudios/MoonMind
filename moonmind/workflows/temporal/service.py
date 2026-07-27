@@ -45,6 +45,8 @@ from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointExecutionEvidence,
     OmnigentCheckpointExecutionKind,
+    OmnigentRecoveryOutcome,
+    decide_checkpoint_execution,
 )
 from moonmind.security import scan_outbound_text
 from moonmind.statuses.compat import (
@@ -3743,6 +3745,7 @@ class TemporalExecutionService:
                 "Recovery checkpoint payload is invalid."
             ) from exc
         omnigent_checkpoint_execution: dict[str, Any] | None = None
+        omnigent_recovery_decision: dict[str, Any] | None = None
         raw_omnigent_checkpoint_execution = checkpoint_payload.get(
             "omnigentCheckpointExecution"
         )
@@ -3768,11 +3771,39 @@ class TemporalExecutionService:
                 raise TemporalExecutionRecoveryCheckpointError(
                     "Failed-step recovery requires Omnigent recovery evidence."
                 )
+            decision = decide_checkpoint_execution(omnigent_evidence)
+            if decision.outcome == OmnigentRecoveryOutcome.RESUME_UNAVAILABLE:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    decision.blocking_reason or decision.reason
+                )
+            if decision.outcome == OmnigentRecoveryOutcome.BRANCH_REQUIRED:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "immutable_input_changed"
+                )
             omnigent_checkpoint_execution = omnigent_evidence.model_dump(
                 by_alias=True,
                 mode="json",
                 exclude_none=True,
             )
+            omnigent_recovery_decision = {
+                "outcome": decision.outcome.value,
+                "reason": decision.reason,
+                "sourceCheckpointRef": (
+                    omnigent_evidence.candidate_workspace.checkpoint_ref
+                ),
+                "sourceExecutionOrdinal": (
+                    omnigent_evidence.candidate_workspace.attempt_ordinal
+                ),
+                "validationPassed": omnigent_evidence.validation_passed,
+                "validationReason": omnigent_evidence.validation_reason,
+                "providerProfileId": (
+                    omnigent_evidence.checkpoint.provider_profile_id
+                ),
+                "sourceHostId": omnigent_evidence.checkpoint.omnigent_host_id,
+                "sourceSessionId": (
+                    omnigent_evidence.checkpoint.omnigent_session_id
+                ),
+            }
         if checkpoint.source.workflow_id != record.workflow_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery checkpoint workflowId does not match source execution."
@@ -3917,6 +3948,20 @@ class TemporalExecutionService:
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary
         )
+        recovery_source_payload["recoveryAttempt"] = {
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "sourceCheckpointRef": checkpoint_ref,
+            "validationResult": recovery_manifest.validation.result,
+            "validationReason": (
+                recovery_manifest.validation.failure_code
+                or recovery_manifest.validation.summary
+            ),
+            **(
+                {"omnigentDecision": omnigent_recovery_decision}
+                if omnigent_recovery_decision is not None
+                else {}
+            ),
+        }
         if admitted_checkpoint_resume_decision is not None:
             recovery_source_payload["admittedCheckpointResumeDecision"] = (
                 admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")

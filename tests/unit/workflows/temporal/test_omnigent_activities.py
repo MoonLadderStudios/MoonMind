@@ -128,6 +128,40 @@ async def test_profile_bound_activity_calls_live_recovery_coordinator() -> None:
 
 
 @pytest.mark.asyncio
+async def test_profile_bound_activity_calls_cold_restore_when_host_authority_is_stale(
+) -> None:
+    coordinator = AsyncMock()
+    coordinator.recover_from_checkpoint.return_value = AgentRunResult(summary="done")
+    checkpoint_execution = _checkpoint_execution(
+        hostLease={
+            "status": "expired",
+            "leaseId": "host-lease-1",
+            "credentialGeneration": 3,
+        }
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="correlation",
+        idempotencyKey="cold-restore-key",
+        parameters={"checkpointExecution": checkpoint_execution},
+    )
+
+    result = await execute_profile_bound_checkpoint_request(
+        coordinator=coordinator, request=request
+    )
+
+    coordinator.recover_from_checkpoint.assert_awaited_once()
+    coordinator.branch_from_checkpoint.assert_not_awaited()
+    assert result.metadata["checkpointRecovery"]["mode"] == "cold_restore"
+    assert (
+        result.metadata["checkpointRecovery"]["reason"]
+        == "replacement_host_required"
+    )
+
+
+@pytest.mark.asyncio
 async def test_profile_bound_activity_routes_changed_input_to_branch() -> None:
     coordinator = AsyncMock()
     coordinator.branch_from_checkpoint.return_value = AgentRunResult(summary="done")

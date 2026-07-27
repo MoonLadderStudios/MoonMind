@@ -3896,6 +3896,23 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         assert resumed_workspace["omnigentCheckpointExecution"]["checkpoint"][
             "idempotencyKey"
         ] == "first-message-1"
+        assert resumed.parameters["recoverySource"]["recoveryAttempt"] == {
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "sourceCheckpointRef": "artifact://checkpoint/source",
+            "validationResult": "valid",
+            "validationReason": None,
+            "omnigentDecision": {
+                "outcome": "live_reattach",
+                "reason": "all_original_authorities_valid",
+                "sourceCheckpointRef": "artifact://checkpoint/source",
+                "sourceExecutionOrdinal": 1,
+                "validationPassed": True,
+                "validationReason": None,
+                "providerProfileId": "profile-1",
+                "sourceHostId": "host-1",
+                "sourceSessionId": "session-1",
+            },
+        }
         assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
