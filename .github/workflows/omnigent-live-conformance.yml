@@ -190,16 +190,32 @@ jobs:
               "janitorState", "providerProfileRelease", "networkPolicyRef", "runtime",
               "hostMode",
           }
+          admission_rows = {
+              "failed_credential_readiness_admission",
+              "failed_host_registration_readiness",
+          }
           for name, row in rows.items():
               if row.get("status") != "passed":
                   raise SystemExit(f"browser row did not pass: {name}")
               assertions = row.get("assertions", {})
-              if any(assertions.get(key) is not True for key in (
+              required_assertions = (
+                  "browser_originated", "normal_create_request_rejected",
+                  "distinct_admission_reason", "no_fallback",
+              ) if name in admission_rows else (
                   "browser_originated", "normal_create_request",
                   "workflow_detail_terminal_replay", "no_fallback",
-              )):
+              )
+              if any(assertions.get(key) is not True for key in required_assertions):
                   raise SystemExit(f"browser row lacks a controlling assertion: {name}")
               authority = row.get("authorityChain", {})
+              if name in admission_rows:
+                  if (
+                      not isinstance(authority, dict)
+                      or set(authority) != {"providerProfileRef"}
+                      or not authority.get("providerProfileRef")
+                  ):
+                      raise SystemExit("admission evidence lacks bounded authority")
+                  continue
               if any(not authority.get(key) for key in authority_fields):
                   raise SystemExit("browser evidence lacks a complete authority chain")
               if (authority.get("hostCapability") != "codex-native"

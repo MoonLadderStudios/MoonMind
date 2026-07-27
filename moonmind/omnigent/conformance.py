@@ -215,6 +215,7 @@ def validate_acceptance_manifest(
     reports = [_resolve_acceptance_json(str(ref), evidence_root) for ref in report_refs]
     if any(report.get("schemaVersion") != REPORT_VERSION for report in reports):
         raise ConformanceContractError("acceptance manifest references a malformed report")
+    row_evidence: list[dict[str, Any]] = []
     for name, row in rows.items():
         assertions = row.get("assertions") if isinstance(row, Mapping) else None
         authority = row.get("authorityChain") if isinstance(row, Mapping) else None
@@ -231,6 +232,9 @@ def validate_acceptance_manifest(
             raise ConformanceContractError(
                 f"acceptance browser row {name!r} lacks controlling evidence"
             )
+        row_evidence.extend(
+            _resolve_acceptance_json(str(ref), evidence_root) for ref in evidence_refs
+        )
     secret_scan = manifest.get("secretScan")
     if not isinstance(secret_scan, Mapping) or secret_scan.get("status") != "passed":
         raise ConformanceContractError("acceptance manifest secret scan did not pass")
@@ -238,6 +242,8 @@ def validate_acceptance_manifest(
     assert_secret_free(browser)
     for report in reports:
         assert_secret_free(report)
+    for evidence in row_evidence:
+        assert_secret_free(evidence)
 
 
 def _resolve_acceptance_json(ref: str, evidence_root: Path) -> dict[str, Any]:

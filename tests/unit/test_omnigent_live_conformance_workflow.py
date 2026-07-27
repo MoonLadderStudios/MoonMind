@@ -148,3 +148,7 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert "expiresAt" in manifest["run"]
     assert "browser evidence lacks the complete release row inventory" in manifest["run"]
     assert "browser evidence lacks a complete authority chain" in manifest["run"]
+    assert "admission_rows" in manifest["run"]
+    assert '"normal_create_request_rejected"' in manifest["run"]
+    assert '"distinct_admission_reason"' in manifest["run"]
+    assert "admission evidence lacks bounded authority" in manifest["run"]

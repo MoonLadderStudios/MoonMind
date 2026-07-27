@@ -85,11 +85,15 @@ def test_stock_images_must_be_immutable() -> None:
 
 
 def _acceptance_manifest(now: datetime, root: Path) -> dict[str, object]:
+    (root / "row-evidence.json").write_text(
+        json.dumps({"schemaVersion": "moonmind.omnigent.row-evidence/v1"}),
+        encoding="utf-8",
+    )
     row = {
         "status": "passed",
         "assertions": {"browser_originated": True, "no_fallback": True},
         "authorityChain": {"providerProfileRef": "profile-safe", "hostId": "host-1"},
-        "evidenceRefs": ["https://evidence.example/row.json"],
+        "evidenceRefs": ["row-evidence.json"],
     }
     browser = {
         "schemaVersion": "moonmind.omnigent.live-evidence/v1",
@@ -171,7 +175,10 @@ def test_acceptance_manifest_gate_binds_commit_and_complete_rows(mutation: str, 
         )
 
 
-@pytest.mark.parametrize("mutation", ["shallow", "unresolved", "failed_scan"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["shallow", "unresolved", "unresolved_row_ref", "failed_scan"],
+)
 def test_acceptance_manifest_rejects_forged_or_unresolved_evidence(
     mutation: str, tmp_path: Path
 ) -> None:
@@ -181,6 +188,15 @@ def test_acceptance_manifest_rejects_forged_or_unresolved_evidence(
         manifest["browserRows"] = {"static_profile_bound": {"status": "passed"}}
     elif mutation == "unresolved":
         manifest["browserEvidence"] = "missing.json"
+    elif mutation == "unresolved_row_ref":
+        manifest["browserRows"]["static_profile_bound"]["evidenceRefs"] = [  # type: ignore[index]
+            "missing-row-evidence.json"
+        ]
+        browser = json.loads((tmp_path / "browser-evidence.json").read_text())
+        browser["rows"] = manifest["browserRows"]
+        (tmp_path / "browser-evidence.json").write_text(
+            json.dumps(browser), encoding="utf-8"
+        )
     else:
         manifest["secretScan"] = {"status": "failed"}
     with pytest.raises(ConformanceContractError):
