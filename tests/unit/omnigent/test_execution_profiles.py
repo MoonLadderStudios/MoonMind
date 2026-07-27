@@ -137,13 +137,42 @@ def test_product_selection_is_explicit_and_versioned() -> None:
 def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
     catalog = public_execution_catalog()
     assert [profile["ref"] for profile in catalog["profiles"]] == [
-        "omnigent-codex@1"
+        "omnigent-codex@1",
+        "omnigent-claude@1",
     ]
     assert {policy["ref"] for policy in catalog["policies"]} == {
         "codex-static@1",
         "codex-on-demand@1",
+        "claude-static@1",
+        "claude-on-demand@1",
     }
     assert "credential" not in str(catalog).lower()
+
+
+def test_claude_profile_compiles_provider_specific_authority() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-claude@1",
+        policy_ref="claude-on-demand@1",
+        provider_profile_id="claude-oauth",
+    )
+
+    assert launch["hostMode"] == "on_demand_docker"
+    assert launch["harness"] == "claude-native"
+    assert launch["providerRuntime"] == "claude_code"
+    assert launch["providerId"] == "anthropic"
+    assert launch["oauthMountPath"] == "/home/app/.claude"
+    assert launch["oauthUserStatePath"] == "/home/app/.claude/.claude.json"
+    validate_effective_launch_snapshot(launch)
+
+
+def test_profile_rejects_policy_for_another_provider() -> None:
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        compile_effective_launch(
+            profile_ref="omnigent-claude@1",
+            policy_ref="codex-static@1",
+            provider_profile_id="claude-oauth",
+        )
+    assert error.value.code == "OMNIGENT_LAUNCH_POLICY_PROFILE_MISMATCH"
 
 
 @pytest.mark.parametrize(

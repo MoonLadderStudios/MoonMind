@@ -1639,6 +1639,38 @@ async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> 
 
 
 @pytest.mark.asyncio
+async def test_embedded_discovery_projects_truthful_claude_capabilities(store) -> None:
+    await _bind_active_host(store, host_id="host-claude")
+    await store.record_embedded_host_lifecycle(
+        host_id="host-claude",
+        credential_generation=1,
+        capabilities={"harnesses": ["claude-native"]},
+        readiness="ready",
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    agents = await facade.list_agents()
+
+    assert agents == [
+        {
+            "id": "claude-native",
+            "name": "Claude",
+            "harness": "claude-native",
+            "ready": True,
+            "capabilities": {
+                "embedded": True,
+                "unsupported": [
+                    "codex_app_server_approvals",
+                    "codex_thread_reset",
+                ],
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_host_auth_profile_is_durably_bound_to_preassigned_lease(store) -> None:
     await _bind_active_host(store, host_id="host-auth-bound")
     await store.record_embedded_host_lifecycle(

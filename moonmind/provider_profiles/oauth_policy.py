@@ -9,6 +9,10 @@ CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR = (
     "Codex OAuth Provider Profiles require max_parallel_runs=1 because the "
     "OAuth home contains mutable refresh-token and credential state."
 )
+CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_ERROR = (
+    "Claude OAuth Provider Profiles require max_parallel_runs=1 because the "
+    "OAuth home contains mutable credential state."
+)
 
 
 def _normalized_value(value: object) -> object:
@@ -35,6 +39,16 @@ def is_codex_oauth_profile(
     )
 
 
+def is_claude_oauth_profile(
+    *, runtime_id: object, credential_source: object, materialization_mode: object
+) -> bool:
+    return (
+        _normalized_value(runtime_id) == "claude_code"
+        and _normalized_value(credential_source) == "oauth_volume"
+        and _normalized_value(materialization_mode) == "oauth_home"
+    )
+
+
 def validate_codex_oauth_capacity(
     *,
     runtime_id: object,
@@ -50,6 +64,12 @@ def validate_codex_oauth_capacity(
         materialization_mode=materialization_mode,
     ) and max_parallel_runs != 1:
         raise ValueError(CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR)
+    if is_claude_oauth_profile(
+        runtime_id=runtime_id,
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+    ) and max_parallel_runs != 1:
+        raise ValueError(CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_ERROR)
 
 
 def effective_oauth_capacity_for_finalization(
@@ -72,14 +92,16 @@ def effective_oauth_capacity_for_finalization(
         raise ValueError("max_parallel_runs must be a positive integer")
     if normalized_capacity < 1:
         raise ValueError("max_parallel_runs must be a positive integer")
-    if _normalized_value(runtime_id) == "codex_cli":
+    if _normalized_value(runtime_id) in {"codex_cli", "claude_code"}:
         return 1
     return normalized_capacity
 
 
 __all__ = [
     "CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR",
+    "CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_ERROR",
     "effective_oauth_capacity_for_finalization",
     "is_codex_oauth_profile",
+    "is_claude_oauth_profile",
     "validate_codex_oauth_capacity",
 ]

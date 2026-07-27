@@ -43,7 +43,10 @@ from moonmind.provider_profiles.lease_client import (
     ProviderProfileLeaseClient,
     deterministic_lease_owner_id,
 )
-from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
+from moonmind.provider_profiles.oauth_policy import (
+    is_claude_oauth_profile,
+    is_codex_oauth_profile,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
@@ -142,6 +145,7 @@ def _bind_exact_host(
     host_id: str,
     workspace_path: str,
     profile_authorization: Mapping[str, Any],
+    harness: str = "codex-native",
 ) -> AgentExecutionRequest:
     parameters = dict(request.parameters or {})
     raw = parameters.get("omnigent")
@@ -160,13 +164,14 @@ def _bind_exact_host(
     session.pop("host_id", None)
     omnigent["session"] = session
     agent = dict(omnigent.get("agent") or {})
-    harness = str(agent.get("harnessOverride") or "").strip()
-    if harness and harness != "codex-native":
+    requested_harness = str(agent.get("harnessOverride") or "").strip()
+    authorized_harness = str(profile_authorization.get("harness") or harness)
+    if requested_harness and requested_harness != authorized_harness:
         raise OmnigentOAuthHostError(
-            "selected Omnigent harness is not Codex compatible",
-            code="OMNIGENT_CODEX_HARNESS_UNAVAILABLE",
+            "selected Omnigent harness conflicts with profile authorization",
+            code="OMNIGENT_HARNESS_UNAVAILABLE",
         )
-    agent["harnessOverride"] = "codex-native"
+    agent["harnessOverride"] = authorized_harness
     omnigent["agent"] = agent
     omnigent["_moonmindProfileAuthorization"] = dict(profile_authorization)
     parameters["omnigent"] = omnigent
@@ -331,7 +336,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "explicit launch selection conflicts with the durable host binding",
                         code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                     )
-                if effective_launch.get("schemaVersion") != 2:
+                if (
+                    effective_launch.get("schemaVersion") != 2
+                    or not effective_launch.get("providerRuntime")
+                ):
                     effective_launch = compile_effective_launch(
                         profile_ref=str(
                             binding.execution_profile_ref or "omnigent-codex@1"
@@ -367,19 +375,49 @@ class OmnigentProfileBoundExecutionCoordinator:
                             code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                         )
             else:
+                claude_profile = is_claude_oauth_profile(
+                    runtime_id=profile.runtime_id,
+                    credential_source=profile.credential_source,
+                    materialization_mode=profile.runtime_materialization_mode,
+                )
                 bootstrap_on_demand = (
                     bool(binding.host_launch_profile_ref)
                     if binding is not None
-                    else bool(os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"))
+                    else bool(
+                        os.getenv(
+                            "OMNIGENT_CLAUDE_HOST_LAUNCH_PROFILE"
+                            if claude_profile
+                            else "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"
+                        )
+                    )
                 )
                 effective_launch = compile_effective_launch(
-                    profile_ref="omnigent-codex@1",
+                    profile_ref=(
+                        "omnigent-claude@1"
+                        if claude_profile
+                        else "omnigent-codex@1"
+                    ),
                     policy_ref=(
-                        "codex-on-demand@1"
+                        (
+                            "claude-on-demand@1"
+                            if claude_profile
+                            else "codex-on-demand@1"
+                        )
                         if bootstrap_on_demand
-                        else "codex-static@1"
+                        else (
+                            "claude-static@1" if claude_profile else "codex-static@1"
+                        )
                     ),
                     provider_profile_id=profile_id,
+                )
+            if (
+                effective_launch["providerRuntime"] != profile.runtime_id
+                or effective_launch["providerId"] != profile.provider_id
+                or effective_launch["oauthMountPath"] != profile.volume_mount_path
+            ):
+                raise OmnigentOAuthHostError(
+                    "execution profile is incompatible with the Provider Profile",
+                    code="OMNIGENT_EXECUTION_PROFILE_PROVIDER_MISMATCH",
                 )
             try:
                 host_capabilities = resolve_runtime_execution_capabilities(
@@ -400,14 +438,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if request.agent_kind != "external" or request.agent_id != "omnigent":
                     raise OmnigentOAuthHostError(
                         "remediation workspace requires external/omnigent execution",
-                        code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
-                    )
-                if (
-                    str(effective_launch.get("harness") or "codex-native")
-                    != "codex-native"
-                ):
-                    raise OmnigentOAuthHostError(
-                        "remediation workspace requires codex-native",
                         code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
                     )
                 if remediation.execution_profile_ref != profile_id:
@@ -462,7 +492,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 current_stage, "waiting", metadata={"providerProfileId": profile_id}
             )
             provider_lease = await self._lease_client.acquire_execution_lease(
-                runtime_id="codex_cli",
+                runtime_id=str(effective_launch["providerRuntime"]),
                 profile_id=profile_id,
                 owner_id=owner_id,
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
@@ -496,9 +526,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     static_host_id=None,
                     host_launch_profile_ref=(
                         (
-                            "codex-on-demand@1"
+                            str(effective_launch["launchPolicyRef"])
                             if requested_target
-                            else os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE")
+                            else os.getenv(
+                                "OMNIGENT_CLAUDE_HOST_LAUNCH_PROFILE"
+                                if effective_launch["harness"] == "claude-native"
+                                else "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"
+                            )
                         )
                         if selected_on_demand
                         else None
@@ -583,7 +617,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "completed",
                 metadata={
                     "credentialGeneration": host_lease.credential_generation,
-                    "credentialMountPath": "/home/app/.codex",
+                    "credentialMountPath": binding.credential_mount_ref.target_path,
                 },
             )
             host_id = str(preflight["hostId"])
@@ -655,7 +689,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     request,
                     host_id=host_id,
                     workspace_path=str(preflight["workspacePath"]),
-                profile_authorization={
+                    profile_authorization={
                         "providerProfileId": profile_id,
                         "credentialGeneration": host_lease.credential_generation,
                         "providerLeaseRef": provider_lease.lease_id,
@@ -665,7 +699,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "omnigentHostId": host_id,
                         "bridgeSessionId": bridge.bridge_session_id,
                         "effectiveLaunchRef": effective_launch["snapshotRef"],
+                        "harness": str(effective_launch["harness"]),
                     },
+                    harness=str(effective_launch["harness"]),
                 ),
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
@@ -690,7 +726,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             if str(result.provider_error_code or "") == "429":
                 await self._lease_client.record_cooldown(
-                    runtime_id="codex_cli",
+                    runtime_id=str(effective_launch["providerRuntime"]),
                     profile_id=profile_id,
                     owner_id=provider_lease.owner_id,
                     cooldown_seconds=profile.cooldown_after_429_seconds,
@@ -1001,13 +1037,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                 raise OmnigentOAuthHostError(
                     "Provider Profile was not found", code="profile_resolution_failed"
                 )
-            if not is_codex_oauth_profile(
+            if not (
+                is_codex_oauth_profile(
                 runtime_id=profile.runtime_id,
                 credential_source=profile.credential_source,
                 materialization_mode=profile.runtime_materialization_mode,
+                )
+                or is_claude_oauth_profile(
+                    runtime_id=profile.runtime_id,
+                    credential_source=profile.credential_source,
+                    materialization_mode=profile.runtime_materialization_mode,
+                )
             ):
                 raise OmnigentOAuthHostError(
-                    "Provider Profile is not Codex OAuth",
+                    "Provider Profile is not a supported OAuth-home profile",
                     code="profile_resolution_failed",
                 )
             return profile

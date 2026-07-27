@@ -1014,6 +1014,13 @@ class CredentialMountRef(BaseModel):
                 raise ValueError("Codex OAuth homes must mount at /home/app/.codex")
             if self.runtime_uid != 1000 or self.runtime_gid != 1000:
                 raise ValueError("Codex OAuth hosts must run with UID/GID 1000")
+        if self.auth_volume_ref.runtime_id == "claude_code":
+            if self.target_path != "/home/app/.claude":
+                raise ValueError("Claude OAuth homes must mount at /home/app/.claude")
+            if self.auth_volume_ref.provider_id != "anthropic":
+                raise ValueError("Claude OAuth hosts require providerId=anthropic")
+            if self.runtime_uid != 1000 or self.runtime_gid != 1000:
+                raise ValueError("Claude OAuth hosts must run with UID/GID 1000")
         return self
 
 
@@ -1025,7 +1032,7 @@ class OmnigentOAuthHostBinding(BaseModel):
     binding_ref: str = Field(..., alias="bindingRef", min_length=1)
     provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
     endpoint_ref: str = Field(..., alias="endpointRef", min_length=1)
-    harness: Literal["codex-native"]
+    harness: Literal["codex-native", "claude-native"]
     credential_mount_ref: CredentialMountRef = Field(..., alias="credentialMountRef")
     max_hosts: Literal[1] = Field(1, alias="maxHosts")
     max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")

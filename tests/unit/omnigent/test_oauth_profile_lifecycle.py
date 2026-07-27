@@ -66,6 +66,27 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 )
 
 
+def test_claude_oauth_profile_materializes_shared_host_binding_contract() -> None:
+    profile = SimpleNamespace(
+        profile_id="claude-oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        credential_generation=3,
+        owner_user_id="user-1",
+    )
+
+    mount = OmnigentOAuthHostRepository._mount_from_profile(profile)
+
+    assert mount.target_path == "/home/app/.claude"
+    assert mount.auth_volume_ref.runtime_id == "claude_code"
+    assert mount.auth_volume_ref.provider_id == "anthropic"
+    assert mount.auth_volume_ref.credential_generation == 3
+
+
 @pytest.mark.parametrize(
     ("code", "failure_class", "remediation"),
     [

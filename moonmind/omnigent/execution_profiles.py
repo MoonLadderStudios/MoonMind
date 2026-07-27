@@ -1,4 +1,4 @@
-"""Versioned, MoonMind-owned Omnigent Codex launch contracts.
+"""Versioned, MoonMind-owned Omnigent provider launch contracts.
 
 The catalog is intentionally built in for the first product slice.  Workflow
 requests select stable refs; they never supply Docker or credential authority.
@@ -21,7 +21,7 @@ _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_REF = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,127}$")
 
 
-class OmnigentCodexExecutionProfile(BaseModel):
+class OmnigentExecutionProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     profile_id: str = Field(alias="profileId")
@@ -30,9 +30,16 @@ class OmnigentCodexExecutionProfile(BaseModel):
     enabled: bool = True
     endpoint_ref: str = Field(alias="endpointRef")
     agent_name: str = Field(alias="agentName")
-    harness: Literal["codex-native"] = "codex-native"
+    harness: Literal["codex-native", "claude-native"]
     default_policy_ref: str = Field(alias="defaultPolicyRef")
-    provider_runtime: Literal["codex_cli"] = Field("codex_cli", alias="providerRuntime")
+    provider_runtime: Literal["codex_cli", "claude_code"] = Field(
+        alias="providerRuntime"
+    )
+    provider_id: Literal["openai", "anthropic"] = Field(alias="providerId")
+    oauth_mount_path: Literal["/home/app/.codex", "/home/app/.claude"] = Field(
+        alias="oauthMountPath"
+    )
+    oauth_user_state_path: str | None = Field(None, alias="oauthUserStatePath")
     provider_auth: Literal["oauth_volume"] = Field("oauth_volume", alias="providerAuth")
     capture_defaults: dict[str, Any] = Field(alias="captureDefaults")
     model: str | None = None
@@ -64,6 +71,9 @@ class OmnigentLaunchPolicy(BaseModel):
     capture: dict[str, Any]
     cleanup: dict[str, Any]
     control_capabilities: tuple[str, ...] = Field(alias="controlCapabilities")
+    execution_profile_ref: str = Field(
+        "omnigent-codex@1", alias="executionProfileRef"
+    )
 
     @property
     def ref(self) -> str:
@@ -114,9 +124,9 @@ class OmnigentLaunchPolicy(BaseModel):
                 "mountClasses contains an unsupported class or omits oauth_home"
             )
         if self.runtime_uid != 1000 or self.runtime_gid != 1000 or not self.read_only_root:
-            raise ValueError("Codex hosts require UID/GID 1000 and a read-only root")
+            raise ValueError("OAuth hosts require UID/GID 1000 and a read-only root")
         if not self.enforced_egress:
-            raise ValueError("Codex launch policy must enforce egress")
+            raise ValueError("OAuth launch policy must enforce egress")
         return self
 
 
@@ -157,6 +167,7 @@ POLICIES = {
             version=1,
             hostMode="static_compose",
             cleanup={"mode": "drain", "janitor": True},
+            executionProfileRef="omnigent-codex@1",
             **_COMMON,
         ),
         OmnigentLaunchPolicy(
@@ -164,6 +175,23 @@ POLICIES = {
             version=1,
             hostMode="on_demand_docker",
             cleanup={"mode": "remove", "janitor": True},
+            executionProfileRef="omnigent-codex@1",
+            **_COMMON,
+        ),
+        OmnigentLaunchPolicy(
+            policyId="claude-static",
+            version=1,
+            hostMode="static_compose",
+            cleanup={"mode": "drain", "janitor": True},
+            executionProfileRef="omnigent-claude@1",
+            **_COMMON,
+        ),
+        OmnigentLaunchPolicy(
+            policyId="claude-on-demand",
+            version=1,
+            hostMode="on_demand_docker",
+            cleanup={"mode": "remove", "janitor": True},
+            executionProfileRef="omnigent-claude@1",
             **_COMMON,
         ),
     )
@@ -171,7 +199,7 @@ POLICIES = {
 PROFILES = {
     p.ref: p
     for p in (
-        OmnigentCodexExecutionProfile(
+        OmnigentExecutionProfile(
             profileId="omnigent-codex",
             version=1,
             displayName="Omnigent Codex",
@@ -180,6 +208,32 @@ PROFILES = {
             defaultPolicyRef="codex-static@1",
             captureDefaults={"required": True, "retentionDays": 30},
             readiness={"requiresProviderLaunchReady": True, "validationVersion": 1},
+            harness="codex-native",
+            providerRuntime="codex_cli",
+            providerId="openai",
+            oauthMountPath="/home/app/.codex",
+        ),
+        OmnigentExecutionProfile(
+            profileId="omnigent-claude",
+            version=1,
+            displayName="Omnigent Claude",
+            endpointRef="default",
+            agentName="claude",
+            defaultPolicyRef="claude-static@1",
+            captureDefaults={"required": True, "retentionDays": 30},
+            readiness={
+                "requiresProviderLaunchReady": True,
+                "validationVersion": 1,
+                "unsupportedCapabilities": (
+                    "codex_app_server_approvals",
+                    "codex_thread_reset",
+                ),
+            },
+            harness="claude-native",
+            providerRuntime="claude_code",
+            providerId="anthropic",
+            oauthMountPath="/home/app/.claude",
+            oauthUserStatePath="/home/app/.claude/.claude.json",
         ),
     )
 }
@@ -218,6 +272,11 @@ def compile_effective_launch(
             "Omnigent launch policy is missing or disabled",
             code="OMNIGENT_LAUNCH_POLICY_UNAVAILABLE",
         )
+    if policy.execution_profile_ref != profile.ref:
+        raise OmnigentOAuthHostError(
+            "Omnigent launch policy belongs to another execution profile",
+            code="OMNIGENT_LAUNCH_POLICY_PROFILE_MISMATCH",
+        )
     policy_payload = policy.model_dump(by_alias=True, mode="json")
     for field, variable in (
         ("serverImageRef", "OMNIGENT_IMAGE_REF"),
@@ -240,6 +299,10 @@ def compile_effective_launch(
         "endpointRef": profile.endpoint_ref,
         "agentName": profile.agent_name,
         "harness": profile.harness,
+        "providerRuntime": profile.provider_runtime,
+        "providerId": profile.provider_id,
+        "oauthMountPath": profile.oauth_mount_path,
+        "oauthUserStatePath": profile.oauth_user_state_path,
         **policy_payload,
         "capture": {**profile.capture_defaults, **policy.capture},
     }

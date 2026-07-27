@@ -373,7 +373,12 @@ class OmnigentEmbeddedHostProtocolFacade:
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
-                harness="codex-native",
+                harness=(
+                    "claude-native"
+                    if str(row.omnigent_agent_id or "").lower()
+                    in {"claude", "claude-native"}
+                    else "codex-native"
+                ),
                 binding_token=binding_token,
             )
             if runner_id != expected_runner_id:
@@ -1196,29 +1201,39 @@ class OmnigentEmbeddedHostProtocolFacade:
         return hosts
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        """Derive the pinned Codex-first catalog from registered host evidence."""
+        """Derive the provider harness catalog from registered host evidence."""
         hosts = await self.list_hosts()
-        compatible = [
-            host
+        agents: list[dict[str, Any]] = []
+        if any(
+            host.get("ready") and _supports_codex(host.get("capabilities"))
             for host in hosts
-            if host.get("ready") and _supports_codex(host.get("capabilities"))
-        ]
-        if not compatible:
+        ):
+            agents.append({
+                "id": "codex-native", "name": "Codex", "harness": "codex-native",
+                "ready": True, "capabilities": {"embedded": True},
+            })
+        if any(
+            host.get("ready") and _supports_claude(host.get("capabilities"))
+            for host in hosts
+        ):
+            agents.append({
+                "id": "claude-native", "name": "Claude", "harness": "claude-native",
+                "ready": True,
+                "capabilities": {
+                    "embedded": True,
+                    "unsupported": [
+                        "codex_app_server_approvals", "codex_thread_reset"
+                    ],
+                },
+            })
+        if not agents:
             raise OmnigentBridgeError(
-                "No ready embedded host advertises the supported Codex harness",
+                "No ready embedded host advertises a supported harness",
                 failure_class="integration_error",
                 status_code=503,
                 code="omnigent_bridge_capability_unavailable",
             )
-        return [
-            {
-                "id": "codex-native",
-                "name": "Codex",
-                "harness": "codex-native",
-                "ready": True,
-                "capabilities": {"embedded": True},
-            }
-        ]
+        return agents
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         """Build an Omnigent-shaped snapshot exclusively from durable evidence."""
@@ -1836,6 +1851,18 @@ def _supports_codex(capabilities: Any) -> bool:
         values = [values]
     return any(
         str(value).strip().lower() in {"codex", "codex-native"}
+        for value in values
+    )
+
+
+def _supports_claude(capabilities: Any) -> bool:
+    if not isinstance(capabilities, dict):
+        return False
+    values = capabilities.get("harnesses") or capabilities.get("agents") or []
+    if isinstance(values, str):
+        values = [values]
+    return any(
+        str(value).strip().lower() in {"claude", "claude-native"}
         for value in values
     )
 

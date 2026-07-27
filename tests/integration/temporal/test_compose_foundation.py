@@ -570,6 +570,11 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "OPENAI_API_KEY": "",
         "GEMINI_API_KEY": "",
         "GOOGLE_API_KEY": "",
+        "OMNIGENT_EFFECTIVE_LAUNCH_REF": "${OMNIGENT_EFFECTIVE_LAUNCH_REF:-}",
+        "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
+        "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
+        "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
+        "OMNIGENT_CAPTURE_RETENTION_DAYS": "${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}",
     }
 
     host_volumes = {
@@ -577,6 +582,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
     assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
     assert "claude_auth_volume:/home/app/.claude" in host_volumes
+    assert "omnigent-host-claude-artifacts:/artifacts" in host_volumes
+    assert "omnigent-host-claude-cache:/home/app/.cache" in host_volumes
+    assert (
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
+        in host_volumes
+    )
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
     assert (
@@ -596,10 +607,15 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
+    assert host_service["read_only"] is True
+    assert host_service["cpus"] == "${OMNIGENT_HOST_CPU_LIMIT:-2.0}"
+    assert host_service["mem_limit"] == "${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}"
+    assert host_service["pids_limit"] == "${OMNIGENT_HOST_PIDS_LIMIT:-256}"
     assert host_service["healthcheck"] == {
         "test": [
             "CMD-SHELL",
-            "test -d /home/app/.claude && test -w /home/app/.claude",
+            "test -d /home/app/.claude && test -w /home/app/.claude "
+            "&& claude auth status >/dev/null 2>&1",
         ],
         "interval": "10s",
         "timeout": "5s",

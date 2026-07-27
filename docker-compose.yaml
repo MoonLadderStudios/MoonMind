@@ -864,6 +864,9 @@ services:
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
     entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
@@ -880,6 +883,11 @@ services:
       OPENAI_API_KEY: ""
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
+      OMNIGENT_EFFECTIVE_LAUNCH_REF: ${OMNIGENT_EFFECTIVE_LAUNCH_REF:-}
+      OMNIGENT_EXECUTION_TIMEOUT_SECONDS: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}
+      OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
+      OMNIGENT_CAPTURE_OWNER: moonmind_bridge
+      OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
@@ -887,6 +895,9 @@ services:
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - claude_auth_volume:/home/app/.claude
+      - omnigent-host-claude-artifacts:/artifacts
+      - omnigent-host-claude-cache:/home/app/.cache
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
       - ./omnigent_workspaces:/workspaces
       # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
       - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
@@ -900,8 +911,11 @@ services:
     networks:
       - local-network
     restart: unless-stopped
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2.0}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
     healthcheck:
-      test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude"]
+      test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude && claude auth status >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1174,6 +1188,8 @@ volumes:
   qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
+  omnigent-host-claude-artifacts:
+  omnigent-host-claude-cache:
   omnigent-host-codex-state:
   omnigent-tools:
     name: moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}
