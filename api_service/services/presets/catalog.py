@@ -48,7 +48,10 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
-from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
+from moonmind.workflows.temporal.remediation_loop import (
+    RemediationLoopSpec,
+    validate_remediation_loop_agent_instructions,
+)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -1563,7 +1566,8 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
                 "A resolved plan may declare only one remediation loop."
             )
         try:
-            RemediationLoopSpec.model_validate(loop_specs[0])
+            loop_spec = RemediationLoopSpec.model_validate(loop_specs[0])
+            validate_remediation_loop_agent_instructions(loop_spec)
         except ValueError as exc:
             raise PresetValidationError(
                 f"Invalid remediation loop contract: {exc}"

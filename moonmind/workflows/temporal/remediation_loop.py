@@ -112,6 +112,28 @@ class RemediationLoopSpec(_Contract):
         return value
 
 
+def validate_remediation_loop_agent_instructions(spec: RemediationLoopSpec) -> None:
+    """Reject loop tools that the managed-agent runtime cannot execute."""
+
+    for field_name, tool in (
+        ("remediationTool", spec.remediation_tool),
+        ("verificationTool", spec.verification_tool),
+    ):
+        has_instructions = any(
+            isinstance(value, str) and bool(value.strip())
+            for value in (
+                tool.inputs.get("instructions"),
+                tool.inputs.get("instructionRef"),
+            )
+        )
+        if not has_instructions:
+            raise ValueError(
+                f"{field_name}.inputs.instructions or "
+                f"{field_name}.inputs.instructionRef is required for "
+                "remediation-loop agent execution"
+            )
+
+
 class ConsumedRemediationBudgets(_Contract):
     attempts: int = Field(default=0, ge=0)
     evidence_retries: int = Field(default=0, alias="evidenceRetries", ge=0)
