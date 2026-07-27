@@ -37,6 +37,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobArtifactPage,
     ContainerJobCancelRequest,
     ContainerJobCancelResult,
+    ContainerJobFailureClass,
     ContainerJobLogEntry,
     ContainerJobLogPage,
     ContainerJobLogQuery,
@@ -52,6 +53,9 @@ from moonmind.schemas.container_job_models import (
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
+_TEMPORAL_START_FAILURE_MESSAGE = (
+    "Temporal workflow start failed before the durable handoff completed."
+)
 
 
 class ContainerJobNotFoundError(RuntimeError):
@@ -218,6 +222,7 @@ class ContainerJobService:
         artifacts: ContainerJobArtifactReader | None = None,
         backend_settings: ContainerBackendSettings | None = None,
     ) -> None:
+        self._session = session
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
@@ -250,21 +255,62 @@ class ContainerJobService:
                 raise ValueError("container image source is not configured") from exc
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
-            created_at = existing.created_at or datetime.now(timezone.utc)
-            return ContainerJobAccepted(
-                jobId=existing.job_id, replayed=True, createdAt=created_at
+            record, replayed = existing, True
+        else:
+            record, replayed = await self.repository.create_or_replay(
+                owner=owner, request=request, authorization=authorization
             )
-        record, replayed = await self.repository.create_or_replay(
-            owner=owner, request=request, authorization=authorization
+
+        terminal = record.terminal_outcome_json
+        recovering_start_failure = bool(
+            record.state == ContainerJobState.FAILED.value
+            and isinstance(terminal, dict)
+            and terminal.get("failureClass")
+            == ContainerJobFailureClass.TEMPORAL_START.value
         )
-        await self._temporal.start_container_job(
-            ContainerJobWorkflowInput(
-                jobId=record.job_id,
-                owner=owner,
-                request=request,
-                registryAuthorization=authorization,
+        preserve_existing_terminal = bool(
+            existing is not None
+            and not recovering_start_failure
+            and record.state
+            in {
+                ContainerJobState.SUCCEEDED.value,
+                ContainerJobState.FAILED.value,
+                ContainerJobState.CANCELED.value,
+                ContainerJobState.TIMED_OUT.value,
+                ContainerJobState.REJECTED.value,
+            }
+        )
+        if recovering_start_failure:
+            record.state = ContainerJobState.QUEUED.value
+            record.terminal_outcome_json = None
+            record.updated_at = datetime.now(timezone.utc)
+
+        # The API-owned job identity is authoritative for every later status
+        # read and for worker projection Activities. Commit it before handing
+        # execution to Temporal; a request-scoped AsyncSession otherwise rolls
+        # back the flushed row when the transport returns. Exact replays also
+        # reissue the deterministic Temporal start so a prior start failure can
+        # recover without creating another job identity.
+        await self._session.commit()
+        try:
+            await self._temporal.start_container_job(
+                ContainerJobWorkflowInput(
+                    jobId=record.job_id,
+                    owner=owner,
+                    request=request,
+                    registryAuthorization=authorization,
+                )
             )
-        )
+        except Exception:
+            if not preserve_existing_terminal:
+                record.state = ContainerJobState.FAILED.value
+                record.terminal_outcome_json = TerminalOutcome(
+                    failureClass=ContainerJobFailureClass.TEMPORAL_START,
+                    message=_TEMPORAL_START_FAILURE_MESSAGE,
+                ).model_dump(mode="json", by_alias=True, exclude_none=True)
+                record.updated_at = datetime.now(timezone.utc)
+                await self._session.commit()
+            raise
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
 

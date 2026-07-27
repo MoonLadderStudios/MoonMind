@@ -440,6 +440,7 @@ class TemporalClientAdapter:
             workflow_type="MoonMind.ContainerJob",
             workflow_id=container_job_workflow_id(model.job_id),
             input_args=model.model_dump(mode="json", by_alias=True),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
 
     async def signal_container_job_cancel(self, job_id: str) -> None:

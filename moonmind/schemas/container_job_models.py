@@ -115,6 +115,7 @@ class ContainerJobFailureClass(StrEnum):
     TIMEOUT = "timeout"
     CANCELED = "canceled"
     INFRASTRUCTURE = "infrastructure"
+    TEMPORAL_START = "temporal_start"
     # Private-image authorization with ephemeral registry credentials (#3257).
     IMAGE_USE_DENIED = "image_use_denied"
     CREDENTIAL_UNRESOLVED = "credential_unresolved"
