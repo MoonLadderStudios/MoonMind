@@ -212,3 +212,50 @@ async def test_profile_bound_activity_blocks_invalid_checkpoint_evidence() -> No
     coordinator.execute.assert_not_awaited()
     coordinator.recover_from_checkpoint.assert_not_awaited()
     coordinator.branch_from_checkpoint.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind_overrides", "idempotency_key"),
+    [
+        ({}, "stale-recovery-key"),
+        (
+            {
+                "kind": "branch",
+                "immutableInputMatches": False,
+                "changedFields": ["instructions"],
+            },
+            "stale-branch-key",
+        ),
+    ],
+)
+async def test_profile_bound_activity_blocks_stale_credential_generation(
+    kind_overrides: dict[str, object],
+    idempotency_key: str,
+) -> None:
+    coordinator = AsyncMock()
+    checkpoint_execution = _checkpoint_execution(
+        currentCredentialGeneration=4,
+        **kind_overrides,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="correlation",
+        idempotencyKey=idempotency_key,
+        parameters={"checkpointExecution": checkpoint_execution},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="resume_unavailable:credential_generation_mismatch",
+    ):
+        await execute_profile_bound_checkpoint_request(
+            coordinator=coordinator,
+            request=request,
+        )
+
+    coordinator.execute.assert_not_awaited()
+    coordinator.recover_from_checkpoint.assert_not_awaited()
+    coordinator.branch_from_checkpoint.assert_not_awaited()

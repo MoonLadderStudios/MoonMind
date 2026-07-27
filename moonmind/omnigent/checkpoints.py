@@ -143,6 +143,15 @@ def decide_checkpoint_execution(
 ) -> OmnigentRecoveryDecision:
     """Choose one of the four operator-visible recovery outcomes."""
 
+    if (
+        evidence.current_credential_generation
+        != evidence.checkpoint.credential_generation
+    ):
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+            reason="credential_generation_stale",
+            blockingReason="credential_generation_mismatch",
+        )
     if evidence.kind == OmnigentCheckpointExecutionKind.BRANCH:
         if not evidence.validation_passed:
             return OmnigentRecoveryDecision(
