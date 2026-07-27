@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.retrieval_gateway import (
+    IssueRetrievalCapabilityRequest,
     RetrievalAuthContext,
+    RetrievalBudgetSnapshot,
+    RetrievalCorrelation,
+    RetrievalQuery,
+    SessionRetrievalCapabilityRegistry,
     authorize_retrieval_request,
     get_retrieval_service,
     router,
@@ -196,6 +202,97 @@ def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
     assert body["filters"]["repo"] == "moonmind"
     assert body["usage"]["latency_ms"] == 4
     assert body["items"][0]["source"] == "src/a.py"
+
+
+def _correlation(**overrides) -> RetrievalCorrelation:
+    values = {
+        "workflow_id": "workflow-1",
+        "step_execution_id": "step-1",
+        "bridge_session_id": "bridge-1",
+        "omnigent_session_id": "session-1",
+        "host_id": "host-1",
+        "turn_id": "turn-1",
+        "tool_call_id": "tool-1",
+    }
+    values.update(overrides)
+    return RetrievalCorrelation(**values)
+
+
+def _capability_request(**budget_overrides) -> IssueRetrievalCapabilityRequest:
+    budget = {
+        "tenant_id": "tenant-1",
+        "repository": "moonmind",
+        "run_id": "run-1",
+        "workspace_id": "workspace-1",
+        "collections": ["repo-main"],
+        "top_k": 3,
+        "max_tokens": 256,
+        "max_latency_ms": 1000,
+        "max_queries": 2,
+        "overlay_policy": "include",
+        "policy_version": "policy-v1",
+    }
+    budget.update(budget_overrides)
+    return IssueRetrievalCapabilityRequest(
+        correlation=_correlation(),
+        budget=RetrievalBudgetSnapshot(**budget),
+        expires_in_seconds=60,
+    )
+
+
+def test_session_capability_is_opaque_host_bound_and_revocable() -> None:
+    registry = SessionRetrievalCapabilityRegistry()
+    token, capability = registry.issue(_capability_request())
+
+    assert token.startswith("rcap_")
+    assert token not in repr(capability)
+    assert registry.authorize(
+        token, host_id="host-1", session_id="session-1"
+    ) is capability
+
+    with pytest.raises(HTTPException) as wrong_host:
+        registry.authorize(token, host_id="host-2", session_id="session-1")
+    assert wrong_host.value.status_code == 403
+
+    registry.revoke(capability.capability_id, "host_cleanup")
+    with pytest.raises(HTTPException) as revoked:
+        registry.authorize(token, host_id="host-1", session_id="session-1")
+    assert revoked.value.status_code == 401
+
+
+def test_session_capability_deduplicates_and_accounts_query_budget() -> None:
+    registry = SessionRetrievalCapabilityRegistry()
+    _token, capability = registry.issue(_capability_request(max_queries=1))
+    payload = RetrievalQuery(
+        query="bounded query",
+        filters={
+            "tenant_id": "tenant-1",
+            "repository": "moonmind",
+            "run_id": "run-1",
+            "workspace_id": "workspace-1",
+        },
+        correlation=_correlation(),
+    )
+
+    assert registry.reserve(capability, payload) is None
+    response = {"items": [{"source": "a"}]}
+    registry.complete(
+        capability,
+        payload,
+        response,
+        started_at=datetime.now(tz=UTC),
+    )
+    assert registry.reserve(capability, payload) == response
+
+    second = payload.model_copy(
+        update={"correlation": _correlation(tool_call_id="tool-2")}
+    )
+    with pytest.raises(HTTPException) as exhausted:
+        registry.reserve(capability, second)
+    assert exhausted.value.status_code == 429
+    diagnostics = registry.diagnostics("workflow-1")
+    assert diagnostics["followUpRequestCount"] == 1
+    assert diagnostics["requests"][0]["delivery"] == "same_turn"
 
 def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
     monkeypatch: pytest.MonkeyPatch,
