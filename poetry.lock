@@ -1207,14 +1207,14 @@ testing = ["hatch", "pre-commit", "pytest", "tox"]
 
 [[package]]
 name = "fastapi"
-version = "0.139.2"
+version = "0.140.3"
 description = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "fastapi-0.139.2-py3-none-any.whl", hash = "sha256:b9ad015a835173d59865e2f5d8296fbc2b317bf56a2ba1a5bfbdd03de2fd4b1c"},
-    {file = "fastapi-0.139.2.tar.gz", hash = "sha256:333145a6891e9b5b3cfceb69baf817e8240cde4d4588ae5a10bf56ffacb6255e"},
+    {file = "fastapi-0.140.3-py3-none-any.whl", hash = "sha256:df04c73662448828dd64cd5a78452921fbf836e6fb258c7ecbc43a342da320df"},
+    {file = "fastapi-0.140.3.tar.gz", hash = "sha256:73a2bca5c5d2a64582805fbe6e450d84e0a7423be0656860e5fd33ae3f1a31d6"},
 ]
 
 [package.dependencies]
@@ -5144,7 +5144,7 @@ description = "Python for Window Extensions"
 optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "sys_platform == \"win32\" or platform_system == \"Windows\""
+markers = "platform_system == \"Windows\" or sys_platform == \"win32\""
 files = [
     {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
     {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
@@ -6696,4 +6696,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "999647a6d5bce3a4d93c1141a4b14d99e896876a60da4e9346d501f7c926d506"
+content-hash = "8c9bf4976147efde0509d6bc50fc5d515c3fb6f2d8d8aca7e6389ec12d06d40d"
