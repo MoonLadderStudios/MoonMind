@@ -158,3 +158,8 @@ new Omnigent selection while preserving Workflow Detail reads for historical
 bridge records; choosing direct Codex is a separate product/deployment decision,
 never a per-request fallback. Cleanup failures retain `janitorRequired` evidence,
 and the Provider Profile is released only after credential-consuming host cleanup.
+
+The promotion consumer and objective thresholds are defined by the versioned
+[Codex cutover policy](CodexCutoverPolicy.md). Public support claims live only
+in the [Codex support matrix](CodexSupportMatrix.md); repository tests without
+the protected live artifact do not upgrade a row to “supported.”

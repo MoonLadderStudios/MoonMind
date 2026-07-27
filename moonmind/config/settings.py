@@ -2189,6 +2189,40 @@ class FeatureFlagsSettings(BaseSettings):
             "routes; enable it once the Docker backend service is provisioned."
         ),
     )
+    omnigent_codex_rollout_phase: Literal[
+        "internal", "create_default", "scheduled_default", "broad_default",
+        "direct_disabled", "retired",
+    ] = Field(
+        "internal",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_CODEX_ROLLOUT_PHASE",
+            "OMNIGENT_CODEX_ROLLOUT_PHASE",
+        ),
+        description="Versioned Codex-through-Omnigent rollout phase.",
+    )
+    omnigent_codex_rollout_generation: str = Field(
+        "v1",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_CODEX_ROLLOUT_GENERATION",
+            "OMNIGENT_CODEX_ROLLOUT_GENERATION",
+        ),
+    )
+    omnigent_codex_conformance_evidence_json: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_EVIDENCE_JSON",
+            "OMNIGENT_CODEX_CONFORMANCE_EVIDENCE_JSON",
+        ),
+        description="Generation-bound live conformance and rollout telemetry evidence.",
+    )
+    omnigent_codex_conformance_max_age_hours: int = Field(
+        168,
+        ge=1,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_MAX_AGE_HOURS",
+            "OMNIGENT_CODEX_CONFORMANCE_MAX_AGE_HOURS",
+        ),
+    )
     checkpoint_resume_promotion_state: Literal[
         "disabled", "shadow_capture", "shadow_restore", "internal", "limited",
         "broad", "ga", "paused",

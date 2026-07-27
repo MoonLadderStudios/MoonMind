@@ -11,7 +11,12 @@ MoonMind is an open-source framework that makes Claude Code and Codex CLI **safe
 
 For now, MoonMind is focused on software engineering use cases, but can be used for other use cases as well and this will be made easier in the future (e.g. not requiring a git repo).
 
-UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://github.com/omnigent-ai/omnigent) as a supported managed agent, which will make MoonMind compatible with Claude Code, Codex, Antigravity, Cursor, OpenCode, Hermes, Pi, and other agents. This should be finished by the end of July 2026.
+MoonMind includes [Omnigent](https://github.com/omnigent-ai/omnigent) as the
+target profile-bound managed path for Codex. General-default promotion is
+versioned and fails closed until the protected live evidence for the deployed
+images passes the [Codex support matrix](docs/Omnigent/CodexSupportMatrix.md).
+Direct Codex is truthful migration compatibility, not an implicit fallback;
+Claude-through-Omnigent parity remains deferred.
 
 ## Quick Start
 
@@ -25,7 +30,9 @@ UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://gith
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
     - Configure any other secrets or settings you want to adjust for your first workflow
-8. Click Create and submit a workflow!
+8. Click Create and select Codex through Omnigent when its profile, policy and
+   conformance readiness are available. During the bounded migration window,
+   direct Codex remains a separate explicit selection.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 

@@ -24,6 +24,11 @@ moonmind_severity_floor_default = "high"
 proposal_delivery_provider_default = "github"
 
 [feature_flags]
+omnigent_codex_rollout_phase = "internal"
+omnigent_codex_rollout_generation = "v1"
+# Protected live report summary. Missing or stale evidence blocks Omnigent defaults.
+omnigent_codex_conformance_evidence_json = ""
+omnigent_codex_conformance_max_age_hours = 168
 # Enable /api/sessions compatibility facades over canonical AgentRun session APIs.
 session_api_compat_enabled = false
 # Disable the Preset Catalog (UI + API) when required.

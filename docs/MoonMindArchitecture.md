@@ -191,7 +191,7 @@ Diagram rules:
 |---|---|---|---|
 | `codex_cli` | Managed CLI runtime and workflow-scoped session runtime | Working managed-run and live `MoonMind.AgentSession` path | Codex App Server transport, session epochs, thread boundaries, artifact-backed continuity |
 | `claude_code` | Managed CLI runtime | Working managed-run path; session admission not yet live | Provider profiles, OAuth/API-key materialization, context delivery, runtime-specific hardening |
-| Omnigent | Agent host and meta-harness | Combined-stack integration in progress | Omnigent runners call MoonMind through authenticated APIs and MCP tools |
+| Omnigent | Profile-bound agent host and meta-harness | Codex target path; default promotion is evidence-gated | Omnigent runners call MoonMind through authenticated APIs and MCP tools; see the [cutover policy](Omnigent/CodexCutoverPolicy.md) |
 | Jules | External delegated agent | Working integration | Provider adapter normalizes status and artifacts into canonical agent contracts |
 | Codex Cloud | External delegated agent | Working integration | Integration Activities and canonical result contracts |
 | Docker Backend Service | API-owned workload service | Desired-state container-job interface over existing Docker backend | Arbitrary permitted images, logical workspaces, Temporal durability, cross-workflow image reuse |

@@ -208,12 +208,12 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 
 ### Remaining work
 
-- [ ] **6.0 Compatibility and cutover design reconciliation** — classify every direct-Codex surface as historical read, Temporal compatibility, temporary event producer, bounded fallback, fixture, or removable launch path.
-- [ ] **6.1 Versioned support matrix** — publish exact support/evidence status for host modes, bridge modes, repository work, controls, recovery, remediation, RAG, policy/profile UI, egress, architectures, and compatibility in #3518.
+- [x] **6.0 Compatibility and cutover design reconciliation** — the canonical [cutover policy](Omnigent/CodexCutoverPolicy.md) classifies every direct-Codex surface and defines evidence-based retirement.
+- [x] **6.1 Versioned support matrix** — the versioned [Codex support matrix](Omnigent/CodexSupportMatrix.md) distinguishes implemented substrate from combinations backed by independently resolvable protected-live evidence.
 - [ ] **6.2 Staged default and telemetry rollout** — move cohorts, Create defaults, schedules, and presets only when readiness, live evidence, and objective rollback thresholds pass.
 - [ ] **6.3 Historical and Temporal compatibility** — preserve truthful direct provenance, Workflow Detail reads, schema decoders, recorded histories, and mixed-version worker replay.
 - [ ] **6.4 Controlled retirement** — disable direct scheduling before removing launch/UI/configuration code; retain the compatibility event/read model until its explicit history and rollback gates pass.
-- [ ] **6.5 Public documentation and release-metadata reconciliation** — correct the public Omnigent story in #3518: `README.md` still promises Omnigent completion "by the end of July 2026" and still describes Omnigent-backed runtimes as future work. Reconcile the README, architecture and combined-stack docs, retire obsolete Omnigent documents, and align release metadata with the published support matrix.
+- [x] **6.5 Public documentation and release-metadata reconciliation** — README, architecture, cutover policy, versioned support matrix, conformance and release notes share the evidence-gated Codex story; Claude parity remains deferred.
 
 **Done means:** the repository tells one accurate Codex-through-Omnigent story, every supported row has evidence, explicit Omnigent selection never silently falls back, rollback remains available during migration, and direct code is removed only after historical and in-flight contracts are safe.
 
