@@ -9136,6 +9136,38 @@ export interface components {
         OmnigentPublicErrorResponse: {
             detail: components["schemas"]["OmnigentPublicErrorDetail"];
         };
+        /** OmnigentRestoreValidation */
+        OmnigentRestoreValidation: {
+            /** Valid */
+            valid: boolean;
+            /** Reasoncode */
+            reasonCode?: string | null;
+            /** Message */
+            message: string;
+            liveReattach: components["schemas"]["RecoveryCapability"];
+            workspaceColdRestore: components["schemas"]["RecoveryCapability"];
+            branchCreation: components["schemas"]["RecoveryCapability"];
+            /** Requiredprofileid */
+            requiredProfileId: string;
+            /** Requiredlaunchpolicyref */
+            requiredLaunchPolicyRef: string;
+            /**
+             * Readinessblocked
+             * @default false
+             */
+            readinessBlocked: boolean;
+            /**
+             * Capacityblocked
+             * @default false
+             */
+            capacityBlocked: boolean;
+            /** Validatedrefs */
+            validatedRefs?: string[];
+            /** Validateddigests */
+            validatedDigests?: {
+                [key: string]: string;
+            };
+        };
         /**
          * OmnigentSessionResponse
          * @description Supported common session snapshot/create/attach response profile.
@@ -10196,7 +10228,7 @@ export interface components {
             /** Failedrunrecoverymanifestref */
             failedRunRecoveryManifestRef?: string | null;
             /** Checkpointboundary */
-            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
+            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration" | "before_first_message" | "after_turn" | "before_host_drain" | "before_remediation" | "before_checkpoint_branch" | "terminal_harvest") | null;
             /** Taskinputsnapshotref */
             taskInputSnapshotRef?: string | null;
             /** Planref */
@@ -10264,7 +10296,7 @@ export interface components {
             /** Failedrunrecoverymanifestref */
             failedRunRecoveryManifestRef?: string | null;
             /** Checkpointboundary */
-            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
+            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration" | "before_first_message" | "after_turn" | "before_host_drain" | "before_remediation" | "before_checkpoint_branch" | "terminal_harvest") | null;
             /** Taskinputsnapshotref */
             taskInputSnapshotRef?: string | null;
             /** Planref */
@@ -10285,6 +10317,18 @@ export interface components {
             };
             /** Selectedstartstepid */
             selectedStartStepId: string;
+        };
+        /**
+         * RecoveryCapability
+         * @description One independently evaluated checkpoint recovery capability.
+         */
+        RecoveryCapability: {
+            /** Available */
+            available: boolean;
+            /** Reasoncode */
+            reasonCode?: string | null;
+            /** Message */
+            message?: string | null;
         };
         /** RecoveryCheckpointTargetModel */
         RecoveryCheckpointTargetModel: {
@@ -11524,6 +11568,7 @@ export interface components {
             };
             stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
             recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
+            checkpointRecovery?: components["schemas"]["OmnigentRestoreValidation"] | null;
             compatibilityDecision?: components["schemas"]["CompatibilityBoundaryDecisionModel"] | null;
             /** Inputrefs */
             inputRefs?: {
@@ -11674,6 +11719,7 @@ export interface components {
             };
             stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
             recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
+            checkpointRecovery?: components["schemas"]["OmnigentRestoreValidation"] | null;
             compatibilityDecision?: components["schemas"]["CompatibilityBoundaryDecisionModel"] | null;
         };
         /**

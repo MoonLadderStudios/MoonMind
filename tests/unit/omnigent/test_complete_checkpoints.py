@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
     build_cold_restore_inputs,
+    materialize_cold_restore,
     validate_restore_material,
 )
 
@@ -88,6 +89,14 @@ def test_complete_manifest_validates_and_builds_clean_restore() -> None:
         "artifact://external": b"external",
         "artifact://head": b"head",
         "artifact://checkpoint": b"checkpoint",
+        "artifact://execution-profile": b"profile",
+        "artifact://launch-policy": b"policy",
+        "artifact://resources": b"resources",
+        "artifact://capture": b"capture",
+        "artifact://instructions": b"instructions",
+        "artifact://context": b"context",
+        "artifact://terminal": b"terminal",
+        "artifact://diagnostics": b"diagnostics",
     }
     result = validate_restore_material(
         manifest,
@@ -117,6 +126,27 @@ def test_complete_manifest_validates_and_builds_clean_restore() -> None:
     assert restore["externalStateRef"] == "artifact://external"
     assert restore["credentialGeneration"] == 3
 
+    calls: list[tuple[object, ...]] = []
+    launched = materialize_cold_restore(
+        manifest,
+        result,
+        destination_workspace_locator=restore["destinationWorkspaceLocator"],
+        new_effective_launch_ref=restore["effectiveLaunchRef"],
+        checkout_baseline=lambda locator, baseline: calls.append(
+            ("checkout", locator, baseline)
+        ),
+        apply_workspace_artifact=lambda locator, ref, patch: calls.append(
+            ("apply", locator, ref, patch)
+        ),
+        restore_immutable_refs=lambda locator, instructions, context: calls.append(
+            ("refs", locator, list(instructions), list(context))
+        ),
+        launch_fresh_session=lambda inputs: ("launched", inputs["externalStateRef"]),
+    )
+    assert calls[0][0] == "checkout"
+    assert calls[1][0:2] == ("apply", restore["destinationWorkspaceLocator"])
+    assert launched == ("launched", "artifact://external")
+
 
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
@@ -139,6 +169,14 @@ def test_restore_validation_fails_closed(kwargs: dict[str, object], reason: str)
             "artifact://external": b"external",
             "artifact://head": b"head",
             "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
         }.__getitem__,
     }
     arguments.update(kwargs)
@@ -169,6 +207,48 @@ def test_digest_mismatch_and_unresolvable_artifact_are_bounded() -> None:
         artifact_reader=lambda _ref: (_ for _ in ()).throw(KeyError()),
     )
     assert missing.reason_code == "artifact_unresolvable"
+
+
+def test_restore_recomputes_independent_capabilities_and_identity_checks() -> None:
+    artifacts = {
+        "artifact://external": b"external",
+        "artifact://head": b"head",
+        "artifact://checkpoint": b"checkpoint",
+        "artifact://execution-profile": b"profile",
+        "artifact://launch-policy": b"policy",
+        "artifact://resources": b"resources",
+        "artifact://capture": b"capture",
+        "artifact://instructions": b"instructions",
+        "artifact://context": b"context",
+        "artifact://terminal": b"terminal",
+        "artifact://diagnostics": b"diagnostics",
+    }
+    result = validate_restore_material(
+        _manifest(),
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        step_execution_id="step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
+        expected_first_message_identity="message-1",
+        expected_first_message_digest="sha256:" + "b" * 64,
+        expected_bridge_event_cursor="event-8",
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        artifact_reader=artifacts.__getitem__,
+        current_provider_lease_ref="lease-provider-1",
+        current_host_lease_ref="lease-host-1",
+        host_registered=True,
+        session_valid=True,
+        capacity_available=False,
+    )
+    assert result.valid
+    assert result.live_reattach.available
+    assert not result.workspace_cold_restore.available
+    assert result.workspace_cold_restore.reason_code == "capacity_unavailable"
+    assert result.capacity_blocked
+    assert set(result.validated_refs) == set(artifacts)
 
 
 @pytest.mark.parametrize(

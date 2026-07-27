@@ -5405,6 +5405,7 @@ class MoonMindRunWorkflow:
         prepared_input_refs: Sequence[str] = (),
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
+        omnigent_checkpoint: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -5426,6 +5427,9 @@ class MoonMindRunWorkflow:
             "stepOutputs": dict(step_outputs or {}),
             "diagnosticRefs": list(diagnostic_refs),
             "idempotencyKey": checkpoint_id,
+            "omnigentCheckpoint": (
+                dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
+            ),
         }
         result = await workflow.execute_activity(
             route.activity_type,
@@ -5925,6 +5929,12 @@ class MoonMindRunWorkflow:
                 logical_step_id
             ),
             diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
+            omnigent_checkpoint=(
+                step_outputs.get("omnigentCheckpoint")
+                if isinstance(step_outputs, Mapping)
+                and isinstance(step_outputs.get("omnigentCheckpoint"), Mapping)
+                else None
+            ),
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:

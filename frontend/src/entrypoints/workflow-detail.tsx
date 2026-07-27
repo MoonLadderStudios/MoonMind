@@ -790,6 +790,29 @@ const StepEvidenceSummarySchema = z
   })
   .passthrough();
 
+const RecoveryCapabilitySchema = z.object({
+  available: z.boolean(),
+  reasonCode: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+});
+
+const CheckpointRecoverySchema = z
+  .object({
+    valid: z.boolean(),
+    reasonCode: z.string().nullable().optional(),
+    message: z.string(),
+    liveReattach: RecoveryCapabilitySchema,
+    workspaceColdRestore: RecoveryCapabilitySchema,
+    branchCreation: RecoveryCapabilitySchema,
+    requiredProfileId: z.string(),
+    requiredLaunchPolicyRef: z.string(),
+    readinessBlocked: z.boolean().default(false),
+    capacityBlocked: z.boolean().default(false),
+    validatedRefs: z.array(z.string()).default([]),
+    validatedDigests: z.record(z.string(), z.string()).default({}),
+  })
+  .passthrough();
+
 const StepExecutionLineageSchema = z
   .object({
     sourceWorkflowId: z.string(),
@@ -826,6 +849,7 @@ const StepExecutionProjectionSchema = z
     outputRefs: z.record(z.string(), z.unknown()).default({}),
     stepEvidence: StepEvidenceSummarySchema.nullable().optional(),
     recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
+    checkpointRecovery: CheckpointRecoverySchema.nullable().optional(),
   })
   .passthrough();
 
@@ -5189,6 +5213,7 @@ function StepExecutionHistoryRow({
   const runtimeChildRefs = stepRefEntries(execution.runtimeChildRefs);
   const downstreamInvalidated = execution.reason === 'dependency_invalidated';
   const lineage = execution.lineage ?? null;
+  const checkpointRecovery = execution.checkpointRecovery ?? null;
 
   return (
     <li className="step-execution-history-item">
@@ -5246,6 +5271,34 @@ function StepExecutionHistoryRow({
           <div className="step-execution-fact">
             <dt>Gate verdict</dt>
             <dd>{formatStatusLabel(gateVerdict)}</dd>
+          </div>
+        ) : null}
+        {checkpointRecovery ? (
+          <div className="step-execution-fact">
+            <dt>Checkpoint recovery</dt>
+            <dd>
+              Live reattach:{' '}
+              {checkpointRecovery.liveReattach.available
+                ? 'available'
+                : formatStatusLabel(
+                    checkpointRecovery.liveReattach.reasonCode ?? 'unavailable',
+                  )}
+              {' · '}Cold restore:{' '}
+              {checkpointRecovery.workspaceColdRestore.available
+                ? 'available'
+                : formatStatusLabel(
+                    checkpointRecovery.workspaceColdRestore.reasonCode ?? 'unavailable',
+                  )}
+              {' · '}Branch:{' '}
+              {checkpointRecovery.branchCreation.available
+                ? 'available'
+                : formatStatusLabel(
+                    checkpointRecovery.branchCreation.reasonCode ?? 'unavailable',
+                  )}
+              <br />
+              Profile <code>{checkpointRecovery.requiredProfileId}</code> · Policy{' '}
+              <code>{checkpointRecovery.requiredLaunchPolicyRef}</code>
+            </dd>
           </div>
         ) : null}
         {contextBundleRef ? (

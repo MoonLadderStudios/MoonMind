@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -218,6 +218,14 @@ class OmnigentRestoreValidation(BaseModel):
         ..., alias="workspaceColdRestore"
     )
     branch_creation: RecoveryCapability = Field(..., alias="branchCreation")
+    required_profile_id: str = Field(..., alias="requiredProfileId")
+    required_launch_policy_ref: str = Field(..., alias="requiredLaunchPolicyRef")
+    readiness_blocked: bool = Field(False, alias="readinessBlocked")
+    capacity_blocked: bool = Field(False, alias="capacityBlocked")
+    validated_refs: list[str] = Field(default_factory=list, alias="validatedRefs")
+    validated_digests: dict[str, str] = Field(
+        default_factory=dict, alias="validatedDigests"
+    )
 
 
 def validate_restore_material(
@@ -230,6 +238,20 @@ def validate_restore_material(
     credential_generation: int,
     artifact_reader: Callable[[str], bytes],
     repository_baseline: str | None = None,
+    repository_head: str | None = None,
+    step_execution_id: str | None = None,
+    attempt_ordinal: int | None = None,
+    boundary: str | None = None,
+    expected_first_message_identity: str | None = None,
+    expected_first_message_digest: str | None = None,
+    expected_bridge_event_cursor: str | None = None,
+    current_provider_lease_ref: str | None = None,
+    current_host_lease_ref: str | None = None,
+    host_registered: bool = False,
+    session_valid: bool = False,
+    profile_ready: bool = True,
+    capacity_available: bool = True,
+    supported_patch_capabilities: Sequence[str] = ("git_patch_v1",),
 ) -> OmnigentRestoreValidation:
     """Dereference and digest-check authority before any recovery side effect."""
 
@@ -242,6 +264,10 @@ def validate_restore_material(
             liveReattach=capability,
             workspaceColdRestore=capability,
             branchCreation=capability,
+            requiredProfileId=manifest.identity.provider_profile_id,
+            requiredLaunchPolicyRef=manifest.launch_policy_ref,
+            readinessBlocked=not profile_ready,
+            capacityBlocked=not capacity_available,
         )
 
     if (manifest.workflow_id, manifest.run_id, manifest.logical_step_id) != (
@@ -259,6 +285,36 @@ def validate_restore_material(
         )
     if repository_baseline and manifest.baseline_commit != repository_baseline:
         return denied("baseline_mismatch", "repository baseline is incompatible")
+    if repository_head and repository_head not in {
+        manifest.baseline_commit,
+        manifest.head_digest,
+    }:
+        return denied("head_mismatch", "repository head is incompatible")
+    identity_expectations = (
+        ("step_execution_mismatch", step_execution_id, manifest.step_execution_id),
+        ("attempt_mismatch", attempt_ordinal, manifest.attempt_ordinal),
+        ("boundary_mismatch", boundary, manifest.boundary),
+        (
+            "first_message_mismatch",
+            expected_first_message_identity,
+            manifest.first_message_identity,
+        ),
+        (
+            "first_message_mismatch",
+            expected_first_message_digest,
+            manifest.first_message_digest,
+        ),
+        (
+            "event_cursor_mismatch",
+            expected_bridge_event_cursor,
+            manifest.last_bridge_event_cursor,
+        ),
+    )
+    for code, expected, actual in identity_expectations:
+        if expected is not None and expected != actual:
+            return denied(code, code.replace("_", " "))
+    if manifest.patch_capability not in set(supported_patch_capabilities):
+        return denied("unsupported_patch", "checkpoint patch capability is unsupported")
 
     digest_refs: list[tuple[str | None, str | None]] = [
         (manifest.identity.external_state_ref, manifest.external_state_digest),
@@ -267,21 +323,69 @@ def validate_restore_material(
     ]
     if manifest.diff_ref:
         digest_refs.append((manifest.diff_ref, manifest.diff_digest))
-    for ref, expected_digest in digest_refs:
+    required_refs = {
+        manifest.identity.external_state_ref,
+        manifest.execution_profile_ref,
+        manifest.launch_policy_ref,
+        manifest.resource_manifest_ref,
+        manifest.capture_manifest_ref,
+        manifest.head_ref,
+        manifest.checkpoint_ref,
+        *manifest.instruction_refs,
+        *manifest.context_refs,
+    }
+    if manifest.diff_ref:
+        required_refs.add(manifest.diff_ref)
+    if manifest.identity.terminal_ref:
+        required_refs.add(manifest.identity.terminal_ref)
+    if manifest.identity.diagnostics_ref:
+        required_refs.add(manifest.identity.diagnostics_ref)
+    resolved: dict[str, bytes] = {}
+    for ref in sorted(required_refs):
         try:
-            payload = artifact_reader(str(ref))
+            resolved[ref] = artifact_reader(ref)
         except Exception:
             return denied(
                 "artifact_unresolvable",
                 f"required artifact is unavailable: {ref}",
             )
+    validated_digests: dict[str, str] = {}
+    for ref, expected_digest in digest_refs:
+        payload = resolved[str(ref)]
         actual = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+        validated_digests[str(ref)] = actual
         if actual != expected_digest:
             return denied("digest_mismatch", f"artifact digest mismatch: {ref}")
 
-    live = manifest.live_reattach
-    cold = manifest.workspace_cold_restore
-    branch = manifest.branch_creation
+    cold_denial = None
+    if not profile_ready:
+        cold_denial = "profile_not_ready"
+    elif not capacity_available:
+        cold_denial = "capacity_unavailable"
+    cold = RecoveryCapability(
+        available=cold_denial is None,
+        reasonCode=cold_denial,
+        message=None if cold_denial is None else cold_denial.replace("_", " "),
+    )
+    live_denial = None
+    if current_provider_lease_ref != manifest.identity.provider_lease_ref:
+        live_denial = "provider_lease_mismatch"
+    elif current_host_lease_ref != manifest.identity.host_lease_ref:
+        live_denial = "host_lease_mismatch"
+    elif not host_registered:
+        live_denial = "host_unavailable"
+    elif not session_valid:
+        live_denial = "session_unavailable"
+    live = RecoveryCapability(
+        available=live_denial is None,
+        reasonCode=live_denial,
+        message=None if live_denial is None else live_denial.replace("_", " "),
+    )
+    branch = RecoveryCapability(
+        available=cold.available,
+        reasonCode=cold.reason_code,
+        message=cold.message,
+    )
     valid = cold.available or live.available
     return OmnigentRestoreValidation(
         valid=valid,
@@ -290,6 +394,12 @@ def validate_restore_material(
         liveReattach=live,
         workspaceColdRestore=cold,
         branchCreation=branch,
+        requiredProfileId=manifest.identity.provider_profile_id,
+        requiredLaunchPolicyRef=manifest.launch_policy_ref,
+        readinessBlocked=not profile_ready,
+        capacityBlocked=not capacity_available,
+        validatedRefs=sorted(resolved),
+        validatedDigests=validated_digests,
     )
 
 
@@ -328,6 +438,48 @@ def build_cold_restore_inputs(
             f"{manifest.boundary}"
         ),
     }
+
+
+def materialize_cold_restore(
+    manifest: OmnigentCheckpointManifest,
+    validation: OmnigentRestoreValidation,
+    *,
+    destination_workspace_locator: Mapping[str, Any],
+    new_effective_launch_ref: str,
+    checkout_baseline: Callable[[Mapping[str, Any], str], None],
+    apply_workspace_artifact: Callable[[Mapping[str, Any], str, str], None],
+    restore_immutable_refs: Callable[
+        [Mapping[str, Any], Sequence[str], Sequence[str]], None
+    ],
+    launch_fresh_session: Callable[[Mapping[str, Any]], Any],
+) -> Any:
+    """Execute cold materialization through explicit workspace/launch boundaries."""
+
+    inputs = build_cold_restore_inputs(
+        manifest,
+        validation,
+        destination_workspace_locator=destination_workspace_locator,
+        new_effective_launch_ref=new_effective_launch_ref,
+    )
+    destination = inputs["destinationWorkspaceLocator"]
+    checkout_baseline(destination, inputs["baselineCommit"])
+    apply_workspace_artifact(
+        destination,
+        inputs["checkpointRef"],
+        inputs["patchCapability"],
+    )
+    if inputs["diffRef"]:
+        apply_workspace_artifact(
+            destination,
+            inputs["diffRef"],
+            inputs["patchCapability"],
+        )
+    restore_immutable_refs(
+        destination,
+        inputs["instructionRefs"],
+        inputs["contextRefs"],
+    )
+    return launch_fresh_session(inputs)
 
 
 def _reject_credential_material(value: Any, path: str = "checkpoint") -> None:
@@ -439,6 +591,7 @@ __all__ = [
     "OmnigentRestoreValidation",
     "RecoveryCapability",
     "build_cold_restore_inputs",
+    "materialize_cold_restore",
     "recovery_mode",
     "validate_branch_identity",
     "validate_cold_restore_target",

@@ -17,7 +17,10 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
-from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
+from moonmind.omnigent.checkpoints import (
+    OmnigentCheckpointManifest,
+    OmnigentRestoreValidation,
+)
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -3574,6 +3577,9 @@ class StepExecutionProjectionModel(BaseModel):
     )
     recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
         None, alias="recoveryEligibility"
+    )
+    checkpoint_recovery: OmnigentRestoreValidation | None = Field(
+        None, alias="checkpointRecovery"
     )
     compatibility_decision: CompatibilityBoundaryDecisionModel | None = Field(
         None, alias="compatibilityDecision"

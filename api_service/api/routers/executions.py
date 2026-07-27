@@ -6752,6 +6752,11 @@ def _step_execution_projection_payload(
         "outputRefs": _bounded_ref_projection(outputs),
         "stepEvidence": _step_evidence_summary_payload(manifest),
         "recoveryEligibility": _recovery_eligibility_payload(manifest),
+        "checkpointRecovery": (
+            _field_value(outputs, "checkpointRecovery")
+            if isinstance(_field_value(outputs, "checkpointRecovery"), Mapping)
+            else None
+        ),
     }
 
 
