@@ -195,6 +195,21 @@ async def test_exact_replay_recovers_temporal_start_failure(
                 temporal=temporal,
             ).submit(owner=owner, request=submission())
 
+    async with session_factory() as failed_session:
+        failed_service = ContainerJobService(
+            failed_session,
+            temporal=AsyncMock(),
+        )
+        failed_record = await failed_service.repository.find_exact_replay(
+            owner=owner,
+            request=submission(),
+        )
+        assert failed_record is not None
+        failed = await failed_service.status(owner=owner, job_id=failed_record.job_id)
+    assert failed.state == "failed"
+    assert failed.terminal is not None
+    assert failed.terminal.failure_class == ContainerJobFailureClass.TEMPORAL_START
+
     async with session_factory() as retry_session:
         accepted = await ContainerJobService(
             retry_session,
@@ -210,6 +225,35 @@ async def test_exact_replay_recovers_temporal_start_failure(
             temporal=AsyncMock(),
         ).status(owner=owner, job_id=accepted.job_id)
     assert persisted.state == "queued"
+    assert persisted.terminal is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_replay_start_error_preserves_terminal_projection(
+    session_factory,
+    temporal,
+) -> None:
+    owner = OwnerIdentity(principalId="terminal-owner", principalType="user")
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+        accepted = await service.submit(owner=owner, request=submission())
+        await service.repository.record_observation(
+            owner=owner,
+            job_id=accepted.job_id,
+            state=ContainerJobState.SUCCEEDED,
+            terminal=TerminalOutcome(exitCode=0),
+        )
+        await session.commit()
+        temporal.start_container_job.side_effect = RuntimeError("temporal unavailable")
+
+        with pytest.raises(RuntimeError, match="temporal unavailable"):
+            await service.submit(owner=owner, request=submission())
+
+        preserved = await service.status(owner=owner, job_id=accepted.job_id)
+
+    assert preserved.state == "succeeded"
+    assert preserved.terminal is not None
+    assert preserved.terminal.exit_code == 0
 
 
 @pytest.mark.asyncio
