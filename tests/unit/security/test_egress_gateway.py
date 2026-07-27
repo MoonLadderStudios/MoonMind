@@ -32,6 +32,10 @@ async def test_reconciler_creates_internal_network_and_dual_homed_gateway(tmp_pa
     async def runner(args):
         command = tuple(args)
         commands.append(command)
+        if command[:2] == ("container", "exec") and "sha256sum" in command:
+            config, _ = compile_squid_policy(_profile())
+            digest = hashlib.sha256(config.encode()).hexdigest().encode()
+            return 0, digest + b"  /etc/squid/squid.conf\n", b""
         if command[:2] in {("container", "inspect"), ("network", "inspect")}:
             if "{{.State.Running}}" in command:
                 return 0, b"true\n", b""
@@ -53,6 +57,9 @@ async def test_reconciler_creates_internal_network_and_dual_homed_gateway(tmp_pa
     assert "--cap-drop" in gateway_create and "ALL" in gateway_create
     assert "NET_ADMIN" not in gateway_create and "NET_RAW" not in gateway_create
     assert "--read-only" in gateway_create
+    assert any(
+        c[:2] == ("container", "exec") and "sha256sum" in c for c in commands
+    )
 
 
 @pytest.mark.asyncio
@@ -79,6 +86,10 @@ async def test_reconciler_adopts_only_an_internal_compose_network(tmp_path: Path
     async def runner(args):
         command = tuple(args)
         commands.append(command)
+        if command[:2] == ("container", "exec") and "sha256sum" in command:
+            config, _ = compile_squid_policy(_profile())
+            digest = hashlib.sha256(config.encode()).hexdigest().encode()
+            return 0, digest + b"  /etc/squid/squid.conf\n", b""
         if command[:2] == ("container", "inspect"):
             if "{{.State.Running}}" in command:
                 return 0, b"true\n", b""
@@ -95,3 +106,44 @@ async def test_reconciler_adopts_only_an_internal_compose_network(tmp_path: Path
     ).reconcile(profile=_profile(), network_ref="egress-1")
 
     assert not any(command[:2] == ("network", "create") for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_reconciler_requires_authenticated_attestation_before_mutation(
+    tmp_path: Path,
+) -> None:
+    commands = []
+
+    async def runner(args):
+        commands.append(tuple(args))
+        return 0, b"", b""
+
+    reconciler = DockerEgressGatewayReconciler(
+        runner=runner,
+        state_root=tmp_path,
+        backend_ref="system",
+        attestation_key=b"short",
+    )
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        await reconciler.reconcile(profile=_profile(), network_ref="egress-1")
+    assert commands == []
+
+
+@pytest.mark.asyncio
+async def test_reconciler_rejects_applied_config_digest_mismatch(tmp_path: Path) -> None:
+    async def runner(args):
+        command = tuple(args)
+        if command[:2] == ("container", "exec") and "sha256sum" in command:
+            return 0, b"0" * 64 + b"  /etc/squid/squid.conf\n", b""
+        if command[:2] in {("container", "inspect"), ("network", "inspect")}:
+            return 1, b"", b"not found"
+        return 0, b"", b""
+
+    reconciler = DockerEgressGatewayReconciler(
+        runner=runner,
+        state_root=tmp_path,
+        backend_ref="system",
+        attestation_key=b"k" * 32,
+    )
+    with pytest.raises(RuntimeError, match="applied gateway policy digest"):
+        await reconciler.reconcile(profile=_profile(), network_ref="egress-1")

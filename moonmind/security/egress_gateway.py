@@ -26,7 +26,7 @@ from moonmind.security.egress_profiles import (
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 
 OWNED_LABEL = "moonmind.egress.reconciler_owned"
-DEFAULT_GATEWAY_IMAGE = "ubuntu/squid:latest"
+DEFAULT_GATEWAY_IMAGE = "ubuntu/squid:6.6-24.04_edge"
 
 
 def _acl_name(index: int) -> str:
@@ -124,7 +124,11 @@ class DockerEgressGatewayReconciler:
             raise RuntimeError(f"egress reconciliation failed at {args[0]}: {detail}")
         return stdout
 
-    async def reconcile(self, *, profile: EgressProfile, network_ref: str) -> ReconciledGateway:
+    async def reconcile(
+        self, *, profile: EgressProfile, network_ref: str
+    ) -> ReconciledGateway:
+        if len(self._key) < 32:
+            raise ValueError("restricted-egress attestation key must be at least 32 bytes")
         gateway_ref = f"{network_ref}-gateway"
         config, rules_digest = compile_squid_policy(profile)
         self._state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -173,22 +177,21 @@ class DockerEgressGatewayReconciler:
         labels = {
             OWNED_LABEL: "true",
         }
-        if len(self._key) >= 32:
-            signature = hmac.new(
-                self._key, "\n".join(signed_fields).encode(), hashlib.sha256
-            ).hexdigest()
-            labels.update(
-                {
-                    ATTESTATION_LABELS["profile_ref"]: profile.ref,
-                    ATTESTATION_LABELS["profile_digest"]: profile.digest,
-                    ATTESTATION_LABELS["rules_digest"]: rules_digest,
-                    ATTESTATION_LABELS["enforcer"]: ENFORCER_IMPLEMENTATION,
-                    ATTESTATION_LABELS["validated"]: "true",
-                    ATTESTATION_LABELS["validated_at"]: validated_at,
-                    ATTESTATION_LABELS["gateway_ref"]: gateway_ref,
-                    ATTESTATION_LABELS["signature"]: signature,
-                }
-            )
+        signature = hmac.new(
+            self._key, "\n".join(signed_fields).encode(), hashlib.sha256
+        ).hexdigest()
+        labels.update(
+            {
+                ATTESTATION_LABELS["profile_ref"]: profile.ref,
+                ATTESTATION_LABELS["profile_digest"]: profile.digest,
+                ATTESTATION_LABELS["rules_digest"]: rules_digest,
+                ATTESTATION_LABELS["enforcer"]: ENFORCER_IMPLEMENTATION,
+                ATTESTATION_LABELS["validated"]: "true",
+                ATTESTATION_LABELS["validated_at"]: validated_at,
+                ATTESTATION_LABELS["gateway_ref"]: gateway_ref,
+                ATTESTATION_LABELS["signature"]: signature,
+            }
+        )
         if created_network:
             network_args = ["network", "create", "--internal"]
             for key, value in labels.items():
@@ -228,6 +231,17 @@ class DockerEgressGatewayReconciler:
                     "-f", "/etc/squid/squid.conf",
                 )
             )
+            applied_hash = await self._checked(
+                (
+                    "container", "exec", gateway_ref,
+                    "sha256sum", "/etc/squid/squid.conf",
+                )
+            )
+            observed_digest = applied_hash.decode(errors="replace").split(None, 1)[0]
+            if f"sha256:{observed_digest}" != rules_digest:
+                raise RuntimeError(
+                    "restricted-egress applied gateway policy digest does not match"
+                )
             running = await self._checked(
                 (
                     "container", "inspect", "--format", "{{.State.Running}}",

@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import UTC, datetime
 
 import pytest
@@ -40,6 +42,15 @@ def test_profile_digest_is_stable_and_profile_has_no_executable_authority() -> N
     assert profile.digest == _profile().digest
     with pytest.raises(ValidationError):
         _profile(firewallCommands=("iptables -F",))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("resolutionMode", "pinned"), ("ipv6Policy", "enforce")),
+)
+def test_profile_rejects_policy_modes_the_gateway_cannot_enforce(field, value) -> None:
+    with pytest.raises(ValidationError):
+        _profile(**{field: value})
 
 
 @pytest.mark.parametrize(
@@ -125,5 +136,3 @@ def test_attestation_rejects_self_declared_or_wrong_backend_labels() -> None:
             labels=labels,
             attestation_key=b"k" * 32,
         )
-import hashlib
-import hmac

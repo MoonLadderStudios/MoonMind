@@ -520,6 +520,12 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert "OMNIGENT_CAPTURE_RETENTION_DAYS=30" in commands[2]
     assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
     assert (
+        "HTTPS_PROXY=http://moonmind-restricted-egress-network-gateway:3128"
+        in commands[2]
+    )
+    assert "NO_PROXY=" in commands[2]
+    assert "no_proxy=" in commands[2]
+    assert (
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
     ) in commands[2]
     assert (

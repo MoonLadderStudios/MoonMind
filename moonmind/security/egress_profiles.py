@@ -66,9 +66,11 @@ class EgressProfile(BaseModel):
     allowed_destinations: tuple[EgressDestination, ...] = Field(
         alias="allowedDestinations", min_length=1
     )
-    resolution_mode: Literal["continuous", "pinned"] = Field(alias="resolutionMode")
+    # The v1 Squid gateway revalidates DNS continuously. Do not accept policy
+    # modes whose semantics the backend cannot realize and attest.
+    resolution_mode: Literal["continuous"] = Field(alias="resolutionMode")
     dns_servers: tuple[str, ...] = Field(alias="dnsServers", min_length=1)
-    ipv6_policy: Literal["deny", "enforce"] = Field(alias="ipv6Policy")
+    ipv6_policy: Literal["deny"] = Field(alias="ipv6Policy")
     permitted_workload_classes: tuple[str, ...] = Field(
         alias="permittedWorkloadClasses", min_length=1
     )

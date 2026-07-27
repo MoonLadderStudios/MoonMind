@@ -640,7 +640,7 @@ class DockerContainerJobBackend:
             backend_ref=self._backend_ref,
             attestation_key=self._egress_attestation_key or b"",
             gateway_image=os.environ.get(
-                "MOONMIND_EGRESS_GATEWAY_IMAGE", "ubuntu/squid:latest"
+                "MOONMIND_EGRESS_GATEWAY_IMAGE", "ubuntu/squid:6.6-24.04_edge"
             ),
         )
         reconciled = await reconciler.reconcile(
