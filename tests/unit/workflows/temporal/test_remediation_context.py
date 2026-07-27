@@ -2713,17 +2713,35 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert pending.decision == "approval_required"
         assert pending.reason == "approval_gated_requires_approval"
         assert pending.executable is False
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        request_id = link.approval_state["requestId"]
+        assert link.approval_state["expectedState"]["targetRunId"] == link.target_run_id
+        assert link.approval_state["expiresAt"]
+        await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=request_id,
+            decision="approved",
+            comment="Target state reviewed.",
+            actor="ops@example.com",
+        )
 
-        approved = await service.evaluate_action_request(
+        approved = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
-            idempotency_key="gated-approved",
+            idempotency_key="gated-pending",
             requesting_principal="user:operator",
             permissions=_admin_permissions(can_approve_high_risk=True),
             security_profile=_admin_profile(),
-            approval_ref="approval://ops/1",
+            approval_ref=request_id,
         )
         assert approved.decision == "allowed"
         assert approved.executable is True

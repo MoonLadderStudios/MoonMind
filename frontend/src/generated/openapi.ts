@@ -10657,14 +10657,30 @@ export interface components {
             actionKind?: string | null;
             /** Risktier */
             riskTier?: string | null;
+            /** Approvallevel */
+            approvalLevel?: string | null;
             /** Preconditions */
             preconditions?: string | null;
             /** Blastradius */
             blastRadius?: string | null;
+            /** Expectedstate */
+            expectedState?: {
+                [key: string]: unknown;
+            } | null;
+            /** Policysnapshot */
+            policySnapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Requestedat */
+            requestedAt?: string | null;
+            /** Expiresat */
+            expiresAt?: string | null;
             /** Decision */
             decision: string;
             /** Decisionactor */
             decisionActor?: string | null;
+            /** Decisionrationale */
+            decisionRationale?: string | null;
             /** Decisionat */
             decisionAt?: string | null;
             /**

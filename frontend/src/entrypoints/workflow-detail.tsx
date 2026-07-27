@@ -998,10 +998,16 @@ const RemediationApprovalStateSchema = z
     requestId: z.string().nullable().optional(),
     actionKind: z.string().nullable().optional(),
     riskTier: z.string().nullable().optional(),
+    approvalLevel: z.string().nullable().optional(),
     preconditions: z.string().nullable().optional(),
     blastRadius: z.string().nullable().optional(),
+    expectedState: z.record(z.string(), z.unknown()).nullable().optional(),
+    policySnapshot: z.record(z.string(), z.unknown()).nullable().optional(),
+    requestedAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
     decision: z.string().default('not_required'),
     decisionActor: z.string().nullable().optional(),
+    decisionRationale: z.string().nullable().optional(),
     decisionAt: z.string().nullable().optional(),
     canDecide: z.boolean().default(false),
     auditRef: z.string().nullable().optional(),
@@ -7362,10 +7368,16 @@ function RemediationApprovalSummary({
       <div className="grid-2">
         <Card label="Action">{approval.actionKind || '—'}</Card>
         <Card label="Risk">{approval.riskTier || '—'}</Card>
+        <Card label="Approval level">{approval.approvalLevel || '—'}</Card>
         <Card label="Decision">{approval.decision || 'not_required'}</Card>
+        <Card label="Expires">{approval.expiresAt || '—'}</Card>
+        <Card label="Actor">{approval.decisionActor || '—'}</Card>
+        <Card label="Rationale">{approval.decisionRationale || '—'}</Card>
         <Card label="Audit">{approval.auditRef || '—'}</Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        <Card label="Expected state"><code className="text-xs break-all">{approval.expectedState ? JSON.stringify(approval.expectedState) : '—'}</code></Card>
+        <Card label="Policy snapshot"><code className="text-xs break-all">{approval.policySnapshot ? JSON.stringify(approval.policySnapshot) : '—'}</code></Card>
       </div>
       {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>

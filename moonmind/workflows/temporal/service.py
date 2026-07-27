@@ -1027,16 +1027,72 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
         if (
             link is None
             or link.authority_mode != "approval_gated"
             or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
-            or request_id != expected_request_id
         ):
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
             )
+        approval_state = (
+            dict(link.approval_state)
+            if isinstance(link.approval_state, Mapping)
+            else {}
+        )
+        if request_id != str(approval_state.get("requestId") or ""):
+            raise TemporalExecutionValidationError(
+                "request_id must reference a pending approval-gated remediation."
+            )
+        existing_decision = str(approval_state.get("decision") or "pending")
+        if existing_decision in {"approved", "rejected"}:
+            if existing_decision != decision:
+                raise TemporalExecutionValidationError(
+                    "approval request already has a different terminal decision."
+                )
+            return {
+                "accepted": True,
+                "workflowId": remediation_workflow_id,
+                "requestId": request_id,
+                "decision": decision,
+            }
+        now = datetime.now(UTC)
+        expires_at_raw = approval_state.get("expiresAt")
+        if expires_at_raw:
+            try:
+                expires_at = datetime.fromisoformat(
+                    str(expires_at_raw).replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise TemporalExecutionValidationError(
+                    "approval request has an invalid expiration."
+                ) from exc
+            if now >= expires_at:
+                raise TemporalExecutionValidationError("approval request has expired.")
+        expected_state = approval_state.get("expectedState")
+        if isinstance(expected_state, Mapping):
+            if expected_state.get("targetRunId") != link.target_run_id:
+                raise TemporalExecutionValidationError(
+                    "approval request is stale for the current target run."
+                )
+            target = await self._require_source_execution(link.target_workflow_id)
+            expected_checkpoint = expected_state.get("checkpointRef")
+            current_checkpoint = (target.memo or {}).get("latest_checkpoint_ref")
+            if expected_checkpoint and expected_checkpoint != current_checkpoint:
+                raise TemporalExecutionValidationError(
+                    "approval request is stale for the current target checkpoint."
+                )
+        approval_state.update(
+            {
+                "requestId": request_id,
+                "decision": decision,
+                "decisionActor": actor,
+                "decisionRationale": comment[:500] if comment else None,
+                "decisionAt": now.isoformat(),
+                "canDecide": False,
+            }
+        )
+        link.approval_state = approval_state
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")

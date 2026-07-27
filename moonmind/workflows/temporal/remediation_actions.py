@@ -640,6 +640,12 @@ class RemediationActionAuthorityService:
             self._decisions[cache_key] = result
             return result
 
+        effective_approval_ref = self._validated_approval_ref(
+            link=link,
+            approval_ref=approval_ref,
+            action_kind=normalized_action,
+            idempotency_key=idem,
+        )
         result = self._evaluate_with_link(
             link=link,
             action_kind=normalized_action,
@@ -649,11 +655,102 @@ class RemediationActionAuthorityService:
             requesting_principal=requesting_principal,
             permissions=permissions,
             security_profile=security_profile,
-            approval_ref=approval_ref,
+            approval_ref=effective_approval_ref,
         )
+        if result.decision == "approval_required":
+            await self._persist_approval_request(
+                link=link,
+                action_kind=normalized_action,
+                risk=result.risk,
+                idempotency_key=idem,
+                parameters=parameters,
+                security_profile=security_profile,
+            )
+            await self._session.flush()
         self._request_shapes.setdefault(shape_key, request_shape_hash)
         self._decisions[cache_key] = result
         return result
+
+    @staticmethod
+    def _validated_approval_ref(
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        approval_ref: str | None,
+        action_kind: str,
+        idempotency_key: str,
+    ) -> str | None:
+        if not approval_ref or not isinstance(link.approval_state, Mapping):
+            return None
+        state = link.approval_state
+        if (
+            state.get("requestId") != approval_ref
+            or state.get("decision") != "approved"
+            or state.get("actionKind") != action_kind
+            or state.get("idempotencyKey") != idempotency_key
+        ):
+            return None
+        expected = state.get("expectedState")
+        if not isinstance(expected, Mapping) or expected.get("targetRunId") != link.target_run_id:
+            return None
+        expires_at = _datetime_from_json(state.get("expiresAt"))
+        if expires_at is None or datetime.now(timezone.utc) >= expires_at:
+            return None
+        required_level = "strong" if action_kind == "execution.force_terminate" else "standard"
+        if state.get("approvalLevel") != required_level:
+            return None
+        return approval_ref
+
+    async def _persist_approval_request(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        action_kind: str,
+        risk: RemediationActionRisk | None,
+        idempotency_key: str,
+        parameters: Mapping[str, Any] | None,
+        security_profile: RemediationSecurityProfile | None,
+    ) -> None:
+        existing = link.approval_state
+        if (
+            isinstance(existing, Mapping)
+            and existing.get("decision") == "pending"
+            and existing.get("actionKind") == action_kind
+            and existing.get("idempotencyKey") == idempotency_key
+        ):
+            return
+        now = datetime.now(timezone.utc)
+        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        link.approval_state = {
+            "requestId": f"{link.remediation_workflow_id}:approval:{idempotency_key}",
+            "actionKind": action_kind,
+            "riskTier": risk,
+            "approvalLevel": (
+                "strong" if action_kind == "execution.force_terminate" else "standard"
+            ),
+            "expectedState": {
+                "targetWorkflowId": link.target_workflow_id,
+                "targetRunId": link.target_run_id,
+                "checkpointRef": safe_parameters.get("checkpointRef"),
+                "hostIdentity": safe_parameters.get("hostIdentity"),
+                "sessionIdentity": safe_parameters.get("sessionIdentity"),
+                "credentialGeneration": safe_parameters.get("credentialGeneration"),
+            },
+            "policySnapshot": {
+                "authorityMode": link.authority_mode,
+                "securityProfile": (
+                    security_profile.profile_ref
+                    if security_profile is not None
+                    else None
+                ),
+                "policyVersion": safe_parameters.get("policyVersion"),
+            },
+            "idempotencyKey": idempotency_key,
+            "requestedAt": now.isoformat(),
+            "expiresAt": (now + timedelta(minutes=15)).isoformat(),
+            "decision": "pending",
+            "canDecide": True,
+        }
+        link.status = "awaiting_approval"
 
     def _evaluate_with_link(
         self,

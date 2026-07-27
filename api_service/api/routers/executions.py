@@ -514,10 +514,16 @@ class RemediationApprovalStateModel(BaseModel):
     requestId: str | None = None
     actionKind: str | None = None
     riskTier: str | None = None
+    approvalLevel: str | None = None
     preconditions: str | None = None
     blastRadius: str | None = None
+    expectedState: dict[str, Any] | None = None
+    policySnapshot: dict[str, Any] | None = None
+    requestedAt: datetime | None = None
+    expiresAt: datetime | None = None
     decision: str
     decisionActor: str | None = None
+    decisionRationale: str | None = None
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None

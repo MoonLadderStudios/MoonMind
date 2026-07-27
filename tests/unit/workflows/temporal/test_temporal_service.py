@@ -4,7 +4,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -1371,6 +1371,19 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         )
         assert link is not None
         link.status = "awaiting_approval"
+        link.approval_state = {
+            "requestId": f"{remediation.workflow_id}:approval",
+            "actionKind": "session.interrupt",
+            "approvalLevel": "standard",
+            "expectedState": {
+                "targetWorkflowId": target.workflow_id,
+                "targetRunId": target.run_id,
+            },
+            "requestedAt": datetime.now(UTC).isoformat(),
+            "expiresAt": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+            "decision": "pending",
+            "canDecide": True,
+        }
         await session.commit()
 
         result = await service.record_remediation_approval_decision(
@@ -1394,6 +1407,20 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["summary"] == "Remediation approval approved."
         assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
+        assert link.approval_state["decision"] == "approved"
+        assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["decisionRationale"] == "Reviewed blast radius."
+
+        replayed = await service.record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=f"{remediation.workflow_id}:approval",
+            decision="approved",
+            comment="A replay must not append another decision.",
+            actor="ops@example.com",
+        )
+        assert replayed["decision"] == "approved"
+        refreshed = await service.describe_execution(remediation.workflow_id)
+        assert len(refreshed.memo["intervention_audit"]) == len(audit)
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
