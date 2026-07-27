@@ -288,6 +288,24 @@ class OmnigentOAuthHostRuntime:
                 "launch policy must enforce egress",
                 code="OMNIGENT_LAUNCH_EGRESS_UNREALIZABLE",
             )
+        from moonmind.omnigent.execution_profiles import EGRESS_PROFILES
+
+        egress_profile_ref = str(launch.get("egressProfileRef") or "")
+        if egress_profile_ref not in EGRESS_PROFILES:
+            raise OmnigentOAuthHostError(
+                "launch policy egress profile is unavailable",
+                code="OMNIGENT_LAUNCH_EGRESS_UNREALIZABLE",
+            )
+        egress_profile = EGRESS_PROFILES[egress_profile_ref]
+        if (
+            launch.get("egressProfileDigest") != egress_profile.digest
+            or launch.get("egressSecurityReviewRef")
+            != egress_profile.security_review_ref
+        ):
+            raise OmnigentOAuthHostError(
+                "launch policy egress evidence is stale or inconsistent",
+                code="OMNIGENT_LAUNCH_EGRESS_UNREALIZABLE",
+            )
         if launch.get("runtimeUid") != 1000 or launch.get("runtimeGid") != 1000:
             raise OmnigentOAuthHostError(
                 "Codex host UID/GID policy is unrealizable",
@@ -532,6 +550,13 @@ class OmnigentOAuthHostRuntime:
             "moonmind.credential_generation": str(host_lease.credential_generation),
             "moonmind.expires_at": host_lease.expires_at.isoformat(),
             "moonmind.effective_launch_ref": str(effective_launch["snapshotRef"]),
+            "moonmind.egress.profile_ref": str(effective_launch["egressProfileRef"]),
+            "moonmind.egress.profile_digest": str(
+                effective_launch["egressProfileDigest"]
+            ),
+            "moonmind.egress.security_review_ref": str(
+                effective_launch["egressSecurityReviewRef"]
+            ),
             "moonmind.capture_required": str(effective_launch["capture"]["required"]).lower(),
             "moonmind.capture_retention_days": str(effective_launch["capture"]["retentionDays"]),
             "moonmind.cleanup_mode": str(effective_launch["cleanup"]["mode"]),
@@ -550,6 +575,12 @@ class OmnigentOAuthHostRuntime:
             "/home/app",
             "--network",
             str(effective_launch["networkRef"]),
+            "--env",
+            "HTTPS_PROXY=http://restricted-egress-proxy:3128",
+            "--env",
+            "HTTP_PROXY=http://restricted-egress-proxy:3128",
+            "--env",
+            "NO_PROXY=omnigent",
             "--cpus",
             str(int(effective_launch["limits"]["cpuMillis"]) / 1000),
             "--memory",

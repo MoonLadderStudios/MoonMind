@@ -62,6 +62,11 @@ from moonmind.schemas.container_job_models import (
     ImageObservation,
 )
 from moonmind.utils.logging import redact_sensitive_text
+from moonmind.security.egress_profiles import (
+    EgressAttestation,
+    EgressProfile,
+    attestation_from_network_labels,
+)
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -342,6 +347,8 @@ class DockerContainerJobBackend:
         workspace_volume_name: str | None = None,
         log_spool_root: str | Path | None = None,
         live_log_max_events: int = _MAX_LIVE_LOG_EVENTS,
+        egress_profile: EgressProfile | None = None,
+        egress_network_ref: str | None = None,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         # Deployment-owned policy. Default to env-independent defaults so unit
@@ -390,6 +397,10 @@ class DockerContainerJobBackend:
             else None
         )
         self._live_log_max_events = max(0, int(live_log_max_events))
+        self._egress_profile = egress_profile
+        self._egress_network_ref = str(egress_network_ref or "").strip() or None
+        if (self._egress_profile is None) != (self._egress_network_ref is None):
+            raise ValueError("egress profile and network ref must be configured together")
 
     # ------------------------------------------------------------------ helpers
 
@@ -531,10 +542,42 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult()
 
     async def network_ready(self, network_ref: str) -> bool:
-        """Return live Docker authority for one deployment-owned network ref."""
+        """Return network existence only; this is not egress evidence."""
 
         code, _, _ = await self._runner(("network", "inspect", network_ref))
         return code == 0
+
+    async def attest_egress_network(
+        self, *, profile: EgressProfile, network_ref: str
+    ) -> EgressAttestation:
+        """Validate digest-bound evidence from the privileged gateway reconciler."""
+
+        code, stdout, _ = await self._runner(
+            ("network", "inspect", "--format", "{{json .Labels}}", network_ref)
+        )
+        if code:
+            raise ContainerBackendReadinessError(
+                f"restricted-egress network {network_ref!r} is unavailable"
+            )
+        try:
+            labels = json.loads(stdout.decode(errors="replace").strip())
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ContainerBackendReadinessError(
+                "restricted-egress network labels are invalid"
+            ) from exc
+        if not isinstance(labels, dict):
+            raise ContainerBackendReadinessError(
+                "restricted-egress network labels are missing"
+            )
+        try:
+            return attestation_from_network_labels(
+                profile=profile,
+                network_ref=network_ref,
+                backend_ref=self._backend_ref,
+                labels=labels,
+            )
+        except ValueError as exc:
+            raise ContainerBackendReadinessError(str(exc)) from exc
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
@@ -1387,6 +1430,18 @@ class DockerContainerJobBackend:
         await self._reject_ownership_collision(request, name)
         if spec.network_mode not in {"none", "bridge"}:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
+        launch_network = "none"
+        egress_attestation: EgressAttestation | None = None
+        if spec.network_mode == "bridge":
+            if self._egress_profile is None or self._egress_network_ref is None:
+                raise RuntimeError(
+                    "networked container jobs require a deployment-owned restricted-egress profile"
+                )
+            egress_attestation = await self.attest_egress_network(
+                profile=self._egress_profile,
+                network_ref=self._egress_network_ref,
+            )
+            launch_network = egress_attestation.network_ref
         volume_name = request.resolved_workspace_volume_name
         volume_subpath = request.resolved_workspace_volume_subpath
         if (
@@ -1449,8 +1504,20 @@ class DockerContainerJobBackend:
             f"{LABEL_BACKEND_REF}={self._backend_ref}",
             "--label",
             f"{LABEL_OWNERSHIP_SCHEMA}={OWNERSHIP_SCHEMA_VERSION}",
+            *(
+                [
+                    "--label",
+                    f"moonmind.egress.profile_ref={egress_attestation.profile_ref}",
+                    "--label",
+                    f"moonmind.egress.profile_digest={egress_attestation.profile_digest}",
+                    "--label",
+                    f"moonmind.egress.rules_digest={egress_attestation.applied_rule_digest}",
+                ]
+                if egress_attestation is not None
+                else []
+            ),
             "--network",
-            spec.network_mode,
+            launch_network,
             *structured_container_security_args(),
             "--cpus",
             str(spec.resources.cpu_millis / 1000),

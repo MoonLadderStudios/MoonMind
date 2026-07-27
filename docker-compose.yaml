@@ -836,6 +836,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      HTTP_PROXY: http://restricted-egress-proxy:3128
+      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      NO_PROXY: omnigent
     env_file:
       - path: .env
         required: false
@@ -855,7 +858,7 @@ services:
       omnigent-tools-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - restricted-egress-network
     restart: unless-stopped
 
   omnigent-host-claude:
@@ -880,6 +883,9 @@ services:
       OPENAI_API_KEY: ""
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
+      HTTP_PROXY: http://restricted-egress-proxy:3128
+      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      NO_PROXY: omnigent
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
@@ -898,7 +904,7 @@ services:
       omnigent-tools-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - restricted-egress-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude"]
@@ -959,6 +965,9 @@ services:
       OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
       OMNIGENT_CAPTURE_OWNER: moonmind_bridge
       OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
+      HTTP_PROXY: http://restricted-egress-proxy:3128
+      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      NO_PROXY: omnigent
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts
@@ -977,7 +986,7 @@ services:
       omnigent-tools-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - restricted-egress-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "/opt/moonmind/check-codex-oauth-host.sh"]
@@ -1104,7 +1113,10 @@ services:
       omnigent-db-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      local-network:
+      restricted-egress-network:
+        aliases:
+          - omnigent
     restart: unless-stopped
 
   agent-workspaces-init:
@@ -1170,6 +1182,17 @@ services:
       - sandbox-egress-network
     restart: unless-stopped
 
+  restricted-egress-proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+    expose:
+      - "3128"
+    networks:
+      - local-network
+      - restricted-egress-network
+    restart: unless-stopped
+
 volumes:
   qdrant-storage:
   omnigent-host-state:
@@ -1205,3 +1228,13 @@ networks:
   sandbox-egress-network:
     name: ${MOONMIND_SANDBOX_EGRESS_NETWORK:-moonmind_sandbox-egress-network}
     internal: true
+  restricted-egress-network:
+    name: moonmind-restricted-egress-network
+    internal: true
+    labels:
+      moonmind.egress.profile_ref: omnigent-provider@1
+      moonmind.egress.profile_digest: sha256:645d8dd56ddd2da5430bebd7e1fd30cd959995349e97d83bfb5f9f12f79f504c
+      moonmind.egress.rules_digest: sha256:4026af85f7348cd414f7454a1ae7b0cbc15b09e74dc67f9cfa9f2f7173778e28
+      moonmind.egress.enforcer: moonmind-docker-gateway/v1
+      moonmind.egress.validated: "true"
+      moonmind.egress.validated_at: "2026-07-27T00:00:00Z"

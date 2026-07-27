@@ -269,6 +269,31 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert expected_proxy_domains <= set(squid_config.split())
 
 
+def test_omnigent_hosts_use_attested_internal_egress_for_issue_3516():
+    compose = yaml.safe_load(Path("docker-compose.yaml").read_text())
+    services = compose["services"]
+    network = compose["networks"]["restricted-egress-network"]
+
+    assert network["internal"] is True
+    labels = network["labels"]
+    assert labels["moonmind.egress.profile_ref"] == "omnigent-provider@1"
+    assert labels["moonmind.egress.profile_digest"].startswith("sha256:")
+    assert labels["moonmind.egress.rules_digest"].startswith("sha256:")
+    assert labels["moonmind.egress.validated"] == "true"
+
+    for name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
+        service = services[name]
+        assert _network_names(service) == {"restricted-egress-network"}
+        env = _env_map(service["environment"])
+        assert env["HTTPS_PROXY"] == "http://restricted-egress-proxy:3128"
+        assert env["NO_PROXY"] == "omnigent"
+
+    assert _network_names(services["restricted-egress-proxy"]) == {
+        "local-network",
+        "restricted-egress-network",
+    }
+
+
 def test_api_service_runs_with_container_init():
     """API service supervises subprocess-capable routes and should reap children."""
     compose_path = Path("docker-compose.yaml")
@@ -459,7 +484,10 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
         omnigent_service["depends_on"]["omnigent-db-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "local-network",
+        "restricted-egress-network",
+    }
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
     assert _has_volume_mount(omnigent_service, "omnigent-data", "/data")
     assert "omnigent-data" in compose_data.get("volumes", {})

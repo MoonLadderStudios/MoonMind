@@ -1603,8 +1603,12 @@ class PentestSettings(BaseSettings):
         ),
     )
     allow_external_targets: bool = Field(
-        True,
+        False,
         validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_EXTERNAL_TARGETS"),
+        description=(
+            "Keep external PentestGPT targets disabled unless a reviewed exact-scope "
+            "egress profile and durable enforcement attestation are available."
+        ),
     )
     telemetry_enabled: bool = Field(
         False,

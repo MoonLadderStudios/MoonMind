@@ -55,6 +55,7 @@ from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
 from moonmind.config.container_backend_settings import (
+    ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
 from moonmind.workflows.skills.deployment_execution import (
@@ -2721,6 +2722,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         reaped_volumes,
                     )
             container_backend_settings = resolve_container_backend_settings()
+            from moonmind.omnigent.execution_profiles import EGRESS_PROFILES, POLICIES
+
             _container_job_store = os.environ.get(
                 "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
             )
@@ -2755,21 +2758,31 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     Path(_container_job_store).resolve().parent
                     / ".mm-container-job-logs"
                 ),
+                egress_profile=EGRESS_PROFILES["omnigent-provider@1"],
+                egress_network_ref="moonmind-restricted-egress-network",
             )
             if container_backend_settings.enabled:
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
-                from moonmind.omnigent.execution_profiles import POLICIES
-
                 enforced_network_refs = []
                 for policy in POLICIES.values():
-                    if (
-                        policy.enabled
-                        and policy.enforced_egress
-                        and await container_job_backend.network_ready(policy.network_ref)
-                    ):
-                        enforced_network_refs.append(policy.network_ref)
+                    if not policy.enabled or not policy.enforced_egress:
+                        continue
+                    try:
+                        await container_job_backend.attest_egress_network(
+                            profile=EGRESS_PROFILES[policy.egress_profile_ref],
+                            network_ref=policy.network_ref,
+                        )
+                    except ContainerBackendReadinessError:
+                        logger.warning(
+                            "Restricted-egress policy %s is not attested; network %s "
+                            "will not be advertised as enforced",
+                            policy.ref,
+                            policy.network_ref,
+                        )
+                        continue
+                    enforced_network_refs.append(policy.network_ref)
             else:
                 container_job_backend = None
                 enforced_network_refs = []

@@ -82,6 +82,7 @@ def test_policy_rejects_mutable_image_before_launch() -> None:
             serverImageRef="omnigent:latest",
             hostImageRef="host:latest",
             networkRef="local-network",
+            egressProfileRef="omnigent-provider@1",
             enforcedEgress=True,
             limits={
                 "cpuMillis": 1,
@@ -144,6 +145,8 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
         "codex-on-demand@1",
     }
     assert "credential" not in str(catalog).lower()
+    assert catalog["egressProfiles"][0]["ref"] == "omnigent-provider@1"
+    assert catalog["egressProfiles"][0]["digest"].startswith("sha256:")
 
 
 @pytest.mark.parametrize(

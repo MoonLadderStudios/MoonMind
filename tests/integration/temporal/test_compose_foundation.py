@@ -849,7 +849,10 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
         == "service_completed_successfully"
     )
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "local-network",
+        "restricted-egress-network",
+    }
     assert "omnigent-data:/data" in omnigent_service["volumes"]
     assert "omnigent-data" in compose["volumes"]
 

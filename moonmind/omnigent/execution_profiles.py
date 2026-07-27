@@ -15,6 +15,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.security.egress_profiles import EgressDestination, EgressProfile
 
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
@@ -55,6 +56,7 @@ class OmnigentLaunchPolicy(BaseModel):
     host_image_ref: str = Field(alias="hostImageRef")
     require_immutable_images: bool = Field(True, alias="requireImmutableImages")
     network_ref: str = Field(alias="networkRef")
+    egress_profile_ref: str = Field(alias="egressProfileRef")
     enforced_egress: bool = Field(alias="enforcedEgress")
     limits: dict[str, int]
     mount_classes: tuple[str, ...] = Field(alias="mountClasses")
@@ -128,7 +130,8 @@ _SERVER_IMAGE = "bootstrap://OMNIGENT_IMAGE_REF"
 _COMMON = dict(
     serverImageRef=_SERVER_IMAGE,
     hostImageRef=_IMAGE,
-    networkRef="local-network",
+    networkRef="moonmind-restricted-egress-network",
+    egressProfileRef="omnigent-provider@1",
     enforcedEgress=True,
     limits={
         "cpuMillis": 2000,
@@ -148,6 +151,36 @@ _COMMON = dict(
     capture={"required": True, "retentionDays": 30},
     controlCapabilities=("interrupt", "terminate", "clear_context"),
 )
+
+EGRESS_PROFILES = {
+    profile.ref: profile
+    for profile in (
+        EgressProfile(
+            profileId="omnigent-provider",
+            version=1,
+            owner="MoonMind security",
+            allowedDestinations=(
+                EgressDestination(dnsName="api.openai.com", ports=(443,)),
+                EgressDestination(dnsName="api.github.com", ports=(443,)),
+                EgressDestination(dnsName="github.com", ports=(443,)),
+                EgressDestination(dnsName="api.anthropic.com", ports=(443,)),
+                EgressDestination(
+                    dnsName="generativelanguage.googleapis.com", ports=(443,)
+                ),
+            ),
+            resolutionMode="continuous",
+            dnsServers=("1.1.1.1", "8.8.8.8"),
+            ipv6Policy="deny",
+            permittedWorkloadClasses=("omnigent", "container-job", "managed-helper"),
+            securityReviewRef="github:MoonLadderStudios/MoonMind#3516",
+            validationState="approved",
+            maxConnections=128,
+            maxBytes=1073741824,
+            idleSeconds=300,
+            diagnosticsRetentionDays=30,
+        ),
+    )
+}
 
 POLICIES = {
     p.ref: p
@@ -199,6 +232,16 @@ def public_execution_catalog() -> dict[str, Any]:
             for policy in POLICIES.values()
             if policy.enabled
         ],
+        "egressProfiles": [
+            {
+                "ref": profile.ref,
+                "digest": profile.digest,
+                "owner": profile.owner,
+                "validationState": profile.validation_state,
+                "securityReviewRef": profile.security_review_ref,
+            }
+            for profile in EGRESS_PROFILES.values()
+        ],
     }
 
 
@@ -218,6 +261,12 @@ def compile_effective_launch(
             "Omnigent launch policy is missing or disabled",
             code="OMNIGENT_LAUNCH_POLICY_UNAVAILABLE",
         )
+    if policy.egress_profile_ref not in EGRESS_PROFILES:
+        raise OmnigentOAuthHostError(
+            "Omnigent egress profile is missing or disabled",
+            code="OMNIGENT_EGRESS_PROFILE_UNAVAILABLE",
+        )
+    egress_profile = EGRESS_PROFILES[policy.egress_profile_ref]
     policy_payload = policy.model_dump(by_alias=True, mode="json")
     for field, variable in (
         ("serverImageRef", "OMNIGENT_IMAGE_REF"),
@@ -240,6 +289,8 @@ def compile_effective_launch(
         "endpointRef": profile.endpoint_ref,
         "agentName": profile.agent_name,
         "harness": profile.harness,
+        "egressProfileDigest": egress_profile.digest,
+        "egressSecurityReviewRef": egress_profile.security_review_ref,
         **policy_payload,
         "capture": {**profile.capture_defaults, **policy.capture},
     }
