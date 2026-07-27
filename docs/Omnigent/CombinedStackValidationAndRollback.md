@@ -399,8 +399,18 @@ Use the rollback matching the active host mode:
 | Static Claude host | Drain active use, remove `omnigent-host-claude` from `COMPOSE_PROFILES`, and stop that service |
 | On-demand Codex | Disable selection through the controlling policy/profile gate, drain active leases, and run supported janitor reconciliation |
 | Direct Codex compatibility path | Use its feature gate only after in-flight compatibility runs are drained |
+| Embedded Omnigent-compatible mode | Select the previous passing compatibility identity or proxy mode for new runs, drain embedded leases, and retain each existing session's recorded mode and identity |
 
 Rollback never requires deleting the OAuth volume, PostgreSQL, `omnigent-data`, or artifact data. Restore a mode only after its profile, image, network, workspace, and cleanup preconditions are again valid.
+
+An embedded rollback must not rewrite the bridge mode recorded by an existing
+session and must not redirect an in-flight session across the proxy/embedded
+boundary. Release metadata retains both the promoted immutable server/host
+image identities and the previous passing compatibility identity. Before an
+upgrade is promoted, conformance runs against the candidate and a rollback
+replay runs against that retained identity. If either evidence set is absent,
+stale, incompatible, or not independently resolvable, embedded readiness fails
+closed and the production default remains proxy mode.
 
 ## DOC-REQ-016 Credentialed Live Conformance
 

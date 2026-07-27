@@ -1068,13 +1068,25 @@ Run against a real, unchanged Omnigent host:
 
 ---
 
-## 21. Open questions
+## 21. Compatibility decisions
 
-1. Should proxy mode mount under `/api/omnigent/*`, a dedicated bridge hostname, or both?
-2. Which upstream Omnigent host auth modes should MoonMind support in embedded mode?
-3. Should direct Codex compatibility emit only normalized bridge events, or both normalized and raw Codex rollout events?
-4. What is the minimum host/runner conformance suite required before embedded mode can be enabled?
-5. Should clear/reset be represented as a bridge-local policy or an Omnigent extension event?
+There are no unresolved embedded compatibility contract questions:
+
+1. The canonical bridge is mounted at `/api/omnigent`; a dedicated hostname may
+   route to that mount but does not define a second contract.
+2. Embedded host authentication supports only the pinned upstream runner-tunnel
+   verifier profile declared in
+   [Embedded host authentication compatibility](EmbeddedHostAuthCompatibility.md).
+3. MoonMind projections expose normalized events. Raw upstream frames are
+   retained only as bounded, redacted, artifact-backed diagnostic evidence.
+4. Production enablement requires the complete versioned issue #3519
+   credentialed stock-host matrix, including auth lifecycle, static and
+   on-demand hosts, restart/reconnect, event replay, resources, controls,
+   cleanup, immutable identities, and an independently resolvable
+   secret-scanned evidence set.
+5. Clear/reset/epoch is unsupported until an upstream compatibility profile
+   declares its exact semantics. It fails explicitly rather than becoming a
+   bridge-local extension or successful no-op.
 
 ---
 
