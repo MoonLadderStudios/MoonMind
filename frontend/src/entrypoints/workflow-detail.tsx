@@ -3706,6 +3706,41 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
   return links;
 }
 
+export function initialRetrievalFacts(
+  metadata: Record<string, unknown>,
+): Array<{ label: string; value: string }> {
+  const sourceKind = String(metadata.sourceKind ?? '');
+  if (
+    sourceKind !== 'lifecycle.initial_context_retrieval'
+    && sourceKind !== 'lifecycle.initial_context_retrieval_linked'
+  ) return [];
+  const raw = metadata.metadata;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const retrieval = raw as Record<string, unknown>;
+  const facts: Array<{ label: string; value: string }> = [];
+  const add = (label: string, value: unknown) => {
+    if (value === null || value === undefined || value === '') return;
+    if (typeof value === 'object') {
+      facts.push({ label, value: JSON.stringify(value) });
+    } else {
+      facts.push({ label, value: String(value) });
+    }
+  };
+  add('Retrieval state', retrieval.state);
+  add('Transport', retrieval.transport);
+  add('Scope', retrieval.scope);
+  add('Results', retrieval.resultCount);
+  add('Sources', Array.isArray(retrieval.sourceIdentities)
+    ? retrieval.sourceIdentities.length
+    : retrieval.sourceIdentities);
+  add('Budgets', retrieval.budgets);
+  add('Truncated', retrieval.truncated);
+  add('Fallback or denial', retrieval.fallbackOrDenialReason);
+  add('Context consumed', retrieval.firstMessageConsumesContextRef);
+  add('First-message digest', retrieval.firstMessageDigest);
+  return facts;
+}
+
 function renderTimelineRow(
   row: TimelineRow,
   wrapLines: boolean,
@@ -3719,6 +3754,7 @@ function renderTimelineRow(
     wrapLines ? 'is-wrapped' : 'is-unwrapped',
   ].join(' ');
   const artifactLinks = timelineViewerEnabled ? buildTimelineArtifactLinks(row, apiBase) : [];
+  const retrievalFacts = timelineViewerEnabled ? initialRetrievalFacts(row.metadata) : [];
 
   if (timelineViewerEnabled && row.rowType === 'boundary') {
     return (
@@ -3763,6 +3799,16 @@ function renderTimelineRow(
       >
         {renderTimelineRowText(row, timelineViewerEnabled)}
       </div>
+      {retrievalFacts.length > 0 ? (
+        <dl className="live-logs-retrieval-facts">
+          {retrievalFacts.map((fact) => (
+            <div key={fact.label}>
+              <dt>{fact.label}</dt>
+              <dd>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       <TimelineArtifactLinks links={artifactLinks} />
     </div>
   );

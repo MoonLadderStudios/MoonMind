@@ -107,16 +107,33 @@ class ContextInjectionService:
         workspace_path: Path,
     ) -> PromptContextResolution:
         """Retrieve RAG context and mutate the request's instruction_ref."""
+        retrieval_required = self._retrieval_required(request)
         if not self._rag_auto_context_enabled():
             self._record_disabled_context_metadata(
                 request=request,
                 reason="auto_context_disabled",
                 initiation_mode="automatic",
             )
+            if retrieval_required:
+                raise RuntimeError(
+                    "required initial context retrieval unavailable: "
+                    "auto_context_disabled"
+                )
             return PromptContextResolution(instruction=request.instruction_ref or "")
 
         instruction_ref = (request.instruction_ref or "").strip()
-        if not instruction_ref:
+        retrieval_query = self._retrieval_query(request).strip()
+        if not retrieval_query:
+            self._record_disabled_context_metadata(
+                request=request,
+                reason="retrieval_query_unavailable",
+                initiation_mode="automatic",
+            )
+            if retrieval_required:
+                raise RuntimeError(
+                    "required initial context retrieval unavailable: "
+                    "retrieval_query_unavailable"
+                )
             return PromptContextResolution(instruction="")
 
         retrieval_skip_reason: str | None = None
@@ -312,6 +329,11 @@ class ContextInjectionService:
         if not isinstance(authored_scope, dict):
             raise ValueError("rag.scope must be an object")
         filters: dict[str, str] = dict(settings.as_filter_metadata())
+        trusted_scope = self._trusted_retrieval_scope(
+            request=request,
+            settings=settings,
+        )
+        filters.update(trusted_scope)
         for authored_key, filter_key in {
             "tenant": "tenant",
             "tenantId": "tenant",
@@ -322,16 +344,35 @@ class ContextInjectionService:
         }.items():
             value = str(authored_scope.get(authored_key) or "").strip()
             if value:
-                filters[filter_key] = value[:256]
+                authoritative = str(trusted_scope.get(filter_key) or "").strip()
+                if not authoritative:
+                    raise ValueError(
+                        f"rag.scope.{authored_key} has no server-owned authority"
+                    )
+                if value != authoritative:
+                    raise ValueError(
+                        f"rag.scope.{authored_key} does not match server-owned authority"
+                    )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
-        repo_filter = self._repository_filter_value(
+        authored_repo_filter = self._repository_filter_value(
             str(
                 authored_scope.get("repository")
                 or authored_scope.get("repo")
-                or parameters.get("repository", "")
+            )
+        )
+        trusted_repo_filter = self._repository_filter_value(
+            str(
+                parameters.get("repository", "")
                 or request.workspace_spec.get("repository", "")
             )
         )
+        if authored_repo_filter and not trusted_repo_filter:
+            raise ValueError("rag.scope.repository has no server-owned authority")
+        if authored_repo_filter and authored_repo_filter != trusted_repo_filter:
+            raise ValueError(
+                "rag.scope.repository does not match server-owned authority"
+            )
+        repo_filter = trusted_repo_filter
         if repo_filter:
             filters["repo"] = repo_filter
             filters["repository"] = repo_filter
@@ -374,6 +415,45 @@ class ContextInjectionService:
             local_fallback_authorized=self._local_fallback_authorized(request),
             stale_allowed=bool(options.get("staleAllowed", False)),
         )
+
+    @staticmethod
+    def _trusted_retrieval_scope(
+        *,
+        request: AgentExecutionRequest,
+        settings: RagRuntimeSettings,
+    ) -> dict[str, str]:
+        """Resolve scope only from server/session-owned launch evidence."""
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        omnigent = parameters.get("omnigent")
+        session = (
+            omnigent.get("session")
+            if isinstance(omnigent, dict)
+            and isinstance(omnigent.get("session"), dict)
+            else {}
+        )
+        step = request.step_execution
+        trusted = dict(settings.as_filter_metadata())
+        run_id = str((step.run_id if step is not None else "") or settings.run_id or "").strip()
+        workspace = str(
+            session.get("workspace")
+            or request.workspace_spec.get("workspace")
+            or request.workspace_spec.get("workspacePath")
+            or ""
+        ).strip()
+        tenant = str(
+            parameters.get("tenantId")
+            or parameters.get("tenant")
+            or request.workspace_spec.get("tenantId")
+            or request.workspace_spec.get("tenant")
+            or ""
+        ).strip()
+        if run_id:
+            trusted["run_id"] = run_id[:256]
+        if workspace:
+            trusted["workspace"] = workspace[:256]
+        if tenant:
+            trusted["tenant"] = tenant[:256]
+        return trusted
 
     def _persist_context_pack(
         self,

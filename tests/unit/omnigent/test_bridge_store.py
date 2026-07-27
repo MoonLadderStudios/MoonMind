@@ -385,6 +385,38 @@ async def test_digest_mismatch_fails_fast(store):
 
 
 @pytest.mark.asyncio
+async def test_prepared_first_message_payload_ref_is_durable_and_immutable(store):
+    request = _request()
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    row = await store.mark_prepared(
+        "idem-1",
+        digest="sha256:first",
+        marker="m",
+        payload_ref="artifact://first-message/exact",
+        payload_digest="sha256:payload",
+    )
+    assert (
+        row.metadata_["first_message_payload_ref"]
+        == "artifact://first-message/exact"
+    )
+    assert row.metadata_["first_message_payload_digest"] == "sha256:payload"
+
+    with pytest.raises(OmnigentDigestMismatchError):
+        await store.mark_prepared(
+            "idem-1",
+            digest="sha256:first",
+            marker="m",
+            payload_ref="artifact://first-message/changed",
+        )
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(

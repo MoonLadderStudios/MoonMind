@@ -9895,3 +9895,24 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+
+.live-logs-retrieval-facts {
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  margin: 0.5rem 0 0;
+}
+
+.live-logs-retrieval-facts > div {
+  min-width: 0;
+}
+
+.live-logs-retrieval-facts dt {
+  color: rgb(var(--mm-text-muted));
+  font-size: 0.75rem;
+}
+
+.live-logs-retrieval-facts dd {
+  margin: 0.1rem 0 0;
+  overflow-wrap: anywhere;
+}

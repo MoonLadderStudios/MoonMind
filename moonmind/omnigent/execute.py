@@ -702,14 +702,51 @@ async def run_omnigent_execution(
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
 
-            first_message = await _build_omnigent_first_message(
-                request=request,
-                prompt=selection.prompt,
-                artifact_gateway=artifact_gateway,
+            persisted_first_message_ref = (
+                (getattr(durable_row, "metadata_", None) or {}).get(
+                    "first_message_payload_ref"
+                )
+                if durable_row is not None
+                else None
             )
-            digest = hashlib.sha256(
-                json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
+            if persisted_first_message_ref:
+                persisted_payload_text = await artifact_gateway.read_text(
+                    str(persisted_first_message_ref)
+                )
+                expected_payload_digest = str(
+                    (getattr(durable_row, "metadata_", None) or {}).get(
+                        "first_message_payload_digest"
+                    )
+                    or ""
+                )
+                actual_payload_digest = hashlib.sha256(
+                    persisted_payload_text.encode("utf-8")
+                ).hexdigest()
+                if expected_payload_digest != f"sha256:{actual_payload_digest}":
+                    raise OmnigentDigestMismatchError(
+                        "persisted first-message artifact digest mismatch"
+                    )
+                first_message = json.loads(persisted_payload_text)
+                if not isinstance(first_message, dict):
+                    raise OmnigentDigestMismatchError(
+                        "persisted first-message artifact is not an object"
+                    )
+                digest = str(
+                    getattr(durable_row, "first_message_digest", "") or ""
+                ).removeprefix("sha256:")
+                if not digest:
+                    raise OmnigentDigestMismatchError(
+                        "persisted first-message payload is missing its digest"
+                    )
+            else:
+                first_message = await _build_omnigent_first_message(
+                    request=request,
+                    prompt=selection.prompt,
+                    artifact_gateway=artifact_gateway,
+                )
+                digest = hashlib.sha256(
+                    json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
             parameters = (
                 request.parameters if isinstance(request.parameters, dict) else {}
             )
@@ -728,18 +765,55 @@ async def run_omnigent_execution(
                         else None
                     )
             marker = _first_message_marker(request=request, digest=digest)
-            first_message.setdefault("metadata", {})[
-                "moonmindFirstMessageDigest"
-            ] = digest
-            first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
-            if selection.prompt.get("includeIdempotencyMarker", True):
-                first_message_text = _first_message_text(first_message)
-                first_message["data"]["content"][0]["text"] = (
-                    f"{first_message_text}\n\n{marker}".strip()
+            if not persisted_first_message_ref:
+                first_message.setdefault("metadata", {})[
+                    "moonmindFirstMessageDigest"
+                ] = digest
+                first_message["metadata"][
+                    "moonmindIdempotencyKey"
+                ] = request.idempotency_key
+                if selection.prompt.get("includeIdempotencyMarker", True):
+                    first_message_text = _first_message_text(first_message)
+                    first_message["data"]["content"][0]["text"] = (
+                        f"{first_message_text}\n\n{marker}".strip()
+                    )
+                persisted_payload_text = json.dumps(
+                    first_message,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
+                persisted_first_message_ref = await artifact_gateway.write_text(
+                    request=request,
+                    name="runtime.omnigent.first-message.prepared.json",
+                    payload=persisted_payload_text,
+                    link_type="runtime.omnigent.first-message.prepared",
+                    content_type="application/json",
+                )
+                persisted_payload_digest = (
+                    "sha256:"
+                    + hashlib.sha256(persisted_payload_text.encode("utf-8")).hexdigest()
+                )
+            else:
+                persisted_payload_digest = str(
+                    (getattr(durable_row, "metadata_", None) or {}).get(
+                        "first_message_payload_digest"
+                    )
+                    or ""
+                )
+            if isinstance(metadata, dict) and isinstance(
+                metadata.get("moonmind"), dict
+            ):
+                metadata["moonmind"]["firstMessagePayloadRef"] = str(
+                    persisted_first_message_ref
+                )
+                metadata["moonmind"][
+                    "firstMessagePayloadDigest"
+                ] = persisted_payload_digest
             external_state["firstMessage"].update(
                 {
                     "digest": digest,
+                    "payloadRef": str(persisted_first_message_ref),
+                    "payloadDigest": persisted_payload_digest,
                     "idempotencyMarkerPresent": selection.prompt.get(
                         "includeIdempotencyMarker", True
                     ),
@@ -754,6 +828,8 @@ async def run_omnigent_execution(
                         request.idempotency_key,
                         digest=digest,
                         marker=marker,
+                        payload_ref=str(persisted_first_message_ref),
+                        payload_digest=persisted_payload_digest,
                     )
                     first_message_reconcile_required = (
                         durable_row.first_message_state == FIRST_MESSAGE_POSTING

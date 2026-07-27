@@ -71,6 +71,56 @@ async def test_inject_context_disabled(mock_request: AgentExecutionRequest, tmp_
     assert moonmind_meta["retrievalDisabledReason"] == "auto_context_disabled"
     assert moonmind_meta["retrievalInitiationMode"] == "automatic"
 
+
+@pytest.mark.asyncio
+async def test_required_context_fails_when_auto_context_is_disabled(
+    mock_request: AgentExecutionRequest, tmp_path
+) -> None:
+    mock_request.parameters["rag"] = {"required": True}
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "false"})
+
+    with pytest.raises(RuntimeError, match="auto_context_disabled"):
+        await service.inject_context(request=mock_request, workspace_path=tmp_path)
+
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievalMode"] == "disabled"
+    assert moonmind_meta["retrievalDisabledReason"] == "auto_context_disabled"
+
+
+@pytest.mark.asyncio
+async def test_required_context_fails_when_query_is_unavailable(tmp_path) -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="test-agent",
+        correlationId="correlation",
+        idempotencyKey="idempotency",
+        parameters={"rag": {"required": True}},
+    )
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+
+    with pytest.raises(RuntimeError, match="retrieval_query_unavailable"):
+        await service.inject_context(request=request, workspace_path=tmp_path)
+
+
+def test_authored_scope_must_match_server_owned_authority(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {
+        "scope": {"repository": "other/repo", "runId": "authored-run"}
+    }
+    mock_request.parameters["repository"] = "owner/repo"
+    settings = MagicMock()
+    settings.as_filter_metadata.return_value = {"run_id": "server-run"}
+    settings.resolve_collections.return_value = ("repo",)
+    settings.resolved_transport.return_value = "gateway"
+    settings.similarity_top_k = 5
+    settings.run_id = "server-run"
+
+    with pytest.raises(ValueError, match="server-owned authority"):
+        ContextInjectionService()._compile_retrieval_request(
+            request=mock_request, settings=settings
+        )
+
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
 async def test_inject_context_enabled_with_items(

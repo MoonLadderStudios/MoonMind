@@ -1565,7 +1565,13 @@ class OmnigentBridgeSessionStore:
             await session.commit()
 
     async def mark_prepared(
-        self, idempotency_key: str, *, digest: str, marker: str
+        self,
+        idempotency_key: str,
+        *,
+        digest: str,
+        marker: str,
+        payload_ref: str | None = None,
+        payload_digest: str | None = None,
     ) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
             row = await self._require(session, idempotency_key)
@@ -1577,6 +1583,22 @@ class OmnigentBridgeSessionStore:
                 row.first_message_state = FIRST_MESSAGE_PREPARED
             row.first_message_digest = digest
             row.first_message_marker = marker
+            metadata = dict(row.metadata_ or {})
+            existing_payload_ref = metadata.get("first_message_payload_ref")
+            if (
+                existing_payload_ref is not None
+                and payload_ref is not None
+                and existing_payload_ref != payload_ref
+            ):
+                raise OmnigentDigestMismatchError(
+                    "idempotencyKey reused with a different first-message payload ref"
+                )
+            if payload_ref is not None:
+                metadata["first_message_payload_ref"] = str(payload_ref)[:1024]
+                metadata["first_message_payload_digest"] = str(
+                    payload_digest or ""
+                )[:128]
+                row.metadata_ = metadata
             lifecycle_state = (
                 (row.metadata_ or {}).get(EMBEDDED_LIFECYCLE_KEY) or {}
             ).get("state")

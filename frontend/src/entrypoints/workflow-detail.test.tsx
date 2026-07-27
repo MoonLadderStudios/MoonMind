@@ -7,6 +7,7 @@ import {
   expandRouteTemplate,
   getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
+  initialRetrievalFacts,
   normalizeObservabilityEvent,
   parseObservabilityEventsResponse,
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -16,6 +17,38 @@ import {
   workflowDetailQueryOptions,
   workflowEvidenceStaleTime,
 } from './workflow-detail';
+
+describe('initial retrieval projection', () => {
+  it('projects bounded retrieval evidence without inlining the context body', () => {
+    expect(initialRetrievalFacts({
+      sourceKind: 'lifecycle.initial_context_retrieval',
+      metadata: {
+        state: 'degraded_local_fallback',
+        transport: 'local_fallback',
+        scope: { repository: 'owner/repo', run_id: 'run-1' },
+        resultCount: 2,
+        sourceIdentities: ['docs/a.md', 'src/a.py'],
+        budgets: { tokens: 512 },
+        truncated: true,
+        fallbackOrDenialReason: 'retrieval_gateway_unavailable',
+        firstMessageConsumesContextRef: true,
+        firstMessageDigest: 'sha256:abc',
+        contextBody: 'must not be rendered',
+      },
+    })).toEqual([
+      { label: 'Retrieval state', value: 'degraded_local_fallback' },
+      { label: 'Transport', value: 'local_fallback' },
+      { label: 'Scope', value: '{"repository":"owner/repo","run_id":"run-1"}' },
+      { label: 'Results', value: '2' },
+      { label: 'Sources', value: '2' },
+      { label: 'Budgets', value: '{"tokens":512}' },
+      { label: 'Truncated', value: 'true' },
+      { label: 'Fallback or denial', value: 'retrieval_gateway_unavailable' },
+      { label: 'Context consumed', value: 'true' },
+      { label: 'First-message digest', value: 'sha256:abc' },
+    ]);
+  });
+});
 
 describe('bridge projection response contract', () => {
   it('fails visibly for an unknown page schema version', () => {
