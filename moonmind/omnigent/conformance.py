@@ -12,6 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +24,7 @@ PROFILE_VERSION = "moonmind.omnigent.conformance/v4"
 PROFILE_SHA256 = "4098a93e74fb354d2a557e900ea85d3d34ca4957a02f91a529daa276ee7b3a1b"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
 ACCEPTANCE_VERSION = "moonmind.omnigent.product-acceptance/v1"
+BROWSER_EVIDENCE_VERSION = "moonmind.omnigent.live-evidence/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 
 _DIGEST_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
@@ -132,6 +136,7 @@ def validate_acceptance_manifest(
     now: datetime | None = None,
     expected_commit: str | None = None,
     required_rows: Iterable[str] = (),
+    evidence_root: Path | None = None,
 ) -> None:
     """Fail closed unless a #3508 release manifest is current and immutable."""
     if manifest.get("schemaVersion") != ACCEPTANCE_VERSION:
@@ -189,6 +194,82 @@ def validate_acceptance_manifest(
         raise ConformanceContractError(
             "acceptance manifest does not contain every passing browser row"
         )
+    if evidence_root is None:
+        raise ConformanceContractError(
+            "acceptance manifest evidence must be independently resolved"
+        )
+
+    browser = _resolve_acceptance_json(str(manifest["browserEvidence"]), evidence_root)
+    if (
+        browser.get("schemaVersion") != BROWSER_EVIDENCE_VERSION
+        or browser.get("issue") != manifest.get("issue")
+        or browser.get("parentIssue") != manifest.get("parentIssue")
+        or browser.get("rows") != rows
+    ):
+        raise ConformanceContractError(
+            "acceptance browser evidence is malformed or does not bind the manifest rows"
+        )
+    report_refs = manifest["reports"]
+    if not isinstance(report_refs, list) or not report_refs:
+        raise ConformanceContractError("acceptance manifest reports are malformed")
+    reports = [_resolve_acceptance_json(str(ref), evidence_root) for ref in report_refs]
+    if any(report.get("schemaVersion") != REPORT_VERSION for report in reports):
+        raise ConformanceContractError("acceptance manifest references a malformed report")
+    for name, row in rows.items():
+        assertions = row.get("assertions") if isinstance(row, Mapping) else None
+        authority = row.get("authorityChain") if isinstance(row, Mapping) else None
+        evidence_refs = row.get("evidenceRefs") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(assertions, Mapping)
+            or not assertions
+            or any(value is not True for value in assertions.values())
+            or not isinstance(authority, Mapping)
+            or any(not value for value in authority.values())
+            or not isinstance(evidence_refs, list)
+            or not evidence_refs
+        ):
+            raise ConformanceContractError(
+                f"acceptance browser row {name!r} lacks controlling evidence"
+            )
+    secret_scan = manifest.get("secretScan")
+    if not isinstance(secret_scan, Mapping) or secret_scan.get("status") != "passed":
+        raise ConformanceContractError("acceptance manifest secret scan did not pass")
+    assert_secret_free(manifest)
+    assert_secret_free(browser)
+    for report in reports:
+        assert_secret_free(report)
+
+
+def _resolve_acceptance_json(ref: str, evidence_root: Path) -> dict[str, Any]:
+    """Resolve only HTTPS or paths confined to the downloaded run artifact."""
+    parsed = urllib.parse.urlparse(ref)
+    try:
+        if parsed.scheme == "https":
+            with urllib.request.urlopen(ref, timeout=10) as response:
+                raw = response.read()
+        elif parsed.scheme in {"", "file"}:
+            candidate = Path(urllib.request.url2pathname(parsed.path))
+            if not candidate.is_absolute():
+                candidate = evidence_root / candidate
+            candidate = candidate.resolve()
+            root = evidence_root.resolve()
+            if candidate != root and root not in candidate.parents:
+                raise ConformanceContractError(
+                    "acceptance evidence path escapes its run artifact"
+                )
+            raw = candidate.read_bytes()
+        else:
+            raise ConformanceContractError(
+                f"unsupported acceptance evidence ref scheme: {parsed.scheme}"
+            )
+        payload = json.loads(raw)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise ConformanceContractError(
+            f"acceptance evidence ref is unresolved or malformed: {ref}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ConformanceContractError("acceptance evidence document must be an object")
+    return payload
 
 
 def assert_secret_free(evidence: Any) -> None:

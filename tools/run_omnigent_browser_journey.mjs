@@ -21,6 +21,7 @@ const repository = required("MOONMIND_OMNIGENT_TEST_REPOSITORY");
 const branch = required("MOONMIND_OMNIGENT_TEST_BRANCH");
 const outputDir = required("MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR");
 const storageState = process.env.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE || undefined;
+const canaryToken = required("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN");
 const timeout = Number(process.env.MOONMIND_OMNIGENT_BROWSER_TIMEOUT_MS || "900000");
 const admissionFailureRows = new Set([
   "failed_credential_readiness_admission",
@@ -31,7 +32,10 @@ const staticRows = new Set(["static_profile_bound", "static_restart_replay"]);
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 try {
-  const context = await browser.newContext(storageState ? { storageState } : {});
+  const context = await browser.newContext({
+    ...(storageState ? { storageState } : {}),
+    extraHTTPHeaders: { "X-MoonMind-Acceptance-Canary": canaryToken },
+  });
   const page = await context.newPage();
   const requests = [];
   page.on("request", (request) => {
@@ -62,6 +66,13 @@ try {
   if (admissionFailureRows.has(row)) {
     if (await submit.isEnabled()) throw new Error("failed-admission row was incorrectly launchable");
     if (requests.length) throw new Error("failed-admission row emitted a Workflow Create request");
+    const pageText = await page.locator("body").innerText();
+    const expectedFailure = row === "failed_credential_readiness_admission"
+      ? /credential|oauth|profile.*(reconnect|validation|required)/i
+      : /host.*(registration|readiness|ready)|static host/i;
+    if (!expectedFailure.test(pageText)) {
+      throw new Error(`failed-admission row did not expose its distinct readiness cause: ${row}`);
+    }
     process.stdout.write(JSON.stringify({
       schemaVersion: "moonmind.omnigent.browser-observation/v1",
       row,
@@ -69,6 +80,8 @@ try {
       selected: { profileId, executionTargetRef: selectedTarget, launchPolicyRef: selectedPolicy },
       createRequestCount: requests.length,
       startPath: new URL(page.url()).pathname,
+      admissionReason: row === "failed_credential_readiness_admission"
+        ? "credential_readiness" : "host_registration_readiness",
     }));
     process.exit(0);
   }
@@ -90,11 +103,47 @@ try {
   }
 
   const workflowId = decodeURIComponent(new URL(page.url()).pathname.split("/").pop());
+  let controlAction = null;
+  if (row === "active_cancellation_interruption") {
+    const control = page.getByRole("button", { name: /cancel|interrupt/i }).first();
+    await control.waitFor({ state: "visible", timeout: 60000 });
+    await control.click();
+    controlAction = "cancel_or_interrupt";
+  }
   await page.getByText(/(completed|failed|cancelled|interrupted)/i).first().waitFor({ timeout });
+  const terminalText = await page.locator("body").innerText();
+  if (row === "active_cancellation_interruption" && !/(cancelled|interrupted)/i.test(terminalText)) {
+    throw new Error("active cancellation did not reach the requested terminal state");
+  }
+  if (row === "repository_read_analysis" && !/(analysis|summary|findings)/i.test(terminalText)) {
+    throw new Error("repository read row lacks a visible analysis outcome");
+  }
+  if (row === "repository_mutation_publication" && !/(commit|pull request|published|changed files)/i.test(terminalText)) {
+    throw new Error("repository mutation row lacks a visible publication outcome");
+  }
+  if (row === "partial_start_cleanup_janitor" && !/(janitor).*(reconciled|complete|released)/is.test(terminalText)) {
+    throw new Error("partial-start row lacks visible janitor reconciliation");
+  }
+  if (!/(host).*(removed|released|cleaned up|gone)/is.test(terminalText)) {
+    throw new Error("terminal detail did not prove host removal before replay");
+  }
+  const durableProjection = {
+    lifecycle: [...terminalText.matchAll(/\b(launch|execut|complet|fail|cancel|interrupt|cleanup|releas)[^\n]*/gi)].map((match) => match[0]),
+    chat: [...terminalText.matchAll(/^(assistant|user|system)[^\n]*/gim)].map((match) => match[0]),
+    resources: [...terminalText.matchAll(/^(artifact|resource|changed files|commit|pull request)[^\n]*/gim)].map((match) => match[0]),
+  };
+  if (!durableProjection.lifecycle.length) throw new Error("terminal detail lacks lifecycle evidence");
   await page.screenshot({ path: path.join(outputDir, `${row}-terminal.png`), fullPage: true });
   const terminalUrl = page.url();
   await page.reload({ waitUntil: "networkidle", timeout });
   await page.getByText(/(completed|failed|cancelled|interrupted)/i).first().waitFor({ timeout: 60000 });
+  const replayText = await page.locator("body").innerText();
+  const missingReplayEvidence = Object.entries(durableProjection).flatMap(([section, values]) =>
+    values.filter((value) => !replayText.includes(value)).map((value) => `${section}:${value}`)
+  );
+  if (missingReplayEvidence.length) {
+    throw new Error(`Workflow Detail replay lost durable evidence: ${missingReplayEvidence.join(", ")}`);
+  }
   await page.screenshot({ path: path.join(outputDir, `${row}-replay.png`), fullPage: true });
 
   process.stdout.write(JSON.stringify({
@@ -110,6 +159,13 @@ try {
     createRequest,
     terminalUrl,
     replayUrl: page.url(),
+    controlAction,
+    hostRemovedBeforeReplay: true,
+    janitorReconciled: row === "partial_start_cleanup_janitor" ? true : null,
+    repositoryOutcome: row === "repository_read_analysis" ? "read_analysis"
+      : row === "repository_mutation_publication" ? "mutation_publication" : null,
+    durableProjection,
+    replayComplete: true,
     screenshots: [`${row}-terminal.png`, `${row}-replay.png`],
   }));
 } finally {

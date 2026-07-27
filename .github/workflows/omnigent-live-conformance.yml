@@ -91,6 +91,7 @@ jobs:
           MOONMIND_OMNIGENT_TEST_REPOSITORY: ${{ vars.MOONMIND_OMNIGENT_TEST_REPOSITORY }}
           MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
           MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
+          MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN: ${{ secrets.MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN }}
         run: |
           python tools/run_omnigent_live_conformance.py \
             --mode "${{ matrix.mode }}" \
@@ -315,11 +316,11 @@ jobs:
                   f"omnigent-live-published-matrix-{os.environ['GITHUB_RUN_ID']}-"
                   f"{os.environ['GITHUB_RUN_ATTEMPT']}"
               ),
-              "reports": [str(path) for path in reports],
-              "productEvidence": str(product_paths[0]),
-              "browserEvidence": str(browser_paths[0]),
+              "reports": [str(path.relative_to(root)) for path in reports],
+              "productEvidence": str(product_paths[0].relative_to(root)),
+              "browserEvidence": str(browser_paths[0].relative_to(root)),
               "browserRows": rows,
-              "cumulativeRemediationEvidence": str(cumulative_paths[0]),
+              "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],

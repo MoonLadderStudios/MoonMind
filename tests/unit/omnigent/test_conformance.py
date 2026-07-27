@@ -84,7 +84,23 @@ def test_stock_images_must_be_immutable() -> None:
         require_pinned_images({"server": "omnigent:latest", "host": "host:latest"})
 
 
-def _acceptance_manifest(now: datetime) -> dict[str, object]:
+def _acceptance_manifest(now: datetime, root: Path) -> dict[str, object]:
+    row = {
+        "status": "passed",
+        "assertions": {"browser_originated": True, "no_fallback": True},
+        "authorityChain": {"providerProfileRef": "profile-safe", "hostId": "host-1"},
+        "evidenceRefs": ["https://evidence.example/row.json"],
+    }
+    browser = {
+        "schemaVersion": "moonmind.omnigent.live-evidence/v1",
+        "issue": "MoonLadderStudios/MoonMind#3508",
+        "parentIssue": "MoonLadderStudios/MoonMind#3448",
+        "rows": {"static_profile_bound": row},
+    }
+    (root / "browser-evidence.json").write_text(json.dumps(browser), encoding="utf-8")
+    (root / "report.json").write_text(json.dumps({
+        "schemaVersion": "moonmind.omnigent.conformance-report/v1"
+    }), encoding="utf-8")
     return {
         "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
         "issue": "MoonLadderStudios/MoonMind#3508",
@@ -96,29 +112,31 @@ def _acceptance_manifest(now: datetime) -> dict[str, object]:
             "serverDigest": "sha256:" + "a" * 64,
             "hostDigest": "sha256:" + "b" * 64,
         },
-        "browserEvidence": "browser/browser-evidence.json",
-        "reports": ["browser/report.json"],
+        "browserEvidence": "browser-evidence.json",
+        "reports": ["report.json"],
+        "secretScan": {"status": "passed"},
         "sourceCommit": "abc123",
         "browserRows": {
-            "static_profile_bound": {"status": "passed"},
+            "static_profile_bound": row,
         },
     }
 
 
-def test_acceptance_manifest_gate_accepts_current_immutable_3508_evidence() -> None:
+def test_acceptance_manifest_gate_accepts_current_immutable_3508_evidence(tmp_path: Path) -> None:
     now = datetime(2026, 7, 27, tzinfo=timezone.utc)
     validate_acceptance_manifest(
-        _acceptance_manifest(now),
+        _acceptance_manifest(now, tmp_path),
         now=now,
         expected_commit="abc123",
         required_rows=("static_profile_bound",),
+        evidence_root=tmp_path,
     )
 
 
 @pytest.mark.parametrize("mutation", ["absent", "expired", "malformed", "mutable"])
-def test_acceptance_manifest_gate_fails_closed(mutation: str) -> None:
+def test_acceptance_manifest_gate_fails_closed(mutation: str, tmp_path: Path) -> None:
     now = datetime(2026, 7, 27, tzinfo=timezone.utc)
-    manifest = _acceptance_manifest(now)
+    manifest = _acceptance_manifest(now, tmp_path)
     if mutation == "absent":
         manifest.pop("browserEvidence")
     elif mutation == "expired":
@@ -128,13 +146,13 @@ def test_acceptance_manifest_gate_fails_closed(mutation: str) -> None:
     else:
         manifest["images"]["hostDigest"] = "latest"  # type: ignore[index]
     with pytest.raises(ConformanceContractError):
-        validate_acceptance_manifest(manifest, now=now)
+        validate_acceptance_manifest(manifest, now=now, evidence_root=tmp_path)
 
 
 @pytest.mark.parametrize("mutation", ["wrong_commit", "incomplete_rows", "failed_row"])
-def test_acceptance_manifest_gate_binds_commit_and_complete_rows(mutation: str) -> None:
+def test_acceptance_manifest_gate_binds_commit_and_complete_rows(mutation: str, tmp_path: Path) -> None:
     now = datetime(2026, 7, 27, tzinfo=timezone.utc)
-    manifest = _acceptance_manifest(now)
+    manifest = _acceptance_manifest(now, tmp_path)
     if mutation == "wrong_commit":
         manifest["sourceCommit"] = "old"
     elif mutation == "incomplete_rows":
@@ -149,6 +167,28 @@ def test_acceptance_manifest_gate_binds_commit_and_complete_rows(mutation: str) 
             now=now,
             expected_commit="abc123",
             required_rows=("static_profile_bound",),
+            evidence_root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["shallow", "unresolved", "failed_scan"])
+def test_acceptance_manifest_rejects_forged_or_unresolved_evidence(
+    mutation: str, tmp_path: Path
+) -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    manifest = _acceptance_manifest(now, tmp_path)
+    if mutation == "shallow":
+        manifest["browserRows"] = {"static_profile_bound": {"status": "passed"}}
+    elif mutation == "unresolved":
+        manifest["browserEvidence"] = "missing.json"
+    else:
+        manifest["secretScan"] = {"status": "failed"}
+    with pytest.raises(ConformanceContractError):
+        validate_acceptance_manifest(
+            manifest,
+            now=now,
+            required_rows=("static_profile_bound",),
+            evidence_root=tmp_path,
         )
 
 

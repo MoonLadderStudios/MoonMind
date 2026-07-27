@@ -159,6 +159,8 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
     authority["providerProfileRef"] = "oauth-1"
     authority["executionProfileRef"] = "omnigent-codex-default"
     authority["launchPolicyRef"] = "on-demand-v1"
+    authority["terminalState"] = "completed"
+    authority["janitorState"] = "reconciled"
     observation = {
         "schemaVersion": "moonmind.omnigent.browser-observation/v1",
         "workflowId": "workflow-1",
@@ -170,6 +172,8 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
         "createRequest": {"payload": {"targetRuntime": "omnigent"}},
         "terminalUrl": "https://moonmind/workflows/workflow-1",
         "replayUrl": "https://moonmind/workflows/workflow-1",
+        "replayComplete": True,
+        "hostRemovedBeforeReplay": True,
     }
     monkeypatch.setattr(
         runner,
@@ -181,18 +185,36 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
                 "admissionRejected": True,
                 "createRequestCount": 0,
                 "selected": observation["selected"],
+                "admissionReason": (
+                    "credential_readiness"
+                    if row == "failed_credential_readiness_admission"
+                    else "host_registration_readiness"
+                ),
             }
             if row in {
                 "failed_credential_readiness_admission",
                 "failed_host_registration_readiness",
             }
-            else {**observation, "row": row}
+            else {
+                **observation,
+                "row": row,
+                "controlAction": "cancel_or_interrupt" if row == "active_cancellation_interruption" else None,
+                "janitorReconciled": row == "partial_start_cleanup_janitor",
+                "repositoryOutcome": (
+                    "read_analysis" if row == "repository_read_analysis"
+                    else "mutation_publication" if row == "repository_mutation_publication"
+                    else None
+                ),
+            }
         ),
     )
 
     def action(scenario, name, **inputs):
         if scenario == "browser":
             actions.append(name)
+        row_authority = dict(authority)
+        if name == "active_cancellation_interruption":
+            row_authority["terminalState"] = "cancelled"
         return {
             "ok": True,
             "row": name,
@@ -201,7 +223,8 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
             "normalCreateRequest": True,
             "workflowDetailTerminalReplay": True,
             "noFallback": True,
-            "authorityChain": authority,
+            "authorityChain": row_authority,
+            "admissionAuthority": {"providerProfileRef": "oauth-1"},
             "_sourceRecords": [
                 {"type": record_type, "_resolved": authority}
                 for record_type in module.BROWSER_RECORD_ORDER

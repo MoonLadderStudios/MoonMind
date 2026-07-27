@@ -554,6 +554,49 @@ class LiveRunner:
                 raise ConformanceContractError(
                     f"browser row identity mismatch: expected {row!r}"
                 )
+            admission_failure = row in {
+                "failed_credential_readiness_admission",
+                "failed_host_registration_readiness",
+            }
+            if admission_failure:
+                expected_reason = (
+                    "credential_readiness"
+                    if row == "failed_credential_readiness_admission"
+                    else "host_registration_readiness"
+                )
+                selected = observation.get("selected")
+                admission_authority = result.get("admissionAuthority")
+                if (
+                    observation.get("admissionRejected") is not True
+                    or observation.get("createRequestCount") != 0
+                    or observation.get("admissionReason") != expected_reason
+                    or not isinstance(selected, dict)
+                    or not isinstance(admission_authority, dict)
+                    or selected.get("profileId")
+                    != admission_authority.get("providerProfileRef")
+                ):
+                    raise ConformanceContractError(
+                        f"browser/{row} did not prove its distinct fail-closed admission"
+                    )
+                rows[row] = {
+                    "status": "passed",
+                    "assertions": {
+                        "browser_originated": True,
+                        "normal_create_request_rejected": True,
+                        "distinct_admission_reason": True,
+                        "no_fallback": bool(result.get("noFallback")),
+                    },
+                    "authorityChain": admission_authority,
+                    "browserObservation": observation,
+                    "evidenceRefs": result["evidenceRefs"],
+                }
+                if not all(rows[row]["assertions"].values()):
+                    raise ConformanceContractError(
+                        f"browser/{row} did not prove no fallback"
+                    )
+                evidence_refs.extend(setup["evidenceRefs"])
+                evidence_refs.extend(result["evidenceRefs"])
+                continue
             authority = result.get("authorityChain")
             if not isinstance(authority, dict):
                 raise ConformanceContractError(
@@ -626,28 +669,31 @@ class LiveRunner:
                 raise ConformanceContractError(
                     f"browser/{row} authority values are not bound to resolved records: {unbound}"
                 )
-            admission_failure = row in {
-                "failed_credential_readiness_admission",
-                "failed_host_registration_readiness",
-            }
             assertions = {
-                "browser_originated": (
-                    observation.get("admissionRejected") is True
-                    if admission_failure
-                    else observation.get("workflowId") == result.get("workflowId")
-                ),
-                "normal_create_request": (
-                    observation.get("createRequestCount") == 0
-                    if admission_failure
-                    else bool(observation.get("createRequest"))
-                ),
+                "browser_originated": observation.get("workflowId") == result.get("workflowId"),
+                "normal_create_request": bool(observation.get("createRequest")),
                 "workflow_detail_terminal_replay": (
-                    observation.get("admissionRejected") is True
-                    if admission_failure
-                    else observation.get("terminalUrl") == observation.get("replayUrl")
+                    observation.get("terminalUrl") == observation.get("replayUrl")
+                    and observation.get("replayComplete") is True
+                    and observation.get("hostRemovedBeforeReplay") is True
                 ),
                 "no_fallback": not mismatches,
             }
+            if row == "active_cancellation_interruption":
+                assertions["active_control"] = (
+                    observation.get("controlAction") == "cancel_or_interrupt"
+                    and authority.get("terminalState") in {"cancelled", "interrupted"}
+                )
+            if row == "partial_start_cleanup_janitor":
+                assertions["janitor_reconciliation"] = (
+                    observation.get("janitorReconciled") is True
+                    and authority.get("janitorState") in {"reconciled", "completed"}
+                )
+            if row in {"repository_read_analysis", "repository_mutation_publication"}:
+                assertions["repository_outcome"] = observation.get("repositoryOutcome") == (
+                    "read_analysis" if row == "repository_read_analysis"
+                    else "mutation_publication"
+                )
             if not all(assertions.values()):
                 raise ConformanceContractError(
                     f"browser/{row} did not prove browser control or no fallback"

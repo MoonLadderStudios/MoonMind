@@ -128,6 +128,42 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     response = client.get("/api/omnigent/codex-catalog-readiness")
 
     assert response.status_code == 200
+
+
+def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
+    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    response = client.get(
+        "/api/omnigent/codex-catalog-readiness",
+        headers={"X-MoonMind-Acceptance-Canary": "canary-secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "acceptance_evidence_unavailable" not in {
+        reason["code"] for reason in payload["gateReasons"]
+    }
+
+
+def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
+    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    response = client.get(
+        "/api/omnigent/codex-catalog-readiness",
+        headers={"X-MoonMind-Acceptance-Canary": "wrong"},
+    )
+
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in response.json()["gateReasons"]
+    }
     body = response.json()
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
     assert body["available"] is True
