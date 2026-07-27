@@ -15407,6 +15407,7 @@ class TemporalCheckpointActivities:
             plan_digest=model.plan_digest,
             prepared_input_refs=model.prepared_input_refs,
             step_outputs=model.step_outputs,
+            omnigent_checkpoint=model.omnigent_checkpoint,
         )
         checkpoint_ref = await self._put_bytes(
             _json_bytes(payload),

@@ -374,3 +374,22 @@ The design is satisfied when a workflow can select a Codex Omnigent agent and Pr
 The same request, binding, bridge, readiness, artifact, checkpoint, and cleanup contracts apply to both launch modes. Direct Codex remains a compatibility producer until the Omnigent path passes the required deterministic and credentialed live conformance gates.
 
 Credentialed conformance uses `tools/run_omnigent_live_conformance.py` with digest-pinned server and host references and an operator-provisioned live action adapter. Evidence references are durable, schema-versioned, scenario-bound, secret-scanned, and independently resolved; a bare success boolean or repository semantic test backend is not accepted as proof of live behavior. The isolated live Compose project cleans its own containers and networks without removing enrolled OAuth or unrelated volumes.
+
+## 16. Host-independent checkpoint contract
+
+At deterministic Step Execution boundaries the adapter supplies evidence to
+the canonical checkpoint writer; it does not create a parallel provider
+checkpoint. The v2 manifest pins lineage, boundary, idempotency,
+producer/capture time, external-state ref/digest, bridge cursor,
+first-message identity/digest, profile/policy/effective-launch evidence,
+Provider Profile and credential generation, leases and host binding, endpoint
+and session identities, terminal/diagnostic refs, resource/capture manifests,
+patch capability, workspace locator, baseline/head/checkpoint/diff refs and
+digests, immutable inputs, branch/publication evidence, and validation.
+
+Before recovery the adapter dereferences and digest-checks required artifacts,
+verifies lineage and repository compatibility, and rejects stale Profile or
+credential-generation evidence. Workflow Detail and APIs project live
+reattach, workspace cold restore, and branch creation separately with bounded
+denial reasons, required policy/profile, readiness blocking, refs/digests, and
+validation status.

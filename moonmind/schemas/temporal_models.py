@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -494,6 +495,12 @@ StepExecutionCheckpointBoundary = Literal[
     "after_gate",
     "before_publication",
     "before_recovery_restoration",
+    "before_first_message",
+    "after_turn",
+    "before_host_drain",
+    "before_remediation",
+    "before_checkpoint_branch",
+    "terminal_harvest",
 ]
 WorkspaceCheckpointKind = Literal[
     "git_commit",
@@ -1277,6 +1284,9 @@ class StepExecutionCheckpointModel(BaseModel):
     )
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    omnigent_checkpoint: OmnigentCheckpointManifest | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
     validation: StepCheckpointValidationResultModel | None = Field(
         None, alias="validation"
     )
@@ -1315,6 +1325,17 @@ class StepExecutionCheckpointModel(BaseModel):
             raise ValueError("checkpointId must match Step Execution boundary identity")
         if self.plan_ref is None and self.plan_digest is None:
             raise ValueError("checkpoint requires planRef or planDigest")
+        if self.omnigent_checkpoint is not None:
+            manifest = self.omnigent_checkpoint
+            if (
+                manifest.workflow_id != self.source.workflow_id
+                or manifest.run_id != self.source.run_id
+                or manifest.logical_step_id != self.source.logical_step_id
+                or manifest.boundary != self.boundary
+            ):
+                raise ValueError(
+                    "omnigentCheckpoint lineage must match Step Execution checkpoint"
+                )
         return self
 
 
@@ -1515,6 +1536,9 @@ class StepCheckpointCreateInput(BaseModel):
     plan_digest: str | None = Field(None, alias="planDigest")
     prepared_input_refs: list[str] = Field(default_factory=list, alias="preparedInputRefs")
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    omnigent_checkpoint: OmnigentCheckpointManifest | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
     diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 

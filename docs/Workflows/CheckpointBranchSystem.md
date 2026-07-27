@@ -1589,3 +1589,19 @@ A sudden infrastructure failure never falsely claims that work was saved.
 ```
 
 MoonMind remains responsible for checkpoint validation, artifact authority, Step Execution identity, workspace and git isolation, provider/runtime boundaries, gates, side-effect classification, publication safety, first-failure-wins diagnostics, and explicit promotion into canonical workflow progress.
+
+## Omnigent branch and restore authority
+
+An Omnigent Checkpoint Branch consumes the complete v2 manifest embedded by
+the canonical Step Execution checkpoint writer. Live session reattachment,
+workspace cold restoration, and branch creation are evaluated independently
+and expose availability plus a bounded denial reason.
+
+Cold restore targets a clean, newly authorized `WorkspaceLocator`: check out
+the pinned baseline, apply digest-checked head/checkpoint/diff evidence,
+restore immutable instruction/context refs, pass the external-state ref to a
+fresh session, reacquire the same Provider Profile under current credential
+generation and capacity rules, and compile a new effective launch while
+retaining source policy evidence. A branch receives a new host lease and
+session; the original container, OAuth home, host-local state, and
+provider-native identifiers are never restoration authority.

@@ -1332,3 +1332,25 @@ Step Executions with Checkpointing supports MoonMind's core principles:
 The key desired-state rule is simple:
 
 > A repeated step is not the same execution happening again. It is a new attempt with explicit context, checkpoint, side-effect policy, evidence, lineage, and stop rules.
+
+## 24. Omnigent complete checkpoint manifest
+
+The canonical Step Execution checkpoint writer may attach one versioned
+`omnigentCheckpoint` manifest. It is the single recovery authority and keeps
+four planes distinct:
+
+- session state: the digest-checked external-state artifact, bridge/session
+  identities, event cursor, and first-message identity/digest;
+- workspace state: a MoonMind `WorkspaceLocator`, pinned baseline,
+  head/checkpoint/diff refs and digests, immutable instruction/context refs,
+  branch evidence, and publication state;
+- host realization: execution profile, launch policy, source effective launch,
+  endpoint, host binding/lease, provider lease, and capture manifests;
+- credentials: Provider Profile identity and credential generation only.
+
+Credential bodies, OAuth homes, provider-native URLs, raw host paths, and
+mutable host volumes are forbidden. Capture boundaries include
+`before_first_message`, `after_turn`, `before_host_drain`,
+`before_remediation`, `before_checkpoint_branch`, and `terminal_harvest`.
+Writes are idempotent by Step Execution identity and boundary. Partial capture
+projects a bounded degraded/invalid reason and never claims resumability.
