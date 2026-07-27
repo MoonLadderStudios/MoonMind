@@ -327,7 +327,20 @@ Typed product controls for interrupt, stop, terminate, harvest, remove, generati
 
 ## 12. Recovery and checkpoints
 
-Omnigent checkpoints use the `external_state_ref` lane. Durable checkpoint identity may include profile, provider-lease, binding, host-lease, credential-generation, host, bridge-session, Omnigent-session, first-message, workspace-locator, diagnostics, terminal, and artifact refs, but never credentials or daemon paths.
+Omnigent checkpoints use the `external_state_ref` session lane and the canonical
+Step Execution checkpoint writer. A complete versioned manifest contains
+workflow/run/logical-step/Step Execution/attempt/boundary lineage; external
+state and digest; bridge, Omnigent session/host, first-message, event-cursor,
+idempotency, terminal, diagnostics, resource, and capture evidence; a typed
+workspace locator with baseline, head/diff/checkpoint refs and digests, patch
+capability, branches and publication state; and execution-profile,
+launch-policy, effective-launch, Provider Profile, provider lease, host binding,
+host lease, endpoint, and credential-generation evidence.
+
+Those fields remain four separate authority planes: session state, workspace
+state, host realization, and credential references/generations. Credentials,
+OAuth-home contents, raw local paths, and mutable host/container state are
+never checkpoint authority.
 
 Recovery chooses between:
 
@@ -335,6 +348,16 @@ Recovery chooses between:
 - **cold restore**, which reacquires the same profile, creates a new host lease, materializes validated artifact-backed state, and starts a fresh session.
 
 A branch always obtains independent host/session authority and does not concurrently reuse the original OAuth lease.
+
+Restore validation dereferences and digest-checks every required artifact,
+matches the requested workflow/run/step lineage, confirms repository
+baseline/head compatibility, and rejects stale profile or credential
+generations. Unsupported patch formats, missing refs, provider-native URLs,
+raw paths, and mismatched first-message or event-cursor evidence produce a
+bounded machine-readable denial reason. Workflow Detail and APIs project live
+reattach, workspace cold restore, and branch creation independently, including
+required policy/profile, current readiness/capacity blocks, refs, digests, and
+validation status.
 
 ---
 

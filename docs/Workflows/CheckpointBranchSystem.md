@@ -1548,6 +1548,24 @@ The initial terminal-publication decisions are not open:
 
 ## 20. Desired end state
 
+### 20.1 Omnigent branch source authority
+
+An Omnigent Checkpoint Branch consumes the canonical versioned Step Execution
+checkpoint manifest; it does not infer recovery authority from a provider URL,
+session id, host container, OAuth volume, or mutable local path. Before branch
+creation MoonMind dereferences and digest-checks the session and workspace
+artifacts, verifies workflow/run/step lineage and repository baseline/head
+compatibility, and revalidates Provider Profile and credential generation.
+
+Branch creation is projected separately from live reattach and workspace cold
+restore. Its projection includes availability, one bounded denial reason,
+required profile/policy, current capacity/readiness blocking, artifact refs and
+digests, and validation status. A branch materializes a clean authorized
+workspace from the pinned baseline plus validated checkpoint/diff/head
+evidence, restores immutable instruction/context refs, passes the external
+state ref to a fresh session, reacquires the same Provider Profile, and compiles
+a new effective launch snapshot while retaining the source policy evidence.
+
 The desired end state is:
 
 ```text

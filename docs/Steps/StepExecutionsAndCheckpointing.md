@@ -1300,6 +1300,38 @@ This design does not require:
 
 ## 22. Versioning and Compatibility
 
+### 22.1 Omnigent checkpoint completeness
+
+The canonical `step_checkpoint.create` writer embeds an
+`application/vnd.moonmind.omnigent-checkpoint+json;version=1` manifest when an
+Omnigent step supplies checkpoint evidence. The manifest keeps four authority
+planes separate:
+
+- session state: the external-state artifact and digest, bridge/session
+  identity, idempotency identity, first-message digest, and committed event
+  cursor;
+- workspace state: a typed `WorkspaceLocator`, pinned repository baseline,
+  head/diff/checkpoint artifact refs and digests, patch capability, immutable
+  instruction/context refs, branch evidence, and publication state;
+- host realization: execution profile, launch-policy and effective-launch
+  snapshot refs, Provider Profile, provider/host lease and binding refs,
+  endpoint, and host identity;
+- credentials: credential references and generations only. Credential bodies,
+  OAuth homes, mutable volumes, local paths, and container filesystems are
+  prohibited.
+
+Capture occurs after workspace preparation and before the first message, after
+a completed turn or logical step, before controlled drain/reset, before
+recovery or Checkpoint Branch work, and at terminal harvest while recoverable
+state remains. The workflow/run/logical-step/Step Execution/attempt/boundary
+identity is part of the manifest and must match the enclosing checkpoint.
+
+A manifest is `valid` only when every evidence class required by its declared
+capabilities is independently resolvable and digest-valid. Partial capture is
+`degraded` or `invalid` and carries bounded reasons; it never implies
+resumability. Live session reattachment, workspace cold restoration, and branch
+creation are evaluated independently.
+
 Payload-affecting Step Execution and checkpoint changes follow a versioned
 cutover rule: canonical writers fail fast for unsupported values, while
 workflow read/replay boundaries must turn degraded, blank, unknown, or future

@@ -5394,6 +5394,7 @@ class MoonMindRunWorkflow:
         plan_digest: str | None = None,
         prepared_input_refs: Sequence[str] = (),
         step_outputs: Mapping[str, Any] | None = None,
+        omnigent_manifest: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
@@ -5414,6 +5415,9 @@ class MoonMindRunWorkflow:
             "planDigest": plan_digest,
             "preparedInputRefs": list(prepared_input_refs),
             "stepOutputs": dict(step_outputs or {}),
+            "omnigentManifest": (
+                dict(omnigent_manifest) if omnigent_manifest is not None else None
+            ),
             "diagnosticRefs": list(diagnostic_refs),
             "idempotencyKey": checkpoint_id,
         }
@@ -5597,6 +5601,13 @@ class MoonMindRunWorkflow:
         ):
             capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            omnigent_manifest = candidate.get(
+                "omnigentCheckpointManifest"
+            ) or candidate.get("omnigent_checkpoint_manifest")
+            if isinstance(omnigent_manifest, Mapping):
+                capture_input["omnigentCheckpointManifest"] = dict(
+                    omnigent_manifest
+                )
             workspace_locator = candidate.get("workspaceLocator") or candidate.get(
                 "workspace_locator"
             )
@@ -5913,6 +5924,13 @@ class MoonMindRunWorkflow:
             prepared_input_refs=self._prepared_artifact_refs,
             step_outputs=step_outputs or self._step_execution_compact_output_refs(
                 logical_step_id
+            ),
+            omnigent_manifest=(
+                capture_input.get("omnigentCheckpointManifest")
+                if isinstance(
+                    capture_input.get("omnigentCheckpointManifest"), Mapping
+                )
+                else None
             ),
             diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
         )

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,6 +13,335 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class OmnigentRecoveryMode(str, Enum):
     LIVE_REATTACH = "live_reattach"
     COLD_RESTORE = "cold_restore"
+
+
+OMNIGENT_CHECKPOINT_CONTENT_TYPE = (
+    "application/vnd.moonmind.omnigent-checkpoint+json;version=1"
+)
+
+
+class RecoveryCapability(BaseModel):
+    """One independently evaluated checkpoint recovery capability."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    available: bool
+    reason: str | None = Field(None, max_length=160)
+
+    @model_validator(mode="after")
+    def _reason_matches_availability(self) -> "RecoveryCapability":
+        if self.available and self.reason is not None:
+            raise ValueError("available capability cannot include a denial reason")
+        if not self.available and not self.reason:
+            raise ValueError("unavailable capability requires a denial reason")
+        return self
+
+
+class OmnigentRestoreValidation(BaseModel):
+    """Bounded, API-safe validation and recovery projection."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    status: Literal["valid", "degraded", "invalid"]
+    live_reattach: RecoveryCapability = Field(alias="liveReattach")
+    workspace_cold_restore: RecoveryCapability = Field(alias="workspaceColdRestore")
+    branch_creation: RecoveryCapability = Field(alias="branchCreation")
+    checked_refs: list[str] = Field(default_factory=list, alias="checkedRefs")
+
+
+class OmnigentCheckpointManifest(BaseModel):
+    """Complete host-independent evidence captured at a Step boundary."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    content_type: Literal[OMNIGENT_CHECKPOINT_CONTENT_TYPE] = Field(
+        OMNIGENT_CHECKPOINT_CONTENT_TYPE, alias="contentType"
+    )
+    workflow_id: str = Field(alias="workflowId", min_length=1)
+    run_id: str = Field(alias="runId", min_length=1)
+    logical_step_id: str = Field(alias="logicalStepId", min_length=1)
+    step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
+    attempt_ordinal: int = Field(alias="attemptOrdinal", ge=1)
+    boundary: str = Field(min_length=1)
+    session: dict[str, Any]
+    workspace: dict[str, Any]
+    host: dict[str, Any]
+    credentials: dict[str, Any]
+    source: dict[str, Any] = Field(default_factory=dict)
+    capture_time: datetime = Field(alias="captureTime")
+    producer_version: str = Field(alias="producerVersion", min_length=1)
+    validation: OmnigentRestoreValidation
+
+    @model_validator(mode="after")
+    def _validate_authority_planes(self) -> "OmnigentCheckpointManifest":
+        required_session = {
+            "externalStateRef",
+            "externalStateDigest",
+            "bridgeSessionId",
+            "idempotencyKey",
+            "lastCommittedEventCursor",
+            "firstMessageDigest",
+        }
+        required_workspace = {
+            "workspaceLocator",
+            "baselineCommit",
+            "checkpointRef",
+            "checkpointDigest",
+        }
+        required_host = {
+            "executionProfile",
+            "launchPolicyRef",
+            "effectiveLaunchRef",
+            "providerProfileId",
+            "hostBindingRef",
+        }
+        required_credentials = {"credentialGeneration"}
+        for plane, required in (
+            (self.session, required_session),
+            (self.workspace, required_workspace),
+            (self.host, required_host),
+            (self.credentials, required_credentials),
+        ):
+            if self.validation.status == "valid":
+                missing = sorted(key for key in required if not plane.get(key))
+                if missing:
+                    raise ValueError(
+                        "valid checkpoint missing required evidence: "
+                        + ", ".join(missing)
+                    )
+        payload = self.model_dump(by_alias=True, mode="json")
+        _reject_unsafe_restore_authority(payload)
+        return self
+
+
+def _reject_unsafe_restore_authority(value: Any, path: str = "checkpoint") -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized = str(key).replace("_", "").lower()
+            if normalized in {
+                "credentialbody",
+                "oauthhome",
+                "oauthvolume",
+                "workspacepath",
+                "containerpath",
+            }:
+                raise ValueError(f"{path}.{key} is not durable checkpoint authority")
+            _reject_unsafe_restore_authority(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_unsafe_restore_authority(nested, f"{path}[{index}]")
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if any(marker in lowered for marker in ("bearer ", "token=", "password=")):
+            raise ValueError(f"{path} contains credential data")
+        if lowered.startswith(
+            ("file://", "/", "http://localhost", "https://localhost")
+        ):
+            raise ValueError(f"{path} contains raw host-local authority")
+
+
+def artifact_digest(payload: bytes) -> str:
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def validate_restore_material(
+    manifest: OmnigentCheckpointManifest,
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    provider_profile_id: str,
+    credential_generation: int,
+    artifacts: Mapping[str, bytes],
+    host_available: bool = False,
+    session_valid: bool = False,
+    first_message_consistent: bool = True,
+    event_cursor_consistent: bool = True,
+) -> OmnigentRestoreValidation:
+    """Digest-check all declared evidence and evaluate modes independently."""
+
+    reasons: list[str] = []
+    if (
+        manifest.workflow_id != workflow_id
+        or manifest.run_id != run_id
+        or manifest.logical_step_id != logical_step_id
+    ):
+        reasons.append("lineage_mismatch")
+    if manifest.host.get("providerProfileId") != provider_profile_id:
+        reasons.append("provider_profile_mismatch")
+    if manifest.credentials.get("credentialGeneration") != credential_generation:
+        reasons.append("credential_generation_stale")
+
+    checked: list[str] = []
+    for plane in (manifest.session, manifest.workspace):
+        for ref_key, digest_key in (
+            ("externalStateRef", "externalStateDigest"),
+            ("checkpointRef", "checkpointDigest"),
+            ("headRef", "headDigest"),
+            ("diffRef", "diffDigest"),
+            ("resourceManifestRef", "resourceManifestDigest"),
+            ("captureManifestRef", "captureManifestDigest"),
+        ):
+            ref = plane.get(ref_key)
+            expected_digest = plane.get(digest_key)
+            if not ref:
+                continue
+            if not str(ref).startswith("artifact://"):
+                reasons.append("non_artifact_authority")
+                continue
+            payload = artifacts.get(str(ref))
+            if payload is None:
+                reasons.append("artifact_unresolved")
+                continue
+            checked.append(str(ref))
+            if not expected_digest or artifact_digest(payload) != expected_digest:
+                reasons.append("artifact_digest_mismatch")
+
+    baseline = manifest.workspace.get("baselineCommit")
+    head = manifest.workspace.get("headCommit")
+    if head and baseline and not manifest.workspace.get("checkpointRef"):
+        reasons.append("repository_evidence_incomplete")
+    if manifest.workspace.get("patchCapability") not in {
+        None,
+        "git_patch_v1",
+        "worktree_archive_v1",
+        "git_commit_v1",
+    }:
+        reasons.append("patch_format_unsupported")
+    if not first_message_consistent:
+        reasons.append("first_message_mismatch")
+    if not event_cursor_consistent:
+        reasons.append("event_cursor_mismatch")
+
+    shared_reason = reasons[0] if reasons else None
+    workspace_available = shared_reason is None and bool(
+        manifest.workspace.get("baselineCommit")
+        and manifest.workspace.get("checkpointRef")
+        and manifest.workspace.get("workspaceLocator")
+    )
+    session_material_available = shared_reason is None and bool(
+        manifest.session.get("externalStateRef")
+        and manifest.session.get("bridgeSessionId")
+    )
+    live_available = session_material_available and host_available and session_valid
+    live_reason = (
+        None
+        if live_available
+        else shared_reason
+        or ("host_unavailable" if not host_available else "session_unavailable")
+    )
+    workspace_reason = (
+        None
+        if workspace_available
+        else shared_reason or "workspace_evidence_missing"
+    )
+    branch_available = workspace_available and session_material_available
+    branch_reason = (
+        None
+        if branch_available
+        else shared_reason
+        or (
+            "session_evidence_missing"
+            if workspace_available
+            else "workspace_evidence_missing"
+        )
+    )
+    status: Literal["valid", "degraded", "invalid"] = (
+        "valid"
+        if live_available and workspace_available
+        else "degraded"
+        if workspace_available or session_material_available
+        else "invalid"
+    )
+    return OmnigentRestoreValidation(
+        status=status,
+        liveReattach=RecoveryCapability(available=live_available, reason=live_reason),
+        workspaceColdRestore=RecoveryCapability(
+            available=workspace_available, reason=workspace_reason
+        ),
+        branchCreation=RecoveryCapability(
+            available=branch_available, reason=branch_reason
+        ),
+        checkedRefs=list(dict.fromkeys(checked)),
+    )
+
+
+def materialize_cold_restore_inputs(
+    manifest: OmnigentCheckpointManifest,
+    validation: OmnigentRestoreValidation,
+    *,
+    replacement_workspace_locator: Mapping[str, Any],
+    effective_launch_ref: str,
+) -> dict[str, Any]:
+    """Build path-free inputs for the canonical #3507 workspace boundary."""
+
+    if not validation.workspace_cold_restore.available:
+        raise ValueError(
+            validation.workspace_cold_restore.reason or "workspace_restore_unavailable"
+        )
+    return {
+        "schemaVersion": "v1",
+        "sourceCheckpoint": {
+            "workflowId": manifest.workflow_id,
+            "runId": manifest.run_id,
+            "logicalStepId": manifest.logical_step_id,
+            "stepExecutionId": manifest.step_execution_id,
+            "boundary": manifest.boundary,
+        },
+        "workspaceLocator": dict(replacement_workspace_locator),
+        "baselineCommit": manifest.workspace["baselineCommit"],
+        "headRef": manifest.workspace.get("headRef"),
+        "diffRef": manifest.workspace.get("diffRef"),
+        "checkpointRef": manifest.workspace["checkpointRef"],
+        "instructionRefs": list(manifest.workspace.get("instructionRefs") or []),
+        "contextRefs": list(manifest.workspace.get("contextRefs") or []),
+        "externalStateRef": manifest.session.get("externalStateRef"),
+        "providerProfileId": manifest.host["providerProfileId"],
+        "credentialGeneration": manifest.credentials["credentialGeneration"],
+        "sourceLaunchPolicyRef": manifest.host["launchPolicyRef"],
+        "effectiveLaunchRef": effective_launch_ref,
+    }
+
+
+def recovery_capability_projection(
+    manifest: OmnigentCheckpointManifest,
+    validation: OmnigentRestoreValidation,
+    *,
+    capacity_ready: bool,
+    readiness_reason: str | None = None,
+) -> dict[str, Any]:
+    """Return the bounded Workflow Detail/API checkpoint projection."""
+
+    capacity_block = None
+    if not capacity_ready:
+        capacity_block = (readiness_reason or "capacity_unavailable")[:160]
+    return {
+        "validationStatus": validation.status,
+        "liveSessionReattach": validation.live_reattach.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "workspaceColdRestore": validation.workspace_cold_restore.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "branchCreation": validation.branch_creation.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "requiredProfileId": manifest.host.get("providerProfileId"),
+        "requiredLaunchPolicyRef": manifest.host.get("launchPolicyRef"),
+        "capacityReady": capacity_ready,
+        "capacityBlockingReason": capacity_block,
+        "artifactEvidence": {
+            "externalStateRef": manifest.session.get("externalStateRef"),
+            "externalStateDigest": manifest.session.get("externalStateDigest"),
+            "workspaceCheckpointRef": manifest.workspace.get("checkpointRef"),
+            "workspaceCheckpointDigest": manifest.workspace.get("checkpointDigest"),
+            "headRef": manifest.workspace.get("headRef"),
+            "headDigest": manifest.workspace.get("headDigest"),
+            "diffRef": manifest.workspace.get("diffRef"),
+            "diffDigest": manifest.workspace.get("diffDigest"),
+        },
+    }
 
 
 class CandidateWorkspaceAuthority(BaseModel):
@@ -151,9 +482,17 @@ def validate_branch_identity(
 
 __all__ = [
     "CandidateWorkspaceAuthority",
+    "OMNIGENT_CHECKPOINT_CONTENT_TYPE",
+    "OmnigentCheckpointManifest",
     "OmnigentCheckpointIdentity",
     "OmnigentRecoveryMode",
+    "OmnigentRestoreValidation",
+    "RecoveryCapability",
+    "artifact_digest",
+    "materialize_cold_restore_inputs",
+    "recovery_capability_projection",
     "recovery_mode",
     "validate_branch_identity",
     "validate_cold_restore_target",
+    "validate_restore_material",
 ]

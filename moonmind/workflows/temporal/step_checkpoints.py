@@ -76,6 +76,7 @@ def build_step_checkpoint_payload(
     plan_digest: str | None = None,
     prepared_input_refs: list[str] | tuple[str, ...] = (),
     step_outputs: Mapping[str, Any] | None = None,
+    omnigent_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable checkpoint artifact payload."""
 
@@ -92,9 +93,14 @@ def build_step_checkpoint_payload(
         preparedInputRefs=list(prepared_input_refs),
         workspace=dict(workspace),
         stepOutputs=dict(step_outputs or {}),
+        omnigentManifest=(
+            dict(omnigent_manifest) if omnigent_manifest is not None else None
+        ),
         createdAt=created_at,
     )
     payload = checkpoint.model_dump(by_alias=True, mode="json")
+    if checkpoint.omnigent_manifest is None:
+        payload.pop("omnigentManifest", None)
     payload["workspace"] = checkpoint.workspace.model_dump(
         by_alias=True,
         mode="json",
@@ -334,6 +340,8 @@ def _checkpoint_artifact_refs(
         refs,
     )
     _collect_ref_values(checkpoint.step_outputs, refs)
+    if checkpoint.omnigent_manifest:
+        _collect_ref_values(checkpoint.omnigent_manifest, refs)
     return refs
 
 

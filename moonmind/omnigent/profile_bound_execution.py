@@ -18,7 +18,9 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
+    OmnigentCheckpointManifest,
     OmnigentRecoveryMode,
+    OmnigentRestoreValidation,
     recovery_mode,
     validate_cold_restore_target,
 )
@@ -868,6 +870,8 @@ class OmnigentProfileBoundExecutionCoordinator:
         first_message_consistent: bool,
         current_credential_generation: int,
         candidate_workspace: CandidateWorkspaceAuthority,
+        restore_manifest: OmnigentCheckpointManifest | None = None,
+        restore_validation: OmnigentRestoreValidation | None = None,
     ) -> AgentRunResult:
         """Live-reattach when safe; otherwise cold-restore on a new lease/session."""
 
@@ -917,6 +921,22 @@ class OmnigentProfileBoundExecutionCoordinator:
             idempotency_key=f"{checkpoint.idempotency_key}:cold:{request.idempotency_key}",
         )
         parameters = dict(request.parameters or {})
+        if restore_manifest is not None:
+            if (
+                restore_validation is None
+                or not restore_validation.workspace_cold_restore.available
+            ):
+                raise ValueError("validated workspace cold-restore material is required")
+            parameters["checkpointSourcePolicy"] = {
+                "launchPolicyRef": restore_manifest.host.get("launchPolicyRef"),
+                "effectiveLaunchRef": restore_manifest.host.get("effectiveLaunchRef"),
+                "baselineCommit": restore_manifest.workspace.get("baselineCommit"),
+                "workspaceLocator": restore_manifest.workspace.get("workspaceLocator"),
+                "instructionRefs": restore_manifest.workspace.get(
+                    "instructionRefs", []
+                ),
+                "contextRefs": restore_manifest.workspace.get("contextRefs", []),
+            }
         parameters["checkpointRestore"] = {
             "mode": "cold_restore",
             "externalStateRef": checkpoint.external_state_ref,

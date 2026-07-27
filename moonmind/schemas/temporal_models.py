@@ -1277,6 +1277,7 @@ class StepExecutionCheckpointModel(BaseModel):
     )
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    omnigent_manifest: dict[str, Any] | None = Field(None, alias="omnigentManifest")
     validation: StepCheckpointValidationResultModel | None = Field(
         None, alias="validation"
     )
@@ -1304,6 +1305,17 @@ class StepExecutionCheckpointModel(BaseModel):
         _reject_inline_checkpoint_evidence(output, "stepOutputs")
         return output
 
+    @field_validator("omnigent_manifest", mode="before")
+    @classmethod
+    def _validate_omnigent_manifest(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
+
+        return OmnigentCheckpointManifest.model_validate(value).model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        )
+
     @model_validator(mode="after")
     def _validate_checkpoint_identity(self) -> "StepExecutionCheckpointModel":
         expected = (
@@ -1315,6 +1327,19 @@ class StepExecutionCheckpointModel(BaseModel):
             raise ValueError("checkpointId must match Step Execution boundary identity")
         if self.plan_ref is None and self.plan_digest is None:
             raise ValueError("checkpoint requires planRef or planDigest")
+        if self.omnigent_manifest is not None:
+            expected_manifest_identity = {
+                "workflowId": self.source.workflow_id,
+                "runId": self.source.run_id,
+                "logicalStepId": self.source.logical_step_id,
+                "attemptOrdinal": self.source.execution_ordinal,
+                "boundary": self.boundary,
+            }
+            for key, expected_value in expected_manifest_identity.items():
+                if self.omnigent_manifest.get(key) != expected_value:
+                    raise ValueError(
+                        f"omnigentManifest {key} must match Step Execution identity"
+                    )
         return self
 
 
@@ -1515,6 +1540,7 @@ class StepCheckpointCreateInput(BaseModel):
     plan_digest: str | None = Field(None, alias="planDigest")
     prepared_input_refs: list[str] = Field(default_factory=list, alias="preparedInputRefs")
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    omnigent_manifest: dict[str, Any] | None = Field(None, alias="omnigentManifest")
     diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
@@ -1537,6 +1563,17 @@ class StepCheckpointCreateInput(BaseModel):
         output = validate_compact_temporal_mapping(value or {}, field_name="stepOutputs")
         _reject_inline_checkpoint_evidence(output, "stepOutputs")
         return output
+
+    @field_validator("omnigent_manifest", mode="before")
+    @classmethod
+    def _validate_omnigent_manifest(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
+
+        return OmnigentCheckpointManifest.model_validate(value).model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        )
 
     @model_validator(mode="after")
     def _validate_input(self) -> "StepCheckpointCreateInput":
