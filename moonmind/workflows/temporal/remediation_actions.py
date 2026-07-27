@@ -2111,6 +2111,11 @@ def _target_type(action_kind: str) -> str | None:
         return None
     return str(action_info.get("target_type") or "")
 
+def is_remediation_action_kind(action_kind: str) -> bool:
+    """Return whether an action kind belongs to the canonical typed catalog."""
+
+    return action_kind in _ACTION_CATALOG
+
 def _verification_hint(action_kind: str) -> str | None:
     action_info = _ACTION_CATALOG.get(action_kind)
     if action_info is None:
@@ -2150,4 +2155,5 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "is_remediation_action_kind",
 ]

@@ -56,11 +56,13 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationSecurityProfile,
 )
 from moonmind.workflows.temporal.remediation_tools import (
+    RemediationControlPlaneActionAdapter,
     RemediationEvidenceToolError,
     RemediationEvidenceToolService,
     RemediationLiveFollowEvent,
     RemediationLiveFollowResult,
     RemediationLogReadResult,
+    RemediationTargetHealthSnapshot,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -1920,11 +1922,33 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         context = await tools.get_context(remediation_workflow_id=remediation.workflow_id)
         assert context["target"]["workflowId"] == target.workflow_id
 
+        execution_page = await tools.read_evidence_class(
+            remediation_workflow_id=remediation.workflow_id,
+            evidence_class="execution",
+        )
+        assert execution_page.status == "available"
+        assert execution_page.items[0]["workflowId"] == target.workflow_id
+        missing_capture = await tools.read_evidence_class(
+            remediation_workflow_id=remediation.workflow_id,
+            evidence_class="capture_resources",
+        )
+        assert missing_capture.status == "degraded"
+        assert missing_capture.degraded_reason == "historical evidence was not captured"
+
         payload = await tools.read_target_artifact(
             remediation_workflow_id=remediation.workflow_id,
             artifact_ref={"artifact_id": target_artifact.artifact_id},
         )
         assert payload == b"target artifact"
+
+        bounded = await tools.read_target_artifact_bounded(
+            remediation_workflow_id=remediation.workflow_id,
+            artifact_ref={"artifact_id": target_artifact.artifact_id},
+            max_bytes=6,
+        )
+        assert bounded.content == b"target"
+        assert bounded.next_cursor == 6
+        assert bounded.truncated is True
 
         logs = await tools.read_target_logs(
             remediation_workflow_id=remediation.workflow_id,
@@ -3631,3 +3655,59 @@ async def test_remediation_mutation_guard_serialization_redacts_sensitive_values
         assert "secret-token-value" not in serialized
         assert "/work/agent_jobs" not in serialized
         assert "X-Amz-Signature" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_control_plane_action_adapter_routes_only_catalog_actions_with_evidence():
+    calls = []
+
+    async def stop_session(request, guard, target):
+        calls.append((request, guard, target))
+        return {
+            "status": "applied",
+            "beforeStateRef": "artifact://session-active",
+            "afterStateRef": "artifact://session-stopped",
+            "verificationRequired": True,
+            "verificationHint": "Verify the bridge session is terminal.",
+            "verification": {"status": "verified"},
+        }
+
+    adapter = RemediationControlPlaneActionAdapter(
+        {"session.terminate": stop_session}
+    )
+    health = RemediationTargetHealthSnapshot(
+        workflow_id="wf-target",
+        pinned_run_id="run-target",
+        current_run_id="run-target",
+        state="executing",
+        close_status=None,
+        title="Target",
+        summary=None,
+        target_run_changed=False,
+    )
+    result = await adapter.execute_action(
+        action_request={"actionKind": "session.terminate", "actionId": "action-1"},
+        guard_result={"executable": True},
+        target_health=health,
+    )
+
+    assert result["status"] == "applied"
+    assert result["beforeStateRef"] == "artifact://session-active"
+    assert result["afterStateRef"] == "artifact://session-stopped"
+    assert calls[0][2] is health
+
+    denied = await adapter.execute_action(
+        action_request={"actionKind": "execution.cancel", "actionId": "action-2"},
+        guard_result={"executable": True},
+        target_health=health,
+    )
+    assert denied["status"] == "denied"
+    assert denied["sideEffects"] == []
+
+
+def test_control_plane_action_adapter_rejects_non_catalog_handler():
+    async def unsafe_handler(request, guard, target):
+        return {"status": "applied"}
+
+    with pytest.raises(ValueError, match="Unsupported remediation"):
+        RemediationControlPlaneActionAdapter({"shell.execute": unsafe_handler})

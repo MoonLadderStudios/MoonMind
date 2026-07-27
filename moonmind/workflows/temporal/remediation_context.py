@@ -97,6 +97,18 @@ REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS = 20
+MAX_REMEDIATION_CONTEXT_INDEX_ITEMS = 100
+OMNIGENT_EVIDENCE_CLASSES = (
+    "bridge_sessions",
+    "bridge_events",
+    "capture_resources",
+    "host_profile_leases",
+    "checkpoint_recovery",
+    "checkpoint_branches",
+    "incident_cleanup",
+    "policy_approvals",
+    "prior_remediation",
+)
 TARGET_EVIDENCE_CLASSES = (
     ("stdout", "stdoutRef"),
     ("stderr", "stderrRef"),
@@ -176,7 +188,7 @@ class RemediationContextBuilder:
                 f"Target execution not found: {link.target_workflow_id}"
             )
 
-        payload = self._build_payload(
+        payload = await self._build_payload(
             link=link,
             remediation_record=remediation_record,
             target_record=target_record,
@@ -230,7 +242,7 @@ class RemediationContextBuilder:
             payload=payload,
         )
 
-    def _build_payload(
+    async def _build_payload(
         self,
         *,
         link: db_models.TemporalExecutionRemediationLink,
@@ -272,6 +284,17 @@ class RemediationContextBuilder:
             in {"missing", "partial", "denied", "unavailable", "unsupported"}
         ]
 
+        omnigent = await self._omnigent_evidence_payload(
+            target_record=target_record,
+            target_evidence=target_evidence,
+        )
+        omnigent_availability = self._omnigent_availability(omnigent)
+        unavailable_classes.extend(
+            item["class"]
+            for item in omnigent_availability
+            if item["status"] != "available"
+        )
+
         return {
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
             "remediationWorkflowId": remediation_record.workflow_id,
@@ -289,6 +312,8 @@ class RemediationContextBuilder:
                 "unavailableEvidenceClasses": unavailable_classes,
                 **self._diagnosis_hints_payload(target_evidence),
             },
+            "omnigent": omnigent,
+            "omnigentEvidenceAvailability": omnigent_availability,
             "liveFollow": live_follow,
             "policies": {
                 "authorityMode": link.authority_mode,
@@ -314,8 +339,246 @@ class RemediationContextBuilder:
                 "maxAgentRunIds": MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS,
                 "rawLogBodiesIncluded": False,
                 "artifactContentsIncluded": False,
+                "maxIndexItemsPerClass": MAX_REMEDIATION_CONTEXT_INDEX_ITEMS,
+                "allLargeBodiesBehindRefs": True,
             },
         }
+
+    async def _omnigent_evidence_payload(
+        self,
+        *,
+        target_record: db_models.TemporalExecutionCanonicalRecord,
+        target_evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project the bounded, secret-free Omnigent control-plane evidence index."""
+
+        bridge_sessions = list(
+            (
+                await self._session.scalars(
+                    select(db_models.OmnigentBridgeSession)
+                    .where(
+                        db_models.OmnigentBridgeSession.moonmind_workflow_id
+                        == target_record.workflow_id
+                    )
+                    .order_by(db_models.OmnigentBridgeSession.created_at.desc())
+                    .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                )
+            ).all()
+        )
+        bridge_ids = [item.bridge_session_id for item in bridge_sessions]
+        events: list[db_models.OmnigentBridgeSessionEvent] = []
+        if bridge_ids:
+            events = list(
+                (
+                    await self._session.scalars(
+                        select(db_models.OmnigentBridgeSessionEvent)
+                        .where(
+                            db_models.OmnigentBridgeSessionEvent.bridge_session_id.in_(
+                                bridge_ids
+                            )
+                        )
+                        .order_by(
+                            db_models.OmnigentBridgeSessionEvent.bridge_session_id,
+                            db_models.OmnigentBridgeSessionEvent.sequence.desc(),
+                        )
+                        .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                    )
+                ).all()
+            )
+        provider_leases = list(
+            (
+                await self._session.scalars(
+                    select(db_models.ProviderProfileSlotLease)
+                    .where(
+                        db_models.ProviderProfileSlotLease.workflow_id
+                        == target_record.workflow_id
+                    )
+                    .order_by(db_models.ProviderProfileSlotLease.granted_at.desc())
+                    .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                )
+            ).all()
+        )
+        host_leases = list(
+            (
+                await self._session.scalars(
+                    select(db_models.OmnigentOAuthHostLeaseRecord)
+                    .where(
+                        db_models.OmnigentOAuthHostLeaseRecord.holder_workflow_id
+                        == target_record.workflow_id
+                    )
+                    .order_by(db_models.OmnigentOAuthHostLeaseRecord.acquired_at.desc())
+                    .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                )
+            ).all()
+        )
+        branches = list(
+            (
+                await self._session.scalars(
+                    select(db_models.WorkflowCheckpointBranch)
+                    .where(
+                        db_models.WorkflowCheckpointBranch.workflow_id
+                        == target_record.workflow_id
+                    )
+                    .order_by(db_models.WorkflowCheckpointBranch.branch_id)
+                    .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                )
+            ).all()
+        )
+
+        event_pages: dict[str, list[dict[str, Any]]] = {}
+        for event in events:
+            event_pages.setdefault(event.bridge_session_id, []).append(
+                {
+                    "sequence": event.sequence,
+                    "timestamp": _timestamp_string(event.timestamp),
+                    "direction": event.direction,
+                    "eventType": event.event_type,
+                    "normalizedStatus": event.normalized_status,
+                    "summary": _redacted_optional_text(event.text_preview),
+                    "artifactRef": _artifact_ref_payload(event.artifact_ref, kind="bridge_event"),
+                }
+            )
+
+        durable = _safe_evidence_index(target_evidence)
+        return {
+            "bridgeSessions": [
+                {
+                    "bridgeSessionId": row.bridge_session_id,
+                    "agentRunId": row.moonmind_agent_run_id,
+                    "stepExecutionId": row.step_execution_id,
+                    "status": row.status,
+                    "committedCursor": max(
+                        (item["sequence"] for item in event_pages.get(row.bridge_session_id, [])),
+                        default=None,
+                    ),
+                    "eventPage": event_pages.get(row.bridge_session_id, []),
+                    "liveFollowCapable": row.status not in {"completed", "failed", "cancelled"},
+                    "omnigentSessionId": row.omnigent_session_id,
+                    "omnigentHostId": row.omnigent_host_id,
+                    "omnigentRunnerId": row.omnigent_runner_id,
+                    "omnigentAgentId": row.omnigent_agent_id,
+                    "providerProfileRef": row.provider_profile_id,
+                    "providerLeaseRef": row.provider_lease_id,
+                    "hostBindingRef": row.host_binding_ref,
+                    "hostLeaseRef": row.host_lease_ref,
+                    "credentialGeneration": row.credential_generation,
+                    "endpointRef": row.omnigent_endpoint_ref,
+                    "effectiveLaunchSnapshot": _safe_policy_mapping(
+                        row.effective_launch_snapshot_json
+                    ),
+                    "artifactRefs": {
+                        key: ref
+                        for key, value in {
+                            "rawEventJournal": row.raw_events_ref,
+                            "normalizedEventJournal": row.normalized_events_ref,
+                            "initialSnapshot": row.initial_snapshot_ref,
+                            "finalSnapshot": row.final_snapshot_ref,
+                            "captureManifest": row.capture_manifest_ref,
+                            "diagnostics": row.diagnostics_ref,
+                            "externalState": row.external_state_ref,
+                            **(row.terminal_refs or {}),
+                        }.items()
+                        if (ref := _artifact_ref_payload(value, kind=key)) is not None
+                    },
+                }
+                for row in bridge_sessions
+            ],
+            "providerLeases": [
+                {
+                    "leaseRef": row.lease_id,
+                    "providerProfileRef": row.profile_id,
+                    "runtimeId": row.runtime_id,
+                    "stepExecutionId": row.step_execution_id,
+                    "purpose": row.purpose,
+                    "expiresAt": _timestamp_string(row.expires_at) if row.expires_at else None,
+                }
+                for row in provider_leases
+            ],
+            "hostLeases": [
+                {
+                    "hostLeaseRef": row.lease_id,
+                    "providerLeaseRef": row.provider_lease_id,
+                    "providerProfileRef": row.provider_profile_id,
+                    "hostBindingRef": row.binding_ref,
+                    "credentialGeneration": row.credential_generation,
+                    "status": row.status,
+                    "omnigentHostId": row.omnigent_host_id,
+                    "omnigentSessionId": row.omnigent_session_id,
+                    "bridgeSessionId": row.bridge_session_id,
+                    "cleanupCompletedAt": (
+                        _timestamp_string(row.cleanup_completed_at)
+                        if row.cleanup_completed_at else None
+                    ),
+                    "errorCode": row.error_code,
+                    "errorSummary": _redacted_optional_text(row.error_summary),
+                }
+                for row in host_leases
+            ],
+            "checkpointBranches": [
+                {
+                    "branchId": row.branch_id,
+                    "state": row.state,
+                    "branchKind": row.branch_kind,
+                    "sourceRunId": row.source_run_id,
+                    "logicalStepId": row.logical_step_id,
+                    "sourceCheckpointRef": row.source_checkpoint_ref,
+                    "sourceCheckpointDigest": row.source_checkpoint_digest,
+                    "sourceStateRef": row.source_state_ref,
+                    "parentBranchId": row.parent_branch_id,
+                    "parentTurnId": row.parent_turn_id,
+                    "workspacePolicy": row.workspace_policy,
+                    "runtimeContextPolicy": row.runtime_context_policy,
+                    "git": {
+                        "repository": row.git_repository,
+                        "baseBranch": row.git_base_branch,
+                        "baseCommit": row.git_base_commit,
+                        "workBranch": row.git_work_branch,
+                    },
+                }
+                for row in branches
+            ],
+            "durableEvidence": durable,
+            "freshness": {
+                "targetUpdatedAt": _timestamp_string(target_record.updated_at),
+                "bridgeSessionCount": len(bridge_sessions),
+                "bridgeEventCount": len(events),
+                "truncated": any(
+                    len(items) >= MAX_REMEDIATION_CONTEXT_INDEX_ITEMS
+                    for items in (bridge_sessions, events, provider_leases, host_leases, branches)
+                ),
+            },
+        }
+
+    @staticmethod
+    def _omnigent_availability(payload: Mapping[str, Any]) -> list[dict[str, str]]:
+        durable = payload.get("durableEvidence")
+        durable_mapping = durable if isinstance(durable, Mapping) else {}
+        sources = {
+            "bridge_sessions": payload.get("bridgeSessions"),
+            "bridge_events": [
+                event
+                for session in _mapping_list(payload.get("bridgeSessions"))
+                for event in _mapping_list(session.get("eventPage"))
+            ],
+            "capture_resources": durable_mapping.get("captureResources"),
+            "host_profile_leases": [
+                *list(payload.get("providerLeases") or []),
+                *list(payload.get("hostLeases") or []),
+            ],
+            "checkpoint_recovery": durable_mapping.get("checkpointRecovery"),
+            "checkpoint_branches": payload.get("checkpointBranches"),
+            "incident_cleanup": durable_mapping.get("incidentCleanup"),
+            "policy_approvals": durable_mapping.get("policyApprovals"),
+            "prior_remediation": durable_mapping.get("priorRemediation"),
+        }
+        return [
+            {
+                "class": class_name,
+                "status": "available" if sources.get(class_name) else "missing",
+                **({"reason": "historical evidence was not captured"} if not sources.get(class_name) else {}),
+            }
+            for class_name in OMNIGENT_EVIDENCE_CLASSES
+        ]
 
     @staticmethod
     def _remediation_payload(
@@ -1587,6 +1850,34 @@ def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
         if safe_item is not None:
             sanitized[key] = safe_item
     return sanitized
+
+def _safe_evidence_index(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy bounded declarative evidence classes while filtering unsafe values."""
+
+    aliases = {
+        "captureResources": ("captureResources", "capture", "resourceManifests"),
+        "checkpointRecovery": ("checkpointRecovery", "checkpoint", "recovery"),
+        "incidentCleanup": ("incidentCleanup", "incident", "cleanup", "janitor"),
+        "policyApprovals": ("policyApprovals", "policy", "approvals"),
+        "priorRemediation": (
+            "priorRemediation",
+            "priorRemediationAttempts",
+            "cumulativeWorkspace",
+            "verificationResults",
+            "preventionOutputs",
+        ),
+    }
+    result: dict[str, Any] = {}
+    for output_key, source_keys in aliases.items():
+        values = [
+            _safe_policy_value(value[key])
+            for key in source_keys
+            if key in value and value[key] not in (None, {}, [])
+        ]
+        values = [item for item in values if item is not None]
+        if values:
+            result[output_key] = values[0] if len(values) == 1 else values
+    return result
 
 def _safe_policy_value(value: Any) -> Any:
     if isinstance(value, Mapping):
