@@ -92,6 +92,17 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
         "policy_blocked",
     }
 )
+REMEDIATION_VERIFICATION_RESOLUTIONS = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+        "evidence_unavailable",
+        "approval_required",
+        "verification_failed",
+    }
+)
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
 )
@@ -1066,6 +1077,64 @@ def build_remediation_target_annotation(
         payload["metadata"] = safe_metadata
     return payload
 
+
+def build_remediation_verification(
+    *,
+    target_workflow_id: str,
+    target_run_id: str,
+    action_kind: str,
+    action_id: str,
+    action_result_ref: str,
+    resolution: str,
+    verification_hint: str,
+    before: Mapping[str, Any],
+    immediate_after: Mapping[str, Any],
+    stabilized: Mapping[str, Any] | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build fresh, action-bound verification evidence.
+
+    The original target outcome is intentionally absent: verification is a
+    supplemental observation and must never rewrite the target execution.
+    """
+
+    normalized_resolution = _validated_choice(
+        resolution, REMEDIATION_VERIFICATION_RESOLUTIONS, "resolution"
+    )
+    before_payload = _verification_observation(before, fresh=False)
+    immediate_payload = _verification_observation(immediate_after, fresh=True)
+    stabilized_payload = (
+        _verification_observation(stabilized, fresh=True)
+        if isinstance(stabilized, Mapping)
+        else None
+    )
+    return {
+        "schemaVersion": "v1",
+        "kind": "remediation.verification",
+        "target": {
+            "workflowId": _required_lifecycle_string(
+                target_workflow_id, "target_workflow_id"
+            ),
+            "runId": _required_lifecycle_string(target_run_id, "target_run_id"),
+        },
+        "actionKind": _required_redacted_text(action_kind, "action_kind"),
+        "actionId": _required_lifecycle_string(action_id, "action_id"),
+        "actionResultRef": _required_artifact_ref_string(
+            action_result_ref, "action_result_ref"
+        ),
+        "resolution": normalized_resolution,
+        "verificationHint": _required_redacted_text(
+            verification_hint, "verification_hint"
+        ),
+        "evidence": {
+            "before": before_payload,
+            "immediateAfter": immediate_payload,
+            "stabilized": stabilized_payload,
+        },
+        "details": _safe_policy_mapping(details) or {},
+        "originalTargetOutcomeMutated": False,
+    }
+
 def build_remediation_repair_decision(
     *,
     target_workflow_id: str,
@@ -1407,6 +1476,29 @@ def _repair_candidate_payload(
         payload["actionKind"] = safe_action
     if safe_reason := _redacted_optional_text(reason):
         payload["reason"] = safe_reason
+    return payload
+
+
+def _verification_observation(
+    value: Mapping[str, Any], *, fresh: bool
+) -> dict[str, Any]:
+    workflow_id = _required_lifecycle_string(
+        value.get("workflowId"), "target_workflow_id"
+    )
+    run_id = _required_lifecycle_string(value.get("runId"), "target_run_id")
+    payload: dict[str, Any] = {
+        "workflowId": workflow_id,
+        "runId": run_id,
+        "state": _required_redacted_text(value.get("state"), "state"),
+        "closeStatus": _redacted_optional_text(value.get("closeStatus")),
+        "fresh": fresh,
+    }
+    if observed_at := _redacted_optional_text(value.get("observedAt")):
+        payload["observedAt"] = observed_at
+    if evidence_ref := _artifact_ref_string(
+        value.get("evidenceRef"), "evidence_ref"
+    ):
+        payload["evidenceRef"] = evidence_ref
     return payload
 
 def _validated_choice(value: Any, allowed: frozenset[str], field_name: str) -> str:

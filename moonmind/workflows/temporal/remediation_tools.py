@@ -17,6 +17,7 @@ from typing import Any, Literal, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
@@ -25,8 +26,8 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_decision_log,
     build_remediation_final_summary,
     build_remediation_target_annotation,
+    build_remediation_verification,
 )
-from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
@@ -39,6 +40,23 @@ _ALLOWED_ACTION_RESULT_STATUSES = frozenset(
         "approval_required",
         "timed_out",
         "failed",
+    }
+)
+_VERIFICATION_RESOLUTION_ALIASES = {
+    "verified": "verified_resolved",
+    "resolved": "verified_resolved",
+    "unchanged": "verified_no_change",
+    "not_verified": "verification_failed",
+}
+_VERIFICATION_RESOLUTIONS = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+        "evidence_unavailable",
+        "approval_required",
+        "verification_failed",
     }
 )
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])/(?:[^\s\"']+/)*[^\s\"']+")
@@ -480,14 +498,34 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        immediate_after = await self.prepare_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=action_kind,
+            principal=principal,
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
+        verification = raw_result.get("verification")
+        verification_details = (
+            dict(verification) if isinstance(verification, Mapping) else {}
+        )
+        verification_resolution = _normalize_verification_resolution(
+            verification_details.get("resolution")
+            or verification_details.get("status")
+        )
+        stabilized = verification_details.get("stabilized")
+        verification_payload = build_remediation_verification(
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            action_kind=action_kind,
+            action_id=action_request["actionId"],
+            action_result_ref=result_artifact.artifact_id,
+            resolution=verification_resolution,
+            verification_hint=redacted_verification_hint
+            or "No verification required for this action.",
+            before=_target_health_observation(preparation.target),
+            immediate_after=_target_health_observation(immediate_after.target),
+            stabilized=stabilized if isinstance(stabilized, Mapping) else None,
+            details=verification_details,
+        )
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -877,6 +915,28 @@ def _normalize_action_result_status(value: Any) -> str:
             f"Unsupported action result status: {status}."
         )
     return status
+
+
+def _normalize_verification_resolution(value: Any) -> str:
+    resolution = _string_or_none(value) or "verification_failed"
+    resolution = _VERIFICATION_RESOLUTION_ALIASES.get(resolution, resolution)
+    if resolution not in _VERIFICATION_RESOLUTIONS:
+        raise RemediationEvidenceToolError(
+            f"Unsupported remediation verification resolution: {resolution}."
+        )
+    return resolution
+
+
+def _target_health_observation(
+    target: RemediationTargetHealthSnapshot,
+) -> dict[str, Any]:
+    return {
+        "workflowId": target.workflow_id,
+        "runId": target.current_run_id,
+        "state": target.state,
+        "closeStatus": target.close_status,
+    }
+
 
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"applied", "failed", "timed_out"}:

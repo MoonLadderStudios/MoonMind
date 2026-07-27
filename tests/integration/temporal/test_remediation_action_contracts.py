@@ -123,6 +123,25 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         assert result_payload["verificationHint"]
         assert verification_payload["actionKind"] == action_kind
         assert verification_payload["actionId"] == action_id
+        assert verification_payload["schemaVersion"] == "v1"
+        assert verification_payload["kind"] == "remediation.verification"
+        assert verification_payload["resolution"] == "verified_resolved"
+        assert verification_payload["target"] == {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+        }
+        assert (
+            verification_payload["actionResultRef"]
+            == result["artifactRefs"]["actionResult"]
+        )
+        assert verification_payload["evidence"]["before"]["state"] == "initializing"
+        assert (
+            verification_payload["evidence"]["immediateAfter"]["state"]
+            == "initializing"
+        )
+        assert verification_payload["evidence"]["immediateAfter"]["fresh"] is True
+        assert verification_payload["evidence"]["stabilized"] is None
+        assert verification_payload["verificationHint"]
         assert audit_payload["eventType"] == "remediation.action"
         assert audit_payload["remediationWorkflowId"] == remediation.workflow_id
         assert audit_payload["targetWorkflowId"] == target.workflow_id
