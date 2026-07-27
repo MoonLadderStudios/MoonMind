@@ -294,6 +294,65 @@ def test_session_capability_deduplicates_and_accounts_query_budget() -> None:
     assert diagnostics["followUpRequestCount"] == 1
     assert diagnostics["requests"][0]["delivery"] == "same_turn"
 
+
+def test_session_capability_rejects_concurrent_duplicate_and_records_failure() -> None:
+    registry = SessionRetrievalCapabilityRegistry()
+    _token, capability = registry.issue(_capability_request())
+    payload = RetrievalQuery(
+        query="bounded query",
+        filters={
+            "tenant_id": "tenant-1",
+            "repository": "moonmind",
+            "run_id": "run-1",
+            "workspace_id": "workspace-1",
+        },
+        correlation=_correlation(),
+    )
+
+    assert registry.reserve(capability, payload) is None
+    with pytest.raises(HTTPException) as duplicate:
+        registry.reserve(capability, payload)
+    assert duplicate.value.status_code == 409
+
+    registry.terminate(
+        capability,
+        payload,
+        state="failed",
+        failure_class="dependency_failure",
+        started_at=datetime.now(tz=UTC),
+    )
+    diagnostics = registry.diagnostics("workflow-1")
+    assert diagnostics["requests"][0]["state"] == "failed"
+    assert diagnostics["requests"][0]["failureClass"] == "dependency_failure"
+
+
+def test_session_budget_binds_turn_filters_and_query_bytes() -> None:
+    from api_service.api.routers.retrieval_gateway import _enforce_session_budget
+
+    registry = SessionRetrievalCapabilityRegistry()
+    _token, capability = registry.issue(
+        _capability_request(filters={"repository": "moonmind"}, max_query_bytes=4)
+    )
+    base = {
+        "query": "short",
+        "filters": {
+            "tenant_id": "tenant-1",
+            "repository": "moonmind",
+            "run_id": "run-1",
+            "workspace_id": "workspace-1",
+        },
+        "correlation": _correlation(),
+    }
+
+    with pytest.raises(HTTPException) as query_too_large:
+        _enforce_session_budget(RetrievalQuery(**base), capability)
+    assert query_too_large.value.status_code == 413
+
+    wrong_turn = dict(base, query="ok", correlation=_correlation(turn_id="turn-2"))
+    with pytest.raises(HTTPException) as turn_denied:
+        _enforce_session_budget(RetrievalQuery(**wrong_turn), capability)
+    assert turn_denied.value.status_code == 403
+
 def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

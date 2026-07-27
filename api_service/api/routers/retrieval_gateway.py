@@ -9,7 +9,7 @@ import secrets
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
@@ -72,6 +72,9 @@ class RetrievalBudgetSnapshot(BaseModel):
     max_tokens: int = Field(default=4096, ge=1)
     max_latency_ms: int = Field(default=10_000, ge=1)
     max_queries: int = Field(default=8, ge=1, le=100)
+    max_query_bytes: int = Field(default=8192, ge=1, le=65536)
+    max_context_bytes: int = Field(default=65536, ge=1, le=1048576)
+    max_sources: int = Field(default=16, ge=1, le=100)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     fallback_allowed: bool = False
     policy_version: str = Field(..., min_length=1, max_length=128)
@@ -173,12 +176,73 @@ class SessionRetrievalCapabilityRegistry:
                         status_code=409,
                         detail="Tool-call identity was reused with a different retrieval request.",
                     )
-                return previous.get("response")  # type: ignore[return-value]
+                if previous["state"] == "succeeded":
+                    return previous.get("response")  # type: ignore[return-value]
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Retrieval tool call is already in progress."
+                        if previous["state"] == "in_progress"
+                        else f"Retrieval tool call already reached terminal state {previous['state']}."
+                    ),
+                )
             if capability.query_count >= capability.budget.max_queries:
                 raise HTTPException(status_code=429, detail="Retrieval query budget exhausted.")
             capability.query_count += 1
-            self._dedup[key] = {"request_digest": request_digest}
+            self._dedup[key] = {
+                "request_digest": request_digest,
+                "state": "in_progress",
+            }
+            self._append_evidence(
+                capability,
+                payload,
+                state="in_progress",
+                started_at=datetime.now(tz=UTC),
+            )
             return None
+
+    def _append_evidence(
+        self,
+        capability: SessionRetrievalCapability,
+        payload: "RetrievalQuery",
+        *,
+        state: str,
+        started_at: datetime,
+        context_pack_ref: str | None = None,
+        result_count: int = 0,
+        context_bytes: int = 0,
+        failure_class: str | None = None,
+        delivery: str | None = None,
+    ) -> None:
+        evidence = {
+            "kind": "follow_up",
+            "state": state,
+            "workflowId": payload.correlation.workflow_id,
+            "stepExecutionId": payload.correlation.step_execution_id,
+            "bridgeSessionId": payload.correlation.bridge_session_id,
+            "omnigentSessionId": payload.correlation.omnigent_session_id,
+            "hostId": payload.correlation.host_id,
+            "turnId": payload.correlation.turn_id,
+            "toolCallId": payload.correlation.tool_call_id,
+            "queryDigest": self._digest(payload.query),
+            "queryPreview": payload.query[:160],
+            "effectiveCollections": payload.collections or capability.budget.collections,
+            "effectiveFilters": dict(payload.filters),
+            "budgetSnapshotRef": capability.budget_snapshot_ref,
+            "contextPackRef": context_pack_ref,
+            "resultCount": result_count,
+            "contextBytes": context_bytes,
+            "latencyMs": int((datetime.now(tz=UTC) - started_at).total_seconds() * 1000),
+            "failureClass": failure_class,
+            "delivery": delivery,
+        }
+        ledger = self._evidence.setdefault(capability.correlation.workflow_id, [])
+        for index, previous in enumerate(ledger):
+            if previous.get("toolCallId") == payload.correlation.tool_call_id:
+                ledger[index] = evidence
+                break
+        else:
+            ledger.append(evidence)
 
     def complete(
         self,
@@ -190,29 +254,41 @@ class SessionRetrievalCapabilityRegistry:
     ) -> None:
         key = (capability.capability_id, payload.correlation.tool_call_id)
         pack_digest = self._digest(str(response))
-        evidence = {
-            "kind": "follow_up",
-            "state": "delivered",
-            "workflowId": payload.correlation.workflow_id,
-            "stepExecutionId": payload.correlation.step_execution_id,
-            "bridgeSessionId": payload.correlation.bridge_session_id,
-            "omnigentSessionId": payload.correlation.omnigent_session_id,
-            "hostId": payload.correlation.host_id,
-            "turnId": payload.correlation.turn_id,
-            "toolCallId": payload.correlation.tool_call_id,
-            "queryDigest": self._digest(payload.query),
-            "budgetSnapshotRef": capability.budget_snapshot_ref,
-            "contextPackRef": f"retrieval-context-pack:{pack_digest}",
-            "resultCount": len(response.get("items", [])),
-            "latencyMs": int(
-                (datetime.now(tz=UTC) - started_at).total_seconds() * 1000
-            ),
-            "delivery": "same_turn",
-        }
+        context_bytes = len(str(response).encode("utf-8"))
         with self._lock:
             self._dedup[key]["response"] = response
-            self._evidence.setdefault(capability.correlation.workflow_id, []).append(
-                evidence
+            self._dedup[key]["state"] = "succeeded"
+            self._append_evidence(
+                capability,
+                payload,
+                state="delivered",
+                started_at=started_at,
+                context_pack_ref=f"retrieval-context-pack:{pack_digest}",
+                result_count=len(response.get("items", [])),
+                context_bytes=context_bytes,
+                delivery="same_turn",
+            )
+
+    def terminate(
+        self,
+        capability: SessionRetrievalCapability,
+        payload: "RetrievalQuery",
+        *,
+        state: Literal["denied", "failed", "timed_out", "cancelled", "delivery_unknown"],
+        failure_class: str,
+        started_at: datetime,
+    ) -> None:
+        key = (capability.capability_id, payload.correlation.tool_call_id)
+        with self._lock:
+            entry = self._dedup.get(key)
+            if entry is not None:
+                entry["state"] = state
+            self._append_evidence(
+                capability,
+                payload,
+                state=state,
+                started_at=started_at,
+                failure_class=failure_class,
             )
 
     def revoke(self, capability_id: str, reason: str) -> None:
@@ -297,16 +373,6 @@ class RetrievalQuery(BaseModel):
                 f"{joined}. Allowed keys: {SESSION_SCOPE_FILTER_KEYS_MESSAGE}."
             )
 
-        has_scope_filter = any(
-            str(self.filters.get(key, "")).strip()
-            for key in SESSION_SCOPE_FILTER_KEYS
-        )
-        if not has_scope_filter:
-            raise ValueError(
-                "Session-issued retrieval requires at least one supported "
-                "scope filter to bound corpus scope. Allowed keys: "
-                f"{SESSION_SCOPE_FILTER_KEYS_MESSAGE}."
-            )
         return self
 
 
@@ -401,7 +467,7 @@ async def authorize_retrieval_request(
         )
 
     capability_token = _bearer_token(authorization_header)
-    if capability_token.startswith("rcap_"):
+    if capability_token and capability_token.startswith("rcap_"):
         capability = _session_capabilities.authorize(
             capability_token,
             host_id=host_id_header,
@@ -497,9 +563,12 @@ def _enforce_session_budget(
         "bridge_session_id",
         "omnigent_session_id",
         "host_id",
+        "turn_id",
     ):
         if getattr(payload.correlation, field) != getattr(expected, field):
             raise HTTPException(status_code=403, detail=f"Correlation {field} is out of scope.")
+    if len(payload.query.encode("utf-8")) > budget.max_query_bytes:
+        raise HTTPException(status_code=413, detail="Retrieval query exceeds policy byte ceiling.")
     required_scope = {
         "tenant_id": budget.tenant_id,
         "repository": budget.repository,
@@ -533,6 +602,10 @@ def _enforce_session_budget(
         raise HTTPException(status_code=403, detail="Requested token budget exceeds policy ceiling.")
     if payload.budgets.get("latency_ms", budget.max_latency_ms) > budget.max_latency_ms:
         raise HTTPException(status_code=403, detail="Requested latency budget exceeds policy ceiling.")
+    for key, value in payload.filters.items():
+        expected_filter = budget.filters.get(key)
+        if expected_filter is not None and value != expected_filter:
+            raise HTTPException(status_code=403, detail=f"Retrieval filter '{key}' is out of scope.")
 
 
 @router.post("/capabilities", response_model=RetrievalCapabilityResponse)
@@ -631,6 +704,7 @@ async def retrieve_context_pack(
     auth: RetrievalAuthContext = Depends(authorize_retrieval_request),
 ) -> Dict[str, object]:
     started_at = datetime.now(tz=UTC)
+    reserved = False
     try:
         _enforce_repo_scope(payload, auth)
         if auth.session_capability is not None:
@@ -638,6 +712,7 @@ async def retrieve_context_pack(
             duplicate = _session_capabilities.reserve(auth.session_capability, payload)
             if duplicate is not None:
                 return duplicate
+            reserved = True
         _enforce_retrieval_available(service)
         pack = await run_in_threadpool(
             service.retrieve,
@@ -672,11 +747,30 @@ async def retrieve_context_pack(
         pack.transport = "gateway"
         response = pack.to_dict()
         if auth.session_capability is not None:
+            budget = auth.session_capability.budget
+            if len(response.get("items", [])) > budget.max_sources:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Retrieval result exceeds source-count policy ceiling.",
+                )
+            if len(str(response).encode("utf-8")) > budget.max_context_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Retrieval result exceeds context byte policy ceiling.",
+                )
             _session_capabilities.complete(
                 auth.session_capability, payload, response, started_at=started_at
             )
         return response
-    except HTTPException:
+    except HTTPException as exc:
+        if reserved and auth.session_capability is not None and payload.correlation is not None:
+            _session_capabilities.terminate(
+                auth.session_capability,
+                payload,
+                state="denied" if exc.status_code in {401, 403, 413, 422, 429} else "failed",
+                failure_class=f"http_{exc.status_code}",
+                started_at=started_at,
+            )
         raise
     except RetrievalBudgetExceededError as exc:
         status_code = (
@@ -684,9 +778,25 @@ async def retrieve_context_pack(
             if exc.budget_type == "tokens"
             else status.HTTP_408_REQUEST_TIMEOUT
         )
+        if reserved and auth.session_capability is not None and payload.correlation is not None:
+            _session_capabilities.terminate(
+                auth.session_capability,
+                payload,
+                state="timed_out" if status_code == 408 else "denied",
+                failure_class=f"budget_{exc.budget_type}",
+                started_at=started_at,
+            )
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - runtime error path
         logger.exception("Retrieval gateway request failed.")
+        if reserved and auth.session_capability is not None and payload.correlation is not None:
+            _session_capabilities.terminate(
+                auth.session_capability,
+                payload,
+                state="failed",
+                failure_class="dependency_failure",
+                started_at=started_at,
+            )
         raise HTTPException(
             status_code=500,
             detail="Retrieval failed due to an internal error.",
