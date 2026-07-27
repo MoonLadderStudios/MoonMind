@@ -135,13 +135,25 @@ class OmnigentPolicyService:
         if state == PolicyState.DISABLED:
             row.disabled_by, row.disabled_at = actor, now
         previous_default = policy.default_version
+        if previous_default == version and state != PolicyState.ACTIVE:
+            policy.default_version = None
         if make_default:
             if state != PolicyState.ACTIVE:
                 raise PolicyConflict("only an active version can be the default")
             policy.default_version = version
-        if state == PolicyState.ACTIVE:
-            if previous_default is not None and previous_default != version:
-                row.supersedes_ref = f"{policy_id}@{previous_default}"
+        if state == PolicyState.ACTIVE and previous_default is not None and previous_default != version:
+            previous = await self.get_version(policy_id, previous_default)
+            previous.state = PolicyState.SUPERSEDED.value
+            previous_history = list(previous.state_history_json or [])
+            previous_history.append({
+                "state": PolicyState.SUPERSEDED.value,
+                "actor": actor,
+                "at": now.isoformat(),
+                "madeDefault": False,
+                "supersededBy": f"{policy_id}@{version}",
+            })
+            previous.state_history_json = previous_history
+            row.supersedes_ref = f"{policy_id}@{previous_default}"
         history = list(row.state_history_json or [])
         history.append({"state": state.value, "actor": actor, "at": now.isoformat(), "madeDefault": make_default})
         row.state_history_json = history
@@ -201,7 +213,7 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
 
 
 async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
-    """Idempotently persist the three pre-existing built-in authorities."""
+    """Persist and select built-in authorities, failing on ambient drift."""
 
     service = OmnigentPolicyService(session)
     seeded: list[str] = []
@@ -210,9 +222,23 @@ async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
         ("codex-static", "Codex static host", "static_compose", "omnigent-codex@1"),
         ("codex-on-demand", "Codex on-demand host", "on_demand_docker", "omnigent-codex@1"),
     ):
-        if await session.get(OmnigentPolicy, policy_id):
-            continue
         document = bootstrap_document(host_mode=host_mode, execution_profile_ref=profile_ref)
+        existing = await session.get(OmnigentPolicy, policy_id)
+        if existing:
+            version = await service.get_version(policy_id, 1)
+            if version.digest != document_digest(document):
+                raise PolicyConflict(
+                    f"persisted bootstrap policy {policy_id}@1 conflicts with deployment authority"
+                )
+            if version.state != PolicyState.ACTIVE.value or existing.default_version != 1:
+                await service.transition(
+                    policy_id=policy_id,
+                    version=1,
+                    state=PolicyState.ACTIVE,
+                    actor="bootstrap-migration",
+                    make_default=True,
+                )
+            continue
         row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
                                    document=document, actor="bootstrap")
         row.env_fallback_used = any(
@@ -222,6 +248,12 @@ async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
                 ("OMNIGENT_HOST_IMAGE_REF", "hostImageRef"),
             )
         )
-        await session.commit()
+        await service.transition(
+            policy_id=policy_id,
+            version=row.version,
+            state=PolicyState.ACTIVE,
+            actor="bootstrap",
+            make_default=True,
+        )
         seeded.append(policy_id)
     return seeded
