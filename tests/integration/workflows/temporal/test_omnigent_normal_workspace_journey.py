@@ -197,8 +197,13 @@ def _request_from_normal_workflow(monkeypatch, authored, *, resolved_skillset_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("on_demand", [False, True], ids=["static", "on-demand"])
+@pytest.mark.parametrize(
+    "controlled_failure",
+    [False, True],
+    ids=["successful-publication", "terminal-checkpoint"],
+)
 async def test_normal_workflow_runs_complete_owned_omnigent_journey(
-    tmp_path, monkeypatch, on_demand
+    tmp_path, monkeypatch, on_demand, controlled_failure
 ) -> None:
     workspace_root = tmp_path / "jobs"
     seed = workspace_root / "sources" / "seed"
@@ -317,8 +322,11 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         ) == "payload:restore-1"
         (workspace / "result.txt").write_text("saved work\n", encoding="utf-8")
         return AgentRunResult(
-            summary="done",
+            summary=(
+                "controlled execution failure" if controlled_failure else "done"
+            ),
             outputRefs=["artifact:declared-output"],
+            failureClass="execution_error" if controlled_failure else None,
         )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -357,7 +365,7 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         run_id=step_id,
         agent_id="codex",
         runtime_id="omnigent",
-        status="completed",
+        status="failed" if controlled_failure else "completed",
         workspace_path=str(workspace),
         stdout_artifact_ref=None,
         stderr_artifact_ref=None,
@@ -373,6 +381,9 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         "targetBranch": request.parameters["publishBaseBranch"],
         "headBranch": request.workspace_spec["targetBranch"],
         "commitMessage": request.parameters["commitMessage"],
+        "terminalCheckpointPublicationEnabled": True,
+        "workspaceAuthoritative": True,
+        "terminalCheckpointCapabilitySupported": True,
     }
     with (
         patch(
@@ -389,6 +400,10 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         adapter.return_value.fetch_result = AsyncMock(return_value=execution_result)
         first = await publication.agent_runtime_fetch_result(fetch_request)
         first_head = _git("rev-parse", "HEAD", cwd=workspace)
+        # A durable workflow retry reads the previously enriched terminal
+        # result, allowing the publication boundary to adopt verified remote
+        # evidence instead of creating or pushing another commit.
+        adapter.return_value.fetch_result.return_value = first
         second = await publication.agent_runtime_fetch_result(fetch_request)
         second_head = _git("rev-parse", "HEAD", cwd=workspace)
 
@@ -396,16 +411,55 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         "on_demand_docker" if on_demand else "static_compose"
     ] * 2
     assert first.output_refs == second.output_refs == ["artifact:declared-output"]
-    assert first.metadata["push_status"] == second.metadata["push_status"] == "pushed"
-    assert first.metadata["push_branch"] == second.metadata["push_branch"] == "issue-3507"
-    assert first.metadata["push_base_branch"] == "main"
-    assert first.metadata["remote_verified"] is True
-    assert first.metadata["acceptedRepositoryEvidence"]["branch"] == "issue-3507"
-    assert first.metadata["acceptedRepositoryEvidence"]["headSha"] == first_head
+    if controlled_failure:
+        first_publication = first.metadata["terminalPublication"]
+        second_publication = second.metadata["terminalPublication"]
+        assert first.failure_class == second.failure_class == "execution_error"
+        assert first.summary == second.summary == "controlled execution failure"
+        assert first_publication["status"] == "pushed"
+        assert first_publication["branchPushed"] is True
+        assert first_publication["commitCreated"] is True
+        assert first_publication["remoteVerified"] is True
+        assert second_publication["status"] == "already_published"
+        assert second_publication["reasonCode"] == "equivalent_remote_head_verified"
+        assert second_publication["attempted"] is False
+        assert second_publication["remoteVerified"] is True
+        assert first_publication["branchName"] == second_publication["branchName"]
+        assert first_publication["headSha"] == second_publication["headSha"]
+        assert (
+            _git(
+                "rev-parse",
+                f"refs/heads/{first_publication['branchName']}",
+                cwd=source,
+            )
+            == first_publication["headSha"]
+            == first_head
+        )
+        assert _git(
+            "rev-list",
+            "--count",
+            f"main..{first_publication['branchName']}",
+            cwd=source,
+        ) == "1"
+    else:
+        assert (
+            first.metadata["push_status"]
+            == second.metadata["push_status"]
+            == "pushed"
+        )
+        assert (
+            first.metadata["push_branch"]
+            == second.metadata["push_branch"]
+            == "issue-3507"
+        )
+        assert first.metadata["push_base_branch"] == "main"
+        assert first.metadata["remote_verified"] is True
+        assert first.metadata["acceptedRepositoryEvidence"]["branch"] == "issue-3507"
+        assert first.metadata["acceptedRepositoryEvidence"]["headSha"] == first_head
+        assert _git("log", "-1", "--format=%s", cwd=workspace) == "Complete #3507"
+        assert _git("rev-parse", "refs/heads/issue-3507", cwd=source) == first_head
+        assert _git("rev-list", "--count", "main..issue-3507", cwd=source) == "1"
     assert first_head == second_head
-    assert _git("log", "-1", "--format=%s", cwd=workspace) == "Complete #3507"
-    assert _git("rev-parse", "refs/heads/issue-3507", cwd=source) == first_head
-    assert _git("rev-list", "--count", "main..issue-3507", cwd=source) == "1"
     assert (workspace / "result.txt").read_text(encoding="utf-8") == "saved work\n"
     assert request.workspace_spec["repository"] == authored["repository"]
     assert request.workspace_spec["startingBranch"] == authored["startingBranch"]
@@ -441,6 +495,11 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         assert attempt_events[-2] == "profile_lease_release"
     terminal_events = [item for item in store.lifecycle if item[0] == "terminal"]
     assert len(terminal_events) == 2
+    expected_terminal_status = "failed" if controlled_failure else "completed"
+    assert [status for _, status, _ in terminal_events] == [
+        expected_terminal_status,
+        expected_terminal_status,
+    ]
     assert all(
         metadata == {
             "workflowId": "workflow-3507",
@@ -450,5 +509,5 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
             "janitorRequired": False,
         }
         for _, status, metadata in terminal_events
-        if status == "completed"
+        if status == expected_terminal_status
     )
