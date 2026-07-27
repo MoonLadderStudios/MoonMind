@@ -281,6 +281,8 @@ def test_session_capability_deduplicates_and_accounts_query_budget() -> None:
         payload,
         response,
         started_at=datetime.now(tz=UTC),
+        context_pack_ref="artifact://context-pack",
+        evidence_ref="artifact://evidence",
     )
     assert registry.reserve(capability, payload) == response
 
@@ -293,6 +295,8 @@ def test_session_capability_deduplicates_and_accounts_query_budget() -> None:
     diagnostics = registry.diagnostics("workflow-1")
     assert diagnostics["followUpRequestCount"] == 1
     assert diagnostics["requests"][0]["delivery"] == "same_turn"
+    assert diagnostics["requests"][0]["contextPackRef"] == "artifact://context-pack"
+    assert diagnostics["requests"][0]["evidenceRef"] == "artifact://evidence"
 
 
 def test_session_capability_rejects_concurrent_duplicate_and_records_failure() -> None:

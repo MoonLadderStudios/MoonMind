@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -16,9 +17,16 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.db.base import async_session_maker
 from api_service.db.models import User
+from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +233,9 @@ class SessionRetrievalCapabilityRegistry:
             "turnId": payload.correlation.turn_id,
             "toolCallId": payload.correlation.tool_call_id,
             "queryDigest": self._digest(payload.query),
-            "queryPreview": payload.query[:160],
+            # Queries may contain source snippets or credentials. Persist only
+            # the digest unless an explicit redaction policy is available.
+            "queryPreview": None,
             "effectiveCollections": payload.collections or capability.budget.collections,
             "effectiveFilters": dict(payload.filters),
             "budgetSnapshotRef": capability.budget_snapshot_ref,
@@ -251,9 +261,10 @@ class SessionRetrievalCapabilityRegistry:
         response: dict[str, object],
         *,
         started_at: datetime,
+        context_pack_ref: str,
+        evidence_ref: str,
     ) -> None:
         key = (capability.capability_id, payload.correlation.tool_call_id)
-        pack_digest = self._digest(str(response))
         context_bytes = len(str(response).encode("utf-8"))
         with self._lock:
             self._dedup[key]["response"] = response
@@ -263,11 +274,15 @@ class SessionRetrievalCapabilityRegistry:
                 payload,
                 state="delivered",
                 started_at=started_at,
-                context_pack_ref=f"retrieval-context-pack:{pack_digest}",
+                context_pack_ref=context_pack_ref,
                 result_count=len(response.get("items", [])),
                 context_bytes=context_bytes,
                 delivery="same_turn",
             )
+            for evidence in self._evidence[capability.correlation.workflow_id]:
+                if evidence.get("toolCallId") == payload.correlation.tool_call_id:
+                    evidence["evidenceRef"] = evidence_ref
+                    break
 
     def terminate(
         self,
@@ -332,6 +347,123 @@ class SessionRetrievalCapabilityRegistry:
 
 
 _session_capabilities = SessionRetrievalCapabilityRegistry()
+
+
+async def _append_bridge_retrieval_event(
+    payload: "RetrievalQuery",
+    *,
+    state: str,
+    artifact_ref: str | None = None,
+    result_count: int = 0,
+    context_bytes: int = 0,
+) -> None:
+    """Append one bounded, secret-free retrieval event to the bridge journal."""
+
+    correlation = payload.correlation
+    if correlation is None:
+        return
+    event = {
+        "eventType": f"retrieval.tool.{state}",
+        "direction": "moonmind",
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "artifactRef": artifact_ref,
+        "textPreview": f"Follow-up retrieval {state}",
+        "metadata": {
+            "kind": "follow_up",
+            "turnId": correlation.turn_id,
+            "toolCallId": correlation.tool_call_id,
+            "resultCount": result_count,
+            "contextBytes": context_bytes,
+        },
+    }
+    await OmnigentBridgeSessionStore(async_session_maker).append_events(
+        correlation.bridge_session_id,
+        [event],
+    )
+
+
+async def _persist_retrieval_result(
+    capability: SessionRetrievalCapability,
+    payload: "RetrievalQuery",
+    response: dict[str, object],
+) -> tuple[str, str]:
+    """Persist the ContextPack and bounded evidence before reporting delivery."""
+
+    correlation = payload.correlation
+    if correlation is None:  # guarded by _enforce_session_budget
+        raise RuntimeError("session correlation is required")
+    principal = "service:session-retrieval-gateway"
+    execution = ExecutionRef(
+        namespace="default",
+        workflow_id=correlation.workflow_id,
+        run_id=capability.budget.run_id,
+        link_type="output.primary",
+        label="follow-up retrieval ContextPack",
+    )
+    context_bytes = json.dumps(
+        response, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    evidence = {
+        "schemaVersion": "moonmind.retrieval.evidence.v1",
+        "kind": "follow_up",
+        "state": "delivered",
+        "correlation": correlation.model_dump(mode="json"),
+        "queryDigest": hashlib.sha256(payload.query.encode("utf-8")).hexdigest(),
+        "queryPreview": None,
+        "effectiveScope": {
+            "tenantId": capability.budget.tenant_id,
+            "repository": capability.budget.repository,
+            "runId": capability.budget.run_id,
+            "workspaceId": capability.budget.workspace_id,
+        },
+        "collections": payload.collections or capability.budget.collections,
+        "filters": payload.filters,
+        "budgetSnapshotRef": capability.budget_snapshot_ref,
+        "resultCount": len(response.get("items", [])),
+        "contextBytes": len(context_bytes),
+        "delivery": "same_turn",
+    }
+    async with async_session_maker() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        context_ref = await service.write_integration_result_artifact(
+            principal=principal,
+            execution=execution,
+            integration_name="session_retrieval",
+            correlation_id=correlation.tool_call_id,
+            payload=context_bytes,
+            metadata_json={
+                "artifact_kind": "retrieval_context_pack",
+                "bridge_session_id": correlation.bridge_session_id,
+                "turn_id": correlation.turn_id,
+                "tool_call_id": correlation.tool_call_id,
+            },
+        )
+        context_pack_ref = f"artifact://{context_ref.artifact_id}"
+        evidence["contextPackRef"] = context_pack_ref
+        evidence_ref = await service.write_integration_event_artifact(
+            principal=principal,
+            execution=ExecutionRef(
+                namespace="default",
+                workflow_id=correlation.workflow_id,
+                run_id=capability.budget.run_id,
+                link_type="debug.trace",
+                label="follow-up retrieval evidence",
+            ),
+            integration_name="session_retrieval",
+            correlation_id=correlation.tool_call_id,
+            event_type="retrieval.tool.result",
+            payload=json.dumps(evidence, sort_keys=True).encode("utf-8"),
+            metadata_json={"artifact_kind": "retrieval_evidence"},
+        )
+    evidence_artifact_ref = f"artifact://{evidence_ref.artifact_id}"
+    await _append_bridge_retrieval_event(
+        payload,
+        state="result",
+        artifact_ref=evidence_artifact_ref,
+        result_count=len(response.get("items", [])),
+        context_bytes=len(context_bytes),
+    )
+    return context_pack_ref, evidence_artifact_ref
 
 class RetrievalQuery(BaseModel):
     query: str = Field(..., min_length=1)
@@ -713,6 +845,10 @@ async def retrieve_context_pack(
             if duplicate is not None:
                 return duplicate
             reserved = True
+            try:
+                await _append_bridge_retrieval_event(payload, state="start")
+            except Exception:
+                logger.exception("Failed to append retrieval start bridge evidence.")
         _enforce_retrieval_available(service)
         pack = await run_in_threadpool(
             service.retrieve,
@@ -758,8 +894,39 @@ async def retrieve_context_pack(
                     status_code=413,
                     detail="Retrieval result exceeds context byte policy ceiling.",
                 )
+            try:
+                context_pack_ref, evidence_ref = await _persist_retrieval_result(
+                    auth.session_capability,
+                    payload,
+                    response,
+                )
+            except Exception:
+                logger.exception("Failed to persist retrieval delivery evidence.")
+                _session_capabilities.terminate(
+                    auth.session_capability,
+                    payload,
+                    state="delivery_unknown",
+                    failure_class="evidence_persistence_failure",
+                    started_at=started_at,
+                )
+                response["moonmindEvidence"] = {
+                    "contextPackRef": None,
+                    "evidenceRef": None,
+                    "delivery": "delivery_unknown",
+                }
+                return response
+            response["moonmindEvidence"] = {
+                "contextPackRef": context_pack_ref,
+                "evidenceRef": evidence_ref,
+                "delivery": "same_turn",
+            }
             _session_capabilities.complete(
-                auth.session_capability, payload, response, started_at=started_at
+                auth.session_capability,
+                payload,
+                response,
+                started_at=started_at,
+                context_pack_ref=context_pack_ref,
+                evidence_ref=evidence_ref,
             )
         return response
     except HTTPException as exc:
