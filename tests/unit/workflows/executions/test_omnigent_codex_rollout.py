@@ -2,7 +2,10 @@ from datetime import datetime, timezone
 import json
 from types import SimpleNamespace
 
-from moonmind.workflows.executions.omnigent_codex_rollout import decide_codex_path
+from moonmind.workflows.executions.omnigent_codex_rollout import (
+    decide_codex_path,
+    project_codex_release_status,
+)
 
 
 NOW = datetime(2026, 7, 27, tzinfo=timezone.utc)
@@ -49,3 +52,16 @@ def test_threshold_failures_block_promotion() -> None:
         failed = dict(raw); failed[field] = value
         decision = decide_codex_path(feature_flags=_flags(omnigent_codex_conformance_evidence_json=json.dumps(failed)), selection="automatic", submission="create", now=NOW)
         assert not decision.admitted and decision.selected_path == "none"
+
+
+def test_release_status_uses_the_same_fresh_evidence_gate() -> None:
+    ready = project_codex_release_status(feature_flags=_flags(), now=NOW)
+    assert ready.promotion_ready
+    assert ready.evidence_ref == "https://github.example/evidence/1"
+
+    stale = project_codex_release_status(
+        feature_flags=_flags(omnigent_codex_conformance_max_age_hours=1),
+        now=NOW.replace(day=28),
+    )
+    assert not stale.promotion_ready
+    assert stale.reason_code == "conformance_gate_failed"

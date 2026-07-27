@@ -51,6 +51,19 @@ class CodexCutoverDecision(BaseModel):
     matrix_version: str | None = Field(alias="matrixVersion")
 
 
+class CodexCutoverReleaseStatus(BaseModel):
+    """Operator projection of the admission gate, without mutable raw evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    generation: str
+    phase: RolloutPhase
+    promotion_ready: bool = Field(alias="promotionReady")
+    reason_code: str = Field(alias="reasonCode")
+    evidence_ref: str | None = Field(alias="evidenceRef")
+    matrix_version: str | None = Field(alias="matrixVersion")
+
+
 def _parse_evidence(raw: str) -> CodexCutoverEvidence | None:
     try:
         return CodexCutoverEvidence.model_validate(json.loads(raw)) if raw.strip() else None
@@ -103,3 +116,24 @@ def decide_codex_path(
     if omnigent_default:
         return CodexCutoverDecision(admitted=evidence_valid, selectedPath="omnigent" if evidence_valid else "none", reasonCode="rollout_default" if evidence_valid else "conformance_gate_failed", **kwargs)
     return CodexCutoverDecision(admitted=True, selectedPath="direct", reasonCode="migration_window_default", **kwargs)
+
+
+def project_codex_release_status(
+    *, feature_flags: object, now: datetime | None = None
+) -> CodexCutoverReleaseStatus:
+    """Project the exact gate used by explicit Omnigent admission."""
+
+    decision = decide_codex_path(
+        feature_flags=feature_flags,
+        selection="omnigent",
+        submission="create",
+        now=now,
+    )
+    return CodexCutoverReleaseStatus(
+        generation=decision.generation,
+        phase=decision.phase,
+        promotionReady=decision.admitted,
+        reasonCode=decision.reason_code,
+        evidenceRef=decision.evidence_ref,
+        matrixVersion=decision.matrix_version,
+    )

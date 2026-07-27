@@ -73,6 +73,11 @@ from moonmind.statuses.compat import (
 )
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
+from moonmind.workflows.executions.omnigent_codex_rollout import (
+    CodexCutoverReleaseStatus,
+    decide_codex_path,
+    project_codex_release_status,
+)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -10051,6 +10056,40 @@ async def _create_execution_from_workflow_request(
     elif isinstance(raw_schedule, ScheduleParameters):
         schedule = raw_schedule
 
+    authored_runtime = (
+        dict(task_payload.get("runtime"))
+        if isinstance(task_payload.get("runtime"), Mapping)
+        else {}
+    )
+    explicit_target_runtime = (
+        payload.get("targetRuntime") or authored_runtime.get("mode")
+    )
+    cutover_input = {
+        "targetRuntime": (
+            explicit_target_runtime or settings.workflow.default_runtime
+        ),
+        "runtime": authored_runtime,
+        "codexPathSelection": (
+            payload.get("codexPathSelection")
+            or authored_runtime.get("codexPathSelection")
+            or ("automatic" if explicit_target_runtime is None else None)
+        ),
+    }
+    cutover_admission = _apply_codex_cutover_admission(
+        cutover_input,
+        submission="schedule" if schedule is not None else "create",
+    )
+    if "codexCutoverDecision" in cutover_admission:
+        payload["targetRuntime"] = cutover_admission["targetRuntime"]
+        payload["codexPathSelection"] = cutover_admission["codexPathSelection"]
+        payload["codexCutoverDecision"] = cutover_admission[
+            "codexCutoverDecision"
+        ]
+        task_payload["runtime"] = cutover_admission["runtime"]
+        task_payload["codexCutoverDecision"] = cutover_admission[
+            "codexCutoverDecision"
+        ]
+
     route = await _resolve_schedule_routing(
         schedule,
         request_payload=payload,
@@ -10435,6 +10474,13 @@ async def _create_execution_from_workflow_request(
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
+    if "codexCutoverDecision" in cutover_admission:
+        initial_parameters["codexPathSelection"] = cutover_admission[
+            "codexPathSelection"
+        ]
+        initial_parameters["codexCutoverDecision"] = cutover_admission[
+            "codexCutoverDecision"
+        ]
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
     if "modelTier" in runtime_payload:
@@ -11777,6 +11823,81 @@ async def record_remediation_approval_decision(
         ) from exc
     return RemediationApprovalDecisionResponse.model_validate(result)
 
+def _apply_codex_cutover_admission(
+    parameters: Mapping[str, Any],
+    *,
+    submission: Literal["create", "edit", "rerun", "schedule", "preset"],
+) -> dict[str, Any]:
+    """Resolve Codex launch ownership once, before a Temporal start is authored."""
+
+    authored = dict(parameters)
+    runtime = authored.get("runtime")
+    runtime_payload = dict(runtime) if isinstance(runtime, Mapping) else {}
+    target_runtime = str(
+        authored.get("targetRuntime") or runtime_payload.get("mode") or ""
+    ).strip()
+    raw_selection = authored.get("codexPathSelection")
+    if raw_selection is None:
+        # Existing authored runtime values remain explicit. New default-aware
+        # clients opt into the staged strategy with codexPathSelection=automatic.
+        selection = (
+            "omnigent" if target_runtime == "omnigent"
+            else "direct" if target_runtime in {"codex", "codex_cli"}
+            else None
+        )
+    else:
+        selection = str(raw_selection).strip().lower()
+
+    if selection not in {"automatic", "omnigent", "direct"}:
+        return authored
+
+    decision = decide_codex_path(
+        feature_flags=settings.feature_flags,
+        selection=selection,
+        submission=submission,
+    )
+    get_metrics_emitter().increment(
+        "omnigent_codex_cutover.admission_total",
+        tags={
+            "admitted": str(decision.admitted).lower(),
+            "phase": decision.phase,
+            "reason": decision.reason_code,
+            "selected_path": decision.selected_path,
+            "submission": submission,
+        },
+    )
+    if not decision.admitted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": decision.reason_code,
+                "message": "Codex runtime admission was blocked by the configured cutover gate.",
+                "cutoverDecision": decision.model_dump(by_alias=True, mode="json"),
+            },
+        )
+
+    resolved_runtime = (
+        "omnigent" if decision.selected_path == "omnigent" else "codex_cli"
+    )
+    authored["targetRuntime"] = resolved_runtime
+    runtime_payload["mode"] = resolved_runtime
+    authored["runtime"] = runtime_payload
+    authored["codexPathSelection"] = selection
+    authored["codexCutoverDecision"] = decision.model_dump(
+        by_alias=True, mode="json"
+    )
+    return authored
+
+
+@router.get("/codex-cutover-status", response_model=CodexCutoverReleaseStatus)
+async def get_codex_cutover_status(
+    _user: User = Depends(get_current_user()),
+) -> CodexCutoverReleaseStatus:
+    """Expose the admission gate used for new work to authenticated operators."""
+
+    return project_codex_release_status(feature_flags=settings.feature_flags)
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
@@ -11811,6 +11932,18 @@ async def create_execution(
             )
 
         request = CreateExecutionRequest.model_validate(payload)
+        submission_kind: Literal["create", "schedule"] = (
+            "schedule" if request.schedule is not None else "create"
+        )
+        admitted_parameters = _apply_codex_cutover_admission(
+            request.initial_parameters,
+            submission=submission_kind,
+        )
+        request = request.model_copy(
+            update={"initial_parameters": admitted_parameters}
+        )
+        payload = dict(payload)
+        payload["initialParameters"] = admitted_parameters
 
         # --- Schedule routing ---
         route = await _resolve_schedule_routing(
@@ -14873,6 +15006,11 @@ async def rerun_execution(
     # Use canonical parameters with rerun-specific sanitization to avoid carrying
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    initial_params.pop("codexCutoverDecision", None)
+    initial_params = _apply_codex_cutover_admission(
+        initial_params,
+        submission="rerun",
+    )
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
