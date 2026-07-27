@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_CHECKPOINT_EXECUTION_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
@@ -1729,6 +1730,29 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "workspacePolicy": "fresh_branch_from_source",
             "runtimeContextPolicy": "fresh_agent_run",
             "gitWorkBranch": "mm/branch-omnigent",
+            "omnigentCheckpointExecution": {
+                "kind": "branch",
+                "checkpoint": {
+                    "providerProfileId": "profile-1",
+                    "credentialGeneration": 1,
+                    "hostBindingRef": "artifact://host-binding",
+                    "endpointRef": "artifact://endpoint",
+                    "bridgeSessionId": "bridge-1",
+                    "externalStateRef": "artifact://external-state",
+                    "idempotencyKey": "source-key",
+                },
+                "candidateWorkspace": {
+                    "loopId": "loop-1",
+                    "attemptOrdinal": 1,
+                    "headRef": "artifact://head",
+                    "headDigest": "sha256:" + "c" * 64,
+                    "checkpointRef": "artifact://checkpoint/source",
+                    "checkpointDigest": "sha256:" + "a" * 64,
+                },
+                "currentCredentialGeneration": 1,
+                "immutableInputMatches": False,
+                "changedFields": ["instructions"],
+            },
         }
 
         with patch(
@@ -1741,6 +1765,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 in {
                     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
                     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+                    RUN_OMNIGENT_CHECKPOINT_EXECUTION_PATCH,
                 }
             ),
         ):
@@ -1748,6 +1773,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 node_inputs={
                     "runtime": {
                         "mode": "omnigent",
+                        "executionProfileRef": "profile-1",
                         "omnigent": {
                             "endpointRef": "default",
                             "prompt": {"text": "stale inline prompt"},
@@ -1779,6 +1805,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"workspaceFiles": True},
         )
         self.assertEqual(request.workspace_spec["branch"], "mm/branch-omnigent")
+        self.assertEqual(
+            request.parameters["checkpointExecution"]["kind"],
+            "branch",
+        )
         self.assertEqual(
             request.workspace_spec["startingBranch"],
             "mm/branch-omnigent",
