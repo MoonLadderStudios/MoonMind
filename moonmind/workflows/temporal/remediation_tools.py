@@ -26,17 +26,24 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_final_summary,
     build_remediation_target_annotation,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    REMEDIATION_BRANCH_SENSITIVE_FIELDS,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
 _ALLOWED_ACTION_RESULT_STATUSES = frozenset(
     {
+        "accepted",
         "applied",
         "no_op",
+        "delivery_unknown",
         "rejected",
+        "denied",
         "precondition_failed",
         "approval_required",
+        "verification_required",
         "timed_out",
         "failed",
     }
@@ -100,6 +107,17 @@ class RemediationActionRequestPreparation:
     action_kind: str
     target: RemediationTargetHealthSnapshot
     context_target: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationEvidencePage:
+    """One bounded, redacted page from a typed context evidence class."""
+
+    evidence_class: str
+    status: str
+    items: tuple[dict[str, Any], ...]
+    next_cursor: int | None
+    degraded_reason: str | None = None
 
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target agent run."""
@@ -173,6 +191,71 @@ class _UnavailableActionExecutor:
             "remediation.execute_action is not configured in this runtime."
         )
 
+
+class MoonMindControlPlaneRemediationActionExecutor:
+    """Allowlisted adapter dispatcher for MoonMind-owned control-plane actions."""
+
+    def __init__(
+        self,
+        adapters: Mapping[
+            str,
+            Callable[
+                [Mapping[str, Any], Mapping[str, Any], RemediationTargetHealthSnapshot],
+                Awaitable[Mapping[str, Any]],
+            ],
+        ],
+    ) -> None:
+        self._adapters = dict(adapters)
+
+    async def execute_action(
+        self,
+        *,
+        action_request: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        target_health: RemediationTargetHealthSnapshot,
+    ) -> Mapping[str, Any]:
+        action_kind = _required_string(action_request.get("actionKind"), "actionKind")
+        parameters = action_request.get("parameters")
+        parameters_mapping = parameters if isinstance(parameters, Mapping) else {}
+        input_changes = parameters_mapping.get("inputChanges")
+        changed_fields = (
+            set(input_changes)
+            if isinstance(input_changes, Mapping)
+            else set()
+        )
+        branch_sensitive_changes = sorted(
+            changed_fields & REMEDIATION_BRANCH_SENSITIVE_FIELDS
+        )
+        if (
+            branch_sensitive_changes
+            and action_kind != "checkpoint_branch.create_from_remediation_context"
+        ):
+            return {
+                "status": "denied",
+                "reason": "checkpoint_branch_required_for_corrected_input",
+                "changedFields": branch_sensitive_changes,
+                "beforeEvidenceRefs": [],
+                "afterEvidenceRefs": [],
+            }
+        adapter = self._adapters.get(action_kind)
+        if adapter is None:
+            return {
+                "status": "denied",
+                "reason": "control_plane_adapter_unavailable",
+                "beforeEvidenceRefs": [],
+                "afterEvidenceRefs": [],
+            }
+        result = await adapter(action_request, guard_result, target_health)
+        if not isinstance(result, Mapping):
+            raise RemediationEvidenceToolError(
+                f"Control-plane adapter for {action_kind} returned an invalid result."
+            )
+        normalized = dict(result)
+        _normalize_action_result_status(normalized.get("status"))
+        normalized.setdefault("beforeEvidenceRefs", [])
+        normalized.setdefault("afterEvidenceRefs", [])
+        return normalized
+
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
 
@@ -234,6 +317,101 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         return payload
+
+    async def read_evidence_page(
+        self,
+        *,
+        remediation_workflow_id: str,
+        evidence_class: str,
+        cursor: int = 0,
+        limit: int = 20,
+        include_content: bool = False,
+        max_content_bytes: int = 65_536,
+        principal: str = "service:remediation-tools",
+    ) -> RemediationEvidencePage:
+        """Read a typed Omnigent evidence class without treating refs as grants.
+
+        The context index is the allowlist, while each referenced artifact is
+        independently authorized by ``TemporalArtifactService``. Missing
+        historical classes return an explicit degraded page.
+        """
+
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        normalized_class = _required_string(evidence_class, "evidenceClass")
+        evidence = context.get("evidence")
+        evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
+        index = evidence_mapping.get("omnigentIndex")
+        entries = _safe_sequence(index)
+        selected = next(
+            (
+                item
+                for item in entries
+                if isinstance(item, Mapping)
+                and item.get("class") == normalized_class
+            ),
+            None,
+        )
+        if not isinstance(selected, Mapping):
+            raise RemediationEvidenceToolError(
+                f"Unknown remediation evidence class: {normalized_class}."
+            )
+        refs = [
+            item
+            for item in _safe_sequence(selected.get("refs"))
+            if isinstance(item, Mapping)
+        ]
+        start = max(0, int(cursor))
+        page_limit = max(1, min(int(limit), 100))
+        page_refs = refs[start : start + page_limit]
+        allowed = _collect_context_artifact_ids(context)
+        items: list[dict[str, Any]] = []
+        content_bound = max(0, min(int(max_content_bytes), 1_048_576))
+        for ref in page_refs:
+            artifact_id = _artifact_id_from_ref(ref)
+            item: dict[str, Any] = {"ref": _redact_payload_value(dict(ref))}
+            if not artifact_id or artifact_id not in allowed:
+                item.update(
+                    {
+                        "status": "unavailable",
+                        "degradedReason": "reference is not authorized by remediation context",
+                    }
+                )
+                items.append(item)
+                continue
+            artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+            )
+            item.update(
+                {
+                    "status": "available",
+                    "artifactId": artifact_id,
+                    "metadata": _redact_payload_value(
+                        artifact.metadata_json
+                        if isinstance(artifact.metadata_json, Mapping)
+                        else {}
+                    ),
+                    "sizeBytes": len(payload),
+                }
+            )
+            if include_content:
+                bounded = payload[:content_bound]
+                item["content"] = _redact_text(
+                    bounded.decode("utf-8", errors="replace")
+                )
+                item["contentTruncated"] = len(payload) > len(bounded)
+            items.append(item)
+        next_cursor = start + len(page_refs)
+        if next_cursor >= len(refs):
+            next_cursor = None
+        return RemediationEvidencePage(
+            evidence_class=normalized_class,
+            status=str(selected.get("status") or ("available" if refs else "missing")),
+            items=tuple(items),
+            next_cursor=next_cursor,
+            degraded_reason=_string_or_none(selected.get("degradedReason")),
+        )
 
     async def read_target_logs(
         self,
@@ -879,13 +1057,13 @@ def _normalize_action_result_status(value: Any) -> str:
     return status
 
 def _annotation_decision_for_status(status: str) -> str:
-    if status in {"applied", "failed", "timed_out"}:
+    if status in {"accepted", "applied", "failed", "timed_out"}:
         return "attempted"
     if status == "no_op":
         return "skipped"
     if status == "approval_required":
         return "approval_required"
-    if status in {"rejected", "precondition_failed"}:
+    if status in {"rejected", "denied", "precondition_failed"}:
         return "denied"
     return "escalated"
 
@@ -958,8 +1136,10 @@ def _enum_value(value: Any) -> str | None:
     return _string_or_none(enum_value)
 
 __all__ = [
+    "MoonMindControlPlaneRemediationActionExecutor",
     "RemediationActionExecutor",
     "RemediationActionRequestPreparation",
+    "RemediationEvidencePage",
     "RemediationEvidenceToolError",
     "RemediationEvidenceToolService",
     "RemediationLiveFollowEvent",

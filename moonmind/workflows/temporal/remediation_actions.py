@@ -74,6 +74,18 @@ _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "decision": "string",
     "timestamp": "string",
 }
+REMEDIATION_BRANCH_SENSITIVE_FIELDS = frozenset(
+    {
+        "instructions",
+        "runtime",
+        "model",
+        "providerProfile",
+        "launchPolicy",
+        "repositoryBranch",
+        "workspacePolicy",
+        "publishMode",
+    }
+)
 _ACTION_CATALOG: dict[str, dict[str, Any]] = {
     "execution.pause": {
         "risk": "medium",
@@ -233,6 +245,87 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "preconditions": ("target_visible", "container_orphaned_by_policy"),
         "idempotency": "same target/action/container key returns the prior decision",
         "verification_hint": "verify orphan container is gone or no-op reason is recorded",
+    },
+    "host.drain": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host rejects new sessions",
+    },
+    "host.stop": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host reaches stopped state",
+    },
+    "host.restart": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify a new host generation becomes healthy",
+    },
+    "host.remove": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "omnigent_host",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "host_lease_owned", "host_removal_approved"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify the lease-owned host and binding are absent",
+    },
+    "host_lease.reconcile_stale": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "host_lease",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "host_lease_stale_or_orphaned"),
+        "idempotency": "same target/action/host-lease key returns the prior decision",
+        "verification_hint": "verify host ownership and lease state are consistent",
+    },
+    "cleanup.request_janitor": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "cleanup",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "cleanup_owned_by_moonmind"),
+        "idempotency": "same target/action/cleanup key returns the prior decision",
+        "verification_hint": "verify a cleanup manifest reaches a terminal state",
+    },
+    "cleanup.verify": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "cleanup",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/cleanup key returns the prior decision",
+        "verification_hint": "verify cleanup and janitor evidence are internally consistent",
+    },
+    "target.annotate": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/annotation key returns the prior decision",
+        "verification_hint": "verify the target links the remediation annotation",
+    },
+    "target.verify": {
+        "risk": "low",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible",),
+        "idempotency": "same target/action/verification key returns the prior decision",
+        "verification_hint": "verify target terminal evidence rather than assistant prose",
     },
 }
 _DEFAULT_AUTO_ALLOWED_RISK = "medium"
@@ -2134,7 +2227,30 @@ def _result_status(decision: RemediationActionDecision, reason: str) -> str:
         return "rejected"
     return "failed"
 
+
+def remediation_changes_require_checkpoint_branch(
+    *,
+    original: Mapping[str, Any],
+    proposed: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return immutable-input choices that require a Checkpoint Branch turn.
+
+    Callers must route any non-empty result through
+    ``checkpoint_branch.create_from_remediation_context`` instead of mutating
+    or resuming the original execution input.
+    """
+
+    return tuple(
+        sorted(
+            field_name
+            for field_name in REMEDIATION_BRANCH_SENSITIVE_FIELDS
+            if original.get(field_name) != proposed.get(field_name)
+        )
+    )
+
+
 __all__ = [
+    "REMEDIATION_BRANCH_SENSITIVE_FIELDS",
     "RemediationActionAuthorityResult",
     "RemediationActionAuthorityService",
     "RemediationActionDecision",
@@ -2150,4 +2266,5 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "remediation_changes_require_checkpoint_branch",
 ]
