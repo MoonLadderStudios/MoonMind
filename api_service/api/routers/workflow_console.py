@@ -1597,9 +1597,7 @@ async def get_dashboard_ui_info(
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
-            # No authorized policy inventory read contract exists yet. Advertising
-            # this explicitly keeps the rail and route free of dead links.
-            "omnigentPolicies": False,
+            "omnigentPolicies": True,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1618,6 +1616,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "omnigentPolicies": "/api/omnigent/policies",
             "manifests": "/api/manifests",
             "remediations": "/api/executions/remediations",
             **(

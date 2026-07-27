@@ -473,6 +473,49 @@ class OmnigentBridgeSession(Base):
     )
 
 
+class OmnigentPolicy(Base):
+    """Stable operator-owned policy identity."""
+
+    __tablename__ = "omnigent_policies"
+
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id"), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    default_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class OmnigentPolicyVersion(Base):
+    """Immutable normalized authority and complete lifecycle audit lineage."""
+
+    __tablename__ = "omnigent_policy_versions"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "version", name="uq_omnigent_policy_version"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("omnigent_policies.policy_id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    document_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False)
+    digest: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    parent_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    clone_source_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    supersedes_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    activated_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    disabled_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    validation_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    compatibility_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    rollout_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    env_fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
 class OmnigentBridgeSessionEvent(Base):
     """Durable index over the Omnigent bridge session event stream.
 
