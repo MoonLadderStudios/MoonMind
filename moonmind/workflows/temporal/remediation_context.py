@@ -106,6 +106,9 @@ OMNIGENT_EVIDENCE_CLASSES = (
     "checkpoint_recovery",
     "checkpoint_branches",
     "incident_cleanup",
+    "host_logs",
+    "container_job_logs",
+    "managed_runtime_logs",
     "policy_approvals",
     "prior_remediation",
 )
@@ -300,7 +303,11 @@ class RemediationContextBuilder:
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
             "remediationWorkflowId": remediation_record.workflow_id,
             "generatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "target": self._target_payload(target_record, link=link),
+            "target": self._target_payload(
+                target_record,
+                link=link,
+                target_evidence=target_evidence,
+            ),
             "selectedSteps": self._normalize_step_selectors(
                 target_mapping.get("stepSelectors"),
                 target_evidence=target_evidence,
@@ -618,11 +625,21 @@ class RemediationContextBuilder:
         ]
         durable = {
             **durable,
-            "captureResources": capture_resources,
-            "checkpointRecovery": checkpoint_recovery,
-            "incidentCleanup": incident_cleanup,
-            "policyApprovals": policy_approvals,
-            "priorRemediation": prior_remediation,
+            "captureResources": _merge_evidence_items(
+                durable.get("captureResources"), capture_resources
+            ),
+            "checkpointRecovery": _merge_evidence_items(
+                durable.get("checkpointRecovery"), checkpoint_recovery
+            ),
+            "incidentCleanup": _merge_evidence_items(
+                durable.get("incidentCleanup"), incident_cleanup
+            ),
+            "policyApprovals": _merge_evidence_items(
+                durable.get("policyApprovals"), policy_approvals
+            ),
+            "priorRemediation": _merge_evidence_items(
+                durable.get("priorRemediation"), prior_remediation
+            ),
         }
         return {
             "bridgeSessions": [
@@ -834,6 +851,9 @@ class RemediationContextBuilder:
             "checkpoint_recovery": durable_mapping.get("checkpointRecovery"),
             "checkpoint_branches": payload.get("checkpointBranches"),
             "incident_cleanup": durable_mapping.get("incidentCleanup"),
+            "host_logs": durable_mapping.get("hostLogs"),
+            "container_job_logs": durable_mapping.get("containerJobLogs"),
+            "managed_runtime_logs": durable_mapping.get("managedRuntimeLogs"),
             "policy_approvals": durable_mapping.get("policyApprovals"),
             "prior_remediation": durable_mapping.get("priorRemediation"),
         }
@@ -877,9 +897,10 @@ class RemediationContextBuilder:
         record: db_models.TemporalExecutionCanonicalRecord,
         *,
         link: db_models.TemporalExecutionRemediationLink,
+        target_evidence: Mapping[str, Any],
     ) -> dict[str, Any]:
         memo = record.memo if isinstance(record.memo, Mapping) else {}
-        return {
+        payload = {
             "workflowId": record.workflow_id,
             "runId": link.target_run_id,
             "title": _string_or_none(memo.get("title")),
@@ -887,6 +908,13 @@ class RemediationContextBuilder:
             "state": _enum_value(record.state),
             "closeStatus": _enum_value(record.close_status),
         }
+        failure = _safe_policy_value(
+            target_evidence.get("failureTaxonomy")
+            or target_evidence.get("failure")
+        )
+        if failure not in (None, {}, []):
+            payload["failureTaxonomy"] = failure
+        return payload
 
     @staticmethod
     def _normalize_step_selectors(
@@ -932,6 +960,11 @@ class RemediationContextBuilder:
             if evidence_step is not None:
                 if status := _safe_optional_string(evidence_step.get("status")):
                     selector["status"] = status
+                if failure := _safe_policy_value(
+                    evidence_step.get("failureTaxonomy")
+                    or evidence_step.get("failure")
+                ):
+                    selector["failureTaxonomy"] = failure
                 if summary := _safe_optional_string(evidence_step.get("summary")):
                     selector["summary"] = summary
                 artifact_refs = _artifact_ref_list(evidence_step.get("artifactRefs"))
@@ -2133,6 +2166,9 @@ def _safe_evidence_index(value: Mapping[str, Any]) -> dict[str, Any]:
         "captureResources": ("captureResources", "capture", "resourceManifests"),
         "checkpointRecovery": ("checkpointRecovery", "checkpoint", "recovery"),
         "incidentCleanup": ("incidentCleanup", "incident", "cleanup", "janitor"),
+        "hostLogs": ("hostLogs", "hostLogRefs"),
+        "containerJobLogs": ("containerJobLogs", "containerJobLogRefs"),
+        "managedRuntimeLogs": ("managedRuntimeLogs", "managedRuntimeLogRefs"),
         "policyApprovals": ("policyApprovals", "policy", "approvals"),
         "priorRemediation": (
             "priorRemediation",
@@ -2153,6 +2189,16 @@ def _safe_evidence_index(value: Mapping[str, Any]) -> dict[str, Any]:
         if values:
             result[output_key] = values[0] if len(values) == 1 else values
     return result
+
+
+def _merge_evidence_items(existing: Any, collected: Sequence[Any]) -> list[Any]:
+    """Preserve declarative refs while appending authoritative store projections."""
+
+    values = list(existing) if isinstance(existing, list) else (
+        [existing] if existing not in (None, {}, []) else []
+    )
+    values.extend(collected)
+    return values[:MAX_REMEDIATION_CONTEXT_INDEX_ITEMS]
 
 def _safe_policy_value(value: Any) -> Any:
     if isinstance(value, Mapping):

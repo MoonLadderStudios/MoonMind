@@ -1872,6 +1872,17 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         )
         assert target_source is not None
         target_source.artifact_refs = [target_artifact.artifact_id]
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "failureTaxonomy": {"class": "runtime_failure"},
+                "hostLogRefs": [{"artifactRef": target_artifact.artifact_id}],
+                "containerJobLogRefs": [{"artifactRef": target_artifact.artifact_id}],
+                "managedRuntimeLogRefs": [
+                    {"artifactRef": target_artifact.artifact_id}
+                ],
+            },
+        }
         await session.commit()
 
         remediation = await execution_service.create_execution(
@@ -1928,6 +1939,20 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
         )
         assert execution_page.status == "available"
         assert execution_page.items[0]["workflowId"] == target.workflow_id
+        assert execution_page.items[0]["failureTaxonomy"] == {
+            "class": "runtime_failure"
+        }
+        for evidence_class in (
+            "host_logs",
+            "container_job_logs",
+            "managed_runtime_logs",
+        ):
+            log_page = await tools.read_evidence_class(
+                remediation_workflow_id=remediation.workflow_id,
+                evidence_class=evidence_class,
+            )
+            assert log_page.status == "available"
+            assert log_page.items[0]["artifactRef"] == target_artifact.artifact_id
         missing_capture = await tools.read_evidence_class(
             remediation_workflow_id=remediation.workflow_id,
             evidence_class="capture_resources",

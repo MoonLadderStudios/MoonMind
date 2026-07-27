@@ -11455,6 +11455,64 @@ def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal()
     )
 
 
+def test_read_remediation_evidence_route_forwards_bounded_cursor_and_principal() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    user = _override_user_dependencies(app, is_superuser=True)
+    tool_service = SimpleNamespace(
+        read_evidence_class=AsyncMock(
+            return_value=SimpleNamespace(
+                evidence_class="bridge_events",
+                status="available",
+                items=({"sequence": 7, "summary": "[REDACTED]"},),
+                next_cursor=8,
+                degraded_reason=None,
+            )
+        )
+    )
+
+    with patch(
+        "api_service.api.routers.executions.RemediationEvidenceToolService",
+        return_value=tool_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get(
+                "/api/executions/mm:wf-1/remediation/evidence/bridge_events"
+                "?cursor=7&limit=1"
+            )
+
+    assert response.status_code == 200
+    assert response.json()["nextCursor"] == 8
+    tool_service.read_evidence_class.assert_awaited_once_with(
+        remediation_workflow_id="mm:wf-1",
+        evidence_class="bridge_events",
+        cursor=7,
+        limit=1,
+        principal=str(user.id),
+    )
+
+
+def test_read_remediation_evidence_route_rejects_cursor_over_bound() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/mm:wf-1/remediation/evidence/bridge_events?limit=101"
+        )
+
+    assert response.status_code == 422
+
+
 def test_get_execution_step_executions_preserves_artifact_authorization() -> None:
     app = FastAPI()
     app.include_router(router)

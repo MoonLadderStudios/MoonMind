@@ -35,13 +35,27 @@ _TYPED_EVIDENCE_PATHS = {
     "execution": ("target",),
     "step_executions": ("selectedSteps",),
     "bridge_sessions": ("omnigent", "bridgeSessions"),
+    "bridge_events": ("omnigent", "bridgeSessions", "*", "eventPage"),
     "capture_resources": ("omnigent", "durableEvidence", "captureResources"),
+    "capture_manifests": ("omnigent", "durableEvidence", "captureResources"),
+    "resource_manifests": ("omnigent", "durableEvidence", "captureResources"),
     "checkpoint_recovery": ("omnigent", "durableEvidence", "checkpointRecovery"),
+    "checkpoint_manifests": ("omnigent", "durableEvidence", "checkpointRecovery"),
+    "recovery_manifests": ("omnigent", "durableEvidence", "checkpointRecovery"),
     "checkpoint_branches": ("omnigent", "checkpointBranches"),
+    "branch_publication": ("omnigent", "checkpointBranches"),
+    "comparison_promotion": ("omnigent", "checkpointBranches"),
     "host_profile_leases": ("omnigent", "hostLeases"),
     "provider_profile_leases": ("omnigent", "providerLeases"),
     "incident_cleanup": ("omnigent", "durableEvidence", "incidentCleanup"),
+    "diagnostics": ("omnigent", "durableEvidence", "incidentCleanup"),
+    "cleanup_janitor": ("omnigent", "durableEvidence", "incidentCleanup"),
+    "host_logs": ("omnigent", "durableEvidence", "hostLogs"),
+    "container_job_logs": ("omnigent", "durableEvidence", "containerJobLogs"),
+    "managed_runtime_logs": ("omnigent", "durableEvidence", "managedRuntimeLogs"),
     "policy_approvals": ("omnigent", "durableEvidence", "policyApprovals"),
+    "policy_snapshots": ("omnigent", "durableEvidence", "policyApprovals"),
+    "approval_snapshots": ("omnigent", "durableEvidence", "policyApprovals"),
     "prior_remediation": ("omnigent", "durableEvidence", "priorRemediation"),
 }
 
@@ -71,6 +85,29 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
+
+
+def _resolve_evidence_path(value: Any, path: Sequence[str]) -> Any:
+    """Resolve a typed context path, flattening only declared collection segments."""
+
+    if not path:
+        return value
+    segment, *remaining = path
+    if segment == "*":
+        if not isinstance(value, list):
+            return None
+        flattened: list[Any] = []
+        for item in value:
+            resolved = _resolve_evidence_path(item, remaining)
+            if isinstance(resolved, list):
+                flattened.extend(resolved)
+            elif resolved not in (None, {}, []):
+                flattened.append(resolved)
+        return flattened
+    if not isinstance(value, Mapping):
+        return None
+    return _resolve_evidence_path(value.get(segment), remaining)
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationLogReadResult:
@@ -406,9 +443,7 @@ class RemediationEvidenceToolService:
             )
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(link=link, principal=principal)
-        value: Any = context
-        for segment in path:
-            value = value.get(segment) if isinstance(value, Mapping) else None
+        value = _resolve_evidence_path(context, path)
         if value in (None, [], {}):
             return RemediationEvidencePage(
                 evidence_class=normalized_class,

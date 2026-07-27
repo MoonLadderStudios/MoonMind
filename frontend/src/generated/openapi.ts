@@ -1564,6 +1564,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/remediation/evidence/{evidence_class}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Remediation Evidence Class
+         * @description Read one bounded evidence class through the remediation authorization link.
+         */
+        get: operations["read_remediation_evidence_class_api_executions__workflow_id__remediation_evidence__evidence_class__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/remediation/artifacts/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Remediation Artifact Content
+         * @description Return a redacted, bounded slice without exposing storage coordinates.
+         */
+        get: operations["read_remediation_artifact_content_api_executions__workflow_id__remediation_artifacts_content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediation/checkpoint-branches": {
         parameters: {
             query?: never;
@@ -10788,6 +10828,19 @@ export interface components {
             /** Items */
             items: components["schemas"]["RemediationCollectionItemModel"][];
         };
+        /** RemediationEvidencePageModel */
+        RemediationEvidencePageModel: {
+            /** Evidenceclass */
+            evidenceClass: string;
+            /** Status */
+            status: string;
+            /** Items */
+            items: unknown[];
+            /** Nextcursor */
+            nextCursor?: number | null;
+            /** Degradedreason */
+            degradedReason?: string | null;
+        };
         /** RemediationLinkSummaryModel */
         RemediationLinkSummaryModel: {
             /** Remediationworkflowid */
@@ -15829,6 +15882,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemediationLinksResponseModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_remediation_evidence_class_api_executions__workflow_id__remediation_evidence__evidence_class__get: {
+        parameters: {
+            query?: {
+                cursor?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+                evidence_class: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationEvidencePageModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_remediation_artifact_content_api_executions__workflow_id__remediation_artifacts_content_get: {
+        parameters: {
+            query: {
+                artifact_ref: string;
+                cursor?: number;
+                max_bytes?: number;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
