@@ -2854,6 +2854,9 @@ class MoonMindRunWorkflow:
             capture = artifacts.get("omnigentCheckpointCapture")
             if isinstance(capture, Mapping):
                 outputs["omnigentCheckpointCapture"] = dict(capture)
+            validation = artifacts.get("omnigentRestoreValidation")
+            if isinstance(validation, Mapping):
+                outputs["omnigentRestoreValidation"] = dict(validation)
         return outputs
 
     def _proposal_step_output_refs(
@@ -5325,6 +5328,13 @@ class MoonMindRunWorkflow:
         )
         if external_state_ref is not None:
             artifacts["externalStateRef"] = external_state_ref
+        if isinstance(workload_metadata, Mapping):
+            checkpoint_capture = workload_metadata.get("omnigentCheckpointCapture")
+            if isinstance(checkpoint_capture, Mapping):
+                artifacts["omnigentCheckpointCapture"] = dict(checkpoint_capture)
+            restore_validation = workload_metadata.get("omnigentRestoreValidation")
+            if isinstance(restore_validation, Mapping):
+                artifacts["omnigentRestoreValidation"] = dict(restore_validation)
         checkpoint_ref = _output_ref(
             "stateCheckpointRef",
             "state_checkpoint_ref",

@@ -6781,34 +6781,24 @@ def _checkpoint_recovery_projection(outputs: Any) -> dict[str, Any] | None:
             return current.model_dump(
                 by_alias=True, mode="json", exclude_none=True
             )
-    valid = manifest.validation_status == "valid"
+    unavailable = {
+        "available": False,
+        "reasonCode": "current_validation_unavailable",
+        "message": "current restore authority has not been validated",
+    }
     return {
-        "valid": valid,
-        "reasonCode": None if valid else f"checkpoint_{manifest.validation_status}",
-        "message": (
-            "checkpoint authority validated"
-            if valid
-            else f"checkpoint authority is {manifest.validation_status}"
-        ),
-        "liveReattach": manifest.live_reattach.model_dump(
-            by_alias=True, mode="json", exclude_none=True
-        ),
-        "workspaceColdRestore": manifest.workspace_cold_restore.model_dump(
-            by_alias=True, mode="json", exclude_none=True
-        ),
-        "branchCreation": manifest.branch_creation.model_dump(
-            by_alias=True, mode="json", exclude_none=True
-        ),
+        "valid": False,
+        "reasonCode": "current_validation_unavailable",
+        "message": "checkpoint capture exists, but current restore authority has not been validated",
+        "liveReattach": dict(unavailable),
+        "workspaceColdRestore": dict(unavailable),
+        "branchCreation": dict(unavailable),
         "requiredProfileId": manifest.identity.provider_profile_id,
         "requiredLaunchPolicyRef": manifest.launch_policy_ref,
-        "readinessBlocked": (
-            manifest.workspace_cold_restore.reason_code == "profile_not_ready"
-        ),
-        "capacityBlocked": (
-            manifest.workspace_cold_restore.reason_code == "capacity_unavailable"
-        ),
-        "validatedRefs": sorted(manifest.artifact_digests),
-        "validatedDigests": dict(manifest.artifact_digests),
+        "readinessBlocked": False,
+        "capacityBlocked": False,
+        "validatedRefs": [],
+        "validatedDigests": {},
     }
 
 

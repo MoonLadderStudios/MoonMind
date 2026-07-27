@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from api_service.api.routers.executions import _checkpoint_recovery_projection
 from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
     assemble_checkpoint_manifest,
@@ -13,6 +14,10 @@ from moonmind.omnigent.checkpoints import (
     materialize_cold_restore,
     validate_restore_material,
 )
+from moonmind.omnigent.profile_bound_execution import (
+    OmnigentProfileBoundExecutionCoordinator,
+)
+from moonmind.schemas.agent_runtime_models import AgentRunResult
 
 
 def _digest(payload: bytes) -> str:
@@ -148,6 +153,103 @@ def test_capture_assembler_derives_lineage_boundary_and_digests() -> None:
     assert manifest.external_state_digest == _digest(b"external")
     assert manifest.checkpoint_digest == _digest(b"checkpoint")
     assert set(manifest.artifact_digests) == set(artifacts)
+
+
+def test_api_projection_fails_closed_without_current_restore_validation() -> None:
+    projection = _checkpoint_recovery_projection(
+        {
+            "omnigentCheckpoint": _manifest().model_dump(
+                by_alias=True, mode="json"
+            )
+        }
+    )
+
+    assert projection is not None
+    assert projection["valid"] is False
+    assert projection["reasonCode"] == "current_validation_unavailable"
+    assert projection["validatedRefs"] == []
+    assert projection["liveReattach"] == {
+        "available": False,
+        "reasonCode": "current_validation_unavailable",
+        "message": "current restore authority has not been validated",
+    }
+
+
+def test_api_projection_prefers_current_restore_validation() -> None:
+    current = validate_restore_material(
+        _manifest(),
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        repository_baseline="abc123",
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
+        artifact_reader=lambda ref: {
+            "artifact://external": b"external",
+            "artifact://head": b"head",
+            "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
+        }[ref],
+    )
+    projection = _checkpoint_recovery_projection(
+        {
+            "omnigentCheckpoint": _manifest().model_dump(
+                by_alias=True, mode="json"
+            ),
+            "omnigentRestoreValidation": current.model_dump(
+                by_alias=True, mode="json"
+            ),
+        }
+    )
+
+    assert projection is not None
+    assert projection["valid"] is True
+    assert projection["validatedRefs"]
+
+
+def test_current_restore_validation_is_persisted_in_runtime_result() -> None:
+    validation = validate_restore_material(
+        _manifest(),
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        repository_baseline="abc123",
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
+        artifact_reader=lambda ref: {
+            "artifact://external": b"external",
+            "artifact://head": b"head",
+            "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
+        }[ref],
+    )
+    result = OmnigentProfileBoundExecutionCoordinator._with_restore_validation(
+        AgentRunResult(summary="restored", metadata={"providerName": "omnigent"}),
+        validation,
+    )
+
+    assert result.metadata["providerName"] == "omnigent"
+    assert result.metadata["omnigentRestoreValidation"]["valid"] is True
 
 
 @pytest.mark.parametrize("schema", ["v1", "v3"])

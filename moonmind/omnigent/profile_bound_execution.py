@@ -912,7 +912,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                 }
             )
-            return await self._execute(
+            result = await self._execute(
                 _bind_exact_host(
                     live_request,
                     host_id=str(identity.omnigent_host_id),
@@ -924,6 +924,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            return self._with_restore_validation(result, validation)
 
         validate_cold_restore_target(
             identity,
@@ -955,7 +956,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 by_alias=True, mode="json"
             ),
         }
-        return await self.execute(
+        result = await self.execute(
             request.model_copy(
                 update={
                     "idempotency_key": cold_key,
@@ -978,6 +979,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 }
             )
         )
+        return self._with_restore_validation(result, validation)
 
     async def branch_from_checkpoint(
         self,
@@ -1023,7 +1025,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 by_alias=True, mode="json"
             ),
         }
-        return await self.execute(
+        result = await self.execute(
             request.model_copy(
                 update={
                     "parameters": parameters,
@@ -1045,6 +1047,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 }
             )
         )
+        return self._with_restore_validation(result, validation)
+
+    @staticmethod
+    def _with_restore_validation(
+        result: AgentRunResult,
+        validation: OmnigentRestoreValidation,
+    ) -> AgentRunResult:
+        """Persist the current recovery decision beside terminal runtime evidence."""
+
+        metadata = dict(result.metadata or {})
+        metadata["omnigentRestoreValidation"] = validation.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude_none=True,
+        )
+        return result.model_copy(update={"metadata": metadata})
 
     async def _validate_checkpoint_restore(
         self,
