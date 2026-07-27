@@ -666,10 +666,34 @@ class OmnigentProfileBoundExecutionCoordinator:
             await emit("initial_context_retrieval", "started")
             from moonmind.rag.context_injection import ContextInjectionService
 
-            context_resolution = await ContextInjectionService().inject_context(
-                request=bound_request,
-                workspace_path=Path(str(preflight["workspacePath"])),
-            )
+            try:
+                context_resolution = await ContextInjectionService().inject_context(
+                    request=bound_request,
+                    workspace_path=Path(str(preflight["workspacePath"])),
+                )
+            except Exception:
+                failed_context_metadata = (
+                    ((bound_request.parameters or {}).get("metadata") or {}).get(
+                        "moonmind"
+                    )
+                    or {}
+                )
+                await emit(
+                    "initial_context_retrieval",
+                    "failed",
+                    code="initial_context_retrieval_failed",
+                    failure_class="integration_error",
+                    metadata={
+                        "state": failed_context_metadata.get(
+                            "retrievalMode", "failed"
+                        ),
+                        "fallbackOrDenialReason": failed_context_metadata.get(
+                            "retrievalDisabledReason"
+                        ),
+                        "required": True,
+                    },
+                )
+                raise
             context_metadata = (
                 ((bound_request.parameters or {}).get("metadata") or {}).get(
                     "moonmind"
@@ -700,6 +724,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "retrievedContextDigest"
                     ),
                     "queryDigest": context_metadata.get("retrievalQueryDigest"),
+                    "requestDigest": context_metadata.get("retrievalRequestDigest"),
                     "resultCount": context_resolution.items_count,
                     "sourceIdentities": context_metadata.get(
                         "retrievedContextSources", []
@@ -721,6 +746,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                         context_metadata.get("retrievalDegradedReason")
                         or context_metadata.get("retrievalDisabledReason")
                     ),
+                    "staleAllowed": bool(
+                        context_metadata.get("retrievalStaleAllowed", False)
+                    ),
+                    "localFallbackAuthorized": bool(
+                        context_metadata.get(
+                            "retrievalLocalFallbackAuthorized", False
+                        )
+                    ),
                     "firstMessageConsumesContextRef": bool(context_ref),
                 },
             )
@@ -733,6 +766,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            first_message_digest = context_metadata.get("firstMessageDigest")
+            if first_message_digest:
+                await emit(
+                    "initial_context_retrieval_linked",
+                    "completed",
+                    metadata={
+                        "state": retrieval_mode,
+                        "contextRef": context_ref or None,
+                        "contextDigest": context_metadata.get(
+                            "retrievedContextDigest"
+                        ),
+                        "firstMessageDigest": first_message_digest,
+                        "firstMessageConsumesContextRef": bool(
+                            context_ref
+                            and context_metadata.get("firstMessageContextRef")
+                            == context_ref
+                        ),
+                    },
+                )
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"
             terminal_status = result_status

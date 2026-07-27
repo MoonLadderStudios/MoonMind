@@ -710,6 +710,23 @@ async def run_omnigent_execution(
             digest = hashlib.sha256(
                 json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
+            parameters = (
+                request.parameters if isinstance(request.parameters, dict) else {}
+            )
+            request.parameters = parameters
+            metadata = parameters.setdefault("metadata", {})
+            if isinstance(metadata, dict):
+                moonmind_metadata = metadata.setdefault("moonmind", {})
+                if isinstance(moonmind_metadata, dict):
+                    moonmind_metadata["firstMessageDigest"] = f"sha256:{digest}"
+                    moonmind_metadata["firstMessageContextRef"] = (
+                        moonmind_metadata.get("latestContextPackRef")
+                        if int(
+                            moonmind_metadata.get("retrievedContextItemCount") or 0
+                        )
+                        > 0
+                        else None
+                    )
             marker = _first_message_marker(request=request, digest=digest)
             first_message.setdefault("metadata", {})[
                 "moonmindFirstMessageDigest"

@@ -1369,6 +1369,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         ("harness_readiness", "ready"),
         ("bridge_authentication", "completed"),
         ("session_creation", "completed"),
+        ("initial_context_retrieval", "completed"),
         ("first_message_prepare", "completed"),
         ("first_message_post", "completed"),
         ("session_running", "completed"),

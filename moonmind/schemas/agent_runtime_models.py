@@ -440,10 +440,16 @@ def _contains_sensitive_key(
     value: Any,
     *,
     allowed_sensitive_keys: frozenset[str] | None = None,
+    allowed_numeric_sensitive_keys: frozenset[str] | None = None,
 ) -> bool:
     normalized_allowlist = (
         frozenset(item.upper() for item in allowed_sensitive_keys)
         if allowed_sensitive_keys
+        else frozenset()
+    )
+    normalized_numeric_allowlist = (
+        frozenset(item.upper() for item in allowed_numeric_sensitive_keys)
+        if allowed_numeric_sensitive_keys
         else frozenset()
     )
     if isinstance(value, dict):
@@ -453,6 +459,11 @@ def _contains_sensitive_key(
                 if (
                     not normalized.endswith("_ref")
                     and str(key).strip().upper() not in normalized_allowlist
+                    and not (
+                        str(key).strip().upper() in normalized_numeric_allowlist
+                        and isinstance(nested, (int, float))
+                        and not isinstance(nested, bool)
+                    )
                 ):
                     # Allow synthetic proxy tokens to inhabit sensitive keys for provider routing
                     if isinstance(nested, str) and nested.startswith("mm-proxy-token:"):
@@ -461,13 +472,16 @@ def _contains_sensitive_key(
             if _contains_sensitive_key(
                 nested,
                 allowed_sensitive_keys=allowed_sensitive_keys,
+                allowed_numeric_sensitive_keys=allowed_numeric_sensitive_keys,
             ):
                 return True
         return False
     if isinstance(value, list):
         return any(
             _contains_sensitive_key(
-                item, allowed_sensitive_keys=allowed_sensitive_keys
+                item,
+                allowed_sensitive_keys=allowed_sensitive_keys,
+                allowed_numeric_sensitive_keys=allowed_numeric_sensitive_keys,
             )
             for item in value
         )
@@ -694,7 +708,12 @@ class AgentExecutionRequest(BaseModel):
             for item in self.input_refs
         ]
 
-        if _contains_sensitive_key(self.parameters):
+        # ``rag.budgets.tokens`` is a numeric context-size budget, not a
+        # credential. Keep every other token-like parameter key prohibited.
+        if _contains_sensitive_key(
+            self.parameters,
+            allowed_numeric_sensitive_keys=frozenset({"tokens"}),
+        ):
             raise ValueError("parameters must not contain raw credential keys")
         if _contains_sensitive_key(self.workspace_spec):
             raise ValueError("workspaceSpec must not contain raw credential keys")

@@ -79,6 +79,7 @@ async def test_inject_context_enabled_with_items(
     tmp_path,
 ) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_request.parameters["rag"] = {"localFallbackAuthorized": True}
 
     mock_pack = MagicMock(spec=ContextPack)
     mock_pack.items = [MagicMock(spec=ContextItem)]
@@ -139,6 +140,7 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
     tmp_path,
 ) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_request.parameters["rag"] = {"localFallbackAuthorized": True}
     mock_request.instruction_ref = (
         "Task details should show the provider profile selected for the workflow run"
     )
@@ -169,6 +171,28 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
     assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
     assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
     assert moonmind_meta["retrievalDegradedReason"] == "local_fallback_after_retrieval_error"
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_local_fallback_requires_authored_authorization(
+    mock_retrieve,
+    mock_build_fallback,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    mock_retrieve.return_value = (None, "retrieval_gateway_unavailable")
+
+    result = await ContextInjectionService(
+        env={"MOONMIND_RAG_AUTO_CONTEXT": "true"}
+    ).inject_context(request=mock_request, workspace_path=tmp_path)
+
+    mock_build_fallback.assert_not_called()
+    assert result.instruction == "Original instruction"
+    metadata = mock_request.parameters["metadata"]["moonmind"]
+    assert metadata["retrievalMode"] == "unavailable"
+    assert metadata["retrievalDisabledReason"] == "retrieval_gateway_unavailable"
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
@@ -236,6 +260,7 @@ async def test_inject_context_uses_local_fallback_when_gateway_auth_missing(
     tmp_path,
 ) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_request.parameters["rag"] = {"localFallbackAuthorized": True}
     mock_pack = MagicMock(spec=ContextPack)
     mock_pack.items = [MagicMock(spec=ContextItem)]
     mock_pack.context_text = "Local fallback snippet"
@@ -426,7 +451,7 @@ async def test_required_retrieval_fails_before_message_preparation(
         )
 
     metadata = mock_request.parameters["metadata"]["moonmind"]
-    assert metadata["retrievalMode"] == "disabled"
+    assert metadata["retrievalMode"] == "unavailable"
     assert metadata["retrievalDisabledReason"] == "retrieval_gateway_unavailable"
 
 
@@ -441,6 +466,118 @@ def test_authored_query_override_is_used_without_replacing_instruction(
     )
     assert mock_request.instruction_ref == "Original instruction"
 
+
+def test_agent_request_accepts_numeric_rag_token_budget_but_not_token_secret() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="test-agent",
+        correlationId="correlation",
+        idempotencyKey="idempotency",
+        parameters={"rag": {"budgets": {"tokens": 800}}},
+    )
+    assert request.parameters["rag"]["budgets"]["tokens"] == 800
+
+    with pytest.raises(ValueError, match="raw credential keys"):
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="test-agent",
+            correlationId="correlation",
+            idempotencyKey="idempotency",
+            parameters={"rag": {"budgets": {"tokens": "secret-value"}}},
+        )
+
+
+@patch("moonmind.rag.context_injection.ContextRetrievalService.retrieve")
+def test_authored_policy_is_compiled_into_bounded_retrieval_request(
+    mock_retrieve,
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {
+        "collections": ["canonical", "run-context"],
+        "scope": {
+            "tenant": "tenant-1",
+            "workspace": "workspace-1",
+            "run": "run-1",
+        },
+        "overlayPolicy": "skip",
+        "budgets": {"tokens": 800, "latency_ms": 1200},
+        "transport": "gateway",
+        "topK": 4,
+        "staleAllowed": True,
+    }
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "MOONMIND_RETRIEVAL_URL": "https://retrieval.invalid",
+            "MOONMIND_RETRIEVAL_TOKEN": "test-token",
+            "VECTOR_STORE_COLLECTION_NAME": "canonical",
+            "VECTOR_STORE_COLLECTION_NAMES": "canonical,run-context",
+        }
+    )
+    mock_retrieve.return_value = ContextPack(
+        items=[],
+        filters={},
+        budgets={},
+        usage={},
+        transport="gateway",
+        context_text="",
+        retrieved_at="2026-07-27T00:00:00Z",
+        telemetry_id="telemetry",
+    )
+
+    service._retrieve_context_pack(mock_request)
+
+    kwargs = mock_retrieve.call_args.kwargs
+    assert kwargs["collections"] == ("canonical", "run-context")
+    assert kwargs["filters"] == {
+        "job_id": "test-correlation-id",
+        "tenant": "tenant-1",
+        "workspace": "workspace-1",
+        "run_id": "run-1",
+        "repo": "test-repo",
+        "repository": "test-repo",
+    }
+    assert kwargs["overlay_policy"] == "skip"
+    assert kwargs["budgets"] == {"tokens": 800, "latency_ms": 1200}
+    assert kwargs["transport"] == "gateway"
+    assert kwargs["top_k"] == 4
+
+
+def test_authored_collection_outside_configured_scope_is_denied(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {"collections": ["other-tenant"]}
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "GOOGLE_API_KEY": "test",
+            "VECTOR_STORE_COLLECTION_NAME": "canonical",
+        }
+    )
+
+    with pytest.raises(ValueError, match="not configured"):
+        service._retrieve_context_pack(mock_request)
+
+
+def test_context_artifact_identity_includes_authored_retrieval_policy(
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    first = ContextInjectionService._context_pack_path(
+        request=mock_request,
+        instruction="Original instruction",
+        workspace_path=tmp_path,
+    )
+    mock_request.parameters["rag"] = {"collections": ["other"]}
+    second = ContextInjectionService._context_pack_path(
+        request=mock_request,
+        instruction="Original instruction",
+        workspace_path=tmp_path,
+    )
+
+    assert first != second
 
 
 def test_record_context_metadata_marks_disabled_retrieval_state(
@@ -482,5 +619,5 @@ async def test_inject_context_records_retrieval_failure_reason_when_fallback_una
     assert result.items_count == 0
     assert result.artifact_path is None
     moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
-    assert moonmind_meta["retrievalMode"] == "disabled"
+    assert moonmind_meta["retrievalMode"] == "unavailable"
     assert moonmind_meta["retrievalDisabledReason"] == "retrieval_gateway_unavailable"

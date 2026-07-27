@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -78,6 +78,21 @@ class PromptContextResolution:
     items_count: int = 0
     artifact_path: Path | None = None
 
+@dataclass(frozen=True, slots=True)
+class InitialRetrievalRequest:
+    """Bounded, immutable compilation of authored initial-retrieval policy."""
+
+    query: str
+    collections: tuple[str, ...]
+    filters: tuple[tuple[str, str], ...]
+    budgets: tuple[tuple[str, int], ...]
+    overlay_policy: str
+    transport: str
+    top_k: int
+    required: bool
+    local_fallback_authorized: bool
+    stale_allowed: bool
+
 class ContextInjectionService:
     """Extracts RAG context and injects it into agent instructions."""
 
@@ -134,7 +149,8 @@ class ContextInjectionService:
                     raise RuntimeError(
                         f"required initial context retrieval unavailable: {retrieval_skip_reason}"
                     ) from exc
-                fallback_pack = self._build_local_fallback_pack(
+                fallback_pack = self._authorized_local_fallback(
+                    request=request,
                     instruction=instruction_ref,
                     workspace_path=workspace_path,
                 )
@@ -161,14 +177,15 @@ class ContextInjectionService:
                     "required initial context retrieval unavailable: "
                     f"{retrieval_skip_reason or 'retrieval_unavailable'}"
                 )
-            if not self._should_use_local_fallback(retrieval_skip_reason):
+            if not self._should_use_local_fallback(request, retrieval_skip_reason):
                 self._record_disabled_context_metadata(
                     request=request,
                     reason=retrieval_skip_reason or "retrieval_disabled",
                     initiation_mode="automatic",
                 )
                 return PromptContextResolution(instruction=instruction_ref)
-            fallback_pack = self._build_local_fallback_pack(
+            fallback_pack = self._authorized_local_fallback(
+                request=request,
                 instruction=instruction_ref,
                 workspace_path=workspace_path,
             )
@@ -237,18 +254,22 @@ class ContextInjectionService:
         if not settings.run_id:
             settings.run_id = getattr(request, "run_id", request.correlation_id)
 
-        transport = settings.resolved_transport(None)
-
-        filters = settings.as_filter_metadata()
-        parameters = request.parameters if isinstance(request.parameters, dict) else {}
-        repo_filter = self._repository_filter_value(
-            parameters.get("repository", "")
-            or request.workspace_spec.get("repository", "")
+        compiled = self._compile_retrieval_request(request=request, settings=settings)
+        moonmind_metadata = self._ensure_moonmind_metadata(request)
+        compiled_payload = asdict(compiled)
+        moonmind_metadata["retrievalRequestDigest"] = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    compiled_payload, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
         )
-        if repo_filter:
-            filters.setdefault("repo", repo_filter)
-            filters.setdefault("repository", repo_filter)
-
+        moonmind_metadata["retrievalStaleAllowed"] = compiled.stale_allowed
+        moonmind_metadata["retrievalLocalFallbackAuthorized"] = (
+            compiled.local_fallback_authorized
+        )
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
         service = ContextRetrievalService(settings=settings, env=self._env)
         planning_ref = (
             parameters.get("planning_ref")
@@ -258,16 +279,98 @@ class ContextInjectionService:
         )
         return (
             service.retrieve(
-                query=self._retrieval_query(request),
-                filters=filters,
-                top_k=settings.similarity_top_k,
-                overlay_policy=self._resolve_rag_overlay_policy(),
-                budgets=self._resolve_rag_budgets(),
-                transport=transport,
+                query=compiled.query,
+                filters=dict(compiled.filters),
+                top_k=compiled.top_k,
+                overlay_policy=compiled.overlay_policy,
+                budgets=dict(compiled.budgets),
+                transport=compiled.transport,
+                collections=compiled.collections,
                 initiation_mode="automatic",
                 planning_ref=str(planning_ref) if planning_ref else None,
             ),
             None,
+        )
+
+    def _compile_retrieval_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        settings: RagRuntimeSettings,
+    ) -> InitialRetrievalRequest:
+        options = self._rag_options(request)
+        requested_collections = options.get("collections")
+        if requested_collections is not None and not isinstance(
+            requested_collections, (list, tuple)
+        ):
+            raise ValueError("rag.collections must be a list")
+        collections = settings.resolve_collections(requested_collections)
+
+        authored_scope = options.get("scope") or {}
+        if not isinstance(authored_scope, dict):
+            raise ValueError("rag.scope must be an object")
+        filters: dict[str, str] = dict(settings.as_filter_metadata())
+        for authored_key, filter_key in {
+            "tenant": "tenant",
+            "tenantId": "tenant",
+            "workspace": "workspace",
+            "workspaceId": "workspace",
+            "run": "run_id",
+            "runId": "run_id",
+        }.items():
+            value = str(authored_scope.get(authored_key) or "").strip()
+            if value:
+                filters[filter_key] = value[:256]
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        repo_filter = self._repository_filter_value(
+            str(
+                authored_scope.get("repository")
+                or authored_scope.get("repo")
+                or parameters.get("repository", "")
+                or request.workspace_spec.get("repository", "")
+            )
+        )
+        if repo_filter:
+            filters["repo"] = repo_filter
+            filters["repository"] = repo_filter
+
+        budgets = self._resolve_rag_budgets()
+        authored_budgets = options.get("budgets")
+        if authored_budgets is not None:
+            if not isinstance(authored_budgets, dict):
+                raise ValueError("rag.budgets must be an object")
+            for key in ("tokens", "latency_ms"):
+                if key in authored_budgets:
+                    value = int(authored_budgets[key])
+                    if value <= 0:
+                        raise ValueError(f"rag.budgets.{key} must be greater than 0")
+                    budgets[key] = value
+
+        overlay_policy = str(
+            options.get("overlayPolicy") or self._resolve_rag_overlay_policy()
+        ).strip().lower()
+        if overlay_policy not in {"include", "skip"}:
+            raise ValueError("rag.overlayPolicy must be 'include' or 'skip'")
+        preferred_transport = (
+            str(options.get("transport") or "").strip().lower() or None
+        )
+        if preferred_transport not in {None, "direct", "gateway"}:
+            raise ValueError("rag.transport must be 'direct' or 'gateway'")
+        top_k = int(options.get("topK") or settings.similarity_top_k)
+        if not 1 <= top_k <= 100:
+            raise ValueError("rag.topK must be between 1 and 100")
+
+        return InitialRetrievalRequest(
+            query=self._retrieval_query(request),
+            collections=collections,
+            filters=tuple(sorted(filters.items())),
+            budgets=tuple(sorted(budgets.items())),
+            overlay_policy=overlay_policy,
+            transport=settings.resolved_transport(preferred_transport),
+            top_k=top_k,
+            required=self._retrieval_required(request),
+            local_fallback_authorized=self._local_fallback_authorized(request),
+            stale_allowed=bool(options.get("staleAllowed", False)),
         )
 
     def _persist_context_pack(
@@ -296,7 +399,17 @@ class ContextInjectionService:
     ) -> Path:
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         repo = parameters.get("repository", "")
-        digest_input = f"{request.correlation_id}:{repo}:{instruction}".encode(
+        authored_rag = ContextInjectionService._rag_options(request)
+        authored_rag_json = json.dumps(
+            authored_rag,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        digest_input = (
+            f"{request.correlation_id}:{repo}:{instruction}:"
+            f"{authored_rag_json}"
+        ).encode(
             "utf-8", errors="replace"
         )
         digest = hashlib.sha256(digest_input).hexdigest()[:12]
@@ -350,6 +463,11 @@ class ContextInjectionService:
     @staticmethod
     def _normalize_retrieval_failure_reason(exc: Exception) -> str:
         message = str(exc).strip().lower()
+        if isinstance(exc, ValueError) and (
+            message.startswith("rag.")
+            or "requested retrieval collections are not configured" in message
+        ):
+            return "retrieval_policy_denied"
         if "gateway" in message or "moonmind_retrieval_url" in message:
             return "retrieval_gateway_unavailable"
         if "qdrant" in message:
@@ -435,8 +553,21 @@ class ContextInjectionService:
             "retrievalQueryDigest",
         ):
             moonmind_meta.pop(key, None)
-        moonmind_meta["retrievalMode"] = "disabled"
-        moonmind_meta["retrievalDisabledReason"] = str(reason or "retrieval_disabled").strip() or "retrieval_disabled"
+        normalized_reason = (
+            str(reason or "retrieval_disabled").strip() or "retrieval_disabled"
+        )
+        if normalized_reason in {
+            "auto_context_disabled",
+            "retrieval_disabled",
+            "qdrant_disabled",
+        }:
+            mode = "disabled"
+        elif "denied" in normalized_reason or "forbidden" in normalized_reason:
+            mode = "denied"
+        else:
+            mode = "unavailable"
+        moonmind_meta["retrievalMode"] = mode
+        moonmind_meta["retrievalDisabledReason"] = normalized_reason
         moonmind_meta["retrievalInitiationMode"] = str(initiation_mode or "automatic").strip() or "automatic"
         moonmind_meta["retrievalContextTruncated"] = False
 
@@ -475,6 +606,28 @@ class ContextInjectionService:
     def _retrieval_required(request: AgentExecutionRequest) -> bool:
         options = ContextInjectionService._rag_options(request)
         return bool(options.get("required", False))
+
+    @staticmethod
+    def _local_fallback_authorized(request: AgentExecutionRequest) -> bool:
+        options = ContextInjectionService._rag_options(request)
+        return bool(
+            options.get("localFallbackAuthorized")
+            or options.get("allowLocalFallback")
+        )
+
+    def _authorized_local_fallback(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        instruction: str,
+        workspace_path: Path,
+    ) -> ContextPack | None:
+        if not self._local_fallback_authorized(request):
+            return None
+        return self._build_local_fallback_pack(
+            instruction=instruction,
+            workspace_path=workspace_path,
+        )
 
     def _resolve_rag_overlay_policy(self) -> str:
         policy = (
@@ -540,10 +693,16 @@ class ContextInjectionService:
         )
 
     @staticmethod
-    def _should_use_local_fallback(retrieval_skip_reason: str | None) -> bool:
+    def _should_use_local_fallback(
+        request: AgentExecutionRequest,
+        retrieval_skip_reason: str | None,
+    ) -> bool:
         if retrieval_skip_reason is None:
-            return True
-        return retrieval_skip_reason in _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS
+            return False
+        return (
+            ContextInjectionService._local_fallback_authorized(request)
+            and retrieval_skip_reason in _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS
+        )
 
     def _build_local_fallback_pack(
         self,

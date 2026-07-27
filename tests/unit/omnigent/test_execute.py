@@ -1192,23 +1192,30 @@ async def test_run_omnigent_execution_reports_disabled_idempotency_marker(
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
     artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
-    result = await run_omnigent_execution(
-        AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            correlationId="corr-1",
-            idempotencyKey="idem-1",
-            parameters={
-                "omnigent": {
-                    "agent": {"agentName": "codex-native-ui"},
-                    "session": {"allowEmptyWorkspace": True},
-                    "prompt": {
-                        "text": "continue",
-                        "includeIdempotencyMarker": False,
-                    },
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "latestContextPackRef": "artifacts/context/pack.json",
+                    "retrievedContextItemCount": 1,
+                }
+            },
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {"allowEmptyWorkspace": True},
+                "prompt": {
+                    "text": "continue",
+                    "includeIdempotencyMarker": False,
                 },
             },
-        ),
+        },
+    )
+    result = await run_omnigent_execution(
+        request,
         artifact_gateway=artifact_gateway,
     )
 
@@ -1216,6 +1223,12 @@ async def test_run_omnigent_execution_reports_disabled_idempotency_marker(
     assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
     text = posted_events[0]["data"]["content"][0]["text"]
     assert "moonmind:first-message" not in text
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    assert moonmind_metadata["firstMessageDigest"].startswith("sha256:")
+    assert (
+        moonmind_metadata["firstMessageContextRef"]
+        == "artifacts/context/pack.json"
+    )
     external_state = json.loads(
         await artifact_gateway.read_text(result.metadata["externalStateRef"])
     )
