@@ -354,6 +354,7 @@ class RagQdrantClient:
         overlay_policy: str,
         overlay_collection: Optional[str],
         trust_overrides: Optional[Mapping[str, str]] = None,
+        stale_allowed: bool = False,
     ) -> SearchResult:
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
@@ -377,7 +378,12 @@ class RagQdrantClient:
                 )
             except UnexpectedResponse:
                 overlay_points = []
-        merge = self._merge_results(overlay_points, canonical, trust_overrides)
+        merge = self._merge_results(
+            overlay_points,
+            canonical,
+            trust_overrides,
+            stale_allowed=stale_allowed,
+        )
         merge.sort(key=lambda item: item.score, reverse=True)
         latency_ms = (time.perf_counter() - start) * 1000
         return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
@@ -488,6 +494,8 @@ class RagQdrantClient:
         overlay_points: Iterable[qmodels.ScoredPoint],
         canonical_points: Iterable[qmodels.ScoredPoint],
         trust_overrides: Optional[Mapping[str, str]] = None,
+        *,
+        stale_allowed: bool = False,
     ) -> List[ContextItem]:
         def resolve_source(payload: MutableMapping[str, Any]) -> str:
             for key in ("source", "path", "file_path", "document_path"):
@@ -546,7 +554,7 @@ class RagQdrantClient:
         def append(points: Iterable[qmodels.ScoredPoint], trust: str) -> None:
             for point in points:
                 payload = point.payload or {}
-                if trust == "workspace_overlay" and _is_expired(payload):
+                if not stale_allowed and _is_expired(payload):
                     continue
                 item = to_item(point, trust)
                 discriminator = item.chunk_hash

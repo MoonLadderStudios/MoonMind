@@ -128,6 +128,29 @@ _NON_TERMINAL_NORMALIZED_STATUSES = frozenset(
 _STATUS_ALIASES = {"cancelled": "canceled", "timeout": "timed_out"}
 
 
+def _bounded_bridge_lifecycle_metadata(value: Any, *, depth: int = 0) -> Any:
+    """Return secret-scanned lifecycle evidence with deterministic size limits."""
+
+    safe = redact_sensitive_payload(value)
+    if depth >= 3:
+        return "[bounded]"
+    if isinstance(safe, dict):
+        return {
+            str(key)[:64]: _bounded_bridge_lifecycle_metadata(nested, depth=depth + 1)
+            for key, nested in list(safe.items())[:32]
+        }
+    if isinstance(safe, (list, tuple)):
+        return [
+            _bounded_bridge_lifecycle_metadata(nested, depth=depth + 1)
+            for nested in list(safe)[:32]
+        ]
+    if isinstance(safe, str):
+        return safe[:1024]
+    if isinstance(safe, (bool, int, float)) or safe is None:
+        return safe
+    return str(safe)[:1024]
+
+
 class OmnigentIdempotencyError(RuntimeError):
     """Base error for invalid durable retry state."""
 
@@ -1133,7 +1156,7 @@ class OmnigentBridgeSessionStore:
                 entry["remediationAction"] = str(remediation_action)[:96]
             if metadata:
                 entry["metadata"] = {
-                    str(key)[:64]: value
+                    str(key)[:64]: _bounded_bridge_lifecycle_metadata(value)
                     for key, value in metadata.items()
                     if key
                     in {
@@ -1176,6 +1199,26 @@ class OmnigentBridgeSessionStore:
                         "captureManifestRef",
                         "resourceProjectionRef",
                         "evidenceCompleteness",
+                        "state",
+                        "contextRef",
+                        "contextDigest",
+                        "queryDigest",
+                        "requestDigest",
+                        "resultCount",
+                        "sourceIdentities",
+                        "scope",
+                        "budgets",
+                        "transport",
+                        "truncated",
+                        "reusedPersistedContext",
+                        "fallbackOrDenialReason",
+                        "required",
+                        "staleAllowed",
+                        "freshness",
+                        "staleResultCount",
+                        "localFallbackAuthorized",
+                        "firstMessageConsumesContextRef",
+                        "firstMessageDigest",
                     }
                 }
             journal.append(entry)

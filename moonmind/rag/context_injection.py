@@ -11,6 +11,7 @@ import re
 import subprocess
 from contextlib import suppress
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -288,6 +289,7 @@ class ContextInjectionService:
                 collections=compiled.collections,
                 initiation_mode="automatic",
                 planning_ref=str(planning_ref) if planning_ref else None,
+                stale_allowed=compiled.stale_allowed,
             ),
             None,
         )
@@ -513,6 +515,15 @@ class ContextInjectionService:
             ]
             moonmind_meta["retrievalBudgets"] = dict(pack.budgets)
             moonmind_meta["retrievalScope"] = dict(pack.filters)
+            stale_items = [
+                item
+                for item in pack.items
+                if ContextInjectionService._item_is_stale(item)
+            ]
+            moonmind_meta["retrievalFreshness"] = (
+                "stale_allowed" if stale_items else "fresh"
+            )
+            moonmind_meta["retrievalStaleResultCount"] = len(stale_items)
             query = ContextInjectionService._retrieval_query(request)
             moonmind_meta["retrievalQueryDigest"] = (
                 "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest()
@@ -551,6 +562,8 @@ class ContextInjectionService:
             "retrievalScope",
             "retrievalReusedPersistedContext",
             "retrievalQueryDigest",
+            "retrievalFreshness",
+            "retrievalStaleResultCount",
         ):
             moonmind_meta.pop(key, None)
         normalized_reason = (
@@ -570,6 +583,22 @@ class ContextInjectionService:
         moonmind_meta["retrievalDisabledReason"] = normalized_reason
         moonmind_meta["retrievalInitiationMode"] = str(initiation_mode or "automatic").strip() or "automatic"
         moonmind_meta["retrievalContextTruncated"] = False
+
+    @staticmethod
+    def _item_is_stale(item: ContextItem) -> bool:
+        raw_expires = (item.payload or {}).get("expires_at")
+        if not isinstance(raw_expires, str) or not raw_expires.strip():
+            return False
+        normalized = raw_expires.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            expires_at = datetime.fromisoformat(normalized)
+        except ValueError:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at <= datetime.now(timezone.utc)
 
     @staticmethod
     def _repository_filter_value(repository: str) -> str:

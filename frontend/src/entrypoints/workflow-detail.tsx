@@ -3693,6 +3693,15 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
     addLink('Open normalized events', row.metadata?.normalizedEventsRef);
     addLink('Open external state', row.metadata?.externalStateRef);
   }
+  if (
+    row.metadata?.sourceKind === 'lifecycle.initial_context_retrieval'
+    || row.metadata?.sourceKind === 'lifecycle.initial_context_retrieval_linked'
+  ) {
+    const retrieval = row.metadata?.metadata;
+    if (retrieval && typeof retrieval === 'object' && !Array.isArray(retrieval)) {
+      addLink('Open retrieved context', (retrieval as Record<string, unknown>).contextRef);
+    }
+  }
 
   return links;
 }
@@ -3839,6 +3848,10 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
   }
   if (sourceKind?.startsWith('lifecycle.')) {
     addLink('Open diagnostics', metadata.diagnosticsRef);
+    const retrieval = metadata.metadata;
+    if (retrieval && typeof retrieval === 'object' && !Array.isArray(retrieval)) {
+      addLink('Open retrieved context', (retrieval as Record<string, unknown>).contextRef);
+    }
   }
   if (metadata.terminalStatus) {
     addLink('Open diagnostics', metadata.diagnosticsRef);

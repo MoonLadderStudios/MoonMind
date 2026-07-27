@@ -52,6 +52,7 @@ class RetrievalQuery(BaseModel):
     collections: List[str] = Field(default_factory=list, max_length=16)
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
+    stale_allowed: bool = False
     budgets: Dict[str, int] = Field(default_factory=dict)
     planning_ref: Optional[str] = Field(default=None, min_length=1)
 
@@ -334,6 +335,7 @@ async def retrieve_context_pack(
             transport="direct",
             initiation_mode="session",
             planning_ref=payload.planning_ref,
+            stale_allowed=payload.stale_allowed,
         )
         pack.transport = "gateway"
         return pack.to_dict()

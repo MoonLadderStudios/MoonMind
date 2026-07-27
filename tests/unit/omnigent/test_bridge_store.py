@@ -462,6 +462,38 @@ async def test_comparison_lifecycle_event_preserves_diagnostic_fields(store):
 
 
 @pytest.mark.asyncio
+async def test_initial_retrieval_lifecycle_metadata_is_bounded_and_secret_safe(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="initial_context_retrieval",
+        event_identity="idem-1:attempt:1:initial-context",
+        metadata={
+            "state": "semantic",
+            "contextRef": "artifact://context/pack-1",
+            "resultCount": 2,
+            "sourceIdentities": [f"source-{index}" for index in range(40)],
+            "scope": {"repository": "owner/repo", "apiToken": "secret-value"},
+            "firstMessageConsumesContextRef": True,
+        },
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    metadata = events[-1].metadata_["metadata"]
+    assert metadata["contextRef"] == "artifact://context/pack-1"
+    assert metadata["firstMessageConsumesContextRef"] is True
+    assert len(metadata["sourceIdentities"]) == 32
+    assert metadata["scope"]["apiToken"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
 async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
     request = _request()
     created = await store.get_or_create(

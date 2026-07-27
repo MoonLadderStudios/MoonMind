@@ -109,6 +109,7 @@ class ContextRetrievalService:
         collections: Sequence[str] | None = None,
         initiation_mode: str = "automatic",
         planning_ref: str | None = None,
+        stale_allowed: bool = False,
     ) -> ContextPack:
         normalized_budgets = self._normalize_budgets(budgets)
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
@@ -124,6 +125,7 @@ class ContextRetrievalService:
                 collections=target_collections,
                 initiation_mode=initiation_mode,
                 planning_ref=planning_ref,
+                stale_allowed=stale_allowed,
             )
         for collection_name in target_collections:
             if collection_name not in self._verified_collections:
@@ -149,6 +151,7 @@ class ContextRetrievalService:
                 overlay_policy=overlay_policy,
                 overlay_collection=overlay_collection,
                 trust_overrides=None,
+                stale_allowed=stale_allowed,
             )
         planning_items = self._prefetch_planning_context(planning_ref)
         memory_items, memory_latency_ms = self._retrieve_long_term_memory_items(
@@ -187,6 +190,7 @@ class ContextRetrievalService:
         collections: Sequence[str],
         initiation_mode: str,
         planning_ref: str | None,
+        stale_allowed: bool,
     ) -> ContextPack:
         if not self._settings.retrieval_gateway_url:
             raise RuntimeError("RetrievalGateway URL is not configured")
@@ -197,6 +201,7 @@ class ContextRetrievalService:
             "overlay_policy": overlay_policy,
             "budgets": dict(budgets),
             "collections": list(collections),
+            "stale_allowed": bool(stale_allowed),
         }
         if planning_ref:
             payload["planning_ref"] = planning_ref

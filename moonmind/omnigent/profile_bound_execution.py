@@ -707,6 +707,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 bound_request.input_refs = list(
                     dict.fromkeys([*bound_request.input_refs, context_ref])
                 )
+                if bound_request.step_execution is not None:
+                    bound_request.step_execution.prepared_input_refs = list(
+                        dict.fromkeys(
+                            [
+                                *bound_request.step_execution.prepared_input_refs,
+                                context_ref,
+                            ]
+                        )
+                    )
             retrieval_mode = str(
                 context_metadata.get("retrievalMode") or "disabled"
             )
@@ -748,6 +757,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     "staleAllowed": bool(
                         context_metadata.get("retrievalStaleAllowed", False)
+                    ),
+                    "freshness": context_metadata.get("retrievalFreshness"),
+                    "staleResultCount": int(
+                        context_metadata.get("retrievalStaleResultCount", 0)
                     ),
                     "localFallbackAuthorized": bool(
                         context_metadata.get(

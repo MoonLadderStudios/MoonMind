@@ -542,6 +542,7 @@ def test_authored_policy_is_compiled_into_bounded_retrieval_request(
     assert kwargs["budgets"] == {"tokens": 800, "latency_ms": 1200}
     assert kwargs["transport"] == "gateway"
     assert kwargs["top_k"] == 4
+    assert kwargs["stale_allowed"] is True
 
 
 def test_authored_collection_outside_configured_scope_is_denied(
@@ -559,6 +560,41 @@ def test_authored_collection_outside_configured_scope_is_denied(
 
     with pytest.raises(ValueError, match="not configured"):
         service._retrieve_context_pack(mock_request)
+
+
+def test_context_metadata_records_actual_stale_result_outcome(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    pack = ContextPack(
+        items=[
+            ContextItem(
+                score=1.0,
+                source="overlay.py",
+                text="stale context",
+                trust_class="workspace_overlay",
+                payload={"expires_at": "2000-01-01T00:00:00Z"},
+            )
+        ],
+        filters={},
+        budgets={},
+        usage={},
+        transport="direct",
+        context_text="stale context",
+        retrieved_at="2026-07-27T00:00:00Z",
+        telemetry_id="telemetry",
+    )
+
+    ContextInjectionService._record_context_metadata(
+        request=mock_request,
+        artifact_ref="artifacts/context/pack.json",
+        transport="direct",
+        items_count=1,
+        pack=pack,
+    )
+
+    metadata = mock_request.parameters["metadata"]["moonmind"]
+    assert metadata["retrievalFreshness"] == "stale_allowed"
+    assert metadata["retrievalStaleResultCount"] == 1
 
 
 def test_context_artifact_identity_includes_authored_retrieval_policy(
