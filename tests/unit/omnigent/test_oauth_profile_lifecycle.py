@@ -1232,6 +1232,7 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     actions: list[str] = []
     lifecycle: list[tuple[str, str | None]] = []
+    prepared_workspace_spec: dict[str, object] = {}
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -1283,8 +1284,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_failed")
 
     class Runtime:
-        async def prepare_host(self, **_kwargs):
+        async def prepare_host(self, **kwargs):
             actions.append("preflight")
+            prepared_workspace_spec.update(kwargs["workspace_spec"])
             return {
                 "hostId": "host-1",
                 "workspacePath": "/workspaces/run",
@@ -1360,10 +1362,17 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
                 "workspaceLocator": {
                     "kind": "sandbox",
                     "workspaceId": hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24],
-                }
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+                "targetBranch": "issue-3507",
             },
             parameters={
-                "omnigent": {"session": {"workspace": "https://example.com/repo.git"}}
+                "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},
+                "publishMode": "pr",
+                "publishBaseBranch": "main",
+                "commitMessage": "Complete #3507",
+                "repositoryMutationRequired": True,
             },
         )
     )
@@ -1374,6 +1383,14 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     assert result.metadata["effectiveLaunchRef"].startswith(
         "omnigent-launch:sha256:"
     )
+    assert prepared_workspace_spec["repository"] == "MoonLadderStudios/MoonMind"
+    assert prepared_workspace_spec["startingBranch"] == "main"
+    assert prepared_workspace_spec["targetBranch"] == "issue-3507"
+    assert prepared_workspace_spec["publishMode"] == "pr"
+    assert prepared_workspace_spec["publishBaseBranch"] == "main"
+    assert prepared_workspace_spec["commitMessage"] == "Complete #3507"
+    assert prepared_workspace_spec["repositoryMutationRequired"] is True
+    assert prepared_workspace_spec["githubCredentialRequired"] is False
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")

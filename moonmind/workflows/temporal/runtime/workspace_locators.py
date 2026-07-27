@@ -151,6 +151,7 @@ def daemon_visible_workspace_path(path: Path) -> Path:
 
 class ManagedRunRecord(Protocol):
     run_id: str
+    workflow_id: str | None
     runtime_id: str
     workspace_path: str
 
@@ -168,6 +169,7 @@ def resolve_managed_workspace_locator(
     store: ManagedRunRecordStore,
     current_agent_run_id: str,
     current_runtime_id: str,
+    current_workflow_id: str | None = None,
 ) -> Path:
     """Resolve a locator only after caller, record, and filesystem authority agree."""
     if locator.agent_run_id != current_agent_run_id or locator.runtime_id != current_runtime_id:
@@ -182,6 +184,11 @@ def resolve_managed_workspace_locator(
     if record.run_id != locator.agent_run_id or record.runtime_id != locator.runtime_id:
         raise WorkspaceLocatorResolutionError(
             WORKSPACE_IDENTITY_MISMATCH, "managed run record does not match the locator"
+        )
+    if current_workflow_id is not None and record.workflow_id != current_workflow_id:
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_IDENTITY_MISMATCH,
+            "managed run record does not belong to the current workflow",
         )
     workspace_root = Path(record.workspace_path).resolve()
     store_authority = store.store_root.resolve().parent

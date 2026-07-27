@@ -581,11 +581,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workspace_spec={
                     **request.workspace_spec,
                     "publishMode": (request.parameters or {}).get("publishMode"),
+                    "publishBaseBranch": (request.parameters or {}).get(
+                        "publishBaseBranch"
+                    ),
+                    "commitMessage": (request.parameters or {}).get(
+                        "commitMessage"
+                    ),
                     "repositoryMutationRequired": self._repository_mutation_required(
                         request
                     ),
                     "requiredCapabilities": list(
                         self._required_capabilities(request)
+                    ),
+                    "githubCredentialRequired": self._github_mutation_required(
+                        request
                     ),
                 },
                 input_refs=tuple(request.input_refs),

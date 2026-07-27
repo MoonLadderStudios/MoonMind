@@ -26,6 +26,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
     WORKSPACE_LOCATOR_ADAPTER,
@@ -796,7 +797,14 @@ class OmnigentOAuthHostRuntime:
         artifact_gateway: Any | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
-        if not isinstance(locator, (SandboxWorkspaceLocator, ManagedWorkspaceLocator)):
+        if not isinstance(
+            locator,
+            (
+                SandboxWorkspaceLocator,
+                ManagedWorkspaceLocator,
+                ExternalStateLocator,
+            ),
+        ):
             raise OmnigentOAuthHostError(
                 "Omnigent repository work requires a worker-owned workspace locator",
                 code="WORKSPACE_LOCATOR_UNSUPPORTED",
@@ -807,6 +815,12 @@ class OmnigentOAuthHostRuntime:
             spec.get("startingBranch") or spec.get("branch") or ""
         ).strip()
         target_branch = str(spec.get("targetBranch") or "").strip()
+        effective_input_refs = list(dict.fromkeys(input_refs))
+        if (
+            isinstance(locator, ExternalStateLocator)
+            and locator.artifact_ref not in effective_input_refs
+        ):
+            effective_input_refs.insert(0, locator.artifact_ref)
         intent = {
             "schemaVersion": 1,
             "sourceIdentity": (
@@ -823,26 +837,38 @@ class OmnigentOAuthHostRuntime:
             "repository": repository or None,
             "startingBranch": starting_branch or None,
             "targetBranch": target_branch or None,
-            "inputRefs": list(dict.fromkeys(input_refs)),
+            "inputRefs": effective_input_refs,
             "resolvedSkillsetRef": resolved_skillset_ref,
             "publishMode": spec.get("publishMode"),
+            "publishBaseBranch": spec.get("publishBaseBranch"),
+            "commitMessage": spec.get("commitMessage"),
             "repositoryMutationRequired": spec.get("repositoryMutationRequired"),
             "requiredCapabilities": list(spec.get("requiredCapabilities") or ()),
+            "githubCredentialRequired": bool(spec.get("githubCredentialRequired")),
         }
         intent_digest = hashlib.sha256(
             json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        if isinstance(locator, SandboxWorkspaceLocator):
+        sandbox_locator = locator
+        if isinstance(locator, ExternalStateLocator):
+            workspace_id = hashlib.sha256(
+                f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            sandbox_locator = SandboxWorkspaceLocator(
+                workspaceId=workspace_id,
+                relativePath="repo",
+            )
+        if isinstance(sandbox_locator, SandboxWorkspaceLocator):
             expected_id = hashlib.sha256(
                 f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
             ).hexdigest()[:24]
             record_store = SandboxWorkspaceRecordStore(self._workspace_root)
-            authoritative_record = record_store.load(locator.workspace_id)
+            authoritative_record = record_store.load(sandbox_locator.workspace_id)
             proposed_record = SandboxWorkspaceRecord(
-                workspace_id=locator.workspace_id,
+                workspace_id=sandbox_locator.workspace_id,
                 workflow_id=current_workflow_id,
                 step_execution_id=current_step_execution_id,
-                relative_path=locator.relative_path,
+                relative_path=sandbox_locator.relative_path,
                 intent_digest=intent_digest,
             )
             if authoritative_record is None:
@@ -851,7 +877,7 @@ class OmnigentOAuthHostRuntime:
             elif (
                 authoritative_record.workflow_id != current_workflow_id
                 or authoritative_record.step_execution_id != current_step_execution_id
-                or authoritative_record.relative_path != locator.relative_path
+                or authoritative_record.relative_path != sandbox_locator.relative_path
                 or authoritative_record.intent_digest != intent_digest
             ):
                 raise OmnigentOAuthHostError(
@@ -859,7 +885,7 @@ class OmnigentOAuthHostRuntime:
                     code="WORKSPACE_IDENTITY_MISMATCH",
                 )
             workspace = resolve_sandbox_workspace_locator(
-                locator,
+                sandbox_locator,
                 workspace_root=self._workspace_root,
                 expected_workspace_id=expected_id,
                 owner_record=authoritative_record,
@@ -873,6 +899,7 @@ class OmnigentOAuthHostRuntime:
                 store=self._managed_run_store,
                 current_agent_run_id=current_step_execution_id,
                 current_runtime_id="codex_cli",
+                current_workflow_id=current_workflow_id,
             )
         workspace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         evidence_path = workspace.parent / ".moonmind-workspace.json"
@@ -938,9 +965,9 @@ class OmnigentOAuthHostRuntime:
             )
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 stream.write(json.dumps(evidence, sort_keys=True))
-        if isinstance(locator, SandboxWorkspaceLocator):
+        if isinstance(sandbox_locator, SandboxWorkspaceLocator):
             workspace = resolve_sandbox_workspace_locator(
-                locator,
+                sandbox_locator,
                 workspace_root=self._workspace_root,
                 expected_workspace_id=expected_id,
                 owner_record=authoritative_record,
