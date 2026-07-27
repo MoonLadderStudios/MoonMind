@@ -42,6 +42,10 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.checkpoints import (
+    OmnigentCheckpointExecutionEvidence,
+    OmnigentCheckpointExecutionKind,
+)
 from moonmind.security import scan_outbound_text
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -3738,6 +3742,37 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery checkpoint payload is invalid."
             ) from exc
+        omnigent_checkpoint_execution: dict[str, Any] | None = None
+        raw_omnigent_checkpoint_execution = checkpoint_payload.get(
+            "omnigentCheckpointExecution"
+        )
+        if raw_omnigent_checkpoint_execution is None:
+            raw_omnigent_checkpoint_execution = checkpoint.recovery_workspace.get(
+                "omnigentCheckpointExecution"
+            )
+        if raw_omnigent_checkpoint_execution is not None:
+            try:
+                omnigent_evidence = (
+                    OmnigentCheckpointExecutionEvidence.model_validate(
+                        raw_omnigent_checkpoint_execution
+                    )
+                )
+            except ValidationError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Omnigent checkpoint execution evidence is invalid."
+                ) from exc
+            if (
+                omnigent_evidence.kind
+                != OmnigentCheckpointExecutionKind.RECOVERY
+            ):
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Failed-step recovery requires Omnigent recovery evidence."
+                )
+            omnigent_checkpoint_execution = omnigent_evidence.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+            )
         if checkpoint.source.workflow_id != record.workflow_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Recovery checkpoint workflowId does not match source execution."
@@ -3916,7 +3951,12 @@ class TemporalExecutionService:
                     and artifact_ref not in preserved_step_refs
                 ):
                     preserved_step_refs.append(artifact_ref)
-        recovery_workspace = checkpoint.recovery_workspace or {}
+        recovery_workspace = dict(checkpoint.recovery_workspace or {})
+        if omnigent_checkpoint_execution is not None:
+            recovery_workspace["omnigentCheckpointExecution"] = (
+                omnigent_checkpoint_execution
+            )
+            recovery_source_payload["recoveryWorkspace"] = recovery_workspace
         workspace_policy = resolve_checkpoint_policy(
             boundary="before_recovery_restoration",
             recovery_source=recovery_source_payload,

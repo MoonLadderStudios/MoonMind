@@ -18774,15 +18774,19 @@ class MoonMindRunWorkflow:
                 checkpoint_execution is None
                 and isinstance(self._recovery_workspace, Mapping)
             ):
-                checkpoint_payload = self._recovery_workspace.get("checkpoint")
-                if not isinstance(checkpoint_payload, Mapping):
-                    checkpoint_payload = self._recovery_workspace.get(
-                        "checkpointPayload"
-                    )
-                if isinstance(checkpoint_payload, Mapping):
-                    checkpoint_execution = checkpoint_payload.get(
-                        "omnigentCheckpointExecution"
-                    )
+                checkpoint_execution = self._recovery_workspace.get(
+                    "omnigentCheckpointExecution"
+                )
+                if checkpoint_execution is None:
+                    checkpoint_payload = self._recovery_workspace.get("checkpoint")
+                    if not isinstance(checkpoint_payload, Mapping):
+                        checkpoint_payload = self._recovery_workspace.get(
+                            "checkpointPayload"
+                        )
+                    if isinstance(checkpoint_payload, Mapping):
+                        checkpoint_execution = checkpoint_payload.get(
+                            "omnigentCheckpointExecution"
+                        )
             if checkpoint_execution is not None:
                 if not isinstance(checkpoint_execution, Mapping):
                     raise ValueError(

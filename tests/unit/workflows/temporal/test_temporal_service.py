@@ -3823,15 +3823,50 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         }
         await session.commit()
 
+        checkpoint_payload = _valid_recovery_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        checkpoint_payload["omnigentCheckpointExecution"] = {
+            "kind": "recovery",
+            "checkpoint": {
+                "providerProfileId": "profile-1",
+                "credentialGeneration": 1,
+                "providerLeaseRef": "provider-lease-1",
+                "hostBindingRef": "artifact://host-binding",
+                "hostLeaseRef": "host-lease-1",
+                "endpointRef": "artifact://endpoint",
+                "omnigentHostId": "host-1",
+                "omnigentSessionId": "session-1",
+                "bridgeSessionId": "bridge-1",
+                "externalStateRef": "artifact://external-state",
+                "idempotencyKey": "first-message-1",
+            },
+            "candidateWorkspace": {
+                "loopId": "loop-1",
+                "attemptOrdinal": 1,
+                "headRef": "artifact://head",
+                "headDigest": "sha256:" + "a" * 64,
+                "checkpointRef": "artifact://checkpoint/source",
+                "checkpointDigest": "sha256:" + "b" * 64,
+            },
+            "currentCredentialGeneration": 1,
+            "providerLease": {"active": True, "leaseId": "provider-lease-1"},
+            "hostLease": {
+                "status": "ready",
+                "leaseId": "host-lease-1",
+                "credentialGeneration": 1,
+            },
+            "hostRegistered": True,
+            "sessionValid": True,
+            "firstMessageConsistent": True,
+        }
         result = await service.create_failed_step_recovery_execution(
             created,
             recovery_checkpoint_ref=None,
             idempotency_key="recover-1",
-            checkpoint_payload=_valid_recovery_checkpoint_payload(
-                workflow_id=created.workflow_id,
-                run_id=created.run_id,
-                snapshot_ref="artifact://snapshot/source",
-            ),
+            checkpoint_payload=checkpoint_payload,
             failed_run_recovery_manifest_ref="artifact://recovery/manifest",
             failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
                 workflow_id=created.workflow_id,
@@ -3848,11 +3883,19 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
         assert resumed.parameters["recoverySource"]["sourceWorkflowId"] == created.workflow_id
         assert resumed.parameters["recoverySource"]["sourceRunId"] == created.run_id
         assert resumed.parameters["recoverySource"]["failedStepId"] == "implement"
-        assert resumed.parameters["recoverySource"]["recoveryWorkspace"] == {
+        resumed_workspace = resumed.parameters["recoverySource"]["recoveryWorkspace"]
+        assert {
+            key: resumed_workspace[key]
+            for key in ("branch", "commit", "checkpointRef")
+        } == {
             "branch": "feature",
             "commit": "abc123",
             "checkpointRef": "artifact://checkpoint/source",
         }
+        assert resumed_workspace["omnigentCheckpointExecution"]["kind"] == "recovery"
+        assert resumed_workspace["omnigentCheckpointExecution"]["checkpoint"][
+            "idempotencyKey"
+        ] == "first-message-1"
         assert resumed.parameters["recoverySource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
