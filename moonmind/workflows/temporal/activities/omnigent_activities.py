@@ -10,6 +10,66 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
+async def execute_profile_bound_checkpoint_request(
+    *,
+    coordinator: object,
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    """Dispatch trusted checkpoint evidence to the one owning coordinator."""
+
+    checkpoint_execution_payload = request.parameters.get("checkpointExecution")
+    if checkpoint_execution_payload is None:
+        return await coordinator.execute(request)
+    if not isinstance(checkpoint_execution_payload, dict):
+        raise ValueError("checkpointExecution must be an object")
+
+    from moonmind.omnigent.checkpoints import (
+        OmnigentCheckpointExecutionEvidence,
+        OmnigentRecoveryOutcome,
+        decide_checkpoint_execution,
+    )
+
+    evidence = OmnigentCheckpointExecutionEvidence.model_validate(
+        checkpoint_execution_payload
+    )
+    decision = decide_checkpoint_execution(evidence)
+    if decision.outcome == OmnigentRecoveryOutcome.RESUME_UNAVAILABLE:
+        raise ValueError(
+            "resume_unavailable:"
+            f"{decision.blocking_reason or decision.reason}"
+        )
+    if decision.outcome == OmnigentRecoveryOutcome.BRANCH_REQUIRED:
+        result = await coordinator.branch_from_checkpoint(
+            request=request,
+            checkpoint=evidence.checkpoint,
+            current_credential_generation=evidence.current_credential_generation,
+            candidate_workspace=evidence.candidate_workspace,
+        )
+    else:
+        result = await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=evidence.checkpoint,
+            provider_lease=evidence.provider_lease,
+            host_lease=evidence.host_lease,
+            host_registered=evidence.host_registered,
+            session_valid=evidence.session_valid,
+            first_message_consistent=evidence.first_message_consistent,
+            current_credential_generation=evidence.current_credential_generation,
+            candidate_workspace=evidence.candidate_workspace,
+        )
+    metadata = dict(result.metadata)
+    metadata["checkpointRecovery"] = {
+        "mode": decision.outcome.value,
+        "reason": decision.reason,
+        "sourceCheckpointRef": evidence.candidate_workspace.checkpoint_ref,
+        "sourceExecutionOrdinal": evidence.candidate_workspace.attempt_ordinal,
+        "sourceHostId": evidence.checkpoint.omnigent_host_id,
+        "sourceSessionId": evidence.checkpoint.omnigent_session_id,
+        "providerProfileId": evidence.checkpoint.provider_profile_id,
+    }
+    return result.model_copy(update={"metadata": metadata})
+
+
 @activity.defn(name="integration.omnigent.execute")
 async def omnigent_execute_activity(
     request: AgentExecutionRequest,
@@ -113,7 +173,10 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
-        return await coordinator.execute(request)
+        return await execute_profile_bound_checkpoint_request(
+            coordinator=coordinator,
+            request=request,
+        )
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")
@@ -167,6 +230,7 @@ async def omnigent_oauth_host_janitor_activity(
 
 __all__ = [
     "omnigent_execute_activity",
+    "execute_profile_bound_checkpoint_request",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",
 ]

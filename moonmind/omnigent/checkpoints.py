@@ -13,6 +13,18 @@ class OmnigentRecoveryMode(str, Enum):
     COLD_RESTORE = "cold_restore"
 
 
+class OmnigentCheckpointExecutionKind(str, Enum):
+    RECOVERY = "recovery"
+    BRANCH = "branch"
+
+
+class OmnigentRecoveryOutcome(str, Enum):
+    LIVE_REATTACH = "live_reattach"
+    COLD_RESTORE = "cold_restore"
+    BRANCH_REQUIRED = "branch_required"
+    RESUME_UNAVAILABLE = "resume_unavailable"
+
+
 class CandidateWorkspaceAuthority(BaseModel):
     """MoonMind-owned repository checkpoint selected for continuation."""
 
@@ -71,6 +83,106 @@ class OmnigentCheckpointIdentity(BaseModel):
             if any(marker in lowered for marker in ("bearer ", "token=", "password=")):
                 raise ValueError(f"{field} must be a reference, not credential data")
         return self
+
+
+class OmnigentCheckpointExecutionEvidence(BaseModel):
+    """Activity-bound checkpoint execution contract.
+
+    The workflow owns this evidence.  The Omnigent Activity validates the whole
+    contract before it invokes either coordinator checkpoint entrypoint.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: OmnigentCheckpointExecutionKind
+    checkpoint: OmnigentCheckpointIdentity
+    candidate_workspace: CandidateWorkspaceAuthority = Field(
+        ..., alias="candidateWorkspace"
+    )
+    current_credential_generation: int = Field(
+        ..., alias="currentCredentialGeneration", ge=1
+    )
+    provider_lease: dict[str, Any] | None = Field(None, alias="providerLease")
+    host_lease: dict[str, Any] | None = Field(None, alias="hostLease")
+    host_registered: bool = Field(False, alias="hostRegistered")
+    session_valid: bool = Field(False, alias="sessionValid")
+    first_message_consistent: bool = Field(
+        False, alias="firstMessageConsistent"
+    )
+    immutable_input_matches: bool = Field(True, alias="immutableInputMatches")
+    changed_fields: tuple[str, ...] = Field(default=(), alias="changedFields")
+    validation_passed: bool = Field(True, alias="validationPassed")
+    validation_reason: str | None = Field(None, alias="validationReason")
+
+    @model_validator(mode="after")
+    def _validate_kind_specific_evidence(
+        self,
+    ) -> "OmnigentCheckpointExecutionEvidence":
+        if self.kind == OmnigentCheckpointExecutionKind.BRANCH:
+            if self.immutable_input_matches or not self.changed_fields:
+                raise ValueError(
+                    "checkpoint branch requires explicit changed immutable input"
+                )
+        elif self.changed_fields or not self.immutable_input_matches:
+            raise ValueError(
+                "checkpoint recovery cannot change immutable workflow input"
+            )
+        return self
+
+
+class OmnigentRecoveryDecision(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    outcome: OmnigentRecoveryOutcome
+    reason: str
+    blocking_reason: str | None = Field(None, alias="blockingReason")
+
+
+def decide_checkpoint_execution(
+    evidence: OmnigentCheckpointExecutionEvidence,
+) -> OmnigentRecoveryDecision:
+    """Choose one of the four operator-visible recovery outcomes."""
+
+    if evidence.kind == OmnigentCheckpointExecutionKind.BRANCH:
+        if not evidence.validation_passed:
+            return OmnigentRecoveryDecision(
+                outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+                reason="checkpoint_validation_failed",
+                blockingReason=evidence.validation_reason
+                or "checkpoint_evidence_invalid",
+            )
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.BRANCH_REQUIRED,
+            reason="immutable_input_changed",
+        )
+    if not evidence.validation_passed:
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+            reason="checkpoint_validation_failed",
+            blockingReason=evidence.validation_reason
+            or "checkpoint_evidence_invalid",
+        )
+    mode = recovery_mode(
+        evidence.checkpoint,
+        provider_lease=evidence.provider_lease,
+        host_lease=evidence.host_lease,
+        host_registered=evidence.host_registered,
+        session_valid=evidence.session_valid,
+        first_message_consistent=evidence.first_message_consistent,
+    )
+    outcome = (
+        OmnigentRecoveryOutcome.LIVE_REATTACH
+        if mode == OmnigentRecoveryMode.LIVE_REATTACH
+        else OmnigentRecoveryOutcome.COLD_RESTORE
+    )
+    return OmnigentRecoveryDecision(
+        outcome=outcome,
+        reason=(
+            "all_original_authorities_valid"
+            if outcome == OmnigentRecoveryOutcome.LIVE_REATTACH
+            else "replacement_host_required"
+        ),
+    )
 
 
 def recovery_mode(
@@ -152,7 +264,12 @@ def validate_branch_identity(
 __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
+    "OmnigentCheckpointExecutionEvidence",
+    "OmnigentCheckpointExecutionKind",
+    "OmnigentRecoveryDecision",
     "OmnigentRecoveryMode",
+    "OmnigentRecoveryOutcome",
+    "decide_checkpoint_execution",
     "recovery_mode",
     "validate_branch_identity",
     "validate_cold_restore_target",

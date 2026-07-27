@@ -653,6 +653,9 @@ RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
 )
+RUN_OMNIGENT_CHECKPOINT_EXECUTION_PATCH = (
+    "run-omnigent-checkpoint-execution-v1"
+)
 RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
     "run-omnigent-authored-selection-compiler-v1"
 )
@@ -18750,6 +18753,43 @@ class MoonMindRunWorkflow:
             idempotency_key = (
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
+
+        # #3510: checkpoint execution evidence is produced by the checkpoint
+        # validation/branch preparation boundary and consumed only by the
+        # profile-bound Omnigent Activity.  Do not synthesize authority from a
+        # host or session identifier here.
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_CHECKPOINT_EXECUTION_PATCH
+            )
+        ):
+            checkpoint_execution = None
+            if isinstance(branch_turn_payload, Mapping):
+                checkpoint_execution = branch_turn_payload.get(
+                    "omnigentCheckpointExecution"
+                )
+            if (
+                checkpoint_execution is None
+                and isinstance(self._recovery_workspace, Mapping)
+            ):
+                checkpoint_payload = self._recovery_workspace.get("checkpoint")
+                if not isinstance(checkpoint_payload, Mapping):
+                    checkpoint_payload = self._recovery_workspace.get(
+                        "checkpointPayload"
+                    )
+                if isinstance(checkpoint_payload, Mapping):
+                    checkpoint_execution = checkpoint_payload.get(
+                        "omnigentCheckpointExecution"
+                    )
+            if checkpoint_execution is not None:
+                if not isinstance(checkpoint_execution, Mapping):
+                    raise ValueError(
+                        "validated Omnigent checkpoint execution evidence "
+                        "must be an object"
+                    )
+                parameters["checkpointExecution"] = dict(checkpoint_execution)
 
         # Repository work delegated through Omnigent carries durable ownership,
         # never a worker or daemon filesystem path. The activity resolves this
