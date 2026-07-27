@@ -11864,11 +11864,21 @@ def _apply_codex_cutover_admission(
 
     if selection not in {"automatic", "omnigent", "direct"}:
         return authored
+    cohort = str(authored.get("codexRolloutCohort") or "general").strip().lower()
+    if cohort not in {"internal", "general"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_codex_rollout_cohort",
+                "message": "codexRolloutCohort must be 'internal' or 'general'.",
+            },
+        )
 
     decision = decide_codex_path(
         feature_flags=settings.feature_flags,
         selection=selection,
         submission=submission,
+        cohort=cohort,
     )
     get_metrics_emitter().increment(
         "omnigent_codex_cutover.admission_total",
@@ -11878,6 +11888,7 @@ def _apply_codex_cutover_admission(
             "reason": decision.reason_code,
             "selected_path": decision.selected_path,
             "submission": submission,
+            "cohort": cohort,
         },
     )
     if not decision.admitted:

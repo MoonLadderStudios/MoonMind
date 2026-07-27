@@ -37,15 +37,22 @@ MoonMind artifact reference and truthful provenance until retention expiry.
 `FEATURE_FLAGS__OMNIGENT_CODEX_ROLLOUT_GENERATION` binds rollout configuration
 to `FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_EVIDENCE_JSON`;
 `FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_MAX_AGE_HOURS` bounds freshness.
-Admission produces an immutable snapshot with generation, phase, selected path,
-reason, matrix version and evidence reference. Persist it with the run input;
-Temporal workflows never recompute it.
+The projection must carry the protected report SHA-256, qualifying case IDs,
+host modes, architectures and immutable image digests, and authenticate with
+`FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_SIGNING_KEY`. Unsigned, tampered,
+incomplete, mutable-tag, or non-artifact/non-HTTPS evidence is rejected. The
+signing key is secret-backed configuration and is never stored in a run
+snapshot. Admission produces an immutable snapshot with generation, phase,
+cohort, selected path, reason, matrix version and evidence reference. Persist
+it with the run input; Temporal workflows never recompute it.
 
 Phases are ordered: `internal`, `create_default`, `scheduled_default`,
 `broad_default`, `direct_disabled`, `retired`. Create defaults move before
-schedules and presets. Promotion fails closed on missing, stale, mismatched or
-failed evidence. Automatic selection records `migration_window_default` or
-`rollout_default`; it does not try another runtime after launch failure.
+schedules and presets. The `internal` phase admits only requests authored with
+the `internal` cohort; general requests retain direct compatibility. Promotion
+fails closed on missing, stale, mismatched or failed evidence. Automatic
+selection records `migration_window_default` or `rollout_default`; it does not
+try another runtime after launch failure.
 Explicit Omnigent failure records `conformance_gate_failed`, never direct
 fallback. Rollback changes new admissions only and preserves run snapshots.
 
@@ -55,8 +62,10 @@ The operator-visible release status is the rollout decision plus its report.
 Promotion requires a digest-pinned report no older than seven days, at least
 99% readiness, terminal-harvest and control-delivery success, at most 1%
 cleanup failures, zero replay gaps and zero secret violations, plus passing
-live conformance, historical-read and Temporal replay assertions. Exceeding any
-limit requires rollback to the prior phase.
+live conformance, historical-read and Temporal replay assertions. Artifact,
+checkpoint, remediation and RAG completeness must each be at least 99%, and
+janitor failures at most 1%. Exceeding any limit requires rollback to the prior
+phase.
 
 Telemetry is segmented by selected path, host mode, image architecture and
 failure class. It records profile-lease, host-ready, first-message, first-event,

@@ -6,6 +6,12 @@ import pytest
 from fastapi import HTTPException
 
 from api_service.api.routers import executions
+from moonmind.workflows.executions.omnigent_codex_rollout import (
+    sign_codex_cutover_evidence,
+)
+
+
+SIGNING_KEY = "test-only-cutover-evidence-key"
 
 
 def _flags(*, phase: str = "create_default", valid: bool = True) -> SimpleNamespace:
@@ -13,6 +19,7 @@ def _flags(*, phase: str = "create_default", valid: bool = True) -> SimpleNamesp
         "generation": "v1",
         "matrixVersion": "moonmind.omnigent.codex-support/v1",
         "reportRef": "artifact://conformance/codex-v1.json",
+        "reportSha256": "a" * 64,
         "recordedAt": datetime.now(timezone.utc).isoformat(),
         "liveConformancePassed": valid,
         "replayPassed": True,
@@ -23,11 +30,24 @@ def _flags(*, phase: str = "create_default", valid: bool = True) -> SimpleNamesp
         "cleanupFailureRatio": .001,
         "replayGapRatio": 0,
         "controlDeliverySuccessRatio": .999,
+        "artifactCompletenessRatio": .999,
+        "checkpointSuccessRatio": .999,
+        "remediationSuccessRatio": .999,
+        "ragSuccessRatio": .999,
+        "janitorFailureRatio": .001,
+        "policyDenials": 0,
+        "readinessDenials": 0,
+        "qualifiedCaseIds": ["create.static.amd64", "create.ondemand.amd64"],
+        "hostModes": ["static", "ondemand"],
+        "architectures": ["linux/amd64"],
+        "imageDigests": ["example.invalid/codex@sha256:" + "b" * 64],
     }
+    evidence = sign_codex_cutover_evidence(evidence, signing_key=SIGNING_KEY)
     return SimpleNamespace(
         omnigent_codex_rollout_phase=phase,
         omnigent_codex_rollout_generation="v1",
         omnigent_codex_conformance_evidence_json=json.dumps(evidence),
+        omnigent_codex_conformance_signing_key=SIGNING_KEY,
         omnigent_codex_conformance_max_age_hours=168,
     )
 

@@ -2215,6 +2215,17 @@ class FeatureFlagsSettings(BaseSettings):
         ),
         description="Generation-bound live conformance and rollout telemetry evidence.",
     )
+    omnigent_codex_conformance_signing_key: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_CODEX_CONFORMANCE_SIGNING_KEY",
+            "OMNIGENT_CODEX_CONFORMANCE_SIGNING_KEY",
+        ),
+        description=(
+            "Secret HMAC key used to authenticate protected Codex conformance "
+            "report projections. An empty value keeps promotion fail closed."
+        ),
+    )
     omnigent_codex_conformance_max_age_hours: int = Field(
         168,
         ge=1,

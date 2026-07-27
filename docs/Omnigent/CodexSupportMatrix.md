@@ -35,6 +35,24 @@ is defined in [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#credential
 | historical direct reads without worker | required compatibility; live evidence required | cumulative historical-read assertion and direct-event UI tests |
 | Claude through Omnigent | deferred | outside MoonLadderStudios/MoonMind#3518 |
 
+## Required protected-report dimensions
+
+No row above is “supported” in v1 until a protected report resolves every
+applicable combination below to a concrete case ID and immutable report/image
+digest. Omitted combinations are unsupported, not inferred from another row.
+
+| Dimension | Required values |
+| --- | --- |
+| host | static and on-demand, independently |
+| architecture/image | `linux/amd64` plus exact server and host `@sha256` digests; every other architecture is unsupported |
+| submission | Create, edit, rerun, schedule and preset |
+| repository authority | read-only, mutation and publication |
+| Workflow Detail | live, reconnect, cold replay, resources and each control |
+| terminal/recovery | cancellation, timeout, provider failure, cleanup, janitor, checkpoint, reattach, cold restore and branch |
+| authored context | operator remediation, autonomous gate, initial RAG, follow-up RAG, persistent policy and persistent profile |
+| network/security | enforced egress, redaction, policy denial and readiness denial |
+| migration | explicit Omnigent, automatic cohort/default and explicit direct fallback while allowed |
+
 Upstream compatibility is the exact protocol and digest-pinned server/host
 images in the report. An upgrade requires a new report for candidate digests
 and architectures before promotion. Image license and notice material must be
