@@ -537,7 +537,25 @@ The session-oriented activities are remote-session contracts. They must delegate
 
 `agent_runtime.restore_workspace_checkpoint` is the `codex_cli` cold-restore data plane. It runs only on `mm.activity.agent_runtime`, verifies checkpoint, archive, manifest, repository base, path containment, and restored entries before atomically activating a new managed workspace, and persists compact restoration evidence. A launch carrying a restoration requirement is rejected unless the destination is `ready` and its checkpoint and capability digest match.
 
-The session-oriented activity surface is intended to become runtime-neutral at the workflow boundary, but the live activity/controller path currently admits Codex CLI only. Runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code must add a Claude-specific session adapter/controller before carrying `runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"` through this activity surface.
+The session-oriented `agent_runtime.*` activity surface is runtime-neutral at
+the workflow boundary, but its live activity/controller path currently admits
+Codex CLI only. Runtime-specific protocol details remain behind the session
+adapter/controller boundary. The current container transport uses the Codex App
+Server-compatible remote-session protocol for the Codex binding. Claude Code
+must add a Claude-specific session adapter/controller before carrying
+`runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"`
+through this activity surface.
+
+This restriction does not prohibit a profile-bound `claude-native` Omnigent
+host. Omnigent sessions use the Omnigent host/bridge activity family and its
+normalized event, control, resource, cursor, and terminal-evidence contracts;
+they do not impersonate the Codex `agent_runtime.*` controller. An explicit
+Claude Omnigent execution profile must retain Claude/harness provenance and
+report unsupported event families instead of synthesizing Codex-only events.
+Checkpoint, branch, ContextPack/RAG, and remediation payloads remain
+host-independent artifact/ref contracts, while live reattach is admitted only
+when the profile generation, host registration, bridge cursor, and session
+authority are still valid.
 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,

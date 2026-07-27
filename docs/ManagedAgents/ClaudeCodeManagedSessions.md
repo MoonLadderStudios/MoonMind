@@ -26,7 +26,17 @@ The Claude Code variant diverges from Codex in a few important ways that must be
 5. **Checkpointing is first-class.** Claude automatically creates rewindable checkpoints around edits and user prompts. That belongs in the plane, not as an afterthought.
 6. **Child work comes in two shapes.** Claude subagents are child contexts inside one session; agent teams are multiple sessions with direct peer communication.
 
-The live MoonMind session-control plane currently admits Codex CLI only. Claude Code is a live managed-run runtime, and this document describes the Claude Code binding that should eventually join the shared Managed Session Plane once it has a Claude-specific session adapter/controller. That future binding should keep the shared Managed Session Plane concepts intact, but change the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.
+The live MoonMind `agent_runtime.*` session-control plane currently admits Codex
+CLI only. That boundary is distinct from the profile-bound Omnigent bridge:
+Claude may run through a `claude-native` Omnigent host while still lacking a
+Claude adapter for the `agent_runtime.*` managed-session transport described in
+this document. Both surfaces use shared session/event/resource concepts, but an
+Omnigent bridge capability must not be presented as support for a missing
+managed-session activity capability. Claude Code is also a live direct
+managed-run runtime. This document defines the Claude binding that joins the
+shared Managed Session Plane when its Claude-specific adapter/controller is
+available; the binding keeps shared plane concepts intact while adapting
+policy, context, and child-session semantics to Claude Code.
 
 Current live boundaries:
 
@@ -40,6 +50,17 @@ Known implementation gaps versus Codex:
 
 - Claude Code does not yet use the live remote-session activity transport. Claude-native checkpoint, policy-dialog, Remote Control, and subagent/team semantics are represented by domain models and documentation but are not yet exposed as live session workflow updates.
 - Codex App Server-specific implementation class names remain in private adapter/controller modules because the only live workflow-scoped managed-session transport is Codex-specific. Shared workflow/activity contracts should use `ManagedSession*` names when a second live runtime is added.
+
+The Claude-via-Omnigent rollout does not retire direct Claude or change existing
+managed-session histories. Every run persists its runtime, harness, execution
+profile, provider profile, policy, model, workspace, capture, and RAG snapshot.
+An explicit `claude-native` Omnigent selection fails closed rather than falling
+back to direct Claude or Codex. Default changes require credentialed static and
+on-demand conformance, Workflow Detail replay after host removal,
+checkpoint/live-reattach/cold-restore evidence, mixed-version Temporal replay,
+and a tested rollback window. Historical reads retain their recorded adapter
+and artifact references. Direct Claude is retired only after no supported
+schedule, branch, remediation path, or in-flight history depends on it.
 
 ---
 

@@ -4,6 +4,10 @@
 **Scope:** Dashboard Settings -> Providers & Secrets -> Provider Profiles  
 **Target OAuth profile:** `claude_anthropic`
 
+**Document Class:** Canonical declarative
+**Status:** Current
+**Last updated:** 2026-07-27
+
 This document defines the OAuth-backed Claude Code authentication path for
 Anthropic accounts. It covers the case where the operator authenticates Claude
 Code through Claude's own interactive login flow in a MoonMind browser terminal,
@@ -55,6 +59,7 @@ runtime_materialization_mode: oauth_home
 
 volume_ref: claude_auth_volume
 volume_mount_path: /home/app/.claude
+user_state_path: /home/app/.claude.json
 
 enabled: true
 account_label: "Claude Anthropic OAuth"
@@ -66,7 +71,10 @@ clear_env_keys:
   - OPENAI_API_KEY
 ```
 
-The auth volume contains Claude's reusable account-auth material. Raw credential
+The profile volume contains Claude's reusable account-auth material, including
+the `.claude` home and the user-level `.claude.json` state required by the
+supported CLI release. They are versioned, mounted, drained, and replaced as one
+credential generation. Raw credential
 files are never copied into workflow payloads, logs, artifacts, browser
 responses, or provider profile rows.
 
@@ -185,27 +193,25 @@ interactive login writes into the mounted auth volume:
 - `CLAUDE_HOME=/home/app/.claude`
 - `CLAUDE_VOLUME_PATH=/home/app/.claude`
 
-The runner should clear competing API-key environment variables during OAuth
-enrollment so the login state comes from the account-auth flow, not an ambient
-key:
+The runner and every profile-bound host should clear competing credential
+environment variables so login state comes from the selected OAuth generation,
+not ambient credentials:
 
 - `ANTHROPIC_API_KEY`
 - `CLAUDE_API_KEY`
+- `OPENAI_API_KEY`
+- `CODEX_API_KEY`
 
 ## 5. Verification
 
 Finalization verifies the auth volume before registering or updating the
 provider profile.
 
-For Claude OAuth, verification should check for Claude account-auth material
-under the mounted Claude home. The verifier may accept known Claude credential
-artifacts such as:
-
-- `credentials.json`
-- `.credentials.json`
-- `settings.json` when it contains evidence that Claude completed account setup
-- any other stable Claude CLI account-auth artifact explicitly documented by the
-runtime adapter
+For Claude OAuth, verification runs `claude auth status` in the exact UID/GID,
+home, mount, and cleared-environment shape used by the target host. File
+existence alone is not authorization evidence. The verifier also checks that
+the mounted `.claude` home and `.claude.json` user state are writable and belong
+to the selected profile generation.
 
 Verification must return only secret-free metadata, such as:
 
@@ -236,17 +242,33 @@ new runs can select the updated profile.
 ## 7. Runtime Launch Behavior
 
 At Claude workflow launch, MoonMind resolves the selected provider profile and
-materializes the OAuth home into the runtime container according to the
-provider-profile materialization contract:
+materializes the OAuth home into either the direct runtime or the shared
+profile-bound Omnigent host lifecycle according to the provider-profile
+materialization contract:
 
 1. Resolve `claude_anthropic`.
 2. Apply `clear_env_keys`.
 3. Mount or project `claude_auth_volume` at the configured Claude home path.
-4. Set Claude home environment variables consistently for the runtime.
-5. Launch `claude_code`.
+4. Mount the generation-matched `.claude.json` user state.
+5. Set Claude home environment variables consistently for the runtime.
+6. Acquire profile and host leases, prove `claude auth status` and exact
+   `claude-native` registration, then launch one session.
+7. On completion, harvest terminal evidence, clean the session and host, and
+   release Provider Profile capacity last.
 
 The launch path must not place raw credential file contents in workflow history,
 logs, or artifacts.
+
+Reconnect, repair, rotation, and disconnect stop new admissions before changing
+credential state. They drain or explicitly terminate the active generation,
+invalidate stale host registrations, and admit new sessions only after the
+replacement generation passes exact-environment verification. With OAuth
+capacity fixed at one, Settings connection is the only login ceremony: an
+Omnigent host never prompts for a second provider login.
+
+An explicit Claude-via-Omnigent execution profile fails closed when its provider
+profile, credential generation, host mode, image, or `claude-native` capability
+is incompatible. It is never silently routed to direct Claude or Codex.
 
 ## 8. API-Key Auth Is Separate
 
@@ -284,3 +306,4 @@ the browser terminal.
 - `docs/Security/ProviderProfiles.md`
 - `docs/UI/SettingsTab.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Omnigent/OmnigentHostOAuth.md`

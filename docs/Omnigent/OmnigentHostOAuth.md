@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-07-18  
+**Last updated:** 2026-07-27
 **Authority:** Provider Profile, credential-mount, host-binding, host-lease, readiness, and cleanup contract for OAuth-backed Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the safety invariants that all launch modes must enforce.
@@ -28,23 +28,27 @@ Implementation progress belongs in the roadmap, issues, and pull requests. This 
 
 MoonMind Settings enrolls first-party CLI OAuth credentials into durable, provider-specific Docker auth volumes and registers connected Provider Profiles. A profile-bound Omnigent host reuses that verified credential home without a second login ceremony and without extracting access or refresh tokens.
 
-The Codex-first operator journey is:
+The provider-neutral operator journey is:
 
 ```text
-Settings -> Connect Codex OAuth
-  -> verified Codex OAuth volume
-  -> connected OpenAI / codex_cli Provider Profile
+Settings -> Connect provider OAuth
+  -> verified provider-specific OAuth home
+  -> connected runtime/provider Provider Profile
   -> executionProfileRef selected for an Omnigent run
   -> one global Provider Profile lease
   -> one durable Omnigent host lease
-  -> static Compose or deterministic on-demand Codex host
-  -> exact codex-native host registration and preflight
+  -> static Compose or deterministic on-demand provider host
+  -> exact native-harness host registration and preflight
   -> one Omnigent session / runner
   -> evidence harvest and host cleanup
   -> Provider Profile lease release last
 ```
 
-The current critical path is Codex. The canonical Compose file also contains a supported static `omnigent-host-claude` profile, but dynamic Claude routing, on-demand launch, bridge parity, and productized recovery remain deferred to the late Claude milestone. No Codex milestone may silently claim Claude parity.
+Codex and Claude use this one lifecycle contract. Provider-specific adapters are
+limited to OAuth-home/config layout, readiness commands, competing-credential
+neutralization, native harness capability, image selection, and truthful
+capability limitations. A Claude selection must never fall back to Codex or
+direct Claude, and a Codex selection must never claim Claude conformance.
 
 ---
 
@@ -57,7 +61,7 @@ This document governs:
 - safe `AuthVolumeRef` and `CredentialMountRef` contracts;
 - profile-to-host binding and durable host leases;
 - the canonical static Compose bootstrap path;
-- deterministic on-demand Codex host materialization;
+- deterministic on-demand OAuth host materialization;
 - exact host registration, harness, and credential readiness;
 - workspace, skill, tool, artifact, cache, temporary-storage, and network boundaries;
 - retry, reconnect, generation drain, janitor, and cleanup ordering;
@@ -74,9 +78,9 @@ API-key profiles may eventually use the same binding and host-launch framework, 
 1. **MoonMind Settings is the enrollment authority.** OAuth connection, validation, repair, reconnect, and disconnect use the existing OAuth Session and Provider Profile systems.
 2. **The Provider Profile is the selection identity.** Workflows use `executionProfileRef`; they never select credential files or Docker volume names.
 3. **The OAuth home is mutable credential state.** The selected CLI may refresh or rewrite it, so ownership must be exclusive and authorized writes must persist.
-4. **OAuth capacity is one globally.** Direct Codex, Omnigent Codex, OAuth maintenance, validation, repair, reconnect, and disconnect share the same purpose-aware Provider Profile capacity ledger.
+4. **OAuth capacity is one globally per profile.** Direct runtime, Omnigent host, OAuth maintenance, validation, repair, reconnect, and disconnect consumers share the same purpose-aware Provider Profile capacity ledger.
 5. **One profile maps to at most one active host and one active session.** Host-local counters do not replace Provider Profile authority.
-6. **Host registration credentials are separate from provider OAuth.** The host authenticates to Omnigent independently from Codex authenticating to OpenAI.
+6. **Host registration credentials are separate from provider OAuth.** The host authenticates to Omnigent independently from the native harness authenticating to its provider.
 7. **Only safe references cross durable boundaries.** Temporal history, bridge rows, checkpoints, diagnostics, and artifacts never contain OAuth credential bodies.
 8. **Static and on-demand modes use one contract.** Both resolve the same profile, mount path, binding, generation, readiness, bridge authorization, artifact, and cleanup semantics.
 9. **Stock host compatibility is preserved.** MoonMind configures and controls an unchanged published `omnigent-host` image.
@@ -480,11 +484,58 @@ Live reattach is permitted only when the profile lease, generation, host registr
 
 ---
 
-## 18. Static Claude compatibility boundary
+## 18. Claude binding of the shared host contract
 
-The canonical Compose file may expose `omnigent-host-claude` as a dedicated static host that mounts only the matching Claude OAuth home and keeps Omnigent state separate. That supported bootstrap slice does not imply the Codex profile-bound coordinator, dynamic on-demand runtime, mounted-tool authorization, recovery path, or conformance matrix already supports Claude.
+The canonical `claude_code` OAuth binding uses the same profile authorization,
+provider lease, host binding, host lease, generation, exact-host registration,
+workspace, bridge, evidence, cleanup, and release-last authorities defined
+above. It may run through the dedicated static `omnigent-host-claude` Compose
+profile or the shared deterministic on-demand launcher. Neither mode creates a
+second lifecycle coordinator.
 
-Claude parity must reuse the same global capacity, binding, generation, exact-host, bridge, workspace, policy, evidence, and cleanup contracts after its runtime-specific credential and configuration rules are reconciled.
+The Claude adapter owns these runtime-specific facts:
+
+| Concern | Claude binding |
+| --- | --- |
+| Provider/runtime/harness | `anthropic` / `claude_code` / `claude-native` |
+| OAuth home | `/home/app/.claude`, mounted read/write from the selected profile volume |
+| User-level state | `/home/app/.claude.json`, persisted with the same profile generation and never copied into durable payloads |
+| Readiness | `claude auth status` in the exact launch environment, followed by exact-host registration proving `claude-native` |
+| Competing credentials | unset `ANTHROPIC_API_KEY`, `CLAUDE_API_KEY`, `OPENAI_API_KEY`, and other adapter-declared provider overrides |
+| Capability differences | publish the registered harness capabilities; Codex App Server-only approvals, thread events, or controls are unsupported unless the Claude bridge reports a real equivalent |
+
+The `.claude` directory and `.claude.json` are one mutable authorization unit.
+Enrollment, validation, static launch, and on-demand launch must see the same
+generation of both. Reconnect or rotation first prevents new admissions, drains
+or terminates the active host/session according to policy, replaces the
+generation, rejects stale registrations, and permits new work only after the
+new exact-environment readiness check succeeds.
+
+Shared checkpoint, branch, RAG, and remediation records remain
+host-independent. Live reattach is allowed only while the Claude profile lease,
+credential generation, host registration, session authority, and bridge cursor
+remain valid. Otherwise cold restore creates a new isolated workspace and a new
+Claude-authorized host/session. ContextPack and follow-up retrieval cross the
+bridge as bounded artifact references; remediation actions use the same typed
+authority and evidence contracts. Unsupported Claude-native event families are
+recorded as unsupported capabilities, never synthesized from Codex events.
+
+Static and on-demand conformance are independent support claims. Each requires
+immutable-image and architecture evidence, exact registration, first-message
+ordering, event and cursor replay, resource harvest, cancellation, restart,
+partial-start reconciliation, stale-generation rejection, janitor cleanup,
+secret scanning, and Provider Profile release-last evidence. A passing static
+row does not authorize the on-demand row.
+
+Direct Claude remains a separate execution profile during rollout. Existing
+runs and historical reads retain their recorded runtime, harness, profile,
+policy, and artifact references. New defaults change only after mixed-version
+Temporal replay, rollback, profile-generation drain, bridge/Workflow Detail,
+checkpoint/recovery, and credentialed static/on-demand conformance pass. Rollback
+selects the previously supported profile for new runs; it never rewrites or
+silently reroutes an explicit Claude-via-Omnigent request. Direct Claude may be
+retired only after no supported schedule, branch, remediation path, or in-flight
+history depends on it and the rollback window has closed.
 
 ---
 
