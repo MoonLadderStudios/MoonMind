@@ -841,6 +841,34 @@ class OmnigentOAuthHostRuntime:
             json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         evidence_path = workspace.parent / ".moonmind-workspace.json"
+        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+        authoritative_record = record_store.load(locator.workspace_id)
+        proposed_record = SandboxWorkspaceRecord(
+            workspace_id=locator.workspace_id,
+            workflow_id=current_workflow_id,
+            step_execution_id=current_step_execution_id,
+            relative_path=locator.relative_path,
+            intent_digest=intent_digest,
+        )
+        if authoritative_record is None:
+            # Claim the identity before creating the workspace or fetching inputs.
+            # O_EXCL in ensure() makes concurrent first materialization fail closed.
+            record_store.ensure(proposed_record)
+            authoritative_record = proposed_record
+        workspace = resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            owner_record=authoritative_record,
+            expected_workflow_id=current_workflow_id,
+            expected_step_execution_id=current_step_execution_id,
+            must_exist=False,
+        )
+        if authoritative_record.intent_digest != intent_digest:
+            raise OmnigentOAuthHostError(
+                "workspace intent conflicts with its durable owner record",
+                code="WORKSPACE_IDENTITY_MISMATCH",
+            )
         if evidence_path.is_file():
             previous = json.loads(evidence_path.read_text(encoding="utf-8"))
             if previous.get("intentDigest") != intent_digest:
@@ -934,18 +962,16 @@ class OmnigentOAuthHostRuntime:
             )
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 stream.write(json.dumps(evidence, sort_keys=True))
-        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
-        authoritative_record = record_store.load(locator.workspace_id)
-        if authoritative_record is None:
-            authoritative_record = SandboxWorkspaceRecord(
-                workspace_id=locator.workspace_id,
-                workflow_id=current_workflow_id,
-                step_execution_id=current_step_execution_id,
-                relative_path=locator.relative_path,
-                intent_digest=intent_digest,
+        if authoritative_record.source_commit is None:
+            authoritative_record = record_store.finalize(
+                expected=authoritative_record,
                 source_commit=source_commit,
             )
-            record_store.ensure(authoritative_record)
+        elif authoritative_record.source_commit != source_commit:
+            raise OmnigentOAuthHostError(
+                "workspace source evidence conflicts with its durable owner record",
+                code="WORKSPACE_IDENTITY_MISMATCH",
+            )
         workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,

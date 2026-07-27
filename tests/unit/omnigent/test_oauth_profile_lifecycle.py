@@ -589,8 +589,33 @@ async def test_host_preparation_resolves_pre_materialized_workspace_without_git(
 
     workspace = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
     workspace.mkdir(parents=True)
+    intent_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "workspaceId": workspace_id,
+                "workflowId": "workflow-1",
+                "stepExecutionId": "step-1",
+                "repository": None,
+                "startingBranch": None,
+                "targetBranch": None,
+                "inputRefs": [],
+                "resolvedSkillsetRef": None,
+                "publishMode": None,
+                "repositoryMutationRequired": None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     SandboxWorkspaceRecordStore(tmp_path / "workspaces").ensure(
-        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
+        SandboxWorkspaceRecord(
+            workspace_id,
+            "workflow-1",
+            "step-1",
+            "repo",
+            intent_digest=intent_digest,
+        )
     )
 
     resolved = await runtime._prepare_workspace(
@@ -612,6 +637,25 @@ async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> N
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
     workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
     workspace.mkdir(parents=True)
+    intent_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "workspaceId": workspace_id,
+                "workflowId": "workflow-1",
+                "stepExecutionId": "step-1",
+                "repository": None,
+                "startingBranch": None,
+                "targetBranch": None,
+                "inputRefs": [],
+                "resolvedSkillsetRef": None,
+                "publishMode": None,
+                "repositoryMutationRequired": None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
     resolved = await runtime._prepare_workspace(
         workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
@@ -621,7 +665,13 @@ async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> N
 
     assert resolved == workspace
     assert SandboxWorkspaceRecordStore(workspace_root).load(workspace_id) == (
-        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
+        SandboxWorkspaceRecord(
+            workspace_id,
+            "workflow-1",
+            "step-1",
+            "repo",
+            intent_digest=intent_digest,
+        )
     )
 
 
@@ -643,7 +693,7 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
+async def test_host_preparation_materializes_empty_authorized_workspace(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=workspace_root
@@ -652,15 +702,14 @@ async def test_host_preparation_rejects_unmaterialized_workspace_without_mutatio
     runtime._run = AsyncMock(return_value=(0, "", ""))
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
-        await runtime._prepare_workspace(
-            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
-            current_workflow_id="workflow-1",
-            current_step_execution_id="step-1",
-        )
+    workspace = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+    )
 
-    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
-    assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+    assert workspace == workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    assert workspace.is_dir()
     runtime._run.assert_not_awaited()
 
 

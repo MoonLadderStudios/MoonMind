@@ -83,6 +83,46 @@ class SandboxWorkspaceRecordStore:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write(payload)
 
+    def finalize(
+        self,
+        *,
+        expected: SandboxWorkspaceRecord,
+        source_commit: str | None,
+    ) -> SandboxWorkspaceRecord:
+        """Atomically add materialization evidence to an owned workspace record."""
+
+        current = self.load(expected.workspace_id)
+        if current != expected:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_IDENTITY_MISMATCH,
+                "sandbox workspace owner record changed during materialization",
+            )
+        finalized = SandboxWorkspaceRecord(
+            workspace_id=expected.workspace_id,
+            workflow_id=expected.workflow_id,
+            step_execution_id=expected.step_execution_id,
+            relative_path=expected.relative_path,
+            intent_digest=expected.intent_digest,
+            source_commit=source_commit,
+        )
+        if finalized == current:
+            return finalized
+        path = self._record_path(expected.workspace_id)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        payload = json.dumps(asdict(finalized), sort_keys=True)
+        try:
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return finalized
+
 
 def resolve_sandbox_workspace_locator(
     locator: SandboxWorkspaceLocator,

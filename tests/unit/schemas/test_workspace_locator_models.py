@@ -116,6 +116,26 @@ def test_sandbox_owner_record_is_durable_and_idempotent(tmp_path):
     assert store.load("owned") == record
 
 
+def test_sandbox_owner_record_finalization_is_compare_and_swap(tmp_path):
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    claimed = SandboxWorkspaceRecord(
+        workspace_id="owned",
+        workflow_id="workflow-1",
+        step_execution_id="step-1",
+        relative_path="repo",
+        intent_digest="intent-1",
+    )
+    store.ensure(claimed)
+
+    finalized = store.finalize(expected=claimed, source_commit="commit-1")
+
+    assert finalized.source_commit == "commit-1"
+    assert store.load("owned") == finalized
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        store.finalize(expected=claimed, source_commit="commit-2")
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
 def test_sandbox_owner_record_rejects_cross_step_retry(tmp_path):
     store = SandboxWorkspaceRecordStore(tmp_path)
     store.ensure(
