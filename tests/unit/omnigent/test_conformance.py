@@ -1,6 +1,7 @@
 """MoonLadderStudios/MoonMind#3419 conformance contract tests."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from moonmind.omnigent.conformance import (
     build_report,
     load_profile,
     require_pinned_images,
+    validate_acceptance_manifest,
     validate_fixture,
 )
 
@@ -80,6 +82,44 @@ def test_unknown_fixture_version_requires_explicit_behavior() -> None:
 def test_stock_images_must_be_immutable() -> None:
     with pytest.raises(ConformanceContractError, match="server image"):
         require_pinned_images({"server": "omnigent:latest", "host": "host:latest"})
+
+
+def _acceptance_manifest(now: datetime) -> dict[str, object]:
+    return {
+        "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
+        "issue": "MoonLadderStudios/MoonMind#3508",
+        "parentIssue": "MoonLadderStudios/MoonMind#3448",
+        "status": "passed",
+        "generatedAt": now.isoformat(),
+        "expiresAt": (now + timedelta(days=30)).isoformat(),
+        "images": {
+            "serverDigest": "sha256:" + "a" * 64,
+            "hostDigest": "sha256:" + "b" * 64,
+        },
+        "browserEvidence": "browser/browser-evidence.json",
+        "reports": ["browser/report.json"],
+    }
+
+
+def test_acceptance_manifest_gate_accepts_current_immutable_3508_evidence() -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    validate_acceptance_manifest(_acceptance_manifest(now), now=now)
+
+
+@pytest.mark.parametrize("mutation", ["absent", "expired", "malformed", "mutable"])
+def test_acceptance_manifest_gate_fails_closed(mutation: str) -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    manifest = _acceptance_manifest(now)
+    if mutation == "absent":
+        manifest.pop("browserEvidence")
+    elif mutation == "expired":
+        manifest["expiresAt"] = (now - timedelta(seconds=1)).isoformat()
+    elif mutation == "malformed":
+        manifest["schemaVersion"] = "future/v2"
+    else:
+        manifest["images"]["hostDigest"] = "latest"  # type: ignore[index]
+    with pytest.raises(ConformanceContractError):
+        validate_acceptance_manifest(manifest, now=now)
 
 
 def test_report_requires_every_case_and_records_machine_readable_evidence() -> None:

@@ -20,6 +20,7 @@ from typing import Any, Iterable, Mapping
 PROFILE_VERSION = "moonmind.omnigent.conformance/v4"
 PROFILE_SHA256 = "4098a93e74fb354d2a557e900ea85d3d34ca4957a02f91a529daa276ee7b3a1b"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
+ACCEPTANCE_VERSION = "moonmind.omnigent.product-acceptance/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 
 _DIGEST_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
@@ -123,6 +124,50 @@ def require_pinned_images(images: Mapping[str, str]) -> None:
             raise ConformanceContractError(
                 f"stock {role} image must be pinned by immutable sha256 digest"
             )
+
+
+def validate_acceptance_manifest(
+    manifest: Mapping[str, Any], *, now: datetime | None = None
+) -> None:
+    """Fail closed unless a #3508 release manifest is current and immutable."""
+    if manifest.get("schemaVersion") != ACCEPTANCE_VERSION:
+        raise ConformanceContractError("acceptance manifest schema is missing or malformed")
+    if (
+        manifest.get("issue") != "MoonLadderStudios/MoonMind#3508"
+        or manifest.get("parentIssue") != "MoonLadderStudios/MoonMind#3448"
+        or manifest.get("status") != "passed"
+    ):
+        raise ConformanceContractError("acceptance manifest is not a passing #3508 artifact")
+    try:
+        generated_at = datetime.fromisoformat(
+            str(manifest["generatedAt"]).replace("Z", "+00:00")
+        )
+        expires_at = datetime.fromisoformat(
+            str(manifest["expiresAt"]).replace("Z", "+00:00")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConformanceContractError(
+            "acceptance manifest validity period is missing or malformed"
+        ) from exc
+    if generated_at.tzinfo is None or expires_at.tzinfo is None:
+        raise ConformanceContractError("acceptance manifest validity period needs timezone")
+    observed_at = now or datetime.now(timezone.utc)
+    if expires_at <= generated_at or expires_at <= observed_at:
+        raise ConformanceContractError("acceptance manifest is expired")
+    images = manifest.get("images")
+    if not isinstance(images, Mapping):
+        raise ConformanceContractError("acceptance manifest images are missing")
+    for key in ("serverDigest", "hostDigest"):
+        digest = images.get(key)
+        if (
+            not isinstance(digest, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+        ):
+            raise ConformanceContractError(
+                "acceptance manifest contains a mutable or malformed image"
+            )
+    if not manifest.get("browserEvidence") or not manifest.get("reports"):
+        raise ConformanceContractError("acceptance manifest evidence is missing")
 
 
 def assert_secret_free(evidence: Any) -> None:

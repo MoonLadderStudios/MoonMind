@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run credentialed Omnigent conformance and product journeys for #3456.
+"""Run credentialed Omnigent conformance and browser product journeys for #3508.
 
 The runner owns only an isolated Compose project.  In particular, it never
 removes volumes: the enrolled Codex OAuth volume is operator-owned evidence,
@@ -39,6 +39,7 @@ PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
+    "browser": {"product.normal-create-api"},
     "product": {"product.normal-create-api"},
     "cumulative": {"product.cumulative-remediation"},
     "stock": {
@@ -51,6 +52,69 @@ LIVE_CASES = {
     "static": {"compose.static-codex-oauth"},
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
+}
+BROWSER_ROWS = (
+    "static_profile_bound",
+    "static_restart_replay",
+    "on_demand_policy_selected",
+    "repository_read_analysis",
+    "repository_mutation_publication",
+    "failed_credential_readiness_admission",
+    "failed_host_registration_readiness",
+    "active_cancellation_interruption",
+    "partial_start_cleanup_janitor",
+)
+BROWSER_AUTHORITY_FIELDS = (
+    "authoredWorkflowRef",
+    "taskInputSnapshotRef",
+    "compiledRuntimeRequestRef",
+    "executionProfileRef",
+    "launchPolicyRef",
+    "effectiveLaunchSnapshotRef",
+    "providerProfileRef",
+    "providerLeaseId",
+    "hostBindingRef",
+    "hostLeaseId",
+    "hostId",
+    "hostCapability",
+    "bridgeSessionId",
+    "omnigentSessionId",
+    "firstMessageId",
+    "eventCursor",
+    "workspaceLocator",
+    "sourceCommit",
+    "resourceRefs",
+    "artifactRefs",
+    "terminalState",
+    "cleanupState",
+    "janitorState",
+    "providerProfileRelease",
+    "networkPolicyRef",
+    "runtime",
+    "hostMode",
+)
+BROWSER_RECORD_TYPES = {
+    "browserTrace",
+    "createRequest",
+    "authoredWorkflow",
+    "taskInputSnapshot",
+    "compiledExecutionRequest",
+    "executionProfile",
+    "launchPolicy",
+    "effectiveLaunchSnapshot",
+    "profileLease",
+    "hostBinding",
+    "hostLease",
+    "hostRegistration",
+    "bridgeSession",
+    "omnigentSession",
+    "bridgeEvents",
+    "workspace",
+    "artifactInventory",
+    "terminalProjection",
+    "cleanupResult",
+    "janitorState",
+    "sideEffectAudit",
 }
 STOCK_ROUTES = (
     "agents", "hosts", "session.create", "session.get", "event.post",
@@ -116,6 +180,7 @@ ONDEMAND_ACTIONS = (
     "host_removed", "workflow_detail_reloaded", "lease_released",
 )
 SCENARIOS = {
+    "browser": f"{PROVIDER_TEST}::test_live_browser_release_matrix",
     "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
     "cumulative": f"{PROVIDER_TEST}::test_live_cumulative_remediation_journey",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
@@ -130,6 +195,7 @@ EVIDENCE_ENV = {
     "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
 }
 SCENARIO_EVIDENCE_ENV = {
+    "browser": "MOONMIND_OMNIGENT_BROWSER_EVIDENCE",
     "product": "MOONMIND_OMNIGENT_PRODUCT_EVIDENCE",
     "cumulative": "MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
@@ -217,7 +283,7 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
-        if scenario in {"product", "cumulative", "failures"}:
+        if scenario in {"browser", "product", "cumulative", "failures"}:
             records = [
                 record
                 for item in observations
@@ -225,7 +291,9 @@ class LiveRunner:
                 if isinstance(record, dict)
             ]
             required_types = (
-                PRODUCT_RECORD_TYPES[action]
+                BROWSER_RECORD_TYPES
+                if scenario == "browser"
+                else PRODUCT_RECORD_TYPES[action]
                 if scenario == "product"
                 else {"cumulativeRunState", "sideEffectAudit"}
                 if scenario == "cumulative"
@@ -393,6 +461,75 @@ class LiveRunner:
             }),
         })
         self.scenario("product")
+
+    def browser(self) -> None:
+        """Control /workflows/new and prove every #3508 release row."""
+        rows: dict[str, dict[str, object]] = {}
+        evidence_refs: list[str] = []
+        for row in BROWSER_ROWS:
+            result = self.action("browser", row)
+            if result.get("row") != row:
+                raise ConformanceContractError(
+                    f"browser row identity mismatch: expected {row!r}"
+                )
+            authority = result.get("authorityChain")
+            if not isinstance(authority, dict):
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the complete authority chain"
+                )
+            missing = [field for field in BROWSER_AUTHORITY_FIELDS if not authority.get(field)]
+            if missing:
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the complete authority chain: {missing}"
+                )
+            if authority.get("hostCapability") != "codex-native":
+                raise ConformanceContractError(
+                    f"browser/{row} did not reach the codex-native capability"
+                )
+            if authority.get("runtime") != "external/omnigent":
+                raise ConformanceContractError(
+                    f"browser/{row} used a non-Omnigent runtime"
+                )
+            browser_control = result.get("browserControl")
+            if (
+                not isinstance(browser_control, dict)
+                or browser_control.get("headless") is not True
+                or browser_control.get("startPath") != "/workflows/new"
+                or browser_control.get("submissionPath") != "operator-frontend"
+                or browser_control.get("readinessObserved") is not True
+                or browser_control.get("manualHostId") is not False
+            ):
+                raise ConformanceContractError(
+                    f"browser/{row} did not use the controlling product browser path"
+                )
+            assertions = {
+                "browser_originated": bool(result.get("browserOriginated")),
+                "normal_create_request": bool(result.get("normalCreateRequest")),
+                "workflow_detail_terminal_replay": bool(
+                    result.get("workflowDetailTerminalReplay")
+                ),
+                "no_fallback": bool(result.get("noFallback")),
+            }
+            if not all(assertions.values()):
+                raise ConformanceContractError(
+                    f"browser/{row} did not prove browser control or no fallback"
+                )
+            rows[row] = {
+                "status": "passed",
+                "assertions": assertions,
+                "authorityChain": authority,
+                "browserControl": browser_control,
+                "evidenceRefs": result["evidenceRefs"],
+            }
+            evidence_refs.extend(result["evidenceRefs"])
+        self.write_evidence("browser", {
+            "issue": "MoonLadderStudios/MoonMind#3508",
+            "parentIssue": "MoonLadderStudios/MoonMind#3448",
+            "entrypoint": "/workflows/new",
+            "rows": rows,
+            "evidenceRefs": evidence_refs,
+        })
+        self.scenario("browser")
 
     def cumulative(self) -> None:
         """Prove cumulative remediation through the production action boundary."""
@@ -637,7 +774,9 @@ def main() -> int:
     try:
         for mode in selected:
             try:
-                if mode == "product":
+                if mode == "browser":
+                    runner.browser()
+                elif mode == "product":
                     runner.product()
                 elif mode == "cumulative":
                     runner.cumulative()

@@ -35,6 +35,7 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     assert job["strategy"]["fail-fast"] is False
     assert job["strategy"]["max-parallel"] == 1
     assert job["strategy"]["matrix"]["mode"] == [
+        "browser",
         "product",
         "cumulative",
         "stock",
@@ -88,7 +89,8 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Write publication manifest"
     )
-    assert "expected six passing reports" in manifest["run"]
+    assert "expected seven passing reports" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3508" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3480" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3471" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3456" in manifest["run"]
@@ -126,13 +128,14 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         step
         for step in job["steps"]
         if step.get("name") == (
-            "Link passing acceptance report from issues 3480, 3471, 3456, and 3448"
+            "Link passing acceptance report from issues 3508 and 3448"
         )
     )
-    assert "gh issue comment 3480" in link["run"]
-    assert "gh issue comment 3471" in link["run"]
-    assert "gh issue comment 3456" in link["run"]
+    assert "gh issue comment 3508" in link["run"]
     assert "gh issue comment 3448" in link["run"]
     assert "github.run_id" in link["run"]
     assert "github.run_attempt" in link["run"]
     assert "github.sha" in link["run"]
+    assert "expiresAt" in manifest["run"]
+    assert "browser evidence lacks the complete release row inventory" in manifest["run"]
+    assert "browser evidence lacks a complete authority chain" in manifest["run"]

@@ -149,6 +149,72 @@ def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypat
         raise AssertionError("incomplete product acceptance evidence was accepted")
 
 
+def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    authority = {name: f"{name}-value" for name in module.BROWSER_AUTHORITY_FIELDS}
+    authority["hostCapability"] = "codex-native"
+    authority["runtime"] = "external/omnigent"
+
+    def action(scenario, name, **inputs):
+        actions.append(name)
+        return {
+            "ok": True,
+            "row": name,
+            "browserOriginated": True,
+            "normalCreateRequest": True,
+            "workflowDetailTerminalReplay": True,
+            "noFallback": True,
+            "authorityChain": authority,
+            "browserControl": {
+                "headless": True,
+                "startPath": "/workflows/new",
+                "submissionPath": "operator-frontend",
+                "readinessObserved": True,
+                "manualHostId": False,
+            },
+            "evidenceRefs": [f"artifact://{name}"],
+        }
+
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.browser()
+    assert actions == list(module.BROWSER_ROWS)
+    evidence = json.loads((tmp_path / "browser-evidence.json").read_text())
+    assert evidence["issue"] == "MoonLadderStudios/MoonMind#3508"
+    assert set(evidence["rows"]) == set(module.BROWSER_ROWS)
+    assert all(row["status"] == "passed" for row in evidence["rows"].values())
+
+
+def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    monkeypatch.setattr(runner, "action", lambda scenario, name, **inputs: {
+        "ok": True,
+        "row": name,
+        "browserOriginated": True,
+        "normalCreateRequest": True,
+        "workflowDetailTerminalReplay": True,
+        "noFallback": name != module.BROWSER_ROWS[-1],
+        "authorityChain": {},
+        "browserControl": {
+            "headless": True,
+            "startPath": "/workflows/new",
+            "submissionPath": "operator-frontend",
+            "readinessObserved": True,
+            "manualHostId": False,
+        },
+        "evidenceRefs": [f"artifact://{name}"],
+    })
+    try:
+        runner.browser()
+    except module.ConformanceContractError as exc:
+        assert "authority chain" in str(exc) or "fallback" in str(exc)
+    else:
+        raise AssertionError("incomplete browser acceptance evidence was accepted")
+
+
 def test_cumulative_journey_requires_destroyed_source_and_distinct_attempts(
     tmp_path, monkeypatch
 ):

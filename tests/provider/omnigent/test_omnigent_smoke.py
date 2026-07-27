@@ -241,6 +241,42 @@ async def test_live_product_create_api_journey(bridge_store) -> None:
     assert evidence.get("schemaVersions")
 
 
+async def test_live_browser_release_matrix(bridge_store) -> None:
+    _require_mode("browser")
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_BROWSER_EVIDENCE")
+    assert evidence.get("issue") == "MoonLadderStudios/MoonMind#3508"
+    assert evidence.get("parentIssue") == "MoonLadderStudios/MoonMind#3448"
+    assert evidence.get("entrypoint") == "/workflows/new"
+    rows = evidence.get("rows")
+    assert isinstance(rows, dict)
+    assert set(rows) == {
+        "static_profile_bound", "static_restart_replay",
+        "on_demand_policy_selected", "repository_read_analysis",
+        "repository_mutation_publication",
+        "failed_credential_readiness_admission",
+        "failed_host_registration_readiness",
+        "active_cancellation_interruption",
+        "partial_start_cleanup_janitor",
+    }
+    for row in rows.values():
+        assert row.get("status") == "passed"
+        _assert_passed(row, {
+            "browser_originated", "normal_create_request",
+            "workflow_detail_terminal_replay", "no_fallback",
+        })
+        authority = row.get("authorityChain")
+        assert isinstance(authority, dict)
+        assert authority.get("hostCapability") == "codex-native"
+        assert authority.get("runtime") == "external/omnigent"
+        control = row.get("browserControl")
+        assert isinstance(control, dict)
+        assert control.get("headless") is True
+        assert control.get("startPath") == "/workflows/new"
+        assert control.get("submissionPath") == "operator-frontend"
+        assert control.get("readinessObserved") is True
+        assert control.get("manualHostId") is False
+
+
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:
     _require_mode("cumulative")
     evidence = _scenario_evidence("MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE")
