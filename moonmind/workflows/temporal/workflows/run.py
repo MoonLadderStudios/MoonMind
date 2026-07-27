@@ -2851,6 +2851,9 @@ class MoonMindRunWorkflow:
             if isinstance(value, str) and value.strip():
                 outputs[target_key] = value.strip()
         if self._step_external_agent_ids.get(logical_step_id) == "omnigent":
+            checkpoint_ref = self._step_checkpoint_refs.get(logical_step_id)
+            if isinstance(checkpoint_ref, str) and checkpoint_ref.strip():
+                outputs["omnigentCheckpointRef"] = checkpoint_ref.strip()
             capture = artifacts.get("omnigentCheckpointCapture")
             if isinstance(capture, Mapping):
                 outputs["omnigentCheckpointCapture"] = dict(capture)

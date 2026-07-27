@@ -135,6 +135,7 @@ from moonmind.schemas.temporal_models import (
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
+    StepExecutionCheckpointModel,
     StepExecutionDetailModel,
     StepExecutionListModel,
     StepExecutionManifestModel,
@@ -182,6 +183,7 @@ from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -6710,6 +6712,7 @@ def _step_execution_projection_payload(
     manifest: StepExecutionManifestModel,
     *,
     manifest_artifact_ref: str,
+    checkpoint_authority: Any = None,
 ) -> dict[str, Any]:
     workspace = manifest.workspace
     execution = manifest.execution
@@ -6726,7 +6729,10 @@ def _step_execution_projection_payload(
             _field_value(execution, "summary"),
         )
     )
-    checkpoint_recovery = _checkpoint_recovery_projection(outputs)
+    checkpoint_recovery = _checkpoint_recovery_projection(
+        outputs,
+        checkpoint_authority=checkpoint_authority,
+    )
     return {
         "manifestArtifactRef": manifest_artifact_ref,
         "stepExecutionId": manifest.step_execution_id,
@@ -6761,10 +6767,16 @@ def _step_execution_projection_payload(
     }
 
 
-def _checkpoint_recovery_projection(outputs: Any) -> dict[str, Any] | None:
+def _checkpoint_recovery_projection(
+    outputs: Any,
+    *,
+    checkpoint_authority: Any = None,
+) -> dict[str, Any] | None:
     """Project only typed checkpoint authority, never caller-authored capability data."""
 
-    raw = _field_value(outputs, "omnigentCheckpoint")
+    raw = checkpoint_authority
+    if raw is None:
+        raw = _field_value(outputs, "omnigentCheckpoint")
     if not isinstance(raw, Mapping):
         return None
     try:
@@ -6802,14 +6814,71 @@ def _checkpoint_recovery_projection(outputs: Any) -> dict[str, Any] | None:
     }
 
 
+async def _read_omnigent_checkpoint_authority(
+    manifest: StepExecutionManifestModel,
+    *,
+    artifact_service: Any,
+    principal: str,
+) -> dict[str, Any] | None:
+    """Resolve finalized authority from the canonical checkpoint artifact.
+
+    The pre-assembly capture mapping is intentionally ignored.  Legacy manifests
+    without the compact checkpoint ref remain readable but have no recovery
+    projection.
+    """
+
+    checkpoint_ref = _first_text(
+        _field_value(manifest.outputs, "omnigentCheckpointRef")
+    )
+    artifact_id = _artifact_id_from_ref(checkpoint_ref)
+    if not artifact_id:
+        return None
+    try:
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        checkpoint = StepExecutionCheckpointModel.model_validate(
+            json.loads(body.decode("utf-8"))
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValidationError, KeyError):
+        return None
+    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "step_checkpoint_unauthorized",
+                "message": "Not authorized to read checkpoint recovery evidence.",
+            },
+        ) from exc
+    except TemporalArtifactError:
+        return None
+    source = checkpoint.source
+    if (
+        source.workflow_id != manifest.workflow_id
+        or source.run_id != manifest.run_id
+        or source.logical_step_id != manifest.logical_step_id
+        or source.execution_ordinal != manifest.execution_ordinal
+    ):
+        return None
+    if checkpoint.omnigent_checkpoint is None:
+        return None
+    return checkpoint.omnigent_checkpoint.model_dump(
+        by_alias=True, mode="json", exclude_none=True
+    )
+
+
 def _step_execution_detail_payload(
     manifest: StepExecutionManifestModel,
     *,
     manifest_artifact_ref: str,
+    checkpoint_authority: Any = None,
 ) -> dict[str, Any]:
     payload = _step_execution_projection_payload(
         manifest,
         manifest_artifact_ref=manifest_artifact_ref,
+        checkpoint_authority=checkpoint_authority,
     )
     payload.update(
         {
@@ -12887,10 +12956,20 @@ async def describe_execution_step_executions(
         zip(manifest_results, manifest_refs, strict=True),
         start=1,
     ):
+        checkpoint_authority = (
+            await _read_omnigent_checkpoint_authority(
+                manifest,
+                artifact_service=artifact_service,
+                principal=principal,
+            )
+            if manifest is not None
+            else None
+        )
         payload = (
             _step_execution_projection_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
+                checkpoint_authority=checkpoint_authority,
             )
             if manifest is not None
             else _degraded_step_execution_projection_payload(
@@ -12994,10 +13073,20 @@ async def describe_execution_step_execution(
         )
         if candidate_ordinal != execution_ordinal:
             continue
+        checkpoint_authority = (
+            await _read_omnigent_checkpoint_authority(
+                manifest,
+                artifact_service=artifact_service,
+                principal=principal,
+            )
+            if manifest is not None
+            else None
+        )
         payload = (
             _step_execution_detail_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
+                checkpoint_authority=checkpoint_authority,
             )
             if manifest is not None
             else _degraded_step_execution_projection_payload(

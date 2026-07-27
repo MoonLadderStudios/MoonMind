@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from api_service.api.routers.executions import _checkpoint_recovery_projection
+from api_service.api.routers.executions import (
+    _checkpoint_recovery_projection,
+    _read_omnigent_checkpoint_authority,
+)
 from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
     assemble_checkpoint_manifest,
@@ -21,6 +26,12 @@ from moonmind.omnigent.profile_bound_execution import (
     build_runtime_checkpoint_capture,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.temporal_models import (
+    STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+    StepExecutionManifestModel,
+)
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal.activity_runtime import TemporalCheckpointActivities
 
 
 def _digest(payload: bytes) -> str:
@@ -218,6 +229,189 @@ def test_api_projection_prefers_current_restore_validation() -> None:
     assert projection is not None
     assert projection["valid"] is True
     assert projection["validatedRefs"]
+
+
+@pytest.mark.asyncio
+async def test_api_reads_finalized_checkpoint_authority_from_canonical_artifact() -> None:
+    checkpoint = {
+        "schemaVersion": "v1",
+        "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        "checkpointId": "workflow-1:run-1:step-1:execution:1:checkpoint:after_turn",
+        "checkpointKind": "step_boundary",
+        "boundary": "after_turn",
+        "source": {
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "step-1",
+            "executionOrdinal": 1,
+        },
+        "taskInputSnapshotRef": "artifact://task-input",
+        "workspace": {
+            "kind": "git_patch",
+            "baseCommit": "abc123",
+            "patchRef": "artifact://workspace-patch",
+        },
+        "stepOutputs": {},
+        "omnigentCheckpoint": _manifest().model_dump(by_alias=True, mode="json"),
+        "createdAt": "2026-06-13T12:00:00Z",
+    }
+    step_execution = StepExecutionManifestModel.model_validate(
+        {
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "step-1",
+            "executionOrdinal": 1,
+            "stepExecutionId": "workflow-1:run-1:step-1:execution:1",
+            "outputs": {
+                "omnigentCheckpointRef": "artifact://canonical-checkpoint",
+                "omnigentCheckpointCapture": {"untrusted": "pre-assembly"},
+            },
+        }
+    )
+    service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="canonical-checkpoint"),
+                json.dumps(checkpoint).encode(),
+            )
+        )
+    )
+
+    authority = await _read_omnigent_checkpoint_authority(
+        step_execution,
+        artifact_service=service,
+        principal="user-1",
+    )
+    projection = _checkpoint_recovery_projection(
+        step_execution.outputs,
+        checkpoint_authority=authority,
+    )
+
+    assert authority is not None
+    assert authority["stepExecutionId"] == step_execution.step_execution_id
+    assert projection is not None
+    assert projection["requiredProfileId"] == "profile-1"
+    assert projection["reasonCode"] == "current_validation_unavailable"
+
+
+class _CheckpointArtifactStore(InMemoryArtifactStore):
+    def __init__(self, source_payloads: dict[str, bytes]) -> None:
+        super().__init__()
+        self._source_payloads = source_payloads
+
+    def get_bytes(self, artifact_ref: str) -> bytes:
+        if artifact_ref in self._source_payloads:
+            return self._source_payloads[artifact_ref]
+        return super().get_bytes(artifact_ref)
+
+
+def _checkpoint_activity_request(
+    *,
+    capture: dict[str, object] | None = None,
+    manifest: OmnigentCheckpointManifest | None = None,
+) -> dict[str, object]:
+    return {
+        "identity": {
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "step-1",
+            "executionOrdinal": 1,
+        },
+        "boundary": "after_turn",
+        "taskInputSnapshotRef": "artifact://task-input",
+        "workspace": {
+            "kind": "git_patch",
+            "baseCommit": "abc123",
+            "patchRef": "artifact://workspace-patch",
+        },
+        "createdAt": "2026-06-13T12:00:00Z",
+        "stepOutputs": {},
+        "omnigentCheckpointCapture": capture,
+        "omnigentCheckpoint": (
+            manifest.model_dump(by_alias=True, mode="json") if manifest else None
+        ),
+        "diagnosticRefs": [],
+        "idempotencyKey": (
+            "workflow-1:run-1:step-1:execution:1:checkpoint:after_turn"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_activity_assembles_degraded_capture_idempotently() -> None:
+    payloads = {
+        "artifact://external": b"external",
+        "artifact://head": b"head",
+        "artifact://checkpoint": b"checkpoint",
+        "artifact://execution-profile": b"profile",
+        "artifact://launch-policy": b"policy",
+        "artifact://resources": b"resources",
+        "artifact://capture": b"capture",
+        "artifact://instructions": b"instructions",
+        "artifact://context": b"context",
+        "artifact://terminal": b"terminal",
+        "artifact://workspace-patch": b"patch",
+    }
+    capture = _capture()
+    identity = dict(capture["identity"])
+    identity.pop("diagnosticsRef")
+    capture["identity"] = identity
+    capture["validationStatus"] = "degraded"
+    capture["workspaceColdRestore"] = {
+        "available": False,
+        "reasonCode": "diagnostics_missing",
+    }
+    capture["branchCreation"] = {
+        "available": False,
+        "reasonCode": "diagnostics_missing",
+    }
+    store = _CheckpointArtifactStore(payloads)
+    activities = TemporalCheckpointActivities(artifact_store=store)
+    request = _checkpoint_activity_request(capture=capture)
+
+    first = await activities.step_checkpoint_create(request)
+    second = await activities.step_checkpoint_create(request)
+    persisted = json.loads(store.get_bytes(first["checkpointRef"]))
+
+    assert first == second
+    assert persisted["omnigentCheckpoint"]["validationStatus"] == "degraded"
+    assert persisted["omnigentCheckpoint"]["workspaceColdRestore"] == {
+        "available": False,
+        "reasonCode": "diagnostics_missing",
+    }
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_activity_accepts_previous_finalized_manifest_shape() -> None:
+    payloads = {
+        ref: payload
+        for ref, payload in {
+            "artifact://external": b"external",
+            "artifact://head": b"head",
+            "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
+            "artifact://workspace-patch": b"patch",
+        }.items()
+    }
+    store = _CheckpointArtifactStore(payloads)
+    activities = TemporalCheckpointActivities(artifact_store=store)
+
+    result = await activities.step_checkpoint_create(
+        _checkpoint_activity_request(manifest=_manifest())
+    )
+    persisted = json.loads(store.get_bytes(result["checkpointRef"]))
+
+    assert persisted["omnigentCheckpoint"]["schemaVersion"] == "v2"
+    assert persisted["omnigentCheckpoint"]["stepExecutionId"] == (
+        "workflow-1:run-1:step-1:execution:1"
+    )
 
 
 def test_current_restore_validation_is_persisted_in_runtime_result() -> None:

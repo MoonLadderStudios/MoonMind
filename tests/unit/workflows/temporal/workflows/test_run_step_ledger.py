@@ -3110,6 +3110,98 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
 
 
 @pytest.mark.asyncio
+async def test_run_maps_real_omnigent_checkpoint_boundaries_and_capture_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Running")
+    workflow._step_external_agent_ids["implement"] = "omnigent"
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "baseCommit": "abc123",
+        "kind": "git_patch",
+    }
+    row = workflow._step_ledger_row_for("implement")
+    assert isinstance(row, dict)
+    row["artifacts"]["omnigentCheckpointCapture"] = {
+        "schemaVersion": "v2",
+        "captureManifestRef": "artifact://omnigent/capture",
+    }
+    create_payloads: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": "abc123",
+                    "patchRef": f"artifact://patch/{payload['boundary']}",
+                    "createdAt": now.isoformat(),
+                },
+                "diagnosticRefs": [],
+            }
+        assert activity == "step_checkpoint.create"
+        create_payloads.append(payload)
+        return {
+            "checkpointRef": f"artifact://checkpoint/{payload['boundary']}",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": "git_patch",
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_publication",
+        updated_at=now,
+    )
+
+    assert [payload["boundary"] for payload in create_payloads] == [
+        "after_turn",
+        "terminal_harvest",
+    ]
+    assert all(
+        payload["omnigentCheckpointCapture"]
+        == {
+            "schemaVersion": "v2",
+            "captureManifestRef": "artifact://omnigent/capture",
+        }
+        for payload in create_payloads
+    )
+    assert create_payloads[0]["idempotencyKey"].endswith(
+        ":checkpoint:after_turn"
+    )
+    assert create_payloads[1]["idempotencyKey"].endswith(
+        ":checkpoint:terminal_harvest"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3208,6 +3300,7 @@ async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
         updated_at=now,
         step_outputs={"summaryRef": "artifact://summary"},
     )
+    workflow._step_external_agent_ids["implement"] = "omnigent"
     await workflow._record_step_execution_manifest(
         "implement",
         phase="start",
@@ -3253,6 +3346,9 @@ async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
         "after_execution": "artifact://checkpoint/after_execution",
     }
     workspace = manifest_writes[-1]["payload"]["workspace"]
+    assert manifest_writes[-1]["payload"]["outputs"]["omnigentCheckpointRef"] == (
+        "artifact://checkpoint/after_execution"
+    )
     assert workspace["checkpointBeforeRef"] == (
         "artifact://checkpoint/before_execution"
     )
