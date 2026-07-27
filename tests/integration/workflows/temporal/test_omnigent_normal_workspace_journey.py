@@ -3,6 +3,7 @@ import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,6 +26,9 @@ from moonmind.schemas.agent_runtime_models import (
     CredentialMountRef,
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
+)
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows import run as run_workflow
@@ -197,14 +201,16 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
     tmp_path, monkeypatch, on_demand
 ) -> None:
     workspace_root = tmp_path / "jobs"
-    source = workspace_root / "sources" / "repository"
-    source.mkdir(parents=True)
-    _git("init", "-b", "main", cwd=source)
-    _git("config", "user.email", "test@example.invalid", cwd=source)
-    _git("config", "user.name", "MoonMind Test", cwd=source)
-    (source / "README.md").write_text("source\n", encoding="utf-8")
-    _git("add", "README.md", cwd=source)
-    _git("commit", "-m", "initial", cwd=source)
+    seed = workspace_root / "sources" / "seed"
+    source = workspace_root / "sources" / "repository.git"
+    seed.mkdir(parents=True)
+    _git("init", "-b", "main", cwd=seed)
+    _git("config", "user.email", "test@example.invalid", cwd=seed)
+    _git("config", "user.name", "MoonMind Test", cwd=seed)
+    (seed / "README.md").write_text("source\n", encoding="utf-8")
+    _git("add", "README.md", cwd=seed)
+    _git("commit", "-m", "initial", cwd=seed)
+    _git("clone", "--bare", str(seed), str(source), cwd=workspace_root)
 
     plan = _build_runtime_planner()(
         inputs={
@@ -313,7 +319,6 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
         return AgentRunResult(
             summary="done",
             outputRefs=["artifact:declared-output"],
-            metadata={"publication": {"mode": "pr", "head": "issue-3507"}},
         )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -345,15 +350,63 @@ async def test_normal_workflow_runs_complete_owned_omnigent_journey(
 
     coordinator._resolve_profile = resolve_profile  # type: ignore[method-assign]
 
-    first = await coordinator.execute(request)
-    second = await coordinator.execute(request)
+    execution_result = await coordinator.execute(request)
+    await coordinator.execute(request)
+    workspace = workspace_root / workspace_id / "repo"
+    run_record = SimpleNamespace(
+        run_id=step_id,
+        agent_id="codex",
+        runtime_id="omnigent",
+        status="completed",
+        workspace_path=str(workspace),
+        stdout_artifact_ref=None,
+        stderr_artifact_ref=None,
+        merged_log_artifact_ref=None,
+        diagnostics_ref=None,
+    )
+    publication_store = SimpleNamespace(load=lambda _run_id: run_record)
+    publication = TemporalAgentRuntimeActivities(run_store=publication_store)
+    fetch_request = {
+        "runId": step_id,
+        "agentId": "omnigent",
+        "publishMode": request.parameters["publishMode"],
+        "targetBranch": request.parameters["publishBaseBranch"],
+        "headBranch": request.workspace_spec["targetBranch"],
+        "commitMessage": request.parameters["commitMessage"],
+    }
+    with (
+        patch(
+            "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter"
+        ) as adapter,
+        patch.object(
+            publication,
+            "_resolve_workspace_push_github_token",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(publication, "_detect_pr_url_from_workspace", return_value=None),
+    ):
+        adapter.return_value.fetch_result = AsyncMock(return_value=execution_result)
+        first = await publication.agent_runtime_fetch_result(fetch_request)
+        first_head = _git("rev-parse", "HEAD", cwd=workspace)
+        second = await publication.agent_runtime_fetch_result(fetch_request)
+        second_head = _git("rev-parse", "HEAD", cwd=workspace)
 
     assert runtime.prepared_modes == [
         "on_demand_docker" if on_demand else "static_compose"
     ] * 2
     assert first.output_refs == second.output_refs == ["artifact:declared-output"]
-    assert first.metadata["publication"] == second.metadata["publication"]
-    assert first.metadata["declaredOutputs"] == ["artifact:declared-output"]
+    assert first.metadata["push_status"] == second.metadata["push_status"] == "pushed"
+    assert first.metadata["push_branch"] == second.metadata["push_branch"] == "issue-3507"
+    assert first.metadata["push_base_branch"] == "main"
+    assert first.metadata["remote_verified"] is True
+    assert first.metadata["acceptedRepositoryEvidence"]["branch"] == "issue-3507"
+    assert first.metadata["acceptedRepositoryEvidence"]["headSha"] == first_head
+    assert first_head == second_head
+    assert _git("log", "-1", "--format=%s", cwd=workspace) == "Complete #3507"
+    assert _git("rev-parse", "refs/heads/issue-3507", cwd=source) == first_head
+    assert _git("rev-list", "--count", "main..issue-3507", cwd=source) == "1"
+    assert (workspace / "result.txt").read_text(encoding="utf-8") == "saved work\n"
     assert request.workspace_spec["repository"] == authored["repository"]
     assert request.workspace_spec["startingBranch"] == authored["startingBranch"]
     assert request.workspace_spec["targetBranch"] == authored["targetBranch"]
