@@ -42,23 +42,6 @@ _ALLOWED_ACTION_RESULT_STATUSES = frozenset(
         "failed",
     }
 )
-_VERIFICATION_RESOLUTION_ALIASES = {
-    "verified": "verified_resolved",
-    "resolved": "verified_resolved",
-    "unchanged": "verified_no_change",
-    "not_verified": "verification_failed",
-}
-_VERIFICATION_RESOLUTIONS = frozenset(
-    {
-        "verified_resolved",
-        "verified_no_change",
-        "still_failed",
-        "regressed",
-        "evidence_unavailable",
-        "approval_required",
-        "verification_failed",
-    }
-)
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])/(?:[^\s\"']+/)*[^\s\"']+")
 _PRESIGNED_URL_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId|Signature|sig=|token=)[^\s\"']*",
@@ -503,15 +486,27 @@ class RemediationEvidenceToolService:
             action_kind=action_kind,
             principal=principal,
         )
-        verification = raw_result.get("verification")
-        verification_details = (
-            dict(verification) if isinstance(verification, Mapping) else {}
+        stabilized_after = (
+            await self.prepare_action_request(
+                remediation_workflow_id=remediation_workflow_id,
+                action_kind=action_kind,
+                principal=principal,
+            )
+            if verification_required and status == "applied"
+            else None
         )
-        verification_resolution = _normalize_verification_resolution(
-            verification_details.get("resolution")
-            or verification_details.get("status")
+        verification_resolution, verification_details = (
+            _evaluate_action_verification(
+                action_kind=action_kind,
+                action_status=status,
+                verification_required=verification_required,
+                before=preparation.target,
+                immediate_after=immediate_after.target,
+                stabilized=(
+                    stabilized_after.target if stabilized_after is not None else None
+                ),
+            )
         )
-        stabilized = verification_details.get("stabilized")
         verification_payload = build_remediation_verification(
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
@@ -523,7 +518,11 @@ class RemediationEvidenceToolService:
             or "No verification required for this action.",
             before=_target_health_observation(preparation.target),
             immediate_after=_target_health_observation(immediate_after.target),
-            stabilized=stabilized if isinstance(stabilized, Mapping) else None,
+            stabilized=(
+                _target_health_observation(stabilized_after.target)
+                if stabilized_after is not None
+                else None
+            ),
             details=verification_details,
         )
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -917,14 +916,78 @@ def _normalize_action_result_status(value: Any) -> str:
     return status
 
 
-def _normalize_verification_resolution(value: Any) -> str:
-    resolution = _string_or_none(value) or "verification_failed"
-    resolution = _VERIFICATION_RESOLUTION_ALIASES.get(resolution, resolution)
-    if resolution not in _VERIFICATION_RESOLUTIONS:
-        raise RemediationEvidenceToolError(
-            f"Unsupported remediation verification resolution: {resolution}."
+def _evaluate_action_verification(
+    *,
+    action_kind: str,
+    action_status: str,
+    verification_required: bool,
+    before: RemediationTargetHealthSnapshot,
+    immediate_after: RemediationTargetHealthSnapshot,
+    stabilized: RemediationTargetHealthSnapshot | None,
+) -> tuple[str, dict[str, Any]]:
+    """Evaluate the typed action contract from fresh canonical target reads.
+
+    Executor-authored classifications are deliberately excluded.  The action
+    delivery boundary reports side effects; this boundary owns verification.
+    """
+
+    observed = stabilized or immediate_after
+    details = {
+        "evaluator": "canonical_target_health_v1",
+        "actionKind": action_kind,
+        "freshReads": 2 if stabilized is not None else 1,
+    }
+    if action_status == "approval_required":
+        return "approval_required", details
+    if not verification_required:
+        return (
+            "verified_no_change"
+            if action_status in {"no_op", "rejected", "precondition_failed"}
+            else "verification_failed",
+            details,
         )
-    return resolution
+    if action_status != "applied":
+        return "verification_failed", details
+    if not observed.workflow_id or not observed.current_run_id:
+        return "evidence_unavailable", details
+
+    failed_states = {"failed", "terminated", "timed_out", "canceled", "cancelled"}
+    before_status = (before.close_status or before.state).casefold()
+    observed_status = (observed.close_status or observed.state).casefold()
+    if observed_status in failed_states and before_status not in failed_states:
+        return "regressed", details
+
+    expects_new_run = action_kind in {
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "session.restart_container",
+    }
+    if expects_new_run:
+        return (
+            "verified_resolved"
+            if observed.current_run_id != before.current_run_id
+            else "still_failed",
+            details,
+        )
+
+    if action_kind == "execution.pause":
+        return (
+            "verified_resolved"
+            if observed.state.casefold() in {"paused", "suspended"}
+            else "still_failed",
+            details,
+        )
+    if action_kind == "execution.resume":
+        return (
+            "verified_resolved"
+            if observed.state.casefold() not in {"paused", "suspended"}
+            else "still_failed",
+            details,
+        )
+
+    if _target_health_observation(observed) != _target_health_observation(before):
+        return "verified_resolved", details
+    return "verified_no_change", details
 
 
 def _target_health_observation(
