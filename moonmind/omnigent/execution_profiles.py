@@ -171,7 +171,10 @@ EGRESS_PROFILES = {
             resolutionMode="continuous",
             dnsServers=("1.1.1.1", "8.8.8.8"),
             ipv6Policy="deny",
-            permittedWorkloadClasses=("omnigent", "container-job", "managed-helper"),
+            permittedWorkloadClasses=(
+                "omnigent", "container-job", "managed-helper", "pentest",
+                "rag", "remediation",
+            ),
             securityReviewRef="github:MoonLadderStudios/MoonMind#3516",
             validationState="approved",
             maxConnections=128,

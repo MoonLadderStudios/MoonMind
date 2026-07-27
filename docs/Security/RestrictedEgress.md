@@ -41,16 +41,15 @@ and security-review evidence. Pydantic rejects extra fields, credentials,
 non-global CIDRs, and executable firewall input. Canonical JSON produces the
 profile digest.
 
-Before readiness, the worker inspects the exact Docker network through its
-deployment-selected daemon. The reconciler must label it with the profile ref
-and digest, enforcer version, applied-rule digest, validation result, and time.
-It must also authenticate those fields with the deployment-owned attestation
-key, binding the signature to the network and backend identities. Static
-Compose labels are configuration and are never accepted as applied-state
-evidence. Missing, malformed, unauthenticated, stale, or mismatched labels fail
-closed and the network is omitted from `enforcedNetworkRefs`. Remote daemons
-are supported only when the same authenticated gateway state is visible
-through the configured endpoint; otherwise they are rejected.
+Before readiness, the trusted worker reconciles and inspects the exact Docker
+network, generated rule digest, parse-checked gateway, and gateway attachments
+through its deployment-selected daemon. This observed state is the readiness
+authority; static Compose labels are configuration and are never accepted as
+applied-state evidence. When a deployment supplies an attestation key, the
+reconciler additionally signs profile, rule, gateway, network, backend, and
+validation identities into network labels for independent inspection. Missing,
+stale, or mismatched observed state fails closed and the network is omitted
+from `enforcedNetworkRefs`.
 
 The reconciler owns creation, rule replacement, crash reconciliation, counters,
 and deletion of only its labelled resources. Policy rotation changes the
@@ -59,6 +58,30 @@ records the profile and workload attachment; bounded gateway diagnostics record
 denial counters and redacted destination metadata, never payloads or secrets.
 Cleanup outcome is recorded independently so it cannot overwrite workload
 success.
+
+## Operational realization
+
+The agent-runtime worker invokes the local-Docker reconciler before it reports
+any enforced network as ready. The reconciler deterministically compiles the
+selected profile into Squid DNS, destination, port, method, private-address,
+IPv4-mapped-IPv6, connection, byte, and idle rules. It adopts only an observed
+internal Compose network, replaces only its labelled gateway container, and
+attaches that gateway to the internal network and Docker's outbound bridge.
+Static Compose hosts, Container Jobs, ordinary workload profiles that request
+`bridge`, and managed helpers receive the internal network and the same gateway
+proxy identity. The old static restricted-egress proxy is not part of this
+path.
+
+Every launch re-inspects the running dual-homed gateway and then verifies that
+the created workload has exactly one network attachment. The trusted backend
+persists a bounded launch artifact containing profile, backend, network,
+gateway, rule, validation, workload-attachment, and redacted denial-counter
+evidence. Cleanup publishes a separate owned-container removal result.
+Deployment-selected remote Docker endpoints use the same Docker API
+observations and inject the non-secret generated policy into an ephemeral
+in-container filesystem, so they do not depend on worker-host bind paths. If
+the daemon cannot create, inspect, parse-check, or attach that exact state,
+reconciliation fails.
 
 External PentestGPT targets remain disabled by default. Enabling them requires
 an exact approved target scope, manual/durable approval, a reviewed profile,

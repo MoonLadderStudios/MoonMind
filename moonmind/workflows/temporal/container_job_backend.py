@@ -65,8 +65,10 @@ from moonmind.utils.logging import redact_sensitive_text
 from moonmind.security.egress_profiles import (
     EgressAttestation,
     EgressProfile,
+    EgressRuntimeEvidence,
     attestation_from_network_labels,
 )
+from moonmind.security.egress_gateway import DockerEgressGatewayReconciler
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -401,16 +403,9 @@ class DockerContainerJobBackend:
         self._egress_profile = egress_profile
         self._egress_network_ref = str(egress_network_ref or "").strip() or None
         self._egress_attestation_key = egress_attestation_key
+        self._observed_egress_attestations: dict[str, EgressAttestation] = {}
         if (self._egress_profile is None) != (self._egress_network_ref is None):
             raise ValueError("egress profile and network ref must be configured together")
-        if self._egress_profile is not None and (
-            self._egress_attestation_key is None
-            or len(self._egress_attestation_key) < 32
-        ):
-            raise ValueError(
-                "restricted-egress configuration requires a deployment-owned "
-                "attestation key of at least 32 bytes"
-            )
 
     # ------------------------------------------------------------------ helpers
 
@@ -562,6 +557,31 @@ class DockerContainerJobBackend:
     ) -> EgressAttestation:
         """Validate digest-bound evidence from the privileged gateway reconciler."""
 
+        observed = self._observed_egress_attestations.get(network_ref)
+        if observed is not None:
+            if observed.profile_ref != profile.ref or observed.profile_digest != profile.digest:
+                raise ContainerBackendReadinessError(
+                    "restricted-egress observed state is stale for the selected profile"
+                )
+            try:
+                gateway_raw = await self._checked(
+                    "container", "inspect", "--format",
+                    "{{json .State}}|{{json .NetworkSettings.Networks}}",
+                    observed.gateway_ref,
+                )
+                state_raw, networks_raw = gateway_raw.split("|", 1)
+                state = json.loads(state_raw)
+                networks = json.loads(networks_raw)
+            except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                raise ContainerBackendReadinessError(
+                    "restricted-egress observed gateway state is invalid"
+                ) from exc
+            if not state.get("Running") or network_ref not in networks or "bridge" not in networks:
+                raise ContainerBackendReadinessError(
+                    "restricted-egress gateway is not running on both enforcement networks"
+                )
+            return observed
+
         code, stdout, _ = await self._runner(
             ("network", "inspect", "--format", "{{json .Labels}}", network_ref)
         )
@@ -580,15 +600,65 @@ class DockerContainerJobBackend:
                 "restricted-egress network labels are missing"
             )
         try:
-            return attestation_from_network_labels(
+            attestation = attestation_from_network_labels(
                 profile=profile,
                 network_ref=network_ref,
                 backend_ref=self._backend_ref,
                 labels=labels,
                 attestation_key=self._egress_attestation_key or b"",
             )
+            gateway_raw = await self._checked(
+                "container",
+                "inspect",
+                "--format",
+                "{{json .State}}|{{json .NetworkSettings.Networks}}",
+                attestation.gateway_ref,
+            )
+            state_raw, networks_raw = gateway_raw.split("|", 1)
+            state = json.loads(state_raw)
+            networks = json.loads(networks_raw)
+            if (
+                not state.get("Running")
+                or network_ref not in networks
+                or "bridge" not in networks
+            ):
+                raise ValueError(
+                    "restricted-egress gateway is not running on both enforcement networks"
+                )
+            return attestation
         except ValueError as exc:
             raise ContainerBackendReadinessError(str(exc)) from exc
+
+    async def reconcile_egress_network(self) -> EgressAttestation:
+        """Realize then observe the deployment-owned gateway boundary."""
+
+        if self._egress_profile is None or self._egress_network_ref is None:
+            raise ContainerBackendReadinessError("restricted-egress profile is not configured")
+        reconciler = DockerEgressGatewayReconciler(
+            runner=self._runner,
+            state_root=self._workspace_root.parent / ".mm-egress-gateway",
+            backend_ref=self._backend_ref,
+            attestation_key=self._egress_attestation_key or b"",
+            gateway_image=os.environ.get(
+                "MOONMIND_EGRESS_GATEWAY_IMAGE", "ubuntu/squid:latest"
+            ),
+        )
+        reconciled = await reconciler.reconcile(
+            profile=self._egress_profile, network_ref=self._egress_network_ref
+        )
+        self._observed_egress_attestations[self._egress_network_ref] = EgressAttestation(
+            profileRef=self._egress_profile.ref,
+            profileDigest=self._egress_profile.digest,
+            backendRef=self._backend_ref,
+            networkRef=reconciled.network_ref,
+            gatewayRef=reconciled.gateway_ref,
+            enforcerVersion="moonmind-docker-gateway/v1",
+            appliedRuleDigest=reconciled.rules_digest,
+            validatedAt=reconciled.validated_at,
+        )
+        return await self.attest_egress_network(
+            profile=self._egress_profile, network_ref=self._egress_network_ref
+        )
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
@@ -1432,6 +1502,18 @@ class DockerContainerJobBackend:
                 args.extend(("--env", f"{item.name}={item.value}"))
         return args
 
+    async def _bounded_egress_denial_count(self) -> int:
+        if self._egress_network_ref is None:
+            return 0
+        gateway_ref = f"{self._egress_network_ref}-gateway"
+        code, stdout, stderr = await self._runner(
+            ("logs", "--tail", "500", gateway_ref)
+        )
+        if code:
+            return 0
+        bounded = (stdout + b"\n" + stderr)[-65536:]
+        return bounded.count(b"TCP_DENIED") + bounded.count(b"UDP_DENIED")
+
     async def create_container(self, request: ContainerJobActivityRequest):
         if not request.resolved_workspace_ref or not request.resolved_image_ref:
             raise RuntimeError("resolved workspace and image are required")
@@ -1543,6 +1625,21 @@ class DockerContainerJobBackend:
             "--mount",
             workspace_mount,
         ]
+        if egress_attestation is not None:
+            proxy = f"http://{egress_attestation.gateway_ref}:3128"
+            # The internal network has no direct route. Supplying an empty
+            # NO_PROXY closes caller-controlled proxy bypass while Squid
+            # re-authorizes CONNECT and redirected requests.
+            args.extend(
+                (
+                    "--env", f"HTTP_PROXY={proxy}",
+                    "--env", f"HTTPS_PROXY={proxy}",
+                    "--env", f"http_proxy={proxy}",
+                    "--env", f"https_proxy={proxy}",
+                    "--env", "NO_PROXY=",
+                    "--env", "no_proxy=",
+                )
+            )
         if spec.caches:
             raise RuntimeError(
                 "cacheRef is unsupported until container-job authority can "
@@ -1560,7 +1657,47 @@ class DockerContainerJobBackend:
             # Docker mount errors echo the trusted host source. Keep it out of
             # workflow history and caller-visible terminal diagnostics.
             raise RuntimeError("docker create failed for the resolved workspace")
-        return ContainerJobActivityResult(containerRef=name)
+        diagnostics_ref = None
+        if egress_attestation is not None:
+            # Re-read the workload attachment after create. The artifact is
+            # generated from observed Docker state, not caller or workflow
+            # claims, and contains no traffic payloads or credentials.
+            attached_raw = await self._checked(
+                "inspect", "--format", "{{json .NetworkSettings.Networks}}", name
+            )
+            attached = json.loads(attached_raw)
+            if set(attached) != {egress_attestation.network_ref}:
+                await self._runner(("rm", "--force", name))
+                raise RuntimeError(
+                    "restricted-egress workload attachment verification failed"
+                )
+            if self._publish is not None:
+                evidence = EgressRuntimeEvidence(
+                    profileRef=egress_attestation.profile_ref,
+                    profileDigest=egress_attestation.profile_digest,
+                    backendRef=egress_attestation.backend_ref,
+                    networkRef=egress_attestation.network_ref,
+                    gatewayRef=egress_attestation.gateway_ref,
+                    enforcerVersion=egress_attestation.enforcer_version,
+                    appliedRuleDigest=egress_attestation.applied_rule_digest,
+                    validatedAt=egress_attestation.validated_at,
+                    workloadAttachmentRef=name,
+                    deniedConnections=await self._bounded_egress_denial_count(),
+                    diagnostics=("attachment-observed", "payload-logging-disabled"),
+                    lifecycle="attached",
+                )
+                diagnostics_ref = await self._publish(
+                    request,
+                    f"{request.job_id}-egress-attestation.json",
+                    (
+                        json.dumps(
+                            evidence.model_dump(mode="json", by_alias=True),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    ).encode(),
+                )
+        return ContainerJobActivityResult(containerRef=name, diagnosticsRef=diagnostics_ref)
 
     async def start_container(self, request: ContainerJobActivityRequest):
         await self._checked("start", request.container_ref or self._name(request))
@@ -1735,7 +1872,23 @@ class DockerContainerJobBackend:
         if ownership != request.ownership_token:
             raise RuntimeError("container job ownership mismatch; refusing removal")
         await self._checked("rm", "--force", ref)
-        return ContainerJobActivityResult()
+        diagnostics_ref = None
+        if self._publish is not None and self._egress_profile is not None:
+            denied_connections = await self._bounded_egress_denial_count()
+            diagnostics_ref = await self._publish(
+                request,
+                f"{request.job_id}-egress-cleanup.json",
+                (json.dumps({
+                    "profileRef": self._egress_profile.ref,
+                    "networkRef": self._egress_network_ref,
+                    "workloadAttachmentRef": ref,
+                    "lifecycle": "cleaned",
+                    "cleanupResult": "removed-owned-container",
+                    "deniedConnections": denied_connections,
+                    "diagnostics": ["gateway-log-tail-bounded-65536-bytes"],
+                }, sort_keys=True) + "\n").encode(),
+            )
+        return ContainerJobActivityResult(diagnosticsRef=diagnostics_ref)
 
     @staticmethod
     def _bound_tail(data: bytes, limit: int) -> bytes:

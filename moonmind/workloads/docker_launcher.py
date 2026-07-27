@@ -764,9 +764,13 @@ class DockerWorkloadLauncher:
         docker_host: str | None = None,
         janitor: DockerContainerJanitor | None = None,
         concurrency_limiter: DockerWorkloadConcurrencyLimiter | None = None,
+        restricted_egress_network_ref: str | None = None,
+        restricted_egress_gateway_ref: str | None = None,
     ) -> None:
         self._docker_binary = docker_binary
         self._docker_host = docker_host
+        self._restricted_egress_network_ref = restricted_egress_network_ref
+        self._restricted_egress_gateway_ref = restricted_egress_gateway_ref
         self._janitor = janitor or DockerContainerJanitor(
             docker_binary=docker_binary,
             docker_host=docker_host,
@@ -785,6 +789,9 @@ class DockerWorkloadLauncher:
                 docker_binary=self._docker_binary,
                 request=request,
             )
+        network = profile.network_policy
+        if network == "bridge" and self._restricted_egress_network_ref:
+            network = self._restricted_egress_network_ref
         args = [
             self._docker_binary,
             "run",
@@ -793,7 +800,7 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network,
             *structured_container_security_args(),
         ]
 
@@ -805,6 +812,7 @@ class DockerWorkloadLauncher:
             args.extend(["--mount", _mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
+        self._append_restricted_egress_env(args, network)
         for flag, value in _effective_resources(
             profile=profile,
             overrides=workload.resources,
@@ -838,6 +846,9 @@ class DockerWorkloadLauncher:
                 "start_helper requires a bounded_service runner profile"
             )
         _ensure_paths_are_mounted(request)
+        network = profile.network_policy
+        if network == "bridge" and self._restricted_egress_network_ref:
+            network = self._restricted_egress_network_ref
         args = [
             self._docker_binary,
             "run",
@@ -847,7 +858,7 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network,
             *structured_container_security_args(),
         ]
         for key, value in _operational_labels(request).items():
@@ -858,6 +869,7 @@ class DockerWorkloadLauncher:
             args.extend(["--mount", _mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
+        self._append_restricted_egress_env(args, network)
         for flag, value in _effective_resources(
             profile=profile,
             overrides=workload.resources,
@@ -876,6 +888,24 @@ class DockerWorkloadLauncher:
             )
         )
         return args
+
+    def _append_restricted_egress_env(self, args: list[str], network: str) -> None:
+        if network != self._restricted_egress_network_ref:
+            return
+        if not self._restricted_egress_gateway_ref:
+            raise DockerWorkloadLauncherError(
+                "restricted-egress gateway identity is unavailable"
+            )
+        proxy = f"http://{self._restricted_egress_gateway_ref}:3128"
+        for key, value in (
+            ("HTTP_PROXY", proxy),
+            ("HTTPS_PROXY", proxy),
+            ("http_proxy", proxy),
+            ("https_proxy", proxy),
+            ("NO_PROXY", ""),
+            ("no_proxy", ""),
+        ):
+            args.extend(["--env", f"{key}={value}"])
 
     async def run(
         self,

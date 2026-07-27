@@ -837,8 +837,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      HTTP_PROXY: http://restricted-egress-proxy:3128
-      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      HTTP_PROXY: http://moonmind-restricted-egress-network-gateway:3128
+      HTTPS_PROXY: http://moonmind-restricted-egress-network-gateway:3128
       NO_PROXY: omnigent
     env_file:
       - path: .env
@@ -884,8 +884,8 @@ services:
       OPENAI_API_KEY: ""
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
-      HTTP_PROXY: http://restricted-egress-proxy:3128
-      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      HTTP_PROXY: http://moonmind-restricted-egress-network-gateway:3128
+      HTTPS_PROXY: http://moonmind-restricted-egress-network-gateway:3128
       NO_PROXY: omnigent
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
@@ -966,8 +966,8 @@ services:
       OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
       OMNIGENT_CAPTURE_OWNER: moonmind_bridge
       OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
-      HTTP_PROXY: http://restricted-egress-proxy:3128
-      HTTPS_PROXY: http://restricted-egress-proxy:3128
+      HTTP_PROXY: http://moonmind-restricted-egress-network-gateway:3128
+      HTTPS_PROXY: http://moonmind-restricted-egress-network-gateway:3128
       NO_PROXY: omnigent
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
@@ -1181,17 +1181,6 @@ services:
     networks:
       - local-network
       - sandbox-egress-network
-    restart: unless-stopped
-
-  restricted-egress-proxy:
-    image: ubuntu/squid:latest
-    volumes:
-      - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
-    expose:
-      - "3128"
-    networks:
-      - local-network
-      - restricted-egress-network
     restart: unless-stopped
 
 volumes:

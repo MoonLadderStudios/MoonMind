@@ -275,23 +275,20 @@ def test_omnigent_hosts_use_attested_internal_egress_for_issue_3516():
     network = compose["networks"]["restricted-egress-network"]
 
     assert network["internal"] is True
-    labels = network["labels"]
-    assert labels["moonmind.egress.profile_ref"] == "omnigent-provider@1"
-    assert labels["moonmind.egress.profile_digest"].startswith("sha256:")
-    assert labels["moonmind.egress.rules_digest"].startswith("sha256:")
-    assert labels["moonmind.egress.validated"] == "true"
+    # Static Compose creates only the internal attachment point. Applied-state
+    # labels and the dual-homed gateway are owned by the trusted reconciler.
+    assert "labels" not in network
 
     for name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
         service = services[name]
         assert _network_names(service) == {"restricted-egress-network"}
         env = _env_map(service["environment"])
-        assert env["HTTPS_PROXY"] == "http://restricted-egress-proxy:3128"
+        assert env["HTTPS_PROXY"] == (
+            "http://moonmind-restricted-egress-network-gateway:3128"
+        )
         assert env["NO_PROXY"] == "omnigent"
 
-    assert _network_names(services["restricted-egress-proxy"]) == {
-        "local-network",
-        "restricted-egress-network",
-    }
+    assert "restricted-egress-proxy" not in services
 
 
 def test_api_service_runs_with_container_init():

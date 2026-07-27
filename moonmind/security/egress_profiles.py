@@ -26,6 +26,7 @@ ATTESTATION_LABELS = {
     "enforcer": "moonmind.egress.enforcer",
     "validated": "moonmind.egress.validated",
     "validated_at": "moonmind.egress.validated_at",
+    "gateway_ref": "moonmind.egress.gateway_ref",
     "signature": "moonmind.egress.attestation_signature",
 }
 _DNS_NAME = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
@@ -77,6 +78,10 @@ class EgressProfile(BaseModel):
     max_bytes: int = Field(alias="maxBytes", ge=1)
     idle_seconds: int = Field(alias="idleSeconds", ge=1)
     diagnostics_retention_days: int = Field(alias="diagnosticsRetentionDays", ge=1)
+    logging_mode: Literal["bounded-redacted"] = Field(
+        "bounded-redacted", alias="loggingMode"
+    )
+    policy_refs: tuple[str, ...] = Field((), alias="policyRefs")
 
     @field_validator("dns_servers")
     @classmethod
@@ -105,9 +110,30 @@ class EgressAttestation(BaseModel):
     profile_digest: str = Field(alias="profileDigest", pattern=r"^sha256:[0-9a-f]{64}$")
     backend_ref: str = Field(alias="backendRef")
     network_ref: str = Field(alias="networkRef")
+    gateway_ref: str = Field(alias="gatewayRef")
     enforcer_version: Literal[ENFORCER_IMPLEMENTATION] = Field(alias="enforcerVersion")
     applied_rule_digest: str = Field(alias="appliedRuleDigest", pattern=r"^sha256:[0-9a-f]{64}$")
     validated_at: datetime = Field(alias="validatedAt")
+
+
+class EgressRuntimeEvidence(BaseModel):
+    """Bounded, non-sensitive observed evidence for one workload attachment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    profile_ref: str = Field(alias="profileRef")
+    profile_digest: str = Field(alias="profileDigest")
+    backend_ref: str = Field(alias="backendRef")
+    network_ref: str = Field(alias="networkRef")
+    gateway_ref: str = Field(alias="gatewayRef")
+    enforcer_version: str = Field(alias="enforcerVersion")
+    applied_rule_digest: str = Field(alias="appliedRuleDigest")
+    validated_at: datetime = Field(alias="validatedAt")
+    validation_result: Literal["passed"] = Field("passed", alias="validationResult")
+    workload_attachment_ref: str = Field(alias="workloadAttachmentRef")
+    denied_connections: int = Field(0, alias="deniedConnections", ge=0)
+    diagnostics: tuple[str, ...] = ()
+    lifecycle: Literal["attached", "cleaned"]
 
 
 def attestation_from_network_labels(
@@ -133,12 +159,16 @@ def attestation_from_network_labels(
         raise ValueError("network does not carry a current restricted-egress attestation")
     rules_digest = str(labels.get(ATTESTATION_LABELS["rules_digest"], ""))
     validated_at = str(labels.get(ATTESTATION_LABELS["validated_at"], ""))
+    gateway_ref = str(labels.get(ATTESTATION_LABELS["gateway_ref"], ""))
+    if not gateway_ref:
+        raise ValueError("network attestation does not identify an enforcing gateway")
     signed_fields = (
         profile.ref,
         profile.digest,
         rules_digest,
         ENFORCER_IMPLEMENTATION,
         validated_at,
+        gateway_ref,
         network_ref,
         backend_ref,
     )
@@ -155,6 +185,7 @@ def attestation_from_network_labels(
         profileDigest=profile.digest,
         backendRef=backend_ref,
         networkRef=network_ref,
+        gatewayRef=gateway_ref,
         enforcerVersion=ENFORCER_IMPLEMENTATION,
         appliedRuleDigest=rules_digest,
         validatedAt=validated_at,

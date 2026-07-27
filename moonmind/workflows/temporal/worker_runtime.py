@@ -2619,6 +2619,8 @@ def _build_agent_runtime_deps(
         concurrency_limiter=DockerWorkloadConcurrencyLimiter(
             fleet_limit=workload_fleet_limit
         ),
+        restricted_egress_network_ref="moonmind-restricted-egress-network",
+        restricted_egress_gateway_ref="moonmind-restricted-egress-network-gateway",
     )
     return (
         store,
@@ -2768,6 +2770,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
+                # This fleet is the deployment-owned authority for the local
+                # Docker gateway. Readiness is advertised only after concrete
+                # state is reconciled and independently re-inspected.
+                await container_job_backend.reconcile_egress_network()
                 enforced_network_refs = []
                 for policy in POLICIES.values():
                     if not policy.enabled or not policy.enforced_egress:

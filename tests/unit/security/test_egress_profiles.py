@@ -67,6 +67,7 @@ def test_attestation_requires_exact_current_profile_and_rule_digest() -> None:
         ATTESTATION_LABELS["enforcer"]: ENFORCER_IMPLEMENTATION,
         ATTESTATION_LABELS["validated"]: "true",
         ATTESTATION_LABELS["validated_at"]: now,
+        ATTESTATION_LABELS["gateway_ref"]: "egress-1-gateway",
     }
     labels[ATTESTATION_LABELS["signature"]] = hmac.new(
         key,
@@ -77,6 +78,7 @@ def test_attestation_requires_exact_current_profile_and_rule_digest() -> None:
                 labels[ATTESTATION_LABELS["rules_digest"]],
                 ENFORCER_IMPLEMENTATION,
                 now,
+                "egress-1-gateway",
                 "egress-1",
                 "system",
             )
@@ -113,6 +115,7 @@ def test_attestation_rejects_self_declared_or_wrong_backend_labels() -> None:
         ATTESTATION_LABELS["enforcer"]: ENFORCER_IMPLEMENTATION,
         ATTESTATION_LABELS["validated"]: "true",
         ATTESTATION_LABELS["validated_at"]: datetime.now(UTC).isoformat(),
+        ATTESTATION_LABELS["gateway_ref"]: "egress-1-gateway",
     }
     with pytest.raises(ValueError, match="authenticated"):
         attestation_from_network_labels(

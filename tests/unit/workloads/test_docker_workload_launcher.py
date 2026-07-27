@@ -301,6 +301,23 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
 
+
+def test_launcher_routes_bridge_profiles_only_through_restricted_gateway(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(network_policy="bridge")
+    validated = _validated_request(tmp_path, profiles=[profile])
+    args = DockerWorkloadLauncher(
+        restricted_egress_network_ref="mm-egress",
+        restricted_egress_gateway_ref="mm-egress-gateway",
+    ).build_run_args(validated)
+
+    assert args[args.index("--network") + 1] == "mm-egress"
+    assert "HTTP_PROXY=http://mm-egress-gateway:3128" in args
+    assert "HTTPS_PROXY=http://mm-egress-gateway:3128" in args
+    assert "NO_PROXY=" in args
+    assert "no_proxy=" in args
+
 def test_unrestricted_docker_request_replaces_leading_docker_binary(
     tmp_path: Path,
 ) -> None:
