@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,9 @@ from moonmind.omnigent.checkpoints import (
     materialize_cold_restore_inputs,
     recovery_capability_projection,
     validate_restore_material,
+)
+from moonmind.omnigent.profile_bound_execution import (
+    OmnigentProfileBoundExecutionCoordinator,
 )
 from moonmind.schemas.temporal_models import StepExecutionIdentityModel
 from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
@@ -135,6 +139,72 @@ def test_restore_validation_checks_artifacts_and_projects_modes_independently() 
     )
     assert result.workspace_cold_restore.available is True
     assert result.branch_creation.available is True
+
+
+@pytest.mark.asyncio
+async def test_coordinator_dereferences_manifest_before_restore() -> None:
+    class Gateway:
+        async def read_bytes(self, ref: str) -> bytes:
+            return _artifacts()[ref]
+
+    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
+    coordinator._artifact_gateway = Gateway()
+    request = SimpleNamespace(
+        execution_profile_ref="profile",
+        step_execution=SimpleNamespace(
+            workflow_id="wf",
+            run_id="run",
+            logical_step_id="step",
+            step_execution_id="wf:run:step:execution:1",
+            execution_ordinal=1,
+        ),
+    )
+
+    result = await coordinator._validate_checkpoint_manifest(
+        request=request,
+        manifest=_manifest(),
+        credential_generation=3,
+        host_available=False,
+        session_valid=False,
+        first_message_consistent=True,
+    )
+
+    assert result.workspace_cold_restore.available is True
+    assert set(result.checked_refs) == set(_artifacts())
+
+
+@pytest.mark.asyncio
+async def test_coordinator_reports_unresolved_manifest_artifact() -> None:
+    class Gateway:
+        async def read_bytes(self, ref: str) -> bytes:
+            if ref == "artifact://workspace":
+                raise FileNotFoundError(ref)
+            return _artifacts()[ref]
+
+    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
+    coordinator._artifact_gateway = Gateway()
+    request = SimpleNamespace(
+        execution_profile_ref="profile",
+        step_execution=SimpleNamespace(
+            workflow_id="wf",
+            run_id="run",
+            logical_step_id="step",
+            step_execution_id="wf:run:step:execution:1",
+            execution_ordinal=1,
+        ),
+    )
+
+    result = await coordinator._validate_checkpoint_manifest(
+        request=request,
+        manifest=_manifest(),
+        credential_generation=3,
+        host_available=False,
+        session_valid=False,
+        first_message_consistent=True,
+    )
+
+    assert result.workspace_cold_restore.available is False
+    assert result.workspace_cold_restore.reason == "artifact_unresolved"
 
 
 def test_canonical_step_checkpoint_writer_embeds_complete_manifest() -> None:

@@ -21,7 +21,9 @@ from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
     OmnigentRecoveryMode,
     OmnigentRestoreValidation,
+    materialize_cold_restore_inputs,
     recovery_mode,
+    validate_restore_material,
     validate_cold_restore_target,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -225,6 +227,57 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._artifact_service = artifact_service or artifact_gateway
         self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+        )
+
+    async def _validate_checkpoint_manifest(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        manifest: OmnigentCheckpointManifest,
+        credential_generation: int,
+        host_available: bool,
+        session_valid: bool,
+        first_message_consistent: bool,
+    ) -> OmnigentRestoreValidation:
+        """Resolve checkpoint artifacts at the authority boundary before restore."""
+
+        artifacts: dict[str, bytes] = {}
+        for plane in (
+            manifest.session,
+            manifest.workspace,
+            manifest.host,
+            manifest.source,
+        ):
+            for key, value in plane.items():
+                if (
+                    not key.endswith("Ref")
+                    or not isinstance(value, str)
+                    or not value.startswith("artifact://")
+                    or not plane.get(f"{key[:-3]}Digest")
+                ):
+                    continue
+                try:
+                    artifacts[value] = await self._artifact_gateway.read_bytes(value)
+                except Exception:
+                    # The validator emits the stable artifact_unresolved reason.
+                    continue
+
+        step = request.step_execution
+        if step is None:
+            raise ValueError("checkpoint restore requires Step Execution lineage")
+        return validate_restore_material(
+            manifest,
+            workflow_id=step.workflow_id,
+            run_id=step.run_id,
+            logical_step_id=step.logical_step_id,
+            step_execution_id=step.step_execution_id,
+            attempt_ordinal=step.execution_ordinal,
+            provider_profile_id=str(request.execution_profile_ref or ""),
+            credential_generation=credential_generation,
+            artifacts=artifacts,
+            host_available=host_available,
+            session_valid=session_valid,
+            first_message_consistent=first_message_consistent,
         )
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
@@ -883,7 +936,22 @@ class OmnigentProfileBoundExecutionCoordinator:
             session_valid=session_valid,
             first_message_consistent=first_message_consistent,
         )
+        if restore_manifest is None:
+            raise ValueError("checkpoint recovery requires a v1 checkpoint manifest")
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
+            restore_validation = await self._validate_checkpoint_manifest(
+                request=request,
+                manifest=restore_manifest,
+                credential_generation=current_credential_generation,
+                host_available=True,
+                session_valid=session_valid,
+                first_message_consistent=first_message_consistent,
+            )
+            if not restore_validation.live_reattach.available:
+                raise ValueError(
+                    restore_validation.live_reattach.reason
+                    or "live_reattach_unavailable"
+                )
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
             live_request = _bind_candidate_workspace(request, candidate_workspace)
@@ -920,23 +988,43 @@ class OmnigentProfileBoundExecutionCoordinator:
             purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
             idempotency_key=f"{checkpoint.idempotency_key}:cold:{request.idempotency_key}",
         )
+        restore_validation = await self._validate_checkpoint_manifest(
+            request=request,
+            manifest=restore_manifest,
+            credential_generation=current_credential_generation,
+            host_available=False,
+            session_valid=False,
+            first_message_consistent=first_message_consistent,
+        )
+        if not restore_validation.workspace_cold_restore.available:
+            raise ValueError(
+                restore_validation.workspace_cold_restore.reason
+                or "workspace_restore_unavailable"
+            )
         parameters = dict(request.parameters or {})
-        if restore_manifest is not None:
-            if (
-                restore_validation is None
-                or not restore_validation.workspace_cold_restore.available
-            ):
-                raise ValueError("validated workspace cold-restore material is required")
-            parameters["checkpointSourcePolicy"] = {
-                "launchPolicyRef": restore_manifest.host.get("launchPolicyRef"),
-                "effectiveLaunchRef": restore_manifest.host.get("effectiveLaunchRef"),
-                "baselineCommit": restore_manifest.workspace.get("baselineCommit"),
-                "workspaceLocator": restore_manifest.workspace.get("workspaceLocator"),
-                "instructionRefs": restore_manifest.workspace.get(
-                    "instructionRefs", []
-                ),
-                "contextRefs": restore_manifest.workspace.get("contextRefs", []),
-            }
+        parameters["checkpointMaterialization"] = materialize_cold_restore_inputs(
+            restore_manifest,
+            restore_validation,
+            replacement_workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": candidate_workspace.checkpoint_digest.removeprefix(
+                    "sha256:"
+                )[:24],
+                "relativePath": "repo",
+            },
+            effective_launch_ref=(
+                checkpoint.effective_launch_ref
+                or str(restore_manifest.host["effectiveLaunchRef"])
+            ),
+        )
+        parameters["checkpointSourcePolicy"] = {
+            "launchPolicyRef": restore_manifest.host.get("launchPolicyRef"),
+            "effectiveLaunchRef": restore_manifest.host.get("effectiveLaunchRef"),
+            "baselineCommit": restore_manifest.workspace.get("baselineCommit"),
+            "workspaceLocator": restore_manifest.workspace.get("workspaceLocator"),
+            "instructionRefs": restore_manifest.workspace.get("instructionRefs", []),
+            "contextRefs": restore_manifest.workspace.get("contextRefs", []),
+        }
         parameters["checkpointRestore"] = {
             "mode": "cold_restore",
             "externalStateRef": checkpoint.external_state_ref,
@@ -971,6 +1059,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         checkpoint: OmnigentCheckpointIdentity,
         current_credential_generation: int,
         candidate_workspace: CandidateWorkspaceAuthority,
+        restore_manifest: OmnigentCheckpointManifest | None = None,
     ) -> AgentRunResult:
         """Create a new capacity-gated host lease and session from checkpoint refs."""
 
@@ -981,7 +1070,36 @@ class OmnigentProfileBoundExecutionCoordinator:
         )
         if request.idempotency_key == checkpoint.idempotency_key:
             raise ValueError("checkpoint branch requires a new idempotency key")
+        if restore_manifest is None:
+            raise ValueError("checkpoint branch requires a v1 checkpoint manifest")
+        validation = await self._validate_checkpoint_manifest(
+            request=request,
+            manifest=restore_manifest,
+            credential_generation=current_credential_generation,
+            host_available=False,
+            session_valid=False,
+            first_message_consistent=True,
+        )
+        if not validation.branch_creation.available:
+            raise ValueError(
+                validation.branch_creation.reason or "branch_creation_unavailable"
+            )
         parameters = dict(request.parameters or {})
+        parameters["checkpointMaterialization"] = materialize_cold_restore_inputs(
+            restore_manifest,
+            validation,
+            replacement_workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": candidate_workspace.checkpoint_digest.removeprefix(
+                    "sha256:"
+                )[:24],
+                "relativePath": "repo",
+            },
+            effective_launch_ref=(
+                checkpoint.effective_launch_ref
+                or str(restore_manifest.host["effectiveLaunchRef"])
+            ),
+        )
         parameters["checkpointRestore"] = {
             "mode": "branch",
             "externalStateRef": checkpoint.external_state_ref,
