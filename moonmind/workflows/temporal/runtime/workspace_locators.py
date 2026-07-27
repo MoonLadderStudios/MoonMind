@@ -25,6 +25,8 @@ class SandboxWorkspaceRecord:
     workflow_id: str
     step_execution_id: str
     relative_path: str
+    intent_digest: str | None = None
+    source_commit: str | None = None
 
 
 class SandboxWorkspaceRecordStore:

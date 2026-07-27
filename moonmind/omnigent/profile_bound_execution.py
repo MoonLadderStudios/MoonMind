@@ -549,7 +549,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     new_status="starting",
                 )
             github_token = await self._github_token(request)
-            current_stage = "container_start"
+            current_stage = "workspace_materialization"
             await emit(current_stage, "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
@@ -569,13 +569,27 @@ class OmnigentProfileBoundExecutionCoordinator:
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
                 target_repository=str(
-                    (request.parameters or {}).get("repository") or ""
+                    (request.parameters or {}).get("repository")
+                    or request.workspace_spec.get("repository")
+                    or request.workspace_spec.get("repo")
+                    or ""
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
+                workspace_spec={
+                    **request.workspace_spec,
+                    "publishMode": (request.parameters or {}).get("publishMode"),
+                    "repositoryMutationRequired": self._repository_mutation_required(
+                        request
+                    ),
+                },
+                input_refs=tuple(request.input_refs),
             )
+            await emit(current_stage, "completed")
+            current_stage = "container_start"
+            await emit(current_stage, "started")
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")
             await emit(

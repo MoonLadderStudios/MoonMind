@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -122,6 +123,8 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
+        workspace_spec: Mapping[str, Any] | None = None,
+        input_refs: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -137,6 +140,9 @@ class OmnigentOAuthHostRuntime:
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
+            workspace_spec=workspace_spec or {},
+            input_refs=input_refs,
+            resolved_skillset_ref=resolved_skillset_ref,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -209,6 +215,17 @@ class OmnigentOAuthHostRuntime:
         validated["workspacePath"] = result["workspacePath"]
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
+        evidence_path = workspace_source.parent / ".moonmind-workspace.json"
+        if evidence_path.is_file():
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            validated["workspaceEvidence"] = {
+                key: evidence.get(key)
+                for key in (
+                    "intentDigest", "sourceCommit", "startingBranch",
+                    "targetBranch", "inputRefs", "resolvedSkillsetRef",
+                )
+                if evidence.get(key) is not None
+            }
         return validated
 
     @staticmethod
@@ -757,6 +774,9 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
+        workspace_spec: Mapping[str, Any] | None = None,
+        input_refs: tuple[str, ...] = (),
+        resolved_skillset_ref: str | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
@@ -767,14 +787,98 @@ class OmnigentOAuthHostRuntime:
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
-        # Validate the workflow-derived identity and containment before writing
-        # even the owner record.
-        resolve_sandbox_workspace_locator(
+        # Resolve containment before writing. The workflow-derived identity is
+        # authority; repository and ref materialization happens only below this
+        # owning-worker boundary.
+        workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
-            must_exist=True,
+            must_exist=False,
         )
+        spec = dict(workspace_spec or {})
+        repository = str(spec.get("repository") or spec.get("repo") or "").strip()
+        starting_branch = str(
+            spec.get("startingBranch") or spec.get("branch") or ""
+        ).strip()
+        target_branch = str(spec.get("targetBranch") or "").strip()
+        intent = {
+            "schemaVersion": 1,
+            "issueRef": "MoonLadderStudios/MoonMind#3507",
+            "workspaceId": locator.workspace_id,
+            "workflowId": current_workflow_id,
+            "stepExecutionId": current_step_execution_id,
+            "repository": repository or None,
+            "startingBranch": starting_branch or None,
+            "targetBranch": target_branch or None,
+            "inputRefs": list(dict.fromkeys(input_refs)),
+            "resolvedSkillsetRef": resolved_skillset_ref,
+            "publishMode": spec.get("publishMode"),
+            "repositoryMutationRequired": spec.get("repositoryMutationRequired"),
+        }
+        intent_digest = hashlib.sha256(
+            json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        workspace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        evidence_path = workspace.parent / ".moonmind-workspace.json"
+        if evidence_path.is_file():
+            previous = json.loads(evidence_path.read_text(encoding="utf-8"))
+            if previous.get("intentDigest") != intent_digest:
+                raise OmnigentOAuthHostError(
+                    "workspace intent conflicts with its durable owner record",
+                    code="WORKSPACE_IDENTITY_MISMATCH",
+                )
+        elif repository:
+            if re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+                source = f"https://github.com/{repository}.git"
+            elif repository.startswith(("https://", "git@")):
+                source = repository
+            else:
+                local_source = Path(repository).resolve()
+                if not local_source.is_relative_to(self._workspace_root):
+                    raise OmnigentOAuthHostError(
+                        "local repository source is outside workspace authority",
+                        code="WORKSPACE_AUTHORITY_MISMATCH",
+                    )
+                source = str(local_source)
+            clone_args = ["git", "clone"]
+            if starting_branch:
+                clone_args.extend(["--branch", starting_branch])
+            clone_args.extend(["--", source, str(workspace)])
+            await self._run(*clone_args)
+            if target_branch and target_branch != starting_branch:
+                await self._run(
+                    "git", "-C", str(workspace), "checkout", "-b", target_branch
+                )
+        elif not workspace.is_dir():
+            workspace.mkdir(mode=0o700, parents=True)
+
+        if not workspace.is_dir():
+            raise OmnigentOAuthHostError(
+                "workspace materialization did not create the authorized repository",
+                code="WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        source_commit = None
+        if (workspace / ".git").exists():
+            commit_result = await self._run(
+                "git", "-C", str(workspace), "rev-parse", "HEAD", check=False
+            )
+            if commit_result[0] == 0:
+                source_commit = commit_result[1].strip() or None
+        evidence = {
+            **intent,
+            "intentDigest": intent_digest,
+            "sourceCommit": source_commit,
+            "materializedInputRefs": [
+                {"artifactRef": ref, "localPath": None} for ref in intent["inputRefs"]
+            ],
+        }
+        if not evidence_path.exists():
+            descriptor = os.open(
+                evidence_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(evidence, sort_keys=True))
         record_store = SandboxWorkspaceRecordStore(self._workspace_root)
         authoritative_record = record_store.load(locator.workspace_id)
         if authoritative_record is None:
@@ -783,6 +887,8 @@ class OmnigentOAuthHostRuntime:
                 workflow_id=current_workflow_id,
                 step_execution_id=current_step_execution_id,
                 relative_path=locator.relative_path,
+                intent_digest=intent_digest,
+                source_commit=source_commit,
             )
             record_store.ensure(authoritative_record)
         workspace = resolve_sandbox_workspace_locator(

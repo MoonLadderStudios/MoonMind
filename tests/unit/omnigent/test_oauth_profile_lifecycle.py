@@ -643,7 +643,9 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
+async def test_host_preparation_materializes_empty_normal_workflow_workspace(
+    tmp_path,
+) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=workspace_root
@@ -652,15 +654,20 @@ async def test_host_preparation_rejects_unmaterialized_workspace_without_mutatio
     runtime._run = AsyncMock(return_value=(0, "", ""))
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
-        await runtime._prepare_workspace(
-            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
-            current_workflow_id="workflow-1",
-            current_step_execution_id="step-1",
-        )
+    workspace = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+    )
 
-    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
-    assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+    assert workspace == workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    assert workspace.is_dir()
+    evidence = json.loads(
+        (workspace.parent / ".moonmind-workspace.json").read_text(encoding="utf-8")
+    )
+    assert evidence["workflowId"] == "workflow-1"
+    assert evidence["stepExecutionId"] == "step-1"
+    assert evidence["issueRef"] == "MoonLadderStudios/MoonMind#3507"
     runtime._run.assert_not_awaited()
 
 
