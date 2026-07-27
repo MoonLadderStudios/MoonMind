@@ -218,6 +218,7 @@ class ContainerJobService:
         artifacts: ContainerJobArtifactReader | None = None,
         backend_settings: ContainerBackendSettings | None = None,
     ) -> None:
+        self._session = session
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
@@ -250,13 +251,19 @@ class ContainerJobService:
                 raise ValueError("container image source is not configured") from exc
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
-            created_at = existing.created_at or datetime.now(timezone.utc)
-            return ContainerJobAccepted(
-                jobId=existing.job_id, replayed=True, createdAt=created_at
+            record, replayed = existing, True
+        else:
+            record, replayed = await self.repository.create_or_replay(
+                owner=owner, request=request, authorization=authorization
             )
-        record, replayed = await self.repository.create_or_replay(
-            owner=owner, request=request, authorization=authorization
-        )
+
+        # The API-owned job identity is authoritative for every later status
+        # read and for worker projection Activities. Commit it before handing
+        # execution to Temporal; a request-scoped AsyncSession otherwise rolls
+        # back the flushed row when the transport returns. Exact replays also
+        # reissue the deterministic Temporal start so a prior start failure can
+        # recover without creating another job identity.
+        await self._session.commit()
         await self._temporal.start_container_job(
             ContainerJobWorkflowInput(
                 jobId=record.job_id,

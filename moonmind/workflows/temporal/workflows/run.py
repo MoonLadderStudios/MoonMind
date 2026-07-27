@@ -732,6 +732,13 @@ RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = (
 RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
     "run-dynamic-remediation-loop-controller-v1"
 )
+# The dynamic controller replaces its durable decision while processing the
+# current verifier result. Re-read the blocking projection after that update so
+# a passing verdict cannot inherit the prior attempt's blocking reason. Keep
+# the ordering change replay-gated for histories that already evaluated a gate.
+RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH = (
+    "run-refresh-moonspec-block-after-remediation-decision-v1"
+)
 # New controller admissions require executable instructions on both agent steps.
 # Gate the workflow-side validation so histories admitted before this invariant
 # keep replaying their recorded command sequence.
@@ -12252,6 +12259,12 @@ class MoonMindRunWorkflow:
                                 ),
                             )
                         )
+                        if workflow.patched(
+                            RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH
+                        ):
+                            blocking_gate_reason = (
+                                self._blocking_moonspec_gate_reason()
+                            )
                         if dynamic_attempt_admitted:
                             blocking_gate_reason = None
                     remaining_remediation_index = (

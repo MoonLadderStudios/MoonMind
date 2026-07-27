@@ -5689,6 +5689,264 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("refresh_enabled", "expect_published"),
+    [(False, False), (True, True)],
+)
+async def test_dynamic_remediation_final_pass_replaces_prior_blocking_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    refresh_enabled: bool,
+    expect_published: bool,
+) -> None:
+    """A passing verifier decision must supersede the prior loop decision.
+
+    Regression for workflow mm:bd309558-4b8c-4883-b4aa-d60ea7494698: the
+    final verifier returned FULLY_IMPLEMENTED, but the execution stage retained
+    the preceding ADDITIONAL_WORK_NEEDED blocking reason and failed instead of
+    publishing.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    executed_steps: list[str] = []
+    create_pr_called = False
+
+    def request_step_id(request: object) -> str:
+        parameters = getattr(request, "parameters", {})
+        metadata = parameters.get("metadata") if isinstance(parameters, dict) else {}
+        moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+        step_ledger = moonmind.get("stepLedger") if isinstance(moonmind, dict) else {}
+        return str(step_ledger.get("logicalStepId") or "")
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+            }
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [
+                    {"name": "moonspec-implement"},
+                    {"name": "moonspec-verify"},
+                ],
+            }
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) if payload is not None else None
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            loop = {
+                "kind": "remediation_loop",
+                "loopId": "issue-implementation-remediation",
+                "remediationTool": {
+                    "type": "agent_runtime",
+                    "name": "auto",
+                    "inputs": {
+                        "selectedSkill": "moonspec-implement",
+                        "instructions": "Fix the remaining verified gaps.",
+                    },
+                },
+                "verificationTool": {
+                    "type": "agent_runtime",
+                    "name": "auto",
+                    "inputs": {
+                        "selectedSkill": "moonspec-verify",
+                        "instructions": "Verify the remediated candidate.",
+                    },
+                },
+                "workspacePolicy": "continue_from_loop_head",
+                "budgets": {
+                    "hardMaxAttempts": 6,
+                    "maxConsecutiveSemanticNoProgress": 2,
+                },
+                "terminalPolicy": {
+                    "fullyImplemented": "advance",
+                    "additionalWorkNeeded": "continue_when_allowed",
+                    "blocked": "stop",
+                    "noDetermination": "retry_evidence_or_stop",
+                    "failedUnrecoverable": "stop",
+                },
+                "sideEffectPolicy": "workflow_owned",
+                "publicationPolicy": "evaluate_after_terminal",
+            }
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Dynamic remediation final pass",
+                        "created_at": "2026-07-27T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "verify-initial",
+                            "tool": {"type": "agent_runtime", "name": "auto"},
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "instructions": "Verify the implementation.",
+                                "annotations": {"remediationLoop": loop},
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: object,
+        **_kwargs: object,
+    ) -> object:
+        step_id = request_step_id(request)
+        executed_steps.append(step_id)
+        if step_id == "verify-initial":
+            return {
+                "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+                "metadata": {
+                    "verdict": "ADDITIONAL_WORK_NEEDED",
+                    "recommendedNextAction": "reattempt_current_step",
+                    "remainingWorkRef": "art_remaining_initial",
+                    "recoverableInCurrentRuntime": True,
+                    "operator_summary": "One implementation gap remains.",
+                    "diagnostics_ref": "art_verify_initial",
+                },
+                "output_refs": [],
+            }
+        if step_id.endswith(":verification:1"):
+            return {
+                "summary": "Verdict: FULLY_IMPLEMENTED",
+                "metadata": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "recommendedNextAction": "advance",
+                    "recoverableInCurrentRuntime": True,
+                    "operator_summary": "All requirements are implemented.",
+                    "diagnostics_ref": "art_verify_final",
+                    "push_status": "pushed",
+                    "push_branch": "fixed-workflow-gate",
+                    "push_base_ref": "origin/main",
+                },
+                "output_refs": [],
+            }
+        return {
+            "summary": "Remediation completed.",
+            "metadata": {
+                "operator_summary": "Remediation completed.",
+                "push_status": "pushed",
+                "push_branch": "fixed-workflow-gate",
+                "push_base_ref": "origin/main",
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_workflow_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    artifact_ordinal = count(1)
+
+    async def fake_write_json_artifact(**_kwargs: object) -> str:
+        return f"artifact://test/{next(artifact_ordinal)}"
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    enabled_patches = {
+        run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
+        run_workflow_module.RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH,
+        run_workflow_module.RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
+    }
+    if refresh_enabled:
+        enabled_patches.add(
+            run_workflow_module.RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH
+        )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert executed_steps == [
+        "verify-initial",
+        "wf-1:run-1:issue-implementation-remediation:remediation:1",
+        "wf-1:run-1:issue-implementation-remediation:verification:1",
+    ]
+    assert workflow._publish_context["moonSpecGate"]["verdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert workflow._publish_context["remediationLoop"]["latestVerdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+    assert create_pr_called is expect_published
+    if expect_published:
+        assert "publicationBlockedBy" not in workflow._publish_context
+    else:
+        assert workflow._publish_context["publicationBlockedBy"] == (
+            "moonspec_verify"
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
