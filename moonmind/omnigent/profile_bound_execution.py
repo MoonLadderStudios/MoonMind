@@ -119,6 +119,31 @@ def _diagnostics_ref(value: object) -> str | None:
     return None
 
 
+def _result_manifest(result: AgentRunResult) -> dict[str, Any]:
+    """Project bounded terminal refs without copying provider payloads or paths."""
+
+    metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
+    publication: dict[str, str] = {}
+    for key in (
+        "branchRef",
+        "checkpointRef",
+        "commitRef",
+        "commitSha",
+        "prRef",
+        "prUrl",
+        "savedWorkRef",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            publication[key] = value.strip()[:1024]
+    return {
+        "schemaVersion": 1,
+        "outputRefs": list(dict.fromkeys(result.output_refs))[:256],
+        "diagnosticsRef": _diagnostics_ref(result),
+        "publication": publication,
+    }
+
+
 def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
     if request.step_execution is not None:
         return (
@@ -287,6 +312,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         binding = None
         effective_launch: dict[str, Any] | None = None
         remediation_resolution: Mapping[str, Any] | None = None
+        result: AgentRunResult | None = None
         terminal_status = "completed"
         try:
             await emit("request_validated", "started")
@@ -710,6 +736,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     str(result.failure_class) if result.failure_class else None
                 ),
                 diagnostics_ref=_diagnostics_ref(result),
+                metadata={"resultManifest": _result_manifest(result)},
             )
             if str(result.provider_error_code or "") == "429":
                 await self._lease_client.record_cooldown(
@@ -874,6 +901,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "leaseReleased": lease_released,
                     "janitorRequired": (
                         provider_lease is not None and not lease_released
+                    ),
+                    **(
+                        {"resultManifest": _result_manifest(result)}
+                        if result is not None
+                        else {}
                     ),
                 },
                 ignore_errors=True,

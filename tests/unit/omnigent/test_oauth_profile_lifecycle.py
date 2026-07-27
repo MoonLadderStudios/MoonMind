@@ -1352,7 +1352,20 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             "workspace": "/workspaces/run",
         }
         actions.append("executed")
-        return AgentRunResult(summary="done")
+        return AgentRunResult(
+            summary="done",
+            outputRefs=[
+                "artifact://omnigent/declared-output",
+                "artifact://omnigent/declared-output",
+            ],
+            diagnosticsRef="artifact://omnigent/diagnostics",
+            metadata={
+                "branchRef": "refs/heads/feature/3507",
+                "commitSha": "a" * 40,
+                "prUrl": "https://github.com/example/repo/pull/1",
+                "unboundedProviderPayload": {"must": "not be projected"},
+            },
+        )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -1398,6 +1411,27 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
+    harvest = next(
+        kwargs
+        for event_type, kwargs in lifecycle
+        if event_type == "resource_harvest" and kwargs.get("status") == "completed"
+    )
+    assert harvest["metadata"]["resultManifest"] == {
+        "schemaVersion": 1,
+        "outputRefs": ["artifact://omnigent/declared-output"],
+        "diagnosticsRef": "artifact://omnigent/diagnostics",
+        "publication": {
+            "branchRef": "refs/heads/feature/3507",
+            "commitSha": "a" * 40,
+            "prUrl": "https://github.com/example/repo/pull/1",
+        },
+    }
+    terminal = next(
+        kwargs
+        for event_type, kwargs in lifecycle
+        if event_type == "terminal" and kwargs.get("status") == "completed"
+    )
+    assert terminal["metadata"]["resultManifest"] == harvest["metadata"]["resultManifest"]
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
