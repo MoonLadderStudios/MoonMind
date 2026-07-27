@@ -1332,6 +1332,11 @@ class StepExecutionCheckpointModel(BaseModel):
                 "workflowId": self.source.workflow_id,
                 "runId": self.source.run_id,
                 "logicalStepId": self.source.logical_step_id,
+                "stepExecutionId": (
+                    f"{self.source.workflow_id}:{self.source.run_id}:"
+                    f"{self.source.logical_step_id}:execution:"
+                    f"{self.source.execution_ordinal}"
+                ),
                 "attemptOrdinal": self.source.execution_ordinal,
                 "boundary": self.boundary,
             }

@@ -9,6 +9,7 @@ from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
     RecoveryCapability,
     artifact_digest,
+    build_omnigent_checkpoint_manifest,
     materialize_cold_restore_inputs,
     recovery_capability_projection,
     validate_restore_material,
@@ -184,6 +185,75 @@ def test_restore_validation_fails_closed(overrides: dict[str, object], reason: s
     assert result.workspace_cold_restore.available is False
     assert result.workspace_cold_restore.reason == reason
     assert result.branch_creation.available is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"step_execution_id": "wf:run:step:execution:2"}, "step_execution_mismatch"),
+        ({"attempt_ordinal": 2}, "attempt_mismatch"),
+        ({"boundary": "before_execution"}, "boundary_mismatch"),
+    ],
+)
+def test_restore_validation_binds_complete_step_lineage(
+    overrides: dict[str, object], reason: str
+) -> None:
+    arguments: dict[str, object] = {
+        "workflow_id": "wf",
+        "run_id": "run",
+        "logical_step_id": "step",
+        "step_execution_id": "wf:run:step:execution:1",
+        "attempt_ordinal": 1,
+        "boundary": "after_execution",
+        "provider_profile_id": "profile",
+        "credential_generation": 3,
+        "artifacts": _artifacts(),
+    }
+    arguments.update(overrides)
+
+    result = validate_restore_material(_manifest(), **arguments)  # type: ignore[arg-type]
+
+    assert result.workspace_cold_restore.available is False
+    assert result.workspace_cold_restore.reason == reason
+
+
+def test_partial_capture_manifest_never_advertises_recovery() -> None:
+    manifest = build_omnigent_checkpoint_manifest(
+        workflow_id="wf",
+        run_id="run",
+        logical_step_id="step",
+        step_execution_id="wf:run:step:execution:1",
+        attempt_ordinal=1,
+        boundary="after_execution",
+        session={"externalStateRef": "artifact://session"},
+        workspace={"workspaceLocator": {"kind": "sandbox"}},
+        host={"providerProfileId": "profile"},
+        credentials={"credentialGeneration": 3},
+        captured_at=datetime.now(UTC),
+        producer_version="test",
+    )
+
+    assert manifest.validation.status == "degraded"
+    assert manifest.validation.live_reattach.available is False
+    assert manifest.validation.workspace_cold_restore.available is False
+    assert manifest.validation.branch_creation.available is False
+    assert manifest.validation.live_reattach.reason.startswith("evidence_missing:")
+
+
+def test_restore_validation_rejects_repository_incompatibility() -> None:
+    result = validate_restore_material(
+        _manifest(),
+        workflow_id="wf",
+        run_id="run",
+        logical_step_id="step",
+        provider_profile_id="profile",
+        credential_generation=3,
+        artifacts=_artifacts(),
+        repository_compatible=lambda _baseline, _head: False,
+    )
+
+    assert result.workspace_cold_restore.available is False
+    assert result.workspace_cold_restore.reason == "repository_incompatible"
 
 
 def test_digest_mismatch_and_unresolved_refs_are_not_resumable() -> None:

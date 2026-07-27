@@ -126,6 +126,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.checkpoint_policy import (
         resolve_checkpoint_policy,
     )
+    from moonmind.omnigent.checkpoints import build_omnigent_checkpoint_manifest
     from moonmind.workflows.temporal.managed_session_errors import (
         is_managed_session_locator_mismatch_error,
     )
@@ -5608,6 +5609,13 @@ class MoonMindRunWorkflow:
                 capture_input["omnigentCheckpointManifest"] = dict(
                     omnigent_manifest
                 )
+            omnigent_evidence = candidate.get("omnigentCheckpointEvidence") or (
+                candidate.get("omnigent_checkpoint_evidence")
+            )
+            if isinstance(omnigent_evidence, Mapping):
+                capture_input["omnigentCheckpointEvidence"] = dict(
+                    omnigent_evidence
+                )
             workspace_locator = candidate.get("workspaceLocator") or candidate.get(
                 "workspace_locator"
             )
@@ -5680,6 +5688,76 @@ class MoonMindRunWorkflow:
 
         if capture_input:
             self._step_workspace_capture_inputs[logical_step_id] = capture_input
+
+    @staticmethod
+    def _build_omnigent_boundary_manifest(
+        *,
+        identity: StepExecutionIdentityModel,
+        boundary: StepExecutionCheckpointBoundary,
+        capture_input: Mapping[str, Any],
+        workspace_evidence: Mapping[str, Any],
+        captured_at: datetime,
+    ) -> dict[str, Any] | None:
+        """Build, rather than merely forward, runtime checkpoint evidence."""
+
+        evidence = capture_input.get("omnigentCheckpointEvidence")
+        capabilities = capture_input.get("runtimeCapabilities")
+        is_omnigent = (
+            isinstance(capabilities, Mapping)
+            and capabilities.get("runtimeId") == "omnigent"
+        )
+        if not is_omnigent and not isinstance(evidence, Mapping):
+            return None
+        evidence = dict(evidence) if isinstance(evidence, Mapping) else {}
+        session = evidence.get("session")
+        workspace = evidence.get("workspace")
+        host = evidence.get("host")
+        credentials = evidence.get("credentials")
+        session_payload = dict(session) if isinstance(session, Mapping) else {}
+        workspace_payload = (
+            dict(workspace) if isinstance(workspace, Mapping) else {}
+        )
+        host_payload = dict(host) if isinstance(host, Mapping) else {}
+        credentials_payload = (
+            dict(credentials) if isinstance(credentials, Mapping) else {}
+        )
+        locator = capture_input.get("workspaceLocator")
+        if isinstance(locator, Mapping):
+            workspace_payload.setdefault("workspaceLocator", dict(locator))
+        for source_key, target_key in (
+            ("externalStateRef", "externalStateRef"),
+            ("externalStateDigest", "externalStateDigest"),
+            ("manifestRef", "checkpointRef"),
+            ("workspaceDigest", "checkpointDigest"),
+            ("archiveDigest", "checkpointDigest"),
+        ):
+            value = workspace_evidence.get(source_key)
+            if value:
+                (
+                    session_payload
+                    if target_key.startswith("externalState")
+                    else workspace_payload
+                ).setdefault(target_key, value)
+        manifest = build_omnigent_checkpoint_manifest(
+            workflow_id=identity.workflow_id,
+            run_id=identity.run_id,
+            logical_step_id=identity.logical_step_id,
+            step_execution_id=build_step_execution_id(identity),
+            attempt_ordinal=identity.execution_ordinal,
+            boundary=str(boundary),
+            session=session_payload,
+            workspace=workspace_payload,
+            host=host_payload,
+            credentials=credentials_payload,
+            source=(
+                evidence.get("source")
+                if isinstance(evidence.get("source"), Mapping)
+                else {}
+            ),
+            captured_at=captured_at,
+            producer_version="moonmind-step-checkpoint-v1",
+        )
+        return manifest.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     def _inject_remediation_managed_session_checkpoint_source_identity(
         self,
@@ -5917,6 +5995,17 @@ class MoonMindRunWorkflow:
         capture_input = dict(
             self._step_workspace_capture_inputs.get(logical_step_id) or {}
         )
+        omnigent_manifest = (
+            dict(capture_input["omnigentCheckpointManifest"])
+            if isinstance(capture_input.get("omnigentCheckpointManifest"), Mapping)
+            else self._build_omnigent_boundary_manifest(
+                identity=identity,
+                boundary=boundary,
+                capture_input=capture_input,
+                workspace_evidence=capture["workspace"],
+                captured_at=updated_at,
+            )
+        )
         capture_diagnostics = list(capture.get("diagnosticRefs") or [])
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,
@@ -5930,13 +6019,7 @@ class MoonMindRunWorkflow:
             step_outputs=step_outputs or self._step_execution_compact_output_refs(
                 logical_step_id
             ),
-            omnigent_manifest=(
-                capture_input.get("omnigentCheckpointManifest")
-                if isinstance(
-                    capture_input.get("omnigentCheckpointManifest"), Mapping
-                )
-                else None
-            ),
+            omnigent_manifest=omnigent_manifest,
             diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()

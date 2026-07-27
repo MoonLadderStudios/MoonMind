@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -187,12 +187,153 @@ def artifact_digest(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+_REF_DIGEST_PAIRS: tuple[tuple[str, str], ...] = (
+    ("externalStateRef", "externalStateDigest"),
+    ("checkpointRef", "checkpointDigest"),
+    ("headRef", "headDigest"),
+    ("diffRef", "diffDigest"),
+    ("resourceManifestRef", "resourceManifestDigest"),
+    ("captureManifestRef", "captureManifestDigest"),
+    ("terminalRef", "terminalDigest"),
+    ("diagnosticsRef", "diagnosticsDigest"),
+    ("launchPolicyRef", "launchPolicyDigest"),
+    ("providerProfileRef", "providerProfileDigest"),
+    ("providerLeaseRef", "providerLeaseDigest"),
+    ("hostBindingRef", "hostBindingDigest"),
+    ("hostLeaseRef", "hostLeaseDigest"),
+    ("endpointRef", "endpointDigest"),
+)
+
+_SESSION_REQUIRED = frozenset(
+    {
+        "externalStateRef",
+        "externalStateDigest",
+        "bridgeSessionId",
+        "idempotencyKey",
+        "lastCommittedEventCursor",
+        "firstMessageDigest",
+        "resourceManifestRef",
+        "resourceManifestDigest",
+        "captureManifestRef",
+        "captureManifestDigest",
+        "terminalRef",
+        "terminalDigest",
+        "diagnosticsRef",
+        "diagnosticsDigest",
+    }
+)
+_WORKSPACE_REQUIRED = frozenset(
+    {
+        "workspaceLocator",
+        "baselineCommit",
+        "checkpointRef",
+        "checkpointDigest",
+        "patchCapability",
+        "sourceBranch",
+        "outputBranch",
+        "publicationState",
+    }
+)
+_HOST_REQUIRED = frozenset(
+    {
+        "executionProfile",
+        "launchPolicyRef",
+        "launchPolicyDigest",
+        "effectiveLaunchRef",
+        "providerProfileId",
+        "providerProfileRef",
+        "providerProfileDigest",
+        "providerLeaseRef",
+        "providerLeaseDigest",
+        "hostBindingRef",
+        "hostBindingDigest",
+        "hostLeaseRef",
+        "hostLeaseDigest",
+        "endpointRef",
+        "endpointDigest",
+    }
+)
+
+
+def _first_missing(plane: Mapping[str, Any], required: frozenset[str]) -> str | None:
+    missing = sorted(key for key in required if not plane.get(key))
+    return f"evidence_missing:{missing[0]}" if missing else None
+
+
+def build_omnigent_checkpoint_manifest(
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    step_execution_id: str,
+    attempt_ordinal: int,
+    boundary: str,
+    session: Mapping[str, Any],
+    workspace: Mapping[str, Any],
+    host: Mapping[str, Any],
+    credentials: Mapping[str, Any],
+    captured_at: datetime,
+    producer_version: str,
+    source: Mapping[str, Any] | None = None,
+) -> OmnigentCheckpointManifest:
+    """Construct a truthful manifest from authoritative boundary evidence.
+
+    Capture is allowed to persist partial evidence, but a partial capture never
+    advertises a recovery capability. The restore validator remains the authority
+    that promotes complete, resolvable evidence to an available capability.
+    """
+
+    session_payload = dict(session)
+    workspace_payload = dict(workspace)
+    host_payload = dict(host)
+    credentials_payload = dict(credentials)
+    session_reason = _first_missing(session_payload, _SESSION_REQUIRED)
+    workspace_reason = _first_missing(workspace_payload, _WORKSPACE_REQUIRED)
+    host_reason = _first_missing(host_payload, _HOST_REQUIRED)
+    credential_reason = (
+        None
+        if credentials_payload.get("credentialGeneration")
+        else "evidence_missing:credentialGeneration"
+    )
+    shared_reason = host_reason or credential_reason
+    live_reason = session_reason or shared_reason or "restore_material_not_validated"
+    cold_reason = workspace_reason or shared_reason or "restore_material_not_validated"
+    branch_reason = workspace_reason or session_reason or shared_reason or (
+        "restore_material_not_validated"
+    )
+    validation = OmnigentRestoreValidation(
+        status="invalid" if session_reason and workspace_reason else "degraded",
+        liveReattach=RecoveryCapability(available=False, reason=live_reason),
+        workspaceColdRestore=RecoveryCapability(available=False, reason=cold_reason),
+        branchCreation=RecoveryCapability(available=False, reason=branch_reason),
+    )
+    return OmnigentCheckpointManifest(
+        workflowId=workflow_id,
+        runId=run_id,
+        logicalStepId=logical_step_id,
+        stepExecutionId=step_execution_id,
+        attemptOrdinal=attempt_ordinal,
+        boundary=boundary,
+        session=session_payload,
+        workspace=workspace_payload,
+        host=host_payload,
+        credentials=credentials_payload,
+        source=dict(source or {}),
+        captureTime=captured_at,
+        producerVersion=producer_version,
+        validation=validation,
+    )
+
+
 def validate_restore_material(
     manifest: OmnigentCheckpointManifest,
     *,
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
+    step_execution_id: str | None = None,
+    attempt_ordinal: int | None = None,
+    boundary: str | None = None,
     provider_profile_id: str,
     credential_generation: int,
     artifacts: Mapping[str, bytes],
@@ -200,6 +341,7 @@ def validate_restore_material(
     session_valid: bool = False,
     first_message_consistent: bool = True,
     event_cursor_consistent: bool = True,
+    repository_compatible: Callable[[str, str | None], bool] | None = None,
 ) -> OmnigentRestoreValidation:
     """Digest-check all declared evidence and evaluate modes independently."""
 
@@ -210,10 +352,28 @@ def validate_restore_material(
         or manifest.logical_step_id != logical_step_id
     ):
         reasons.append("lineage_mismatch")
+    if (
+        step_execution_id is not None
+        and manifest.step_execution_id != step_execution_id
+    ):
+        reasons.append("step_execution_mismatch")
+    if attempt_ordinal is not None and manifest.attempt_ordinal != attempt_ordinal:
+        reasons.append("attempt_mismatch")
+    if boundary is not None and manifest.boundary != boundary:
+        reasons.append("boundary_mismatch")
     if manifest.host.get("providerProfileId") != provider_profile_id:
         reasons.append("provider_profile_mismatch")
     if manifest.credentials.get("credentialGeneration") != credential_generation:
         reasons.append("credential_generation_stale")
+
+    session_missing = _first_missing(manifest.session, _SESSION_REQUIRED)
+    workspace_missing = _first_missing(manifest.workspace, _WORKSPACE_REQUIRED)
+    host_missing = _first_missing(manifest.host, _HOST_REQUIRED)
+    credential_missing = (
+        None
+        if manifest.credentials.get("credentialGeneration")
+        else "evidence_missing:credentialGeneration"
+    )
 
     checked: list[str] = []
     for plane in (
@@ -222,22 +382,7 @@ def validate_restore_material(
         manifest.host,
         manifest.source,
     ):
-        for ref_key, digest_key in (
-            ("externalStateRef", "externalStateDigest"),
-            ("checkpointRef", "checkpointDigest"),
-            ("headRef", "headDigest"),
-            ("diffRef", "diffDigest"),
-            ("resourceManifestRef", "resourceManifestDigest"),
-            ("captureManifestRef", "captureManifestDigest"),
-            ("terminalRef", "terminalDigest"),
-            ("diagnosticsRef", "diagnosticsDigest"),
-            ("launchPolicyRef", "launchPolicyDigest"),
-            ("providerProfileRef", "providerProfileDigest"),
-            ("providerLeaseRef", "providerLeaseDigest"),
-            ("hostBindingRef", "hostBindingDigest"),
-            ("hostLeaseRef", "hostLeaseDigest"),
-            ("endpointRef", "endpointDigest"),
-        ):
+        for ref_key, digest_key in _REF_DIGEST_PAIRS:
             ref = plane.get(ref_key)
             expected_digest = plane.get(digest_key)
             if not ref:
@@ -257,6 +402,12 @@ def validate_restore_material(
     head = manifest.workspace.get("headCommit")
     if head and baseline and not manifest.workspace.get("checkpointRef"):
         reasons.append("repository_evidence_incomplete")
+    if (
+        repository_compatible is not None
+        and baseline
+        and not repository_compatible(str(baseline), str(head) if head else None)
+    ):
+        reasons.append("repository_incompatible")
     if manifest.workspace.get("patchCapability") not in {
         None,
         "git_patch_v1",
@@ -269,27 +420,22 @@ def validate_restore_material(
     if not event_cursor_consistent:
         reasons.append("event_cursor_mismatch")
 
-    shared_reason = reasons[0] if reasons else None
-    workspace_available = shared_reason is None and bool(
-        manifest.workspace.get("baselineCommit")
-        and manifest.workspace.get("checkpointRef")
-        and manifest.workspace.get("workspaceLocator")
-    )
-    session_material_available = shared_reason is None and bool(
-        manifest.session.get("externalStateRef")
-        and manifest.session.get("bridgeSessionId")
-    )
+    shared_reason = reasons[0] if reasons else host_missing or credential_missing
+    workspace_reason_base = shared_reason or workspace_missing
+    session_reason_base = shared_reason or session_missing
+    workspace_available = workspace_reason_base is None
+    session_material_available = session_reason_base is None
     live_available = session_material_available and host_available and session_valid
     live_reason = (
         None
         if live_available
-        else shared_reason
+        else session_reason_base
         or ("host_unavailable" if not host_available else "session_unavailable")
     )
     workspace_reason = (
         None
         if workspace_available
-        else shared_reason or "workspace_evidence_missing"
+        else workspace_reason_base or "workspace_evidence_missing"
     )
     branch_available = workspace_available and session_material_available
     branch_reason = (
@@ -297,9 +443,9 @@ def validate_restore_material(
         if branch_available
         else shared_reason
         or (
-            "session_evidence_missing"
+            session_reason_base or "session_evidence_missing"
             if workspace_available
-            else "workspace_evidence_missing"
+            else workspace_reason_base or "workspace_evidence_missing"
         )
     )
     status: Literal["valid", "degraded", "invalid"] = (
@@ -544,6 +690,7 @@ __all__ = [
     "OmnigentRestoreValidation",
     "RecoveryCapability",
     "artifact_digest",
+    "build_omnigent_checkpoint_manifest",
     "materialize_cold_restore_inputs",
     "recovery_capability_projection",
     "recovery_mode",
