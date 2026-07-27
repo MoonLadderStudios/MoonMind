@@ -866,6 +866,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         host_registered: bool,
         session_valid: bool,
         first_message_consistent: bool,
+        event_cursor_valid: bool,
+        workspace_authority_valid: bool,
+        policy_valid: bool,
         current_credential_generation: int,
         candidate_workspace: CandidateWorkspaceAuthority,
     ) -> AgentRunResult:
@@ -878,6 +881,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             host_registered=host_registered,
             session_valid=session_valid,
             first_message_consistent=first_message_consistent,
+            event_cursor_valid=event_cursor_valid,
+            workspace_authority_valid=workspace_authority_valid,
+            policy_valid=policy_valid,
         )
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:

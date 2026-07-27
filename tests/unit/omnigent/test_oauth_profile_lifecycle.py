@@ -1052,6 +1052,9 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             host_registered=True,
             session_valid=True,
             first_message_consistent=True,
+            event_cursor_valid=True,
+            workspace_authority_valid=True,
+            policy_valid=True,
         )
         == OmnigentRecoveryMode.LIVE_REATTACH
     )
@@ -1067,6 +1070,9 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             host_registered=True,
             session_valid=True,
             first_message_consistent=True,
+            event_cursor_valid=True,
+            workspace_authority_valid=True,
+            policy_valid=True,
         )
         == OmnigentRecoveryMode.COLD_RESTORE
     )

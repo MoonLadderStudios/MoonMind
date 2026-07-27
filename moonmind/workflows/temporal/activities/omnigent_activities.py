@@ -3,11 +3,63 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+
+async def dispatch_profile_bound_execution(
+    coordinator: Any,
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    """Route admitted checkpoint work through the coordinator's canonical paths."""
+
+    raw = request.parameters.get("checkpointExecution")
+    if raw is None:
+        return await coordinator.execute(request)
+    if not isinstance(raw, Mapping):
+        raise ValueError("resume_unavailable:checkpoint_execution_invalid")
+
+    from moonmind.omnigent.checkpoints import OmnigentCheckpointExecutionInput
+
+    try:
+        execution = OmnigentCheckpointExecutionInput.model_validate(raw)
+    except Exception as exc:
+        reason = str(exc)
+        if "branch_required:" in reason or "resume_unavailable:" in reason:
+            raise ValueError(reason) from exc
+        raise ValueError("resume_unavailable:checkpoint_evidence_invalid") from exc
+
+    if request.execution_profile_ref != execution.checkpoint.provider_profile_id:
+        if execution.action == "resume":
+            raise ValueError("branch_required:provider_profile_changed")
+        raise ValueError("resume_unavailable:provider_profile_mismatch")
+
+    if execution.action == "branch":
+        return await coordinator.branch_from_checkpoint(
+            request=request,
+            checkpoint=execution.checkpoint,
+            current_credential_generation=execution.current_credential_generation,
+            candidate_workspace=execution.candidate_workspace,
+        )
+    return await coordinator.recover_from_checkpoint(
+        request=request,
+        checkpoint=execution.checkpoint,
+        provider_lease=execution.provider_lease,
+        host_lease=execution.host_lease,
+        host_registered=execution.host_registered,
+        session_valid=execution.session_valid,
+        first_message_consistent=execution.first_message_consistent,
+        event_cursor_valid=execution.event_cursor_valid,
+        workspace_authority_valid=execution.workspace_authority_valid,
+        policy_valid=execution.policy_valid,
+        current_credential_generation=execution.current_credential_generation,
+        candidate_workspace=execution.candidate_workspace,
+    )
 
 
 @activity.defn(name="integration.omnigent.execute")
@@ -113,7 +165,7 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
-        return await coordinator.execute(request)
+        return await dispatch_profile_bound_execution(coordinator, request)
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")
@@ -167,6 +219,7 @@ async def omnigent_oauth_host_janitor_activity(
 
 __all__ = [
     "omnigent_execute_activity",
+    "dispatch_profile_bound_execution",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,6 +11,41 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class OmnigentRecoveryMode(str, Enum):
     LIVE_REATTACH = "live_reattach"
     COLD_RESTORE = "cold_restore"
+
+
+class OmnigentCheckpointExecutionInput(BaseModel):
+    """Fail-closed Activity input for resume and Checkpoint Branch execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action: Literal["resume", "branch"]
+    checkpoint: "OmnigentCheckpointIdentity"
+    candidate_workspace: CandidateWorkspaceAuthority = Field(
+        ..., alias="candidateWorkspace"
+    )
+    current_credential_generation: int = Field(
+        ..., alias="currentCredentialGeneration", ge=1
+    )
+    provider_lease: dict[str, Any] | None = Field(None, alias="providerLease")
+    host_lease: dict[str, Any] | None = Field(None, alias="hostLease")
+    host_registered: bool = Field(False, alias="hostRegistered")
+    session_valid: bool = Field(False, alias="sessionValid")
+    first_message_consistent: bool = Field(False, alias="firstMessageConsistent")
+    event_cursor_valid: bool = Field(False, alias="eventCursorValid")
+    workspace_authority_valid: bool = Field(..., alias="workspaceAuthorityValid")
+    policy_valid: bool = Field(..., alias="policyValid")
+    original_input_unchanged: bool = Field(..., alias="originalInputUnchanged")
+    validation_ref: str = Field(..., alias="validationRef", min_length=1)
+
+    @model_validator(mode="after")
+    def _require_branch_or_immutable_resume(self) -> "OmnigentCheckpointExecutionInput":
+        if self.action == "resume" and not self.original_input_unchanged:
+            raise ValueError("branch_required:immutable_input_changed")
+        if not self.workspace_authority_valid:
+            raise ValueError("resume_unavailable:workspace_authority_invalid")
+        if not self.policy_valid:
+            raise ValueError("resume_unavailable:policy_denied")
+        return self
 
 
 class CandidateWorkspaceAuthority(BaseModel):
@@ -81,6 +116,9 @@ def recovery_mode(
     host_registered: bool,
     session_valid: bool,
     first_message_consistent: bool,
+    event_cursor_valid: bool,
+    workspace_authority_valid: bool,
+    policy_valid: bool,
 ) -> OmnigentRecoveryMode:
     """Select live reattach only when every original authority is still valid."""
 
@@ -117,6 +155,9 @@ def recovery_mode(
             host_registered,
             session_valid,
             first_message_consistent,
+            event_cursor_valid,
+            workspace_authority_valid,
+            policy_valid,
             checkpoint.omnigent_host_id,
             checkpoint.omnigent_session_id,
         )
@@ -152,6 +193,7 @@ def validate_branch_identity(
 __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
+    "OmnigentCheckpointExecutionInput",
     "OmnigentRecoveryMode",
     "recovery_mode",
     "validate_branch_identity",
