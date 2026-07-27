@@ -98,12 +98,21 @@ def _acceptance_manifest(now: datetime) -> dict[str, object]:
         },
         "browserEvidence": "browser/browser-evidence.json",
         "reports": ["browser/report.json"],
+        "sourceCommit": "abc123",
+        "browserRows": {
+            "static_profile_bound": {"status": "passed"},
+        },
     }
 
 
 def test_acceptance_manifest_gate_accepts_current_immutable_3508_evidence() -> None:
     now = datetime(2026, 7, 27, tzinfo=timezone.utc)
-    validate_acceptance_manifest(_acceptance_manifest(now), now=now)
+    validate_acceptance_manifest(
+        _acceptance_manifest(now),
+        now=now,
+        expected_commit="abc123",
+        required_rows=("static_profile_bound",),
+    )
 
 
 @pytest.mark.parametrize("mutation", ["absent", "expired", "malformed", "mutable"])
@@ -120,6 +129,27 @@ def test_acceptance_manifest_gate_fails_closed(mutation: str) -> None:
         manifest["images"]["hostDigest"] = "latest"  # type: ignore[index]
     with pytest.raises(ConformanceContractError):
         validate_acceptance_manifest(manifest, now=now)
+
+
+@pytest.mark.parametrize("mutation", ["wrong_commit", "incomplete_rows", "failed_row"])
+def test_acceptance_manifest_gate_binds_commit_and_complete_rows(mutation: str) -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    manifest = _acceptance_manifest(now)
+    if mutation == "wrong_commit":
+        manifest["sourceCommit"] = "old"
+    elif mutation == "incomplete_rows":
+        manifest["browserRows"] = {}
+    else:
+        manifest["browserRows"] = {
+            "static_profile_bound": {"status": "failed"}
+        }
+    with pytest.raises(ConformanceContractError):
+        validate_acceptance_manifest(
+            manifest,
+            now=now,
+            expected_commit="abc123",
+            required_rows=("static_profile_bound",),
+        )
 
 
 def test_report_requires_every_case_and_records_machine_readable_evidence() -> None:

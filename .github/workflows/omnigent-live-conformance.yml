@@ -42,6 +42,17 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install -e .[tests]
+      - name: Install controlling browser
+        if: ${{ matrix.mode == 'browser' }}
+        run: |
+          npm ci --no-fund --no-audit
+          npx playwright install --with-deps chromium
+      - name: Materialize browser authentication state
+        if: ${{ matrix.mode == 'browser' }}
+        env:
+          BROWSER_STORAGE_STATE: ${{ secrets.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE }}
+        run: |
+          python -c 'import os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"moonmind-browser-state.json"; p.write_text(os.environ["BROWSER_STORAGE_STATE"], encoding="utf-8"); p.chmod(0o600)'
       - name: Resolve pinned image inputs
         id: images
         shell: bash
@@ -75,6 +86,11 @@ jobs:
           MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE }}
           MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE }}
           MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE }}
+          MOONMIND_OMNIGENT_DASHBOARD_URL: ${{ vars.MOONMIND_OMNIGENT_DASHBOARD_URL }}
+          MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID: ${{ vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID }}
+          MOONMIND_OMNIGENT_TEST_REPOSITORY: ${{ vars.MOONMIND_OMNIGENT_TEST_REPOSITORY }}
+          MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
+          MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
         run: |
           python tools/run_omnigent_live_conformance.py \
             --mode "${{ matrix.mode }}" \
@@ -290,7 +306,7 @@ jobs:
               "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "commit": os.environ["GITHUB_SHA"],
+              "sourceCommit": os.environ["GITHUB_SHA"],
               "runUrl": (
                   f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
                   f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
@@ -302,6 +318,7 @@ jobs:
               "reports": [str(path) for path in reports],
               "productEvidence": str(product_paths[0]),
               "browserEvidence": str(browser_paths[0]),
+              "browserRows": rows,
               "cumulativeRemediationEvidence": str(cumulative_paths[0]),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,

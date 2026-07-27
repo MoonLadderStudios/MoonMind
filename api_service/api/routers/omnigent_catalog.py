@@ -6,9 +6,11 @@ selection data, never launch authority or provider/host secret material.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -42,6 +44,10 @@ from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
+from moonmind.omnigent.conformance import (
+    ConformanceContractError,
+    validate_acceptance_manifest,
+)
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -55,6 +61,17 @@ router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
 _SCHEMA_VERSION = "moonmind.omnigent-codex-readiness.v1"
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_ACCEPTANCE_ROWS = (
+    "static_profile_bound",
+    "static_restart_replay",
+    "on_demand_policy_selected",
+    "repository_read_analysis",
+    "repository_mutation_publication",
+    "failed_credential_readiness_admission",
+    "failed_host_registration_readiness",
+    "active_cancellation_interruption",
+    "partial_start_cleanup_janitor",
+)
 
 
 class GateReason(BaseModel):
@@ -126,6 +143,7 @@ _REASONS: dict[str, tuple[str, str]] = {
     "static_host_not_ready": ("Start and validate the static Omnigent Codex host.", "/settings#omnigent"),
     "immutable_image_unavailable": ("Configure immutable Omnigent server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
+    "acceptance_evidence_unavailable": ("Publish a current #3508 browser acceptance matrix for this source commit.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
     "profile_reconnect_required": ("Reconnect this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_validation_required": ("Validate this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
@@ -156,6 +174,21 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
         "1", "true", "yes", "on"
     }:
         reasons.append(_reason("workspace_resolver_unavailable"))
+    manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
+    source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
+    try:
+        if not manifest_path or not source_commit:
+            raise ConformanceContractError("acceptance evidence is not configured")
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ConformanceContractError("acceptance manifest must be an object")
+        validate_acceptance_manifest(
+            manifest,
+            expected_commit=source_commit,
+            required_rows=_ACCEPTANCE_ROWS,
+        )
+    except (OSError, json.JSONDecodeError, ConformanceContractError):
+        reasons.append(_reason("acceptance_evidence_unavailable"))
     return reasons
 
 

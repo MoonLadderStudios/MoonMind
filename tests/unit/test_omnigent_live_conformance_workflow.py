@@ -63,6 +63,14 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     assert run_step["env"]["OMNIGENT_DEFAULT_AGENT_NAME"] == (
         "${{ vars.OMNIGENT_DEFAULT_AGENT_NAME }}"
     )
+    assert run_step["env"]["MOONMIND_OMNIGENT_DASHBOARD_URL"] == (
+        "${{ vars.MOONMIND_OMNIGENT_DASHBOARD_URL }}"
+    )
+    browser_step = next(
+        step for step in job["steps"] if step.get("name") == "Install controlling browser"
+    )
+    assert browser_step["if"] == "${{ matrix.mode == 'browser' }}"
+    assert "playwright install --with-deps chromium" in browser_step["run"]
 
 
 def test_live_conformance_always_uploads_case_evidence() -> None:
@@ -96,7 +104,8 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert "MoonLadderStudios/MoonMind#3456" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3448" in manifest["run"]
     assert "moonmind.omnigent.product-acceptance/v1" in manifest["run"]
-    assert '"commit": os.environ["GITHUB_SHA"]' in manifest["run"]
+    assert '"sourceCommit": os.environ["GITHUB_SHA"]' in manifest["run"]
+    assert '"browserRows": rows' in manifest["run"]
     assert "product evidence lacks independently resolved production records" in manifest["run"]
     assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]
     assert '"safeIdentities": product["identifiers"]' in manifest["run"]

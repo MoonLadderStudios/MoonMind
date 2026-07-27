@@ -156,24 +156,56 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
     authority = {name: f"{name}-value" for name in module.BROWSER_AUTHORITY_FIELDS}
     authority["hostCapability"] = "codex-native"
     authority["runtime"] = "external/omnigent"
+    authority["providerProfileRef"] = "oauth-1"
+    authority["executionProfileRef"] = "omnigent-codex-default"
+    authority["launchPolicyRef"] = "on-demand-v1"
+    observation = {
+        "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+        "workflowId": "workflow-1",
+        "selected": {
+            "profileId": "oauth-1",
+            "executionTargetRef": "omnigent-codex-default",
+            "launchPolicyRef": "on-demand-v1",
+        },
+        "createRequest": {"payload": {"targetRuntime": "omnigent"}},
+        "terminalUrl": "https://moonmind/workflows/workflow-1",
+        "replayUrl": "https://moonmind/workflows/workflow-1",
+    }
+    monkeypatch.setattr(
+        runner,
+        "browser_observation",
+        lambda row: (
+            {
+                "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+                "row": row,
+                "admissionRejected": True,
+                "createRequestCount": 0,
+                "selected": observation["selected"],
+            }
+            if row in {
+                "failed_credential_readiness_admission",
+                "failed_host_registration_readiness",
+            }
+            else {**observation, "row": row}
+        ),
+    )
 
     def action(scenario, name, **inputs):
-        actions.append(name)
+        if scenario == "browser":
+            actions.append(name)
         return {
             "ok": True,
             "row": name,
+            "workflowId": "workflow-1",
             "browserOriginated": True,
             "normalCreateRequest": True,
             "workflowDetailTerminalReplay": True,
             "noFallback": True,
             "authorityChain": authority,
-            "browserControl": {
-                "headless": True,
-                "startPath": "/workflows/new",
-                "submissionPath": "operator-frontend",
-                "readinessObserved": True,
-                "manualHostId": False,
-            },
+            "_sourceRecords": [
+                {"type": record_type, "_resolved": authority}
+                for record_type in module.BROWSER_RECORD_ORDER
+            ],
             "evidenceRefs": [f"artifact://{name}"],
         }
 
@@ -190,6 +222,19 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
 def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
+    monkeypatch.setattr(runner, "browser_observation", lambda name: {
+        "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+        "row": name,
+        "workflowId": "workflow-1",
+        "selected": {
+            "profileId": "oauth-1",
+            "executionTargetRef": "target",
+            "launchPolicyRef": "policy",
+        },
+        "createRequest": {"payload": {"targetRuntime": "omnigent"}},
+        "terminalUrl": "detail",
+        "replayUrl": "detail",
+    })
     monkeypatch.setattr(runner, "action", lambda scenario, name, **inputs: {
         "ok": True,
         "row": name,

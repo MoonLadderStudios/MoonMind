@@ -127,7 +127,11 @@ def require_pinned_images(images: Mapping[str, str]) -> None:
 
 
 def validate_acceptance_manifest(
-    manifest: Mapping[str, Any], *, now: datetime | None = None
+    manifest: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    expected_commit: str | None = None,
+    required_rows: Iterable[str] = (),
 ) -> None:
     """Fail closed unless a #3508 release manifest is current and immutable."""
     if manifest.get("schemaVersion") != ACCEPTANCE_VERSION:
@@ -168,6 +172,23 @@ def validate_acceptance_manifest(
             )
     if not manifest.get("browserEvidence") or not manifest.get("reports"):
         raise ConformanceContractError("acceptance manifest evidence is missing")
+    if expected_commit is not None and manifest.get("sourceCommit") != expected_commit:
+        raise ConformanceContractError(
+            "acceptance manifest was produced for a different source commit"
+        )
+    rows = manifest.get("browserRows")
+    required = set(required_rows)
+    if required and (
+        not isinstance(rows, Mapping)
+        or set(rows) != required
+        or any(
+            not isinstance(row, Mapping) or row.get("status") != "passed"
+            for row in rows.values()
+        )
+    ):
+        raise ConformanceContractError(
+            "acceptance manifest does not contain every passing browser row"
+        )
 
 
 def assert_secret_free(evidence: Any) -> None:

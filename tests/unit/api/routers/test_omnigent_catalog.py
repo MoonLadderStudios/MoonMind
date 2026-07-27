@@ -105,6 +105,10 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64)
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abc123")
+    monkeypatch.setattr(catalog.Path, "read_text", lambda *_args, **_kwargs: "{}")
+    monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None)
     app = FastAPI()
     app.include_router(catalog.router)
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
@@ -238,6 +242,36 @@ def test_catalog_projects_authoritative_deployment_gates(
 
     assert body["available"] is False
     assert expected in {reason["code"] for reason in body["gateReasons"]}
+
+
+@pytest.mark.parametrize(
+    ("manifest_path", "source_commit"),
+    [
+        ("", "abc123"),
+        ("/missing/matrix.json", "abc123"),
+        ("/evidence/matrix.json", ""),
+    ],
+)
+def test_catalog_fails_closed_without_qualifying_acceptance_evidence(
+    monkeypatch, manifest_path, source_commit
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(
+        catalog,
+        "validate_acceptance_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            catalog.ConformanceContractError("invalid")
+        ),
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", manifest_path)
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", source_commit)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in body["gateReasons"]
+    }
 
 
 def test_catalog_rejects_placeholder_image_digests(monkeypatch):

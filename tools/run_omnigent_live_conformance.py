@@ -93,7 +93,7 @@ BROWSER_AUTHORITY_FIELDS = (
     "runtime",
     "hostMode",
 )
-BROWSER_RECORD_TYPES = {
+BROWSER_RECORD_ORDER = (
     "browserTrace",
     "createRequest",
     "authoredWorkflow",
@@ -115,6 +115,36 @@ BROWSER_RECORD_TYPES = {
     "cleanupResult",
     "janitorState",
     "sideEffectAudit",
+)
+BROWSER_RECORD_TYPES = set(BROWSER_RECORD_ORDER)
+BROWSER_FIELD_RECORD_TYPE = {
+    "authoredWorkflowRef": "authoredWorkflow",
+    "taskInputSnapshotRef": "taskInputSnapshot",
+    "compiledRuntimeRequestRef": "compiledExecutionRequest",
+    "executionProfileRef": "executionProfile",
+    "launchPolicyRef": "launchPolicy",
+    "effectiveLaunchSnapshotRef": "effectiveLaunchSnapshot",
+    "providerProfileRef": "profileLease",
+    "providerLeaseId": "profileLease",
+    "hostBindingRef": "hostBinding",
+    "hostLeaseId": "hostLease",
+    "hostId": "hostRegistration",
+    "hostCapability": "hostRegistration",
+    "bridgeSessionId": "bridgeSession",
+    "omnigentSessionId": "omnigentSession",
+    "firstMessageId": "bridgeEvents",
+    "eventCursor": "bridgeEvents",
+    "workspaceLocator": "workspace",
+    "sourceCommit": "workspace",
+    "resourceRefs": "artifactInventory",
+    "artifactRefs": "artifactInventory",
+    "terminalState": "terminalProjection",
+    "cleanupState": "cleanupResult",
+    "janitorState": "janitorState",
+    "providerProfileRelease": "profileLease",
+    "networkPolicyRef": "effectiveLaunchSnapshot",
+    "runtime": "compiledExecutionRequest",
+    "hostMode": "launchPolicy",
 }
 STOCK_ROUTES = (
     "agents", "hosts", "session.create", "session.get", "event.post",
@@ -318,7 +348,14 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"{scenario}/{action} source record digest does not match: {record['type']}"
                     )
+                try:
+                    record["_resolved"] = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ConformanceContractError(
+                        f"{scenario}/{action} source record is not JSON: {record['type']}"
+                    ) from exc
             payload["_sourceRecordTypes"] = sorted(observed_types)
+            payload["_sourceRecords"] = records
         returned_ids = {
             key: value for key, value in payload.items()
             if key in {
@@ -358,6 +395,49 @@ class LiveRunner:
                 f"{scenario}/{action} durable failure claims are not bound to evidence"
             )
         return payload
+
+    def browser_observation(self, row: str) -> dict[str, object]:
+        """Run the fixed repository-owned Playwright journey for one matrix row."""
+        browser_dir = self.output_dir / "browser"
+        browser_dir.mkdir(parents=True, exist_ok=True)
+        env = dict(self.env)
+        env.update({
+            "MOONMIND_OMNIGENT_BROWSER_ROW": row,
+            "MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR": str(browser_dir),
+        })
+        result = subprocess.run(
+            ["node", "tools/run_omnigent_browser_journey.mjs"],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        log_path = browser_dir / f"{row}.log"
+        log_path.write_text(
+            f"--- STDOUT ---\n{result.stdout}\n--- STDERR ---\n{result.stderr}",
+            encoding="utf-8",
+        )
+        self.logs.append(log_path)
+        if result.returncode:
+            raise RuntimeError(f"browser/{row} failed; see {log_path}")
+        try:
+            observation = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ConformanceContractError(
+                f"browser/{row} controller returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(observation, dict)
+            or observation.get("schemaVersion")
+            != "moonmind.omnigent.browser-observation/v1"
+            or observation.get("row") != row
+        ):
+            raise ConformanceContractError(
+                f"browser/{row} controller returned a mismatched observation"
+            )
+        return observation
 
     def _resolve_evidence_ref(self, ref: str) -> dict[str, object]:
         """Resolve durable evidence and reject opaque or unreachable attestations."""
@@ -467,7 +547,9 @@ class LiveRunner:
         rows: dict[str, dict[str, object]] = {}
         evidence_refs: list[str] = []
         for row in BROWSER_ROWS:
-            result = self.action("browser", row)
+            setup = self.action("browser-setup", row)
+            observation = self.browser_observation(row)
+            result = self.action("browser", row, browserObservation=observation)
             if result.get("row") != row:
                 raise ConformanceContractError(
                     f"browser row identity mismatch: expected {row!r}"
@@ -490,25 +572,81 @@ class LiveRunner:
                 raise ConformanceContractError(
                     f"browser/{row} used a non-Omnigent runtime"
                 )
-            browser_control = result.get("browserControl")
-            if (
-                not isinstance(browser_control, dict)
-                or browser_control.get("headless") is not True
-                or browser_control.get("startPath") != "/workflows/new"
-                or browser_control.get("submissionPath") != "operator-frontend"
-                or browser_control.get("readinessObserved") is not True
-                or browser_control.get("manualHostId") is not False
+            selected = observation.get("selected")
+            if not isinstance(selected, dict):
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the selected browser authorities"
+                )
+            expected = {
+                "providerProfileRef": selected.get("profileId"),
+                "executionProfileRef": selected.get("executionTargetRef"),
+                "launchPolicyRef": selected.get("launchPolicyRef"),
+                "runtime": "external/omnigent",
+                "hostCapability": "codex-native",
+            }
+            if selected.get("hostMode"):
+                expected["hostMode"] = selected["hostMode"]
+            mismatches = {
+                key: (value, authority.get(key))
+                for key, value in expected.items()
+                if authority.get(key) != value
+            }
+            if mismatches:
+                raise ConformanceContractError(
+                    f"browser/{row} selected authorities do not match observed records: {mismatches}"
+                )
+            records = result.get("_sourceRecords")
+            if not isinstance(records, list):
+                raise ConformanceContractError(f"browser/{row} lacks resolved records")
+            positions = {
+                record.get("type"): index
+                for index, record in enumerate(records)
+                if isinstance(record, dict)
+            }
+            if any(
+                positions[BROWSER_RECORD_ORDER[index]]
+                >= positions[BROWSER_RECORD_ORDER[index + 1]]
+                for index in range(len(BROWSER_RECORD_ORDER) - 1)
             ):
                 raise ConformanceContractError(
-                    f"browser/{row} did not use the controlling product browser path"
+                    f"browser/{row} authority records are not lifecycle ordered"
                 )
+            resolved_by_type = {
+                record["type"]: json.dumps(record.get("_resolved"), sort_keys=True)
+                for record in records
+            }
+            unbound = [
+                field
+                for field, value in authority.items()
+                if field in BROWSER_AUTHORITY_FIELDS
+                and json.dumps(value, sort_keys=True)
+                not in resolved_by_type[BROWSER_FIELD_RECORD_TYPE[field]]
+            ]
+            if unbound:
+                raise ConformanceContractError(
+                    f"browser/{row} authority values are not bound to resolved records: {unbound}"
+                )
+            admission_failure = row in {
+                "failed_credential_readiness_admission",
+                "failed_host_registration_readiness",
+            }
             assertions = {
-                "browser_originated": bool(result.get("browserOriginated")),
-                "normal_create_request": bool(result.get("normalCreateRequest")),
-                "workflow_detail_terminal_replay": bool(
-                    result.get("workflowDetailTerminalReplay")
+                "browser_originated": (
+                    observation.get("admissionRejected") is True
+                    if admission_failure
+                    else observation.get("workflowId") == result.get("workflowId")
                 ),
-                "no_fallback": bool(result.get("noFallback")),
+                "normal_create_request": (
+                    observation.get("createRequestCount") == 0
+                    if admission_failure
+                    else bool(observation.get("createRequest"))
+                ),
+                "workflow_detail_terminal_replay": (
+                    observation.get("admissionRejected") is True
+                    if admission_failure
+                    else observation.get("terminalUrl") == observation.get("replayUrl")
+                ),
+                "no_fallback": not mismatches,
             }
             if not all(assertions.values()):
                 raise ConformanceContractError(
@@ -518,9 +656,10 @@ class LiveRunner:
                 "status": "passed",
                 "assertions": assertions,
                 "authorityChain": authority,
-                "browserControl": browser_control,
+                "browserObservation": observation,
                 "evidenceRefs": result["evidenceRefs"],
             }
+            evidence_refs.extend(setup["evidenceRefs"])
             evidence_refs.extend(result["evidenceRefs"])
         self.write_evidence("browser", {
             "issue": "MoonLadderStudios/MoonMind#3508",
