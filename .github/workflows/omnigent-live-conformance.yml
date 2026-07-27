@@ -240,6 +240,7 @@ jobs:
               "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
               "issue": "MoonLadderStudios/MoonMind#3456",
               "parentIssue": "MoonLadderStudios/MoonMind#3448",
+              "acceptanceGateIssue": "MoonLadderStudios/MoonMind#3508",
               "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
               "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
               "runId": os.environ["GITHUB_RUN_ID"],
@@ -299,11 +300,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issues: \`MoonLadderStudios/MoonMind#3456\`, cumulative remediation \`#3480\` (parent \`#3471\`)"
+            echo "- Issues: acceptance gate \`MoonLadderStudios/MoonMind#3508\`, \`#3456\`, cumulative remediation \`#3480\` (parent \`#3471\`)"
             echo "- Result: product-create, cumulative remediation, stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing acceptance report from issues 3480, 3471, 3456, and 3448
+      - name: Link passing acceptance report from issues 3508, 3480, 3471, 3456, and 3448
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -320,6 +321,7 @@ jobs:
             echo "- Durable artifact: \`${artifact}\`"
             echo "- Evidence refs and immutable image digests: the six \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
+          gh issue comment 3508 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3480 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3471 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3456 --repo "${{ github.repository }}" --body-file "$comment_file"
