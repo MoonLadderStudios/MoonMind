@@ -587,7 +587,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
                 input_refs=tuple(request.input_refs),
             )
-            await emit(current_stage, "completed")
+            await emit(
+                current_stage,
+                "completed",
+                metadata={
+                    "workspaceEvidence": dict(
+                        preflight.get("workspaceEvidence") or {}
+                    ),
+                    "launchEvidence": dict(preflight.get("launchEvidence") or {}),
+                },
+            )
             current_stage = "container_start"
             await emit(current_stage, "started")
             await emit(current_stage, "completed")

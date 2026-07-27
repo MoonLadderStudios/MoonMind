@@ -131,6 +131,15 @@ class OmnigentOAuthHostRuntime:
         launch = self._validate_effective_launch(
             binding=binding, effective_launch=effective_launch
         )
+        if (
+            not binding.host_launch_profile_ref
+            and "gh" in {item.strip().lower() for item in required_capabilities}
+        ):
+            raise MountedToolPreflightError(
+                "Required gh credentials cannot be isolated on a reusable static host",
+                code="github_auth_unavailable",
+                evidence={"tool": "gh", "phase": "host_launch", "hostMode": "static"},
+            )
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
@@ -143,6 +152,7 @@ class OmnigentOAuthHostRuntime:
             workspace_spec=workspace_spec or {},
             input_refs=input_refs,
             resolved_skillset_ref=resolved_skillset_ref,
+            artifact_gateway=artifact_gateway,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -215,6 +225,17 @@ class OmnigentOAuthHostRuntime:
         validated["workspacePath"] = result["workspacePath"]
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
+        validated["launchEvidence"] = {
+            "effectiveLaunchRef": launch["snapshotRef"],
+            "hostMode": launch["hostMode"],
+            "mountClasses": sorted(launch["mountClasses"]),
+            "runtimeUid": launch["runtimeUid"],
+            "runtimeGid": launch["runtimeGid"],
+            "limits": dict(launch["limits"]),
+            "captureRequired": launch["capture"]["required"],
+            "cleanupMode": launch["cleanup"]["mode"],
+            "janitorRequired": launch["cleanup"]["janitor"],
+        }
         evidence_path = workspace_source.parent / ".moonmind-workspace.json"
         if evidence_path.is_file():
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -777,6 +798,7 @@ class OmnigentOAuthHostRuntime:
         workspace_spec: Mapping[str, Any] | None = None,
         input_refs: tuple[str, ...] = (),
         resolved_skillset_ref: str | None = None,
+        artifact_gateway: Any | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
@@ -818,7 +840,6 @@ class OmnigentOAuthHostRuntime:
         intent_digest = hashlib.sha256(
             json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        workspace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         evidence_path = workspace.parent / ".moonmind-workspace.json"
         if evidence_path.is_file():
             previous = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -827,7 +848,17 @@ class OmnigentOAuthHostRuntime:
                     "workspace intent conflicts with its durable owner record",
                     code="WORKSPACE_IDENTITY_MISMATCH",
                 )
-        elif repository:
+            materialized_inputs = list(previous.get("materializedInputRefs") or ())
+        else:
+            input_payloads = await self._load_workspace_inputs(
+                refs=tuple(intent["inputRefs"]),
+                artifact_gateway=artifact_gateway,
+                workflow_id=current_workflow_id,
+            )
+            workspace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            materialized_inputs = []
+
+        if not evidence_path.exists() and repository:
             if re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
                 source = f"https://github.com/{repository}.git"
             elif repository.startswith(("https://", "git@")):
@@ -847,7 +878,7 @@ class OmnigentOAuthHostRuntime:
             await self._run(*clone_args)
             if target_branch and target_branch != starting_branch:
                 await self._run("git", "-C", str(workspace), "checkout", "-b", target_branch)
-        elif not workspace.is_dir():
+        elif not evidence_path.exists() and not workspace.is_dir():
             workspace.mkdir(mode=0o700, parents=True)
 
         if not workspace.is_dir():
@@ -862,13 +893,40 @@ class OmnigentOAuthHostRuntime:
             )
             if commit_result[0] == 0:
                 source_commit = commit_result[1].strip() or None
+        if not evidence_path.exists():
+            inputs_root = workspace / ".moonmind" / "inputs"
+            for index, (artifact_ref, payload) in enumerate(input_payloads):
+                digest = hashlib.sha256(payload).hexdigest()
+                relative_path = (
+                    Path(".moonmind")
+                    / "inputs"
+                    / f"{index:04d}-{digest[:24]}.bin"
+                )
+                destination = (workspace / relative_path).resolve()
+                if not destination.is_relative_to(workspace.resolve()):
+                    raise OmnigentOAuthHostError(
+                        "input projection escaped the authorized workspace",
+                        code="WORKSPACE_INPUT_PATH_INVALID",
+                    )
+                inputs_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                descriptor = os.open(
+                    destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(payload)
+                materialized_inputs.append(
+                    {
+                        "artifactRef": artifact_ref,
+                        "localPath": relative_path.as_posix(),
+                        "sha256": f"sha256:{digest}",
+                        "sizeBytes": len(payload),
+                    }
+                )
         evidence = {
             **intent,
             "intentDigest": intent_digest,
             "sourceCommit": source_commit,
-            "materializedInputRefs": [
-                {"artifactRef": ref, "localPath": None} for ref in intent["inputRefs"]
-            ],
+            "materializedInputRefs": materialized_inputs,
         }
         if not evidence_path.exists():
             descriptor = os.open(
@@ -898,6 +956,64 @@ class OmnigentOAuthHostRuntime:
             must_exist=True,
         )
         return workspace
+
+    @staticmethod
+    async def _load_workspace_inputs(
+        *,
+        refs: tuple[str, ...],
+        artifact_gateway: Any | None,
+        workflow_id: str,
+    ) -> list[tuple[str, bytes]]:
+        """Authorize and read durable inputs before any workspace or host mutation."""
+
+        if not refs:
+            return []
+        if artifact_gateway is None:
+            raise OmnigentOAuthHostError(
+                "workspace inputs require the trusted artifact boundary",
+                code="WORKSPACE_INPUT_SERVICE_UNAVAILABLE",
+            )
+        result: list[tuple[str, bytes]] = []
+        for ref in refs:
+            artifact_id = (
+                ref.removeprefix("artifact://")
+                if ref.startswith("artifact://")
+                else ref
+            )
+            if not artifact_id or (
+                not ref.startswith("artifact://")
+                and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", artifact_id)
+            ):
+                raise OmnigentOAuthHostError(
+                    "workspace input is not a durable artifact ref",
+                    code="WORKSPACE_INPUT_REF_UNSUPPORTED",
+                )
+            try:
+                if hasattr(artifact_gateway, "read"):
+                    _artifact, payload = await artifact_gateway.read(
+                        artifact_id=artifact_id,
+                        principal=f"workflow:{workflow_id}",
+                        allow_restricted_raw=True,
+                    )
+                else:
+                    payload = await artifact_gateway.read_bytes(ref)
+            except Exception as exc:
+                raise OmnigentOAuthHostError(
+                    "workspace input artifact is unavailable or unauthorized",
+                    code="WORKSPACE_INPUT_UNAVAILABLE",
+                ) from exc
+            if not isinstance(payload, bytes):
+                raise OmnigentOAuthHostError(
+                    "workspace input artifact returned an invalid payload",
+                    code="WORKSPACE_INPUT_INVALID",
+                )
+            if len(payload) > 64 * 1024 * 1024:
+                raise OmnigentOAuthHostError(
+                    "workspace input artifact exceeds the materialization limit",
+                    code="WORKSPACE_INPUT_TOO_LARGE",
+                )
+            result.append((ref, payload))
+        return result
 
     async def _initialize_required_tools(self) -> None:
         await self._run(
