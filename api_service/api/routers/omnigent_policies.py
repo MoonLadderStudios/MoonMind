@@ -58,10 +58,12 @@ def _version_json(row: Any) -> dict[str, Any]:
         "policyId": row.policy_id, "version": row.version, "ref": f"{row.policy_id}@{row.version}",
         "state": row.state, "digest": row.digest, "document": row.document_json,
         "validation": row.validation_json, "compatibility": row.compatibility_json,
+        "rollout": row.rollout_json,
         "lineage": {"parentRef": row.parent_ref, "cloneSourceRef": row.clone_source_ref, "supersedesRef": row.supersedes_ref},
         "audit": {"createdBy": row.created_by, "createdAt": row.created_at, "activatedBy": row.activated_by,
                   "activatedAt": row.activated_at, "disabledBy": row.disabled_by, "disabledAt": row.disabled_at},
         "envFallbackUsed": row.env_fallback_used,
+        "stateHistory": row.state_history_json,
     }
 
 
@@ -69,7 +71,7 @@ def _version_json(row: Any) -> dict[str, Any]:
 async def list_policies(session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.catalog.read")
     rows = await OmnigentPolicyService(session).list()
-    return {"items": [{"id": policy.policy_id, "name": policy.name, "visibility": policy.visibility,
+    return {"canWrite": has_settings_permission(user, "settings.system.write"), "items": [{"id": policy.policy_id, "name": policy.name, "visibility": policy.visibility,
                        "status": version.state if version else "draft", "defaultVersion": policy.default_version,
                        "summary": f"Immutable policy authority; default {policy.default_version or 'not selected'}",
                        "version": _version_json(version) if version else None} for policy, version in rows]}
@@ -85,6 +87,8 @@ async def create_policy(body: CreatePolicy, session: AsyncSession = Depends(get_
             clone_source_ref=body.clone_source_ref,
         )
         return _version_json(row)
+    except PolicyNotFound as exc:
+        raise HTTPException(404, f"Clone source not found: {exc}") from exc
     except PolicyConflict as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -45,6 +45,7 @@ def upgrade() -> None:
         sa.Column("compatibility_json", sa.JSON(), nullable=False),
         sa.Column("rollout_json", sa.JSON(), nullable=False),
         sa.Column("env_fallback_used", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("state_history_json", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
         sa.UniqueConstraint("policy_id", "version", name="uq_omnigent_policy_version"),
     )
     op.create_index("ix_omnigent_policy_versions_policy_id", "omnigent_policy_versions", ["policy_id"])

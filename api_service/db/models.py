@@ -514,6 +514,7 @@ class OmnigentPolicyVersion(Base):
     compatibility_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
     rollout_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
     env_fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    state_history_json: Mapped[list[dict[str, Any]]] = mapped_column(mutable_json_list(), nullable=False, default=list)
 
 
 class OmnigentBridgeSessionEvent(Base):

@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentPolicy, OmnigentPolicyVersion
@@ -18,6 +19,7 @@ from moonmind.omnigent.policies import (
     compile_policy_snapshot,
     document_digest,
     normalize_document,
+    validate_policy_document,
 )
 
 
@@ -32,23 +34,9 @@ class PolicyNotFound(LookupError):
 def validate_policy(document: PolicyDocument) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return stable diagnostics consumed before credentials or host mutation."""
 
-    diagnostics: list[dict[str, str]] = []
-    required_checks = (
-        ("host", "mode", "OMNIGENT_HOST_MODE_UNAVAILABLE"),
-        ("host", "serverImageRef", "OMNIGENT_INVALID_IMAGE_REF"),
-        ("network", "egressProfileRef", "OMNIGENT_ENFORCED_EGRESS_MISSING"),
-        ("workspace", "allowedClasses", "OMNIGENT_WORKSPACE_CLASS_UNSUPPORTED"),
-        ("capture", "required", "OMNIGENT_CAPTURE_AUTHORITY_MISSING"),
-    )
-    payload = document.model_dump(by_alias=True, mode="json")
-    for section, field, code in required_checks:
-        if payload.get(section, {}).get(field) in (None, "", [], False):
-            diagnostics.append({"code": code, "path": f"{section}.{field}", "message": "Required policy authority is missing."})
-    valid = not diagnostics
-    return (
-        {"valid": valid, "diagnostics": diagnostics, "validatedAt": datetime.now(UTC).isoformat()},
-        {"compatible": valid, "diagnosticCodes": [item["code"] for item in diagnostics]},
-    )
+    validation, compatibility = validate_policy_document(document)
+    validation["validatedAt"] = datetime.now(UTC).isoformat()
+    return validation, compatibility
 
 
 class OmnigentPolicyService:
@@ -90,16 +78,32 @@ class OmnigentPolicyService:
                      document: PolicyDocument, actor: str, clone_source_ref: str | None = None) -> OmnigentPolicyVersion:
         if await self.session.get(OmnigentPolicy, policy_id):
             raise PolicyConflict("policy identity already exists")
+        if clone_source_ref is not None:
+            await self.resolve_ref(clone_source_ref)
         policy = OmnigentPolicy(policy_id=policy_id, name=name, owner_user_id=owner_user_id, visibility=visibility)
         self.session.add(policy)
         row = self._version(policy_id, 1, document, actor, clone_source_ref=clone_source_ref)
         self.session.add(row)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise PolicyConflict("policy identity or name already exists") from exc
         return row
+
+    async def resolve_ref(self, policy_ref: str) -> OmnigentPolicyVersion:
+        policy_id, separator, version = policy_ref.rpartition("@")
+        if not separator or not version.isdigit():
+            raise PolicyConflict("policy reference must use <policy-id>@<version>")
+        return await self.get_version(policy_id, int(version))
 
     async def new_version(self, *, policy_id: str, document: PolicyDocument, actor: str,
                           expected_parent_ref: str) -> OmnigentPolicyVersion:
-        await self.get_policy(policy_id)
+        policy = (await self.session.execute(
+            select(OmnigentPolicy).where(OmnigentPolicy.policy_id == policy_id).with_for_update()
+        )).scalar_one_or_none()
+        if policy is None:
+            raise PolicyNotFound(policy_id)
         latest = (await self.session.execute(select(func.max(OmnigentPolicyVersion.version)).where(
             OmnigentPolicyVersion.policy_id == policy_id
         ))).scalar_one()
@@ -107,12 +111,20 @@ class OmnigentPolicyService:
             raise PolicyConflict("stale policy version; reload before editing")
         row = self._version(policy_id, latest + 1, document, actor, parent_ref=expected_parent_ref)
         self.session.add(row)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise PolicyConflict("concurrent policy edit detected; reload before editing") from exc
         return row
 
     async def transition(self, *, policy_id: str, version: int, state: PolicyState, actor: str,
                          make_default: bool = False) -> OmnigentPolicyVersion:
-        policy = await self.get_policy(policy_id)
+        policy = (await self.session.execute(
+            select(OmnigentPolicy).where(OmnigentPolicy.policy_id == policy_id).with_for_update()
+        )).scalar_one_or_none()
+        if policy is None:
+            raise PolicyNotFound(policy_id)
         row = await self.get_version(policy_id, version)
         if state == PolicyState.ACTIVE and not row.validation_json.get("valid"):
             raise PolicyConflict("invalid policy cannot be activated")
@@ -122,10 +134,17 @@ class OmnigentPolicyService:
             row.activated_by, row.activated_at = actor, now
         if state == PolicyState.DISABLED:
             row.disabled_by, row.disabled_at = actor, now
+        previous_default = policy.default_version
         if make_default:
             if state != PolicyState.ACTIVE:
                 raise PolicyConflict("only an active version can be the default")
             policy.default_version = version
+        if state == PolicyState.ACTIVE:
+            if previous_default is not None and previous_default != version:
+                row.supersedes_ref = f"{policy_id}@{previous_default}"
+        history = list(row.state_history_json or [])
+        history.append({"state": state.value, "actor": actor, "at": now.isoformat(), "madeDefault": make_default})
+        row.state_history_json = history
         await self.session.commit()
         return row
 
