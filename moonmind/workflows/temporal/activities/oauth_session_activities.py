@@ -77,7 +77,7 @@ async def oauth_session_prepare_credential_maintenance(
             # The static host can remain intentionally idle after its prior
             # lease is released. Stop it before the OAuth runner mounts the
             # same mutable home even when there is no active host lease row.
-            await runtime.stop_static_host()
+            await runtime.stop_static_host(harness=binding.harness)
         for host_lease in leases:
             if host_lease.omnigent_session_id:
                 try:

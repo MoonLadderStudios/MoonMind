@@ -812,7 +812,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         skill_projection=skills,
         effective_launch=launch,
     )
-    await runtime.stop_static_host()
+    await runtime.stop_static_host(harness="codex-native")
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands == [
@@ -837,7 +837,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
             "exec",
             "-T",
             "omnigent-host-codex",
-            "/opt/moonmind/check-runner-projections.sh",
+            "/opt/moonmind/check-codex-oauth-host.sh",
         ),
         (
             "docker",
@@ -854,6 +854,38 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
     start_env = runtime._run.await_args_list[0].kwargs["env"]
     assert start_env["OMNIGENT_RUN_WORKSPACE"] == str(workspace)
     assert start_env["OMNIGENT_ACTIVE_SKILLS_DIR"] == str(skills)
+
+
+@pytest.mark.asyncio
+async def test_static_claude_host_uses_authorized_service_and_exact_auth_check(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    launch = compile_effective_launch(
+        profile_ref="omnigent-claude@1",
+        policy_ref="claude-static@1",
+        provider_profile_id="claude",
+    )
+
+    await runtime._compose_static_check(
+        workspace_source=tmp_path / "workspace",
+        effective_launch=launch,
+    )
+    await runtime.stop_static_host(harness="claude-native")
+
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert commands[0][-3:] == ("-d", "omnigent-host-claude")
+    assert commands[1][-2:] == (
+        "omnigent-host-claude",
+        "/opt/moonmind/check-claude-oauth-host.sh",
+    )
+    assert commands[2][-2:] == ("stop", "omnigent-host-claude")
+    assert all("omnigent-host-codex" not in command for command in commands)
 
 
 def test_static_codex_compose_separates_authorized_mount_classes() -> None:

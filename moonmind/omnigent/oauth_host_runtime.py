@@ -379,7 +379,7 @@ class OmnigentOAuthHostRuntime:
         self, *, binding: OmnigentOAuthHostBinding, host_lease: OmnigentHostLease
     ) -> None:
         if not binding.host_launch_profile_ref:
-            await self.stop_static_host()
+            await self.stop_static_host(harness=binding.harness)
             return
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
@@ -398,9 +398,10 @@ class OmnigentOAuthHostRuntime:
             "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
         )
 
-    async def stop_static_host(self) -> None:
+    async def stop_static_host(self, *, harness: str) -> None:
         """Stop the static credential consumer even when no host lease is active."""
 
+        service = self._static_service_for_harness(harness)
         await self._run(
             "docker",
             "compose",
@@ -409,9 +410,23 @@ class OmnigentOAuthHostRuntime:
             "--profile",
             service,
             "stop",
-            "omnigent-host-codex",
+            service,
             check=False,
         )
+
+    @staticmethod
+    def _static_service_for_harness(harness: str) -> str:
+        services = {
+            "codex-native": "omnigent-host-codex",
+            "claude-native": "omnigent-host-claude",
+        }
+        try:
+            return services[harness]
+        except KeyError as exc:
+            raise OmnigentOAuthHostError(
+                "static OAuth host harness is unsupported",
+                code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
+            ) from exc
 
     async def container_exists(self, container_name: str) -> bool:
         result = await self._run(
@@ -859,19 +874,18 @@ class OmnigentOAuthHostRuntime:
                     ),
                 }
             )
-        is_claude = bool(effective_launch and effective_launch.get("harness") == "claude-native")
-        compose_profile = "omnigent-host-claude" if is_claude else "omnigent-host-codex"
-        service = compose_profile
+        harness = str((effective_launch or {}).get("harness") or "")
+        service = self._static_service_for_harness(harness)
         await self._run(
             "docker",
             "compose",
             "-f",
             "docker-compose.yaml",
             "--profile",
-            compose_profile,
+            service,
             "up",
             "-d",
-            compose_profile,
+            service,
             env=child_env,
         )
         await self._run(
@@ -883,8 +897,12 @@ class OmnigentOAuthHostRuntime:
             service,
             "exec",
             "-T",
-            "omnigent-host-codex",
-            ("claude auth status >/dev/null 2>&1" if is_claude else "/opt/moonmind/check-codex-oauth-host.sh"),
+            service,
+            (
+                "/opt/moonmind/check-claude-oauth-host.sh"
+                if harness == "claude-native"
+                else "/opt/moonmind/check-codex-oauth-host.sh"
+            ),
             env=child_env,
         )
 
