@@ -2850,6 +2850,10 @@ class MoonMindRunWorkflow:
             value = artifacts.get(source_key)
             if isinstance(value, str) and value.strip():
                 outputs[target_key] = value.strip()
+        if self._step_external_agent_ids.get(logical_step_id) == "omnigent":
+            capture = artifacts.get("omnigentCheckpointCapture")
+            if isinstance(capture, Mapping):
+                outputs["omnigentCheckpointCapture"] = dict(capture)
         return outputs
 
     def _proposal_step_output_refs(
@@ -5406,6 +5410,7 @@ class MoonMindRunWorkflow:
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
         omnigent_checkpoint: Mapping[str, Any] | None = None,
+        omnigent_checkpoint_capture: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -5429,6 +5434,11 @@ class MoonMindRunWorkflow:
             "idempotencyKey": checkpoint_id,
             "omnigentCheckpoint": (
                 dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
+            ),
+            "omnigentCheckpointCapture": (
+                dict(omnigent_checkpoint_capture)
+                if omnigent_checkpoint_capture is not None
+                else None
             ),
         }
         result = await workflow.execute_activity(
@@ -5943,6 +5953,12 @@ class MoonMindRunWorkflow:
                 step_outputs.get("omnigentCheckpoint")
                 if isinstance(step_outputs, Mapping)
                 and isinstance(step_outputs.get("omnigentCheckpoint"), Mapping)
+                else None
+            ),
+            omnigent_checkpoint_capture=(
+                step_outputs.get("omnigentCheckpointCapture")
+                if isinstance(step_outputs, Mapping)
+                and isinstance(step_outputs.get("omnigentCheckpointCapture"), Mapping)
                 else None
             ),
         )

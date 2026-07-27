@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from moonmind.omnigent.checkpoints import (
     OmnigentCheckpointManifest,
+    assemble_checkpoint_manifest,
     build_cold_restore_inputs,
     materialize_cold_restore,
     validate_restore_material,
@@ -93,6 +94,78 @@ def _manifest(**updates: object) -> OmnigentCheckpointManifest:
     }
     data.update(updates)
     return OmnigentCheckpointManifest.model_validate(data)
+
+
+def _capture() -> dict[str, object]:
+    capture = _manifest().model_dump(by_alias=True, mode="json")
+    for key in (
+        "workflowId",
+        "runId",
+        "logicalStepId",
+        "stepExecutionId",
+        "attemptOrdinal",
+        "boundary",
+        "capturedAt",
+        "artifactDigests",
+        "externalStateDigest",
+        "headDigest",
+        "checkpointDigest",
+        "diffDigest",
+    ):
+        capture.pop(key, None)
+    return capture
+
+
+def test_capture_assembler_derives_lineage_boundary_and_digests() -> None:
+    artifacts = {
+        ref: payload
+        for ref, payload in {
+            "artifact://external": b"external",
+            "artifact://head": b"head",
+            "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
+        }.items()
+    }
+    manifest = assemble_checkpoint_manifest(
+        _capture(),
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
+        captured_at=datetime.now(UTC),
+        artifact_reader=artifacts.__getitem__,
+    )
+    assert manifest.schema_version == "v2"
+    assert manifest.external_state_digest == _digest(b"external")
+    assert manifest.checkpoint_digest == _digest(b"checkpoint")
+    assert set(manifest.artifact_digests) == set(artifacts)
+
+
+@pytest.mark.parametrize("schema", ["v1", "v3"])
+def test_capture_assembler_rejects_old_or_unknown_schema(schema: str) -> None:
+    capture = _capture()
+    capture["schemaVersion"] = schema
+    with pytest.raises(ValueError, match="unsupported"):
+        assemble_checkpoint_manifest(
+            capture,
+            workflow_id="workflow-1",
+            run_id="run-1",
+            logical_step_id="step-1",
+            step_execution_id="workflow-1:run-1:step-1:execution:1",
+            attempt_ordinal=1,
+            boundary="after_turn",
+            captured_at=datetime.now(UTC),
+            artifact_reader=lambda _ref: b"",
+        )
 
 
 def test_complete_manifest_validates_and_builds_clean_restore() -> None:
@@ -285,6 +358,63 @@ def test_restore_recomputes_independent_capabilities_and_identity_checks() -> No
     assert result.workspace_cold_restore.reason_code == "capacity_unavailable"
     assert result.capacity_blocked
     assert set(result.validated_refs) == set(artifacts)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        ({"current_host_lease_ref": "wrong"}, "host_lease_mismatch"),
+        ({"expected_first_message_identity": "wrong"}, "first_message_mismatch"),
+        ({"expected_first_message_digest": "sha256:" + "c" * 64}, "first_message_mismatch"),
+        ({"expected_bridge_event_cursor": "wrong"}, "event_cursor_mismatch"),
+        ({"supported_patch_capabilities": ("archive_v1",)}, "unsupported_patch"),
+    ],
+)
+def test_restore_rejects_stale_session_and_patch_evidence(
+    kwargs: dict[str, object], reason: str
+) -> None:
+    artifacts = {
+        ref: payload
+        for ref, payload in {
+            "artifact://external": b"external",
+            "artifact://head": b"head",
+            "artifact://checkpoint": b"checkpoint",
+            "artifact://execution-profile": b"profile",
+            "artifact://launch-policy": b"policy",
+            "artifact://resources": b"resources",
+            "artifact://capture": b"capture",
+            "artifact://instructions": b"instructions",
+            "artifact://context": b"context",
+            "artifact://terminal": b"terminal",
+            "artifact://diagnostics": b"diagnostics",
+        }.items()
+    }
+    arguments: dict[str, object] = {
+        "workflow_id": "workflow-1",
+        "run_id": "run-1",
+        "logical_step_id": "step-1",
+        "step_execution_id": "workflow-1:run-1:step-1:execution:1",
+        "attempt_ordinal": 1,
+        "boundary": "after_turn",
+        "expected_first_message_identity": "message-1",
+        "expected_first_message_digest": "sha256:" + "b" * 64,
+        "expected_bridge_event_cursor": "event-8",
+        "provider_profile_id": "profile-1",
+        "credential_generation": 3,
+        "artifact_reader": artifacts.__getitem__,
+        "current_provider_lease_ref": "lease-provider-1",
+        "current_host_lease_ref": "lease-host-1",
+        "host_registered": True,
+        "session_valid": True,
+    }
+    arguments.update(kwargs)
+    result = validate_restore_material(_manifest(), **arguments)
+    if reason == "host_lease_mismatch":
+        assert result.valid
+        assert result.live_reattach.reason_code == reason
+    else:
+        assert not result.valid
+        assert result.reason_code == reason
 
 
 @pytest.mark.parametrize(

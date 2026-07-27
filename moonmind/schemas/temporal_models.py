@@ -1549,6 +1549,9 @@ class StepCheckpointCreateInput(BaseModel):
     omnigent_checkpoint: OmnigentCheckpointManifest | None = Field(
         None, alias="omnigentCheckpoint"
     )
+    omnigent_checkpoint_capture: dict[str, Any] | None = Field(
+        None, alias="omnigentCheckpointCapture"
+    )
     diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
@@ -1572,10 +1575,26 @@ class StepCheckpointCreateInput(BaseModel):
         _reject_inline_checkpoint_evidence(output, "stepOutputs")
         return output
 
+    @field_validator("omnigent_checkpoint_capture", mode="before")
+    @classmethod
+    def _validate_omnigent_capture(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return validate_compact_temporal_mapping(
+            value, field_name="omnigentCheckpointCapture"
+        )
+
     @model_validator(mode="after")
     def _validate_input(self) -> "StepCheckpointCreateInput":
         if self.plan_ref is None and self.plan_digest is None:
             raise ValueError("checkpoint creation requires planRef or planDigest")
+        if (
+            self.omnigent_checkpoint is not None
+            and self.omnigent_checkpoint_capture is not None
+        ):
+            raise ValueError(
+                "provide omnigentCheckpoint or omnigentCheckpointCapture, not both"
+            )
         _reject_raw_secret_text(self.model_dump(by_alias=True, mode="json"), "createInput")
         return self
 

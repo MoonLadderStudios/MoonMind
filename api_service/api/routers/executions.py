@@ -67,7 +67,10 @@ from api_service.services.checkpoint_branch_service import (
     build_branch_turn_launch_idempotency_key,
 )
 from moonmind.config.settings import settings
-from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
+from moonmind.omnigent.checkpoints import (
+    OmnigentCheckpointManifest,
+    OmnigentRestoreValidation,
+)
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
@@ -6768,6 +6771,16 @@ def _checkpoint_recovery_projection(outputs: Any) -> dict[str, Any] | None:
         manifest = OmnigentCheckpointManifest.model_validate(raw)
     except ValidationError:
         return None
+    current_raw = _field_value(outputs, "omnigentRestoreValidation")
+    if isinstance(current_raw, Mapping):
+        try:
+            current = OmnigentRestoreValidation.model_validate(current_raw)
+        except ValidationError:
+            current = None
+        if current is not None:
+            return current.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
     valid = manifest.validation_status == "valid"
     return {
         "valid": valid,

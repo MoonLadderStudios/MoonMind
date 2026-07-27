@@ -15397,9 +15397,37 @@ class TemporalCheckpointActivities:
             if isinstance(request, StepCheckpointCreateInput)
             else StepCheckpointCreateInput.model_validate(request)
         )
-        if model.omnigent_checkpoint is not None:
+        omnigent_checkpoint = model.omnigent_checkpoint
+        if model.omnigent_checkpoint_capture is not None:
+            from moonmind.omnigent.checkpoints import (
+                assemble_checkpoint_manifest,
+                checkpoint_capture_artifact_refs,
+            )
+
+            payloads = {
+                ref: await self._read_bytes(ref)
+                for ref in checkpoint_capture_artifact_refs(
+                    model.omnigent_checkpoint_capture
+                )
+            }
+            omnigent_checkpoint = assemble_checkpoint_manifest(
+                model.omnigent_checkpoint_capture,
+                workflow_id=model.identity.workflow_id,
+                run_id=model.identity.run_id,
+                logical_step_id=model.identity.logical_step_id,
+                step_execution_id=(
+                    f"{model.identity.workflow_id}:{model.identity.run_id}:"
+                    f"{model.identity.logical_step_id}:execution:"
+                    f"{model.identity.execution_ordinal}"
+                ),
+                attempt_ordinal=model.identity.execution_ordinal,
+                boundary=model.boundary,
+                captured_at=model.created_at,
+                artifact_reader=payloads.__getitem__,
+            )
+        if omnigent_checkpoint is not None:
             for artifact_ref, expected_digest in (
-                model.omnigent_checkpoint.artifact_digests.items()
+                omnigent_checkpoint.artifact_digests.items()
             ):
                 artifact_payload = await self._read_bytes(artifact_ref)
                 actual_digest = (
@@ -15420,7 +15448,7 @@ class TemporalCheckpointActivities:
             plan_digest=model.plan_digest,
             prepared_input_refs=model.prepared_input_refs,
             step_outputs=model.step_outputs,
-            omnigent_checkpoint=model.omnigent_checkpoint,
+            omnigent_checkpoint=omnigent_checkpoint,
         )
         checkpoint_ref = await self._put_bytes(
             _json_bytes(payload),

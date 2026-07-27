@@ -258,6 +258,107 @@ class OmnigentRestoreValidation(BaseModel):
     )
 
 
+def assemble_checkpoint_manifest(
+    capture: Mapping[str, Any],
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    step_execution_id: str,
+    attempt_ordinal: int,
+    boundary: str,
+    captured_at: datetime,
+    artifact_reader: Callable[[str], bytes],
+) -> OmnigentCheckpointManifest:
+    """Assemble complete checkpoint authority at the artifact Activity boundary.
+
+    The workflow carries only compact refs and identities.  The Activity that owns
+    artifact reads independently resolves every declared ref and pins its digest
+    before the canonical Step Execution checkpoint is written.
+    """
+
+    raw = dict(capture)
+    supplied_schema = raw.pop("schemaVersion", "v2")
+    if supplied_schema != "v2":
+        raise ValueError("unsupported Omnigent checkpoint capture schema")
+    for protected in (
+        "workflowId",
+        "runId",
+        "logicalStepId",
+        "stepExecutionId",
+        "attemptOrdinal",
+        "boundary",
+        "capturedAt",
+        "artifactDigests",
+        "externalStateDigest",
+        "headDigest",
+        "checkpointDigest",
+        "diffDigest",
+    ):
+        if protected in raw:
+            raise ValueError(f"{protected} is derived by the checkpoint writer")
+
+    identity = OmnigentCheckpointIdentity.model_validate(raw.get("identity"))
+    refs = checkpoint_capture_artifact_refs(raw, identity=identity)
+    if any(not ref.startswith("artifact://") for ref in refs):
+        raise ValueError("checkpoint capture contains non-artifact authority")
+    digests = {
+        ref: f"sha256:{hashlib.sha256(artifact_reader(ref)).hexdigest()}"
+        for ref in dict.fromkeys(refs)
+    }
+
+    raw.update(
+        {
+            "schemaVersion": "v2",
+            "workflowId": workflow_id,
+            "runId": run_id,
+            "logicalStepId": logical_step_id,
+            "stepExecutionId": step_execution_id,
+            "attemptOrdinal": attempt_ordinal,
+            "boundary": boundary,
+            "capturedAt": captured_at,
+            "artifactDigests": digests,
+            "externalStateDigest": digests[identity.external_state_ref],
+            "headDigest": digests[str(raw["headRef"])],
+            "checkpointDigest": digests[str(raw["checkpointRef"])],
+        }
+    )
+    if raw.get("diffRef"):
+        raw["diffDigest"] = digests[str(raw["diffRef"])]
+    return OmnigentCheckpointManifest.model_validate(raw)
+
+
+def checkpoint_capture_artifact_refs(
+    capture: Mapping[str, Any],
+    *,
+    identity: OmnigentCheckpointIdentity | None = None,
+) -> list[str]:
+    """Return the complete artifact set a capture assembler must resolve."""
+
+    identity = identity or OmnigentCheckpointIdentity.model_validate(
+        capture.get("identity")
+    )
+    refs: list[str] = [
+        identity.external_state_ref,
+        str(capture.get("executionProfileRef") or ""),
+        str(capture.get("launchPolicyRef") or ""),
+        str(capture.get("resourceManifestRef") or ""),
+        str(capture.get("captureManifestRef") or ""),
+        str(capture.get("headRef") or ""),
+        str(capture.get("checkpointRef") or ""),
+        *[str(ref) for ref in capture.get("instructionRefs", ())],
+        *[str(ref) for ref in capture.get("contextRefs", ())],
+    ]
+    for optional_ref in (
+        capture.get("diffRef"),
+        identity.terminal_ref,
+        identity.diagnostics_ref,
+    ):
+        if optional_ref:
+            refs.append(str(optional_ref))
+    return list(dict.fromkeys(refs))
+
+
 def validate_restore_material(
     manifest: OmnigentCheckpointManifest,
     *,
@@ -624,6 +725,8 @@ __all__ = [
     "OmnigentRecoveryMode",
     "OmnigentRestoreValidation",
     "RecoveryCapability",
+    "assemble_checkpoint_manifest",
+    "checkpoint_capture_artifact_refs",
     "build_cold_restore_inputs",
     "materialize_cold_restore",
     "recovery_mode",
