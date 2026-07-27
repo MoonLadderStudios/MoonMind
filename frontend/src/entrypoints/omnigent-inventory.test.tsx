@@ -71,7 +71,7 @@ describe('OmnigentInventoryPage', () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ canWrite: true, items: [{
-        id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2,
+        id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2, canManage: true,
         summary: 'Immutable policy authority', version: {
           validation: { valid: true }, document: { host: { mode: 'static_compose' } },
         },
@@ -102,6 +102,8 @@ describe('OmnigentInventoryPage', () => {
     expect(screen.getByText('Validation: Valid')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Activate / rollback' })).toBeTruthy();
     expect(await screen.findByText('codex-static@2 — active')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Activate codex-static@1 as default' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Disable codex-static@1' })).toBeTruthy();
     expect(screen.getByText(/operator set active and selected it as default/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Compare latest versions' }));
     expect((await screen.findByRole('region', { name: 'Normalized policy diff' })).textContent).toContain('memoryMiB');

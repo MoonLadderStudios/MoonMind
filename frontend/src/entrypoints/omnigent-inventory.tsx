@@ -15,6 +15,7 @@ type InventoryRow = {
   version?: number | null;
   validation?: { valid?: boolean; diagnostics?: Array<{ code: string; message: string }> };
   document?: Record<string, unknown>;
+  canManage?: boolean;
 };
 type PolicyVersion = {
   ref: string;
@@ -61,6 +62,7 @@ function compactRows(payload: unknown): { rows: InventoryRow[]; canWrite: boolea
         ? (row.version as { validation?: InventoryRow['validation'] }).validation : undefined,
       document: row.version && typeof row.version === 'object'
         ? (row.version as { document?: Record<string, unknown> }).document : undefined,
+      canManage: row.canManage === true,
     }];
   });
   const canWrite = Boolean(payload && typeof payload === 'object' && !Array.isArray(payload)
@@ -123,8 +125,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     `${row.name} ${row.status} ${row.summary}`.toLowerCase().includes(filter.toLowerCase()),
   );
   const transition = useMutation({
-    mutationFn: async ({ row, state, makeDefault = false }: { row: InventoryRow; state: string; makeDefault?: boolean }) => {
-      const response = await fetch(`${endpoint}/${encodeURIComponent(row.id)}/versions/${row.version}/transition`, {
+    mutationFn: async ({ row, version = row.version, state, makeDefault = false }: { row: InventoryRow; version?: number | null; state: string; makeDefault?: boolean }) => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(row.id)}/versions/${version}/transition`, {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state, makeDefault }),
       });
@@ -134,6 +136,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     onSuccess: async (_, variables) => {
       setNotice(`${variables.row.name} is now ${variables.state}.`);
       await queryClient.invalidateQueries({ queryKey: ['omnigent-inventory', kind] });
+      await queryClient.invalidateQueries({ queryKey: ['omnigent-policy-versions', variables.row.id] });
     },
   });
   const savePolicy = useMutation({
@@ -174,7 +177,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
       {result.data && rows.length === 0 ? <p>{filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
-      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td><button type="button" onClick={() => setSelected(row)}>Inspect</button>{row.version && result.data?.canWrite ? <><button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button><button type="button" onClick={() => transition.mutate({ row, state: 'disabled' })}>Disable</button><button type="button" onClick={() => transition.mutate({ row, state: 'deprecated' })}>Deprecate</button></> : null}</td> : null}</tr>)}</tbody></table></div> : null}
+      {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td><button type="button" onClick={() => setSelected(row)}>Inspect</button>{row.version && row.canManage ? <><button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button><button type="button" onClick={() => transition.mutate({ row, state: 'disabled' })}>Disable</button><button type="button" onClick={() => transition.mutate({ row, state: 'deprecated' })}>Deprecate</button></> : null}</td> : null}</tr>)}</tbody></table></div> : null}
       {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
         <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => setSelected(null)}>Close</button></div>
@@ -182,7 +185,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         {selected.validation?.diagnostics?.map((diagnostic) => <p role="alert" key={diagnostic.code}>{diagnostic.code}: {diagnostic.message}</p>)}
         <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
         <pre>{JSON.stringify(selected.document, null, 2)}</pre>
-        {result.data?.canWrite ? <><button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(selected.document, null, 2) })}>Edit as new version</button>
+        {selected.canManage ? <><button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(selected.document, null, 2) })}>Edit as new version</button>
         <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: JSON.stringify(selected.document, null, 2) })}>Clone</button></> : <p>Read-only access: lifecycle actions require settings write permission.</p>}
         <h3>Immutable version history and audit</h3>
         {versions.isPending ? <p role="status">Loading immutable version history…</p> : null}
@@ -191,6 +194,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           <h4>{version.ref} — {version.state}</h4>
           <p>Digest: <code>{version.digest}</code></p>
           <p>Compatibility: {version.compatibility?.compatible ? 'Compatible' : 'Incompatible'}</p>
+          {selected.canManage ? <p><button type="button" aria-label={`Activate ${version.ref} as default`} onClick={() => transition.mutate({ row: selected, version: version.version, state: 'active', makeDefault: true })}>Activate as default</button><button type="button" aria-label={`Disable ${version.ref}`} onClick={() => transition.mutate({ row: selected, version: version.version, state: 'disabled' })}>Disable</button><button type="button" aria-label={`Deprecate ${version.ref}`} onClick={() => transition.mutate({ row: selected, version: version.version, state: 'deprecated' })}>Deprecate</button></p> : null}
           {version.lineage?.parentRef ? <p>Parent: {version.lineage.parentRef}</p> : null}
           {version.lineage?.supersedesRef ? <p>Supersedes: {version.lineage.supersedesRef}</p> : null}
           {version.stateHistory?.map((event) => <p key={`${event.at}-${event.state}`}>{event.at}: {event.actor} set {event.state}{event.madeDefault ? ' and selected it as default' : ''}.</p>)}
