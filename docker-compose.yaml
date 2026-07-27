@@ -590,6 +590,7 @@ services:
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
+      - MOONMIND_EGRESS_ATTESTATION_KEY=${MOONMIND_EGRESS_ATTESTATION_KEY:-}
       # Optional prebuilt override. Empty selects the deployment-owned local
       # recipe, which is built lazily by the first Python-test job.
       - MOONMIND_PYTHON_TEST_IMAGE=${MOONMIND_PYTHON_TEST_IMAGE:-}
@@ -1231,10 +1232,3 @@ networks:
   restricted-egress-network:
     name: moonmind-restricted-egress-network
     internal: true
-    labels:
-      moonmind.egress.profile_ref: omnigent-provider@1
-      moonmind.egress.profile_digest: sha256:645d8dd56ddd2da5430bebd7e1fd30cd959995349e97d83bfb5f9f12f79f504c
-      moonmind.egress.rules_digest: sha256:4026af85f7348cd414f7454a1ae7b0cbc15b09e74dc67f9cfa9f2f7173778e28
-      moonmind.egress.enforcer: moonmind-docker-gateway/v1
-      moonmind.egress.validated: "true"
-      moonmind.egress.validated_at: "2026-07-27T00:00:00Z"

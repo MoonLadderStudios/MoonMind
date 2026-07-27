@@ -349,6 +349,7 @@ class DockerContainerJobBackend:
         live_log_max_events: int = _MAX_LIVE_LOG_EVENTS,
         egress_profile: EgressProfile | None = None,
         egress_network_ref: str | None = None,
+        egress_attestation_key: bytes | None = None,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         # Deployment-owned policy. Default to env-independent defaults so unit
@@ -399,8 +400,17 @@ class DockerContainerJobBackend:
         self._live_log_max_events = max(0, int(live_log_max_events))
         self._egress_profile = egress_profile
         self._egress_network_ref = str(egress_network_ref or "").strip() or None
+        self._egress_attestation_key = egress_attestation_key
         if (self._egress_profile is None) != (self._egress_network_ref is None):
             raise ValueError("egress profile and network ref must be configured together")
+        if self._egress_profile is not None and (
+            self._egress_attestation_key is None
+            or len(self._egress_attestation_key) < 32
+        ):
+            raise ValueError(
+                "restricted-egress configuration requires a deployment-owned "
+                "attestation key of at least 32 bytes"
+            )
 
     # ------------------------------------------------------------------ helpers
 
@@ -575,6 +585,7 @@ class DockerContainerJobBackend:
                 network_ref=network_ref,
                 backend_ref=self._backend_ref,
                 labels=labels,
+                attestation_key=self._egress_attestation_key or b"",
             )
         except ValueError as exc:
             raise ContainerBackendReadinessError(str(exc)) from exc

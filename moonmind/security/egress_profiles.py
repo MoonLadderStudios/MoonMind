@@ -9,6 +9,7 @@ never be advertised as enforced egress.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import re
@@ -25,6 +26,7 @@ ATTESTATION_LABELS = {
     "enforcer": "moonmind.egress.enforcer",
     "validated": "moonmind.egress.validated",
     "validated_at": "moonmind.egress.validated_at",
+    "signature": "moonmind.egress.attestation_signature",
 }
 _DNS_NAME = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 
@@ -109,9 +111,17 @@ class EgressAttestation(BaseModel):
 
 
 def attestation_from_network_labels(
-    *, profile: EgressProfile, network_ref: str, backend_ref: str, labels: Mapping[str, str]
+    *,
+    profile: EgressProfile,
+    network_ref: str,
+    backend_ref: str,
+    labels: Mapping[str, str],
+    attestation_key: bytes,
 ) -> EgressAttestation:
-    """Validate trusted reconciler evidence; reject stale or declarative networks."""
+    """Validate authenticated reconciler evidence; reject declarative labels."""
+
+    if len(attestation_key) < 32:
+        raise ValueError("restricted-egress attestation key must be at least 32 bytes")
 
     expected = {
         ATTESTATION_LABELS["profile_ref"]: profile.ref,
@@ -123,6 +133,23 @@ def attestation_from_network_labels(
         raise ValueError("network does not carry a current restricted-egress attestation")
     rules_digest = str(labels.get(ATTESTATION_LABELS["rules_digest"], ""))
     validated_at = str(labels.get(ATTESTATION_LABELS["validated_at"], ""))
+    signed_fields = (
+        profile.ref,
+        profile.digest,
+        rules_digest,
+        ENFORCER_IMPLEMENTATION,
+        validated_at,
+        network_ref,
+        backend_ref,
+    )
+    expected_signature = hmac.new(
+        attestation_key, "\n".join(signed_fields).encode(), hashlib.sha256
+    ).hexdigest()
+    supplied_signature = str(labels.get(ATTESTATION_LABELS["signature"], ""))
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        raise ValueError(
+            "network does not carry an authenticated restricted-egress attestation"
+        )
     return EgressAttestation(
         profileRef=profile.ref,
         profileDigest=profile.digest,

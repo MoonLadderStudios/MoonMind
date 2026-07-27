@@ -44,10 +44,13 @@ profile digest.
 Before readiness, the worker inspects the exact Docker network through its
 deployment-selected daemon. The reconciler must label it with the profile ref
 and digest, enforcer version, applied-rule digest, validation result, and time.
-Missing, malformed, stale, or mismatched labels fail closed and the network is
-omitted from `enforcedNetworkRefs`. Remote daemons are supported only when the
-same labelled gateway network is visible through the configured endpoint;
-otherwise they are rejected.
+It must also authenticate those fields with the deployment-owned attestation
+key, binding the signature to the network and backend identities. Static
+Compose labels are configuration and are never accepted as applied-state
+evidence. Missing, malformed, unauthenticated, stale, or mismatched labels fail
+closed and the network is omitted from `enforcedNetworkRefs`. Remote daemons
+are supported only when the same authenticated gateway state is visible
+through the configured endpoint; otherwise they are rejected.
 
 The reconciler owns creation, rule replacement, crash reconciliation, counters,
 and deletion of only its labelled resources. Policy rotation changes the

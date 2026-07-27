@@ -2760,6 +2760,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 ),
                 egress_profile=EGRESS_PROFILES["omnigent-provider@1"],
                 egress_network_ref="moonmind-restricted-egress-network",
+                egress_attestation_key=os.environ.get(
+                    "MOONMIND_EGRESS_ATTESTATION_KEY", ""
+                ).encode(),
             )
             if container_backend_settings.enabled:
                 # Fail fast at startup when the deployment-selected endpoint is
