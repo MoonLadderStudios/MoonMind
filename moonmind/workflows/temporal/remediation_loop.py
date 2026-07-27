@@ -119,10 +119,17 @@ def validate_remediation_loop_agent_instructions(spec: RemediationLoopSpec) -> N
         ("remediationTool", spec.remediation_tool),
         ("verificationTool", spec.verification_tool),
     ):
-        instructions = tool.inputs.get("instructions")
-        if not isinstance(instructions, str) or not instructions.strip():
+        has_instructions = any(
+            isinstance(value, str) and bool(value.strip())
+            for value in (
+                tool.inputs.get("instructions"),
+                tool.inputs.get("instructionRef"),
+            )
+        )
+        if not has_instructions:
             raise ValueError(
-                f"{field_name}.inputs.instructions is required for "
+                f"{field_name}.inputs.instructions or "
+                f"{field_name}.inputs.instructionRef is required for "
                 "remediation-loop agent execution"
             )
 

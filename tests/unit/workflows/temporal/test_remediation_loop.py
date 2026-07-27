@@ -246,11 +246,25 @@ def test_remediation_loop_rejects_instructionless_agent_steps(tool_name: str) ->
 
     with pytest.raises(
         ValueError,
-        match=rf"{tool_name}\.inputs\.instructions is required",
+        match=(
+            rf"{tool_name}\.inputs\.instructions or "
+            rf"{tool_name}\.inputs\.instructionRef is required"
+        ),
     ):
         validate_remediation_loop_agent_instructions(
             RemediationLoopSpec.model_validate(payload)
         )
+
+
+@pytest.mark.parametrize("tool_name", ["remediationTool", "verificationTool"])
+def test_remediation_loop_accepts_instruction_refs(tool_name: str) -> None:
+    payload = _spec().model_dump(by_alias=True, mode="json")
+    payload[tool_name]["inputs"].pop("instructions")
+    payload[tool_name]["inputs"]["instructionRef"] = "artifact://loop-instructions"
+
+    validate_remediation_loop_agent_instructions(
+        RemediationLoopSpec.model_validate(payload)
+    )
 
 
 def test_materialized_attempts_route_to_the_runs_resolved_runtime() -> None:

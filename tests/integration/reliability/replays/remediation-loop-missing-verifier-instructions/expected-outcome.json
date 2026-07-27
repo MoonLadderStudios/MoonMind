@@ -1,4 +1,4 @@
 {
   "invariant": "every remediation-loop agent step has an instruction before any AgentRun child can be dispatched",
-  "error": "verificationTool.inputs.instructions is required for remediation-loop agent execution"
+  "error": "verificationTool.inputs.instructions or verificationTool.inputs.instructionRef is required for remediation-loop agent execution"
 }
