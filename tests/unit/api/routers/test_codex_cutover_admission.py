@@ -79,3 +79,53 @@ def test_direct_launch_is_rejected_after_disable(monkeypatch) -> None:
         )
 
     assert caught.value.detail["code"] == "direct_launch_disabled"
+
+
+def test_configured_codex_default_uses_automatic_rollout(monkeypatch) -> None:
+    monkeypatch.setattr(executions.settings, "feature_flags", _flags())
+    monkeypatch.setattr(executions.settings.workflow, "default_runtime", "codex_cli")
+
+    authored = executions._apply_codex_cutover_admission(
+        {},
+        submission="create",
+    )
+
+    assert authored["targetRuntime"] == "omnigent"
+    assert authored["codexPathSelection"] == "automatic"
+    assert authored["codexCutoverDecision"]["reasonCode"] == "rollout_default"
+
+
+def test_edit_replaces_stale_decision_and_stamps_current_gate(monkeypatch) -> None:
+    monkeypatch.setattr(executions.settings, "feature_flags", _flags())
+
+    patch = executions._admit_task_edit_parameters(
+        current_parameters={
+            "targetRuntime": "codex_cli",
+            "codexPathSelection": "automatic",
+            "codexCutoverDecision": {"generation": "old"},
+        },
+        parameters_patch={"goal": "revised"},
+        submission="edit",
+    )
+
+    assert patch is not None
+    assert patch["goal"] == "revised"
+    assert patch["targetRuntime"] == "omnigent"
+    assert patch["codexCutoverDecision"]["generation"] == "v1"
+
+
+def test_exact_rerun_is_blocked_when_direct_launch_is_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        executions.settings,
+        "feature_flags",
+        _flags(phase="direct_disabled"),
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        executions._admit_task_edit_parameters(
+            current_parameters={"targetRuntime": "codex_cli"},
+            parameters_patch=None,
+            submission="rerun",
+        )
+
+    assert caught.value.detail["code"] == "direct_launch_disabled"

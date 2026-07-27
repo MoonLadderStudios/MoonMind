@@ -10056,40 +10056,6 @@ async def _create_execution_from_workflow_request(
     elif isinstance(raw_schedule, ScheduleParameters):
         schedule = raw_schedule
 
-    authored_runtime = (
-        dict(task_payload.get("runtime"))
-        if isinstance(task_payload.get("runtime"), Mapping)
-        else {}
-    )
-    explicit_target_runtime = (
-        payload.get("targetRuntime") or authored_runtime.get("mode")
-    )
-    cutover_input = {
-        "targetRuntime": (
-            explicit_target_runtime or settings.workflow.default_runtime
-        ),
-        "runtime": authored_runtime,
-        "codexPathSelection": (
-            payload.get("codexPathSelection")
-            or authored_runtime.get("codexPathSelection")
-            or ("automatic" if explicit_target_runtime is None else None)
-        ),
-    }
-    cutover_admission = _apply_codex_cutover_admission(
-        cutover_input,
-        submission="schedule" if schedule is not None else "create",
-    )
-    if "codexCutoverDecision" in cutover_admission:
-        payload["targetRuntime"] = cutover_admission["targetRuntime"]
-        payload["codexPathSelection"] = cutover_admission["codexPathSelection"]
-        payload["codexCutoverDecision"] = cutover_admission[
-            "codexCutoverDecision"
-        ]
-        task_payload["runtime"] = cutover_admission["runtime"]
-        task_payload["codexCutoverDecision"] = cutover_admission[
-            "codexCutoverDecision"
-        ]
-
     route = await _resolve_schedule_routing(
         schedule,
         request_payload=payload,
@@ -10132,6 +10098,49 @@ async def _create_execution_from_workflow_request(
             user=user,
         )
         _reject_submit_version_identity(task_payload)
+
+    authored_runtime = (
+        dict(task_payload.get("runtime"))
+        if isinstance(task_payload.get("runtime"), Mapping)
+        else {}
+    )
+    explicit_target_runtime = (
+        payload.get("targetRuntime") or authored_runtime.get("mode")
+    )
+    cutover_admission = _apply_codex_cutover_admission(
+        {
+            "targetRuntime": (
+                explicit_target_runtime or settings.workflow.default_runtime
+            ),
+            "runtime": authored_runtime,
+            "codexPathSelection": (
+                payload.get("codexPathSelection")
+                or authored_runtime.get("codexPathSelection")
+                or ("automatic" if explicit_target_runtime is None else None)
+            ),
+        },
+        submission=(
+            "schedule"
+            if schedule is not None
+            else "preset"
+            if (
+                task_payload.get("taskTemplate")
+                or task_payload.get("presetSchedule")
+                or task_payload.get("authoredPresets")
+            )
+            else "create"
+        ),
+    )
+    if "codexCutoverDecision" in cutover_admission:
+        payload["targetRuntime"] = cutover_admission["targetRuntime"]
+        payload["codexPathSelection"] = cutover_admission["codexPathSelection"]
+        payload["codexCutoverDecision"] = cutover_admission[
+            "codexCutoverDecision"
+        ]
+        task_payload["runtime"] = cutover_admission["runtime"]
+        task_payload["codexCutoverDecision"] = cutover_admission[
+            "codexCutoverDecision"
+        ]
 
     (
         objective_attachment_refs,
@@ -11837,6 +11846,11 @@ def _apply_codex_cutover_admission(
         authored.get("targetRuntime") or runtime_payload.get("mode") or ""
     ).strip()
     raw_selection = authored.get("codexPathSelection")
+    if not target_runtime and raw_selection is None:
+        configured_default = str(settings.workflow.default_runtime or "").strip()
+        if configured_default in {"codex", "codex_cli", "omnigent"}:
+            target_runtime = configured_default
+            raw_selection = "automatic"
     if raw_selection is None:
         # Existing authored runtime values remain explicit. New default-aware
         # clients opt into the staged strategy with codexPathSelection=automatic.
@@ -11887,6 +11901,31 @@ def _apply_codex_cutover_admission(
         by_alias=True, mode="json"
     )
     return authored
+
+
+def _admit_task_edit_parameters(
+    *,
+    current_parameters: Mapping[str, Any] | None,
+    parameters_patch: Mapping[str, Any] | None,
+    submission: Literal["edit", "rerun"],
+) -> dict[str, Any] | None:
+    """Stamp a fresh cutover decision into edits that can launch more work."""
+
+    current = dict(current_parameters or {})
+    patch = dict(parameters_patch or {})
+    candidate = {**current, **patch}
+    candidate.pop("codexCutoverDecision", None)
+    admitted = _apply_codex_cutover_admission(candidate, submission=submission)
+    if "codexCutoverDecision" not in admitted:
+        return dict(parameters_patch) if parameters_patch is not None else None
+    for key in (
+        "targetRuntime",
+        "runtime",
+        "codexPathSelection",
+        "codexCutoverDecision",
+    ):
+        patch[key] = admitted[key]
+    return patch
 
 
 @router.get("/codex-cutover-status", response_model=CodexCutoverReleaseStatus)
@@ -14563,6 +14602,16 @@ async def update_execution(
     )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
     if is_task_editing_update:
+        cutover_patch = _admit_task_edit_parameters(
+            current_parameters=getattr(record, "parameters", None),
+            parameters_patch=payload.parameters_patch,
+            submission=(
+                "rerun" if payload.update_name == "RequestRerun" else "edit"
+            ),
+        )
+        payload = payload.model_copy(
+            update={"parameters_patch": cutover_patch}
+        )
         _emit_task_editing_metric(
             "submit_attempt",
             update_name=payload.update_name,
