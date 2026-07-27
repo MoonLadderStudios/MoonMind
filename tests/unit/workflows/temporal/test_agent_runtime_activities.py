@@ -1519,6 +1519,83 @@ async def test_publish_artifacts_stamps_step_metadata_when_context_exists(
     assert captured_metadata[0]["scope"] == "step"
     assert captured_metadata[1]["step_id"] == "delegate-agent"
 
+
+async def test_failed_agent_result_does_not_promote_stale_moonspec_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "failed-verifier" / "repo"
+    verify_path = workspace / "artifacts" / "github-issue-implement-verify.json"
+    verify_path.parent.mkdir(parents=True)
+    verify_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "HIGH",
+                "recommendedNextAction": "reattempt_current_step",
+                "recoverableInCurrentRuntime": True,
+                "remainingWork": ["stale gap"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = _make_store(tmp_path)
+    _save_record(
+        store,
+        run_id="failed-verifier",
+        status="failed",
+        failure_class="execution_error",
+        workspace_path=str(workspace),
+    )
+    written_payloads: list[object] = []
+
+    async def fake_write_json_artifact(
+        _service: object,
+        *,
+        principal: str,
+        payload: object,
+        execution_ref: object = None,
+        metadata_json: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        del principal, execution_ref, metadata_json
+        written_payloads.append(payload)
+        return SimpleNamespace(artifact_id=f"art_{len(written_payloads)}")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_write_json_artifact",
+        fake_write_json_artifact,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=object(),
+        run_store=store,
+    )
+
+    result = await activities.agent_runtime_publish_artifacts(
+        AgentRunResult(
+            summary="Activity task failed",
+            failureClass="execution_error",
+            metadata={
+                "agentRunId": "failed-verifier",
+                "verify_artifact_path": (
+                    "artifacts/github-issue-implement-verify.json"
+                ),
+                "moonmind": {"selectedSkill": "moonspec-verify"},
+            },
+        )
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert "moonSpecVerify" not in result.metadata
+    assert "moonSpecVerifyArtifactRef" not in result.metadata
+    assert "gateResultRef" not in result.metadata
+    assert len(written_payloads) == 2
+    assert not any(
+        isinstance(payload, dict) and payload.get("verdict")
+        for payload in written_payloads
+    )
+
 async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     tmp_path: Path,
 ) -> None:

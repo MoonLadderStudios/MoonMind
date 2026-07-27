@@ -3388,6 +3388,12 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert loop["remediationTool"]["name"] == "auto"
     assert loop["verificationTool"]["name"] == "auto"
     assert loop["verificationTool"]["inputs"]["selectedSkill"] == "moonspec-verify"
+    assert "Run the selected moonspec-verify Skill" in (
+        loop["verificationTool"]["inputs"]["instructions"]
+    )
+    assert "artifacts/github-issue-implement-verify.json" in (
+        loop["verificationTool"]["inputs"]["instructions"]
+    )
     assert not any(
         step.get("annotations", {}).get("moonSpecRemediationAttempt")
         for step in expanded["steps"]

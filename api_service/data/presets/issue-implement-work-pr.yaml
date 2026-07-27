@@ -207,6 +207,10 @@ steps:
         name: auto
         inputs:
           selectedSkill: moonspec-verify
+          instructions: 'Run the selected moonspec-verify Skill against the latest
+            remediation workspace head using the supplied Skill inputs. Do not modify
+            source code or tests. Write the complete structured verifier result to
+            {{ inputs.verify_artifact_path }}.'
           verification_target: '{{ inputs.verification_target }}'
           issue_provider: '{{ inputs.issue_provider }}'
           issue_ref: '{{ inputs.issue_ref }}'

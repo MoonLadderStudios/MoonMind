@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
 
 from moonmind.config.settings import settings
@@ -99,6 +100,10 @@ async def test_start_container_job_is_asynchronous_start_or_attach() -> None:
     assert (
         adapter.start_workflow.await_args.kwargs["workflow_type"]
         == "MoonMind.ContainerJob"
+    )
+    assert (
+        adapter.start_workflow.await_args.kwargs["id_reuse_policy"]
+        == WorkflowIDReusePolicy.REJECT_DUPLICATE
     )
 
 
