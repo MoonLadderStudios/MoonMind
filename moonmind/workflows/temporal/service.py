@@ -93,6 +93,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     initialize_manifest_projection,
     list_manifest_nodes,
 )
+from moonmind.workflows.temporal.remediation_actions import _target_approval_snapshot
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -1076,12 +1077,32 @@ class TemporalExecutionService:
                     "approval request is stale for the current target run."
                 )
             target = await self._require_source_execution(link.target_workflow_id)
-            expected_checkpoint = expected_state.get("checkpointRef")
-            current_checkpoint = (target.memo or {}).get("latest_checkpoint_ref")
-            if expected_checkpoint and expected_checkpoint != current_checkpoint:
-                raise TemporalExecutionValidationError(
-                    "approval request is stale for the current target checkpoint."
-                )
+            current_snapshot = _target_approval_snapshot(target)
+            freshness_fields = (
+                ("checkpointRef", "checkpoint"),
+                ("hostIdentity", "host identity"),
+                ("sessionIdentity", "session identity"),
+                ("credentialGeneration", "credential generation"),
+            )
+            for field, label in freshness_fields:
+                expected_value = expected_state.get(field)
+                if (
+                    expected_value is not None
+                    and expected_value != current_snapshot.get(field)
+                ):
+                    raise TemporalExecutionValidationError(
+                        f"approval request is stale for the current target {label}."
+                    )
+            policy_snapshot = approval_state.get("policySnapshot")
+            if isinstance(policy_snapshot, Mapping):
+                expected_policy_version = policy_snapshot.get("policyVersion")
+                if (
+                    expected_policy_version is not None
+                    and expected_policy_version != current_snapshot.get("policyVersion")
+                ):
+                    raise TemporalExecutionValidationError(
+                        "approval request is stale for the current target policy version."
+                    )
         approval_state.update(
             {
                 "requestId": request_id,

@@ -2693,11 +2693,21 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
-        _target, remediation = await _create_target_and_remediation(
+        target, remediation = await _create_target_and_remediation(
             session,
             mock_client_adapter,
             authority_mode="approval_gated",
         )
+        target.memo.update(
+            {
+                "latest_checkpoint_ref": "checkpoint-1",
+                "host_identity": "host-1",
+                "session_identity": "session-1",
+                "credential_generation": 3,
+                "policy_version": 7,
+            }
+        )
+        await session.commit()
         service = RemediationActionAuthorityService(session=session)
 
         pending = await service.evaluate_action_request(
@@ -2719,6 +2729,15 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert link is not None
         request_id = link.approval_state["requestId"]
         assert link.approval_state["expectedState"]["targetRunId"] == link.target_run_id
+        assert link.approval_state["expectedState"] == {
+            "targetWorkflowId": target.workflow_id,
+            "targetRunId": target.run_id,
+            "checkpointRef": "checkpoint-1",
+            "hostIdentity": "host-1",
+            "sessionIdentity": "session-1",
+            "credentialGeneration": 3,
+        }
+        assert link.approval_state["policySnapshot"]["policyVersion"] == 7
         assert link.approval_state["expiresAt"]
         await TemporalExecutionService(
             session, client_adapter=mock_client_adapter
@@ -2747,6 +2766,24 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert approved.executable is True
         assert approved.audit["requestingPrincipal"] == "user:operator"
         assert approved.audit["executionPrincipal"] == "service:admin-healer"
+
+        target.memo["credential_generation"] = 4
+        await session.commit()
+        stale = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="workload.restart_helper_container",
+            parameters={},
+            dry_run=False,
+            idempotency_key="gated-pending",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+            approval_ref=request_id,
+        )
+        assert stale.decision == "approval_required"
+        assert stale.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_profile_permissions_and_risk(

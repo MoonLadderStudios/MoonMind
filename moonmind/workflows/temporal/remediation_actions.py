@@ -640,7 +640,7 @@ class RemediationActionAuthorityService:
             self._decisions[cache_key] = result
             return result
 
-        effective_approval_ref = self._validated_approval_ref(
+        effective_approval_ref = await self._validated_approval_ref(
             link=link,
             approval_ref=approval_ref,
             action_kind=normalized_action,
@@ -671,8 +671,8 @@ class RemediationActionAuthorityService:
         self._decisions[cache_key] = result
         return result
 
-    @staticmethod
-    def _validated_approval_ref(
+    async def _validated_approval_ref(
+        self,
         *,
         link: db_models.TemporalExecutionRemediationLink,
         approval_ref: str | None,
@@ -698,6 +698,12 @@ class RemediationActionAuthorityService:
         required_level = "strong" if action_kind == "execution.force_terminate" else "standard"
         if state.get("approvalLevel") != required_level:
             return None
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord,
+            link.target_workflow_id,
+        )
+        if target is None or not _approval_snapshot_matches_target(state, target):
+            return None
         return approval_ref
 
     async def _persist_approval_request(
@@ -720,6 +726,11 @@ class RemediationActionAuthorityService:
             return
         now = datetime.now(timezone.utc)
         safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord,
+            link.target_workflow_id,
+        )
+        target_snapshot = _target_approval_snapshot(target)
         link.approval_state = {
             "requestId": f"{link.remediation_workflow_id}:approval:{idempotency_key}",
             "actionKind": action_kind,
@@ -730,10 +741,18 @@ class RemediationActionAuthorityService:
             "expectedState": {
                 "targetWorkflowId": link.target_workflow_id,
                 "targetRunId": link.target_run_id,
-                "checkpointRef": safe_parameters.get("checkpointRef"),
-                "hostIdentity": safe_parameters.get("hostIdentity"),
-                "sessionIdentity": safe_parameters.get("sessionIdentity"),
-                "credentialGeneration": safe_parameters.get("credentialGeneration"),
+                "checkpointRef": target_snapshot.get(
+                    "checkpointRef", safe_parameters.get("checkpointRef")
+                ),
+                "hostIdentity": target_snapshot.get(
+                    "hostIdentity", safe_parameters.get("hostIdentity")
+                ),
+                "sessionIdentity": target_snapshot.get(
+                    "sessionIdentity", safe_parameters.get("sessionIdentity")
+                ),
+                "credentialGeneration": target_snapshot.get(
+                    "credentialGeneration", safe_parameters.get("credentialGeneration")
+                ),
             },
             "policySnapshot": {
                 "authorityMode": link.authority_mode,
@@ -742,7 +761,9 @@ class RemediationActionAuthorityService:
                     if security_profile is not None
                     else None
                 ),
-                "policyVersion": safe_parameters.get("policyVersion"),
+                "policyVersion": target_snapshot.get(
+                    "policyVersion", safe_parameters.get("policyVersion")
+                ),
             },
             "idempotencyKey": idempotency_key,
             "requestedAt": now.isoformat(),
@@ -1812,6 +1833,60 @@ def _datetime_from_json(value: Any) -> datetime | None:
     except ValueError:
         return None
     return _normalize_datetime(parsed)
+
+
+_APPROVAL_TARGET_MEMO_KEYS = {
+    "checkpointRef": "latest_checkpoint_ref",
+    "hostIdentity": "host_identity",
+    "sessionIdentity": "session_identity",
+    "credentialGeneration": "credential_generation",
+    "policyVersion": "policy_version",
+}
+
+
+def _target_approval_snapshot(
+    target: db_models.TemporalExecutionCanonicalRecord | None,
+) -> dict[str, Any]:
+    """Read approval freshness only from the canonical target projection memo."""
+    if target is None or not isinstance(target.memo, Mapping):
+        return {}
+    return {
+        approval_key: target.memo[memo_key]
+        for approval_key, memo_key in _APPROVAL_TARGET_MEMO_KEYS.items()
+        if memo_key in target.memo
+    }
+
+
+def _approval_snapshot_matches_target(
+    approval_state: Mapping[str, Any],
+    target: db_models.TemporalExecutionCanonicalRecord,
+) -> bool:
+    expected = approval_state.get("expectedState")
+    if not isinstance(expected, Mapping):
+        return False
+    if (
+        expected.get("targetWorkflowId") != target.workflow_id
+        or expected.get("targetRunId") != target.run_id
+    ):
+        return False
+    current = _target_approval_snapshot(target)
+    for key in (
+        "checkpointRef",
+        "hostIdentity",
+        "sessionIdentity",
+        "credentialGeneration",
+    ):
+        if expected.get(key) is not None and expected.get(key) != current.get(key):
+            return False
+    policy = approval_state.get("policySnapshot")
+    if not isinstance(policy, Mapping):
+        return False
+    if (
+        policy.get("policyVersion") is not None
+        and policy.get("policyVersion") != current.get("policyVersion")
+    ):
+        return False
+    return True
 
 def _request_shape_hash(
     *,
