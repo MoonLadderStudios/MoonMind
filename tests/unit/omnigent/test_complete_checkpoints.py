@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -16,8 +18,9 @@ from moonmind.omnigent.checkpoints import (
 )
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    build_runtime_checkpoint_capture,
 )
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
 def _digest(payload: bytes) -> str:
@@ -250,6 +253,172 @@ def test_current_restore_validation_is_persisted_in_runtime_result() -> None:
 
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["omnigentRestoreValidation"]["valid"] is True
+
+
+def _execution_request() -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="workflow-1",
+        idempotencyKey="capture-1",
+        inputRefs=["artifact://instructions"],
+    )
+
+
+def test_runtime_builds_complete_checkpoint_capture_from_authority_handoffs() -> None:
+    evidence = _capture()
+    evidence.pop("identity")
+    result = AgentRunResult(
+        diagnosticsRef="artifact://diagnostics",
+        metadata={
+            "omnigentSessionId": "session-1",
+            "externalStateRef": "artifact://external",
+            "finalSnapshotRef": "artifact://terminal",
+            "captureManifestRef": "artifact://capture",
+            "omnigentCheckpointEvidence": evidence,
+        },
+    )
+
+    capture, reasons = build_runtime_checkpoint_capture(
+        request=_execution_request(),
+        result=result,
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        provider_lease_ref="lease-provider-1",
+        host_binding_ref="host-binding-1",
+        host_lease_ref="lease-host-1",
+        endpoint_ref="endpoint-1",
+        omnigent_host_id="host-1",
+        bridge_session_id="bridge-1",
+        effective_launch_ref="omnigent-launch:sha256:" + "a" * 64,
+    )
+
+    assert reasons == []
+    assert capture is not None
+    assert capture["identity"]["providerProfileId"] == "profile-1"
+    assert capture["identity"]["terminalRef"] == "artifact://terminal"
+    assert capture["identity"]["diagnosticsRef"] == "artifact://diagnostics"
+    assert "credential" not in str(capture).lower().replace(
+        "credentialgeneration", ""
+    )
+
+
+def test_runtime_checkpoint_capture_degrades_with_bounded_missing_reasons() -> None:
+    capture, reasons = build_runtime_checkpoint_capture(
+        request=_execution_request(),
+        result=AgentRunResult(metadata={"providerName": "omnigent"}),
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        provider_lease_ref="lease-provider-1",
+        host_binding_ref="host-binding-1",
+        host_lease_ref="lease-host-1",
+        endpoint_ref="endpoint-1",
+        omnigent_host_id="host-1",
+        bridge_session_id="bridge-1",
+        effective_launch_ref="omnigent-launch:sha256:" + "a" * 64,
+    )
+
+    assert capture is None
+    assert "identity.externalStateRef" in reasons
+    assert "identity.terminalRef" in reasons
+    assert "checkpointRef" in reasons
+
+
+@pytest.mark.asyncio
+async def test_production_harvest_persists_workspace_and_launch_authority(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    (workspace / "tracked.txt").write_text("base\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "base",
+        ],
+        cwd=workspace,
+        check=True,
+    )
+    baseline = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        text=True,
+    ).strip()
+    (workspace / "tracked.txt").write_text("changed\n")
+    payloads = {"first-message": b"first message"}
+
+    class ArtifactService:
+        async def create(self, **kwargs):
+            artifact_id = str(kwargs["metadata_json"]["artifact_kind"])
+            return SimpleNamespace(artifact_id=artifact_id), object()
+
+        async def write_complete(self, *, artifact_id, payload, **_kwargs):
+            payloads[artifact_id] = payload
+            return SimpleNamespace(artifact_id=artifact_id)
+
+        async def read(self, *, artifact_id, **_kwargs):
+            return object(), payloads[artifact_id]
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=object(),
+        host_repository=object(),
+        host_runtime=object(),
+        run_store=object(),
+        execution_runner=object(),
+        artifact_gateway=object(),
+        artifact_service=ArtifactService(),
+    )
+    request = _execution_request().model_copy(
+        update={
+            "workspace_spec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "workspace-1",
+                    "relativePath": "repo",
+                },
+                "baseCommit": baseline,
+            }
+        }
+    )
+    result = AgentRunResult(
+        diagnosticsRef="artifact://diagnostics",
+        metadata={
+            "externalStateRef": "artifact://external",
+            "finalSnapshotRef": "artifact://terminal",
+            "captureManifestRef": "artifact://capture",
+            "firstMessageRequestRef": "artifact://first-message",
+            "omnigentSessionId": "session-1",
+            "sseEventsCaptured": 8,
+        },
+    )
+
+    harvested = await coordinator._harvest_checkpoint_evidence(
+        request=request,
+        result=result,
+        workspace_path=str(workspace),
+        workspace_locator=request.workspace_spec["workspaceLocator"],
+        effective_launch={
+            "snapshotRef": "omnigent-launch:sha256:" + "a" * 64,
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+        },
+    )
+
+    evidence = harvested.metadata["omnigentCheckpointEvidence"]
+    assert evidence["baselineCommit"] == baseline
+    assert evidence["checkpointRef"] == "artifact://omnigent_workspace_patch"
+    assert evidence["firstMessageDigest"] == _digest(b"first message")
+    assert b"changed" in payloads["omnigent_workspace_patch"]
 
 
 @pytest.mark.parametrize("schema", ["v1", "v3"])

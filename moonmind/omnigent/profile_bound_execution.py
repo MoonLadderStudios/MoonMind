@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
+import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -54,6 +57,124 @@ from moonmind.workflows.executions.runtime_capabilities import (
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
+ColdRestoreMaterializer = Callable[
+    [Mapping[str, Any], AgentExecutionRequest], Awaitable[Mapping[str, Any]]
+]
+
+
+_CHECKPOINT_CAPTURE_REQUIRED_FIELDS = (
+    "executionProfileRef",
+    "launchPolicyRef",
+    "lastBridgeEventCursor",
+    "firstMessageIdentity",
+    "firstMessageDigest",
+    "resourceManifestRef",
+    "captureManifestRef",
+    "patchCapability",
+    "workspaceLocator",
+    "baselineCommit",
+    "headCommit",
+    "headRef",
+    "checkpointRef",
+    "sourceBranch",
+    "publicationState",
+)
+
+
+def build_runtime_checkpoint_capture(
+    *,
+    request: AgentExecutionRequest,
+    result: AgentRunResult,
+    provider_profile_id: str,
+    credential_generation: int,
+    provider_lease_ref: str,
+    host_binding_ref: str,
+    host_lease_ref: str,
+    endpoint_ref: str,
+    omnigent_host_id: str,
+    bridge_session_id: str,
+    effective_launch_ref: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Join bridge harvest and coordinator authority into a v2 capture input.
+
+    The bridge may only contribute durable, path-free evidence. The coordinator
+    overwrites identity fields that it authoritatively owns. Missing evidence is
+    reported explicitly instead of manufacturing a resumable checkpoint.
+    """
+
+    metadata = dict(result.metadata or {})
+    supplied = metadata.get("omnigentCheckpointEvidence")
+    evidence = dict(supplied) if isinstance(supplied, Mapping) else {}
+    identity = dict(evidence.get("identity") or {})
+    external_state_ref = str(
+        evidence.get("externalStateRef")
+        or metadata.get("externalStateRef")
+        or ""
+    ).strip()
+    diagnostics_ref = str(result.diagnostics_ref or "").strip()
+    terminal_ref = str(
+        evidence.get("terminalRef")
+        or metadata.get("finalSnapshotRef")
+        or ""
+    ).strip()
+    session_id = str(
+        evidence.get("omnigentSessionId")
+        or metadata.get("omnigentSessionId")
+        or ""
+    ).strip()
+    identity.update(
+        {
+            "providerProfileId": provider_profile_id,
+            "credentialGeneration": credential_generation,
+            "providerLeaseRef": provider_lease_ref,
+            "hostBindingRef": host_binding_ref,
+            "hostLeaseRef": host_lease_ref,
+            "endpointRef": endpoint_ref,
+            "omnigentHostId": omnigent_host_id,
+            "omnigentSessionId": session_id,
+            "bridgeSessionId": bridge_session_id,
+            "externalStateRef": external_state_ref,
+            "idempotencyKey": request.idempotency_key,
+            "terminalRef": terminal_ref,
+            "diagnosticsRef": diagnostics_ref,
+            "effectiveLaunchRef": effective_launch_ref,
+        }
+    )
+    evidence["identity"] = identity
+    evidence.setdefault("captureManifestRef", metadata.get("captureManifestRef"))
+    evidence.setdefault("resourceManifestRef", metadata.get("captureManifestRef"))
+    evidence.setdefault("sourceEffectiveLaunchRef", effective_launch_ref)
+    evidence.setdefault("instructionRefs", list(request.input_refs))
+    evidence.setdefault("contextRefs", [])
+    missing = [
+        field
+        for field in _CHECKPOINT_CAPTURE_REQUIRED_FIELDS
+        if not evidence.get(field)
+    ]
+    for field in (
+        "externalStateRef",
+        "omnigentSessionId",
+        "terminalRef",
+        "diagnosticsRef",
+    ):
+        if not identity.get(field):
+            missing.append(f"identity.{field}")
+    non_artifact_refs = [
+        field
+        for field in (
+            "externalStateRef",
+            "terminalRef",
+            "diagnosticsRef",
+        )
+        if identity.get(field)
+        and not str(identity[field]).startswith("artifact://")
+    ]
+    if non_artifact_refs:
+        missing.extend(f"nonArtifact.{field}" for field in non_artifact_refs)
+    if missing:
+        return None, sorted(set(missing))
+    evidence.pop("externalStateRef", None)
+    return evidence, []
 
 
 def _activity_attempt() -> int:
@@ -214,6 +335,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         artifact_gateway: Any,
         artifact_service: Any | None = None,
         workspace_owner: RemediationWorkspaceOwner | None = None,
+        cold_restore_materializer: ColdRestoreMaterializer | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -226,6 +348,133 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         )
+        self._cold_restore_materializer = cold_restore_materializer
+
+    async def _put_checkpoint_evidence(
+        self,
+        payload: bytes,
+        *,
+        kind: str,
+        content_type: str,
+    ) -> str:
+        if self._artifact_service is None:
+            raise ValueError("checkpoint evidence artifact service is unavailable")
+        artifact, _upload = await self._artifact_service.create(
+            principal="service:omnigent_checkpoint_capture",
+            content_type=content_type,
+            metadata_json={"artifact_kind": kind},
+        )
+        await self._artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal="service:omnigent_checkpoint_capture",
+            payload=payload,
+            content_type=content_type,
+        )
+        return f"artifact://{artifact.artifact_id}"
+
+    async def _harvest_checkpoint_evidence(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+        workspace_path: str,
+        workspace_locator: Mapping[str, Any],
+        effective_launch: Mapping[str, Any],
+    ) -> AgentRunResult:
+        """Persist workspace/profile evidence while the authorized host is live."""
+
+        metadata = dict(result.metadata or {})
+        evidence = dict(metadata.get("omnigentCheckpointEvidence") or {})
+        try:
+            resolved = str(os.path.realpath(workspace_path))
+            git = ["git", "-c", f"safe.directory={resolved}", "-C", resolved]
+
+            def git_output(*args: str, binary: bool = False) -> bytes | str:
+                completed = subprocess.run(
+                    [*git, *args],
+                    check=True,
+                    capture_output=True,
+                )
+                return completed.stdout if binary else completed.stdout.decode().strip()
+
+            baseline = str(
+                (request.workspace_spec or {}).get("baseCommit")
+                or git_output("rev-list", "--max-parents=0", "HEAD")
+            )
+            head_commit = str(git_output("rev-parse", "HEAD"))
+            source_branch = str(git_output("branch", "--show-current") or "detached")
+            patch = git_output("diff", "--binary", baseline, binary=True)
+            if not isinstance(patch, bytes):
+                raise ValueError("workspace patch capture returned invalid bytes")
+            patch_ref = await self._put_checkpoint_evidence(
+                patch,
+                kind="omnigent_workspace_patch",
+                content_type="application/vnd.moonmind.git-patch",
+            )
+            launch_payload = json.dumps(
+                dict(effective_launch),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            launch_ref = await self._put_checkpoint_evidence(
+                launch_payload,
+                kind="omnigent_effective_launch",
+                content_type="application/json",
+            )
+            first_message_ref = str(metadata.get("firstMessageRequestRef") or "")
+            first_message_digest = ""
+            if first_message_ref.startswith("artifact://"):
+                _artifact, first_message = await self._artifact_service.read(
+                    artifact_id=first_message_ref.removeprefix("artifact://"),
+                    principal="service:omnigent_checkpoint_capture",
+                    allow_restricted_raw=True,
+                )
+                first_message_digest = (
+                    f"sha256:{hashlib.sha256(first_message).hexdigest()}"
+                )
+            context_refs: list[str] = []
+            if (
+                request.step_execution is not None
+                and str(request.step_execution.context_bundle_ref or "").startswith(
+                    "artifact://"
+                )
+            ):
+                context_refs.append(str(request.step_execution.context_bundle_ref))
+            evidence.update(
+                {
+                    "executionProfileRef": launch_ref,
+                    "launchPolicyRef": launch_ref,
+                    "lastBridgeEventCursor": str(
+                        metadata.get("sseEventsCaptured") or "terminal"
+                    ),
+                    "firstMessageIdentity": first_message_ref,
+                    "firstMessageDigest": first_message_digest,
+                    "resourceManifestRef": metadata.get("captureManifestRef"),
+                    "captureManifestRef": metadata.get("captureManifestRef"),
+                    "patchCapability": "git_patch_v1",
+                    "workspaceLocator": dict(workspace_locator),
+                    "baselineCommit": baseline,
+                    "headCommit": head_commit,
+                    "headRef": patch_ref,
+                    "checkpointRef": patch_ref,
+                    "instructionRefs": [
+                        ref
+                        for ref in request.input_refs
+                        if ref.startswith("artifact://")
+                    ],
+                    "contextRefs": context_refs,
+                    "sourceBranch": source_branch,
+                    "outputBranch": source_branch,
+                    "publicationState": "unpublished",
+                }
+            )
+            metadata["omnigentCheckpointEvidence"] = evidence
+        except Exception as exc:
+            metadata["omnigentCheckpointEvidenceHarvest"] = {
+                "status": "degraded",
+                "reason": type(exc).__name__,
+            }
+        return result.model_copy(update={"metadata": metadata})
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         profile_id = str(request.execution_profile_ref or "").strip()
@@ -578,6 +827,42 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
             )
+            checkpoint_restore = (request.parameters or {}).get(
+                "checkpointRestore"
+            )
+            if isinstance(checkpoint_restore, Mapping):
+                if self._cold_restore_materializer is None:
+                    raise ValueError(
+                        "checkpoint cold restore materialization boundary "
+                        "is unavailable"
+                    )
+                restore_input = {
+                    **dict(checkpoint_restore),
+                    "workspacePath": str(preflight["workspacePath"]),
+                    "workspaceLocator": (
+                        remediation_resolution.get("workspaceLocator")
+                        if remediation_resolution is not None
+                        else self._workspace_locator(request)
+                    ),
+                    "effectiveLaunchRef": str(effective_launch["snapshotRef"]),
+                    "credentialGeneration": host_lease.credential_generation,
+                }
+                materialized = await self._cold_restore_materializer(
+                    restore_input,
+                    request,
+                )
+                if not materialized.get("restoreEvidenceRef"):
+                    raise ValueError(
+                        "cold restore did not return materialization evidence"
+                    )
+                await emit(
+                    "checkpoint_cold_restore",
+                    "completed",
+                    metadata={
+                        "restoreEvidenceRef": materialized["restoreEvidenceRef"],
+                        "workspaceLocator": restore_input["workspaceLocator"],
+                    },
+                )
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")
             await emit(
@@ -690,6 +975,45 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ),
                 diagnostics_ref=_diagnostics_ref(result),
             )
+            result = await self._harvest_checkpoint_evidence(
+                request=request,
+                result=result,
+                workspace_path=str(preflight["workspacePath"]),
+                workspace_locator=(
+                    remediation_resolution.get("workspaceLocator")
+                    if remediation_resolution is not None
+                    else self._workspace_locator(request)
+                ),
+                effective_launch=effective_launch,
+            )
+            checkpoint_capture, degraded_reasons = build_runtime_checkpoint_capture(
+                request=request,
+                result=result,
+                provider_profile_id=profile_id,
+                credential_generation=host_lease.credential_generation,
+                provider_lease_ref=provider_lease.lease_id,
+                host_binding_ref=binding.binding_ref,
+                host_lease_ref=host_lease.lease_id,
+                endpoint_ref=binding.endpoint_ref,
+                omnigent_host_id=host_id,
+                bridge_session_id=bridge.bridge_session_id,
+                effective_launch_ref=str(effective_launch["snapshotRef"]),
+            )
+            checkpoint_metadata = dict(result.metadata or {})
+            if checkpoint_capture is not None:
+                checkpoint_metadata["omnigentCheckpointCapture"] = checkpoint_capture
+                checkpoint_metadata["omnigentCheckpointCaptureStatus"] = {
+                    "status": "complete",
+                    "boundary": "terminal_harvest",
+                    "degradedReasons": [],
+                }
+            else:
+                checkpoint_metadata["omnigentCheckpointCaptureStatus"] = {
+                    "status": "degraded",
+                    "boundary": "terminal_harvest",
+                    "degradedReasons": degraded_reasons,
+                }
+            result = result.model_copy(update={"metadata": checkpoint_metadata})
             if str(result.provider_error_code or "") == "429":
                 await self._lease_client.record_cooldown(
                     runtime_id="codex_cli",

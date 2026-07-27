@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
+import subprocess
 
 from temporalio import activity
 
@@ -98,6 +101,70 @@ async def omnigent_execute_activity(
             artifact_service=artifact_service,
         )
 
+        async def materialize_checkpoint_restore(raw, restore_request):
+            workspace = Path(str(raw.get("workspacePath") or "")).resolve()
+            if not workspace.is_relative_to(workspace_root.resolve()):
+                raise ValueError("cold restore workspace escaped managed authority")
+            baseline = str(raw.get("baselineCommit") or "").strip()
+            if not baseline:
+                raise ValueError("cold restore requires a pinned baseline commit")
+            subprocess.run(
+                ["git", "-C", str(workspace), "checkout", "--detach", baseline],
+                check=True,
+                capture_output=True,
+            )
+            applied_refs: list[str] = []
+            for key in ("checkpointRef", "diffRef"):
+                ref = str(raw.get(key) or "").strip()
+                if not ref:
+                    continue
+                _artifact, payload = await artifact_service.read(
+                    artifact_id=ref.removeprefix("artifact://"),
+                    principal="service:omnigent_cold_restore",
+                    allow_restricted_raw=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(workspace), "apply", "--binary", "-"],
+                    input=payload,
+                    check=True,
+                    capture_output=True,
+                )
+                applied_refs.append(ref)
+            evidence = {
+                "schemaVersion": "v1",
+                "baselineCommit": baseline,
+                "appliedRefs": applied_refs,
+                "instructionRefs": list(raw.get("instructionRefs") or ()),
+                "contextRefs": list(raw.get("contextRefs") or ()),
+                "effectiveLaunchRef": raw.get("effectiveLaunchRef"),
+                "providerProfileId": restore_request.execution_profile_ref,
+                "credentialGeneration": raw.get("credentialGeneration"),
+                "workspaceLocator": raw.get("workspaceLocator"),
+            }
+            payload = json.dumps(
+                evidence,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            artifact, _upload = await artifact_service.create(
+                principal="service:omnigent_cold_restore",
+                content_type="application/json",
+                metadata_json={
+                    "artifact_kind": "omnigent_cold_restore_evidence",
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+            completed = await artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="service:omnigent_cold_restore",
+                payload=payload,
+                content_type="application/json",
+            )
+            return {
+                "restoreEvidenceRef": f"artifact://{completed.artifact_id}",
+                "workspaceLocator": raw.get("workspaceLocator"),
+            }
+
         coordinator = OmnigentProfileBoundExecutionCoordinator(
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
@@ -112,6 +179,7 @@ async def omnigent_execute_activity(
                 restorer=ManagedServiceRemediationRestorer(restore_service),
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
+            cold_restore_materializer=materialize_checkpoint_restore,
         )
         return await coordinator.execute(request)
 

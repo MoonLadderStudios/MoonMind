@@ -3073,11 +3073,19 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
         created_at=now,
         plan_digest="sha256:plan",
         step_outputs={"summaryRef": "artifact://summary"},
+        omnigent_checkpoint_capture={
+            "schemaVersion": "v2",
+            "captureManifestRef": "artifact://omnigent/capture",
+        },
     )
 
     assert result["checkpointRef"] == "artifact://checkpoint/created"
     assert captured["activity"] == "step_checkpoint.create"
     assert captured["payload"]["workspace"]["patchRef"] == "artifact://patch"
+    assert captured["payload"]["omnigentCheckpointCapture"] == {
+        "schemaVersion": "v2",
+        "captureManifestRef": "artifact://omnigent/capture",
+    }
     assert captured["payload"]["idempotencyKey"].endswith(
         ":checkpoint:after_execution"
     )
