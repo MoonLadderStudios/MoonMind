@@ -45,7 +45,7 @@ describe('OmnigentInventoryPage', () => {
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeTruthy();
   });
 
-  it('does not fetch or render future policy actions without a capability contract', async () => {
+  it('does not fetch policy actions without a capability contract', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     renderPage({ page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: false } });
     expect(screen.getByRole('alert').textContent).toContain('not available');
@@ -64,5 +64,27 @@ describe('OmnigentInventoryPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/policies', { credentials: 'same-origin' });
+  });
+
+  it('renders immutable policy inspection and lifecycle actions', async () => {
+    window.history.replaceState({}, '', '/omnigent/policies');
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{
+        id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2,
+        summary: 'Immutable policy authority', version: {
+          validation: { valid: true }, document: { host: { mode: 'static_compose' } },
+        },
+      }] }),
+    } as Response);
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
+      initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/policies' } },
+    });
+    expect(await screen.findByText('Static Codex')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+    expect(screen.getByRole('region', { name: 'Immutable policy version' })).toBeTruthy();
+    expect(screen.getByText('Validation: Valid')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Activate / rollback' })).toBeTruthy();
   });
 });

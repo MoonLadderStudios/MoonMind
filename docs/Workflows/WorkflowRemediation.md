@@ -1,5 +1,8 @@
 # Workflow Remediation
 
+Omnigent remediation and approvals use the exact
+[immutable policy version](../Omnigent/PolicyAuthority.md).
+
 **Status:** Desired-state design
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
