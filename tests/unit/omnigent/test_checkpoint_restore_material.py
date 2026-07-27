@@ -35,9 +35,19 @@ def _manifest(
                 "externalStateRef": "artifact://session",
                 "externalStateDigest": artifact_digest(external),
                 "bridgeSessionId": "bridge",
+                "omnigentSessionId": "session-id",
+                "omnigentHostId": "host-id",
                 "idempotencyKey": "idem",
                 "lastCommittedEventCursor": "42",
                 "firstMessageDigest": artifact_digest(b"first"),
+                "terminalRef": "artifact://terminal",
+                "terminalDigest": artifact_digest(b"terminal"),
+                "diagnosticsRef": "artifact://diagnostics",
+                "diagnosticsDigest": artifact_digest(b"diagnostics"),
+                "resourceManifestRef": "artifact://resources",
+                "resourceManifestDigest": artifact_digest(b"resources"),
+                "captureManifestRef": "artifact://capture",
+                "captureManifestDigest": artifact_digest(b"capture"),
             },
             "workspace": {
                 "workspaceLocator": {
@@ -51,13 +61,26 @@ def _manifest(
                 "patchCapability": "git_patch_v1",
                 "instructionRefs": ["artifact://instructions"],
                 "contextRefs": ["artifact://context"],
+                "sourceBranch": "main",
+                "outputBranch": "feature/checkpoint",
+                "publicationState": "unpublished",
             },
             "host": {
                 "executionProfile": "omnigent",
                 "launchPolicyRef": "artifact://launch-policy",
+                "launchPolicyDigest": artifact_digest(b"launch-policy"),
                 "effectiveLaunchRef": "omnigent-launch:sha256:" + "1" * 64,
                 "providerProfileId": "profile",
+                "providerProfileRef": "artifact://profile",
+                "providerProfileDigest": artifact_digest(b"profile"),
+                "providerLeaseRef": "artifact://provider-lease",
+                "providerLeaseDigest": artifact_digest(b"provider-lease"),
                 "hostBindingRef": "artifact://binding",
+                "hostBindingDigest": artifact_digest(b"binding"),
+                "hostLeaseRef": "artifact://host-lease",
+                "hostLeaseDigest": artifact_digest(b"host-lease"),
+                "endpointRef": "artifact://endpoint",
+                "endpointDigest": artifact_digest(b"endpoint"),
             },
             "credentials": {"credentialGeneration": 3},
             "captureTime": datetime.now(UTC),
@@ -72,6 +95,25 @@ def _manifest(
     )
 
 
+def _artifacts(**overrides: bytes) -> dict[str, bytes]:
+    values = {
+        "session": b"session",
+        "workspace": b"workspace",
+        "terminal": b"terminal",
+        "diagnostics": b"diagnostics",
+        "resources": b"resources",
+        "capture": b"capture",
+        "launch-policy": b"launch-policy",
+        "profile": b"profile",
+        "provider-lease": b"provider-lease",
+        "binding": b"binding",
+        "host-lease": b"host-lease",
+        "endpoint": b"endpoint",
+    }
+    values.update(overrides)
+    return {f"artifact://{name}": payload for name, payload in values.items()}
+
+
 def test_restore_validation_checks_artifacts_and_projects_modes_independently() -> None:
     manifest = _manifest()
     result = validate_restore_material(
@@ -81,10 +123,7 @@ def test_restore_validation_checks_artifacts_and_projects_modes_independently() 
         logical_step_id="step",
         provider_profile_id="profile",
         credential_generation=3,
-        artifacts={
-            "artifact://session": b"session",
-            "artifact://workspace": b"workspace",
-        },
+        artifacts=_artifacts(),
         host_available=False,
         session_valid=False,
     )
@@ -137,10 +176,7 @@ def test_restore_validation_fails_closed(overrides: dict[str, object], reason: s
         "logical_step_id": "step",
         "provider_profile_id": "profile",
         "credential_generation": 3,
-        "artifacts": {
-            "artifact://session": b"session",
-            "artifact://workspace": b"workspace",
-        },
+        "artifacts": _artifacts(),
     }
     arguments.update(overrides)
     result = validate_restore_material(_manifest(), **arguments)  # type: ignore[arg-type]
@@ -158,7 +194,7 @@ def test_digest_mismatch_and_unresolved_refs_are_not_resumable() -> None:
         logical_step_id="step",
         provider_profile_id="profile",
         credential_generation=3,
-        artifacts={"artifact://session": b"wrong"},
+        artifacts=_artifacts(session=b"wrong"),
     )
 
     assert result.status == "invalid"
@@ -174,10 +210,7 @@ def test_cold_restore_inputs_are_path_free_and_pin_source_policy() -> None:
         logical_step_id="step",
         provider_profile_id="profile",
         credential_generation=3,
-        artifacts={
-            "artifact://session": b"session",
-            "artifact://workspace": b"workspace",
-        },
+        artifacts=_artifacts(),
     )
     payload = materialize_cold_restore_inputs(
         manifest,
@@ -217,6 +250,7 @@ def test_cold_restore_inputs_are_path_free_and_pin_source_policy() -> None:
         {"oauthHome": "/root/.codex"},
         {"credentialBody": "secret"},
         {"workspacePath": "/tmp/repo"},
+        {"endpoint": "https://provider.example/session/native-id"},
     ],
 )
 def test_manifest_rejects_host_local_or_credential_authority(
@@ -225,5 +259,16 @@ def test_manifest_rejects_host_local_or_credential_authority(
     payload = _manifest().model_dump(by_alias=True, mode="json")
     payload["credentials"].update(unsafe)
 
-    with pytest.raises(ValueError, match="not durable checkpoint authority"):
+    with pytest.raises(
+        ValueError,
+        match="not durable checkpoint authority|provider-native or host-local authority",
+    ):
+        OmnigentCheckpointManifest.model_validate(payload)
+
+
+def test_valid_manifest_requires_complete_host_independent_evidence() -> None:
+    payload = _manifest().model_dump(by_alias=True, mode="json")
+    del payload["host"]["providerLeaseRef"]
+
+    with pytest.raises(ValueError, match="providerLeaseRef"):
         OmnigentCheckpointManifest.model_validate(payload)

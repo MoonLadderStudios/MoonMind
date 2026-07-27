@@ -5912,6 +5912,11 @@ class MoonMindRunWorkflow:
         )
         if capture is None:
             return None
+        # The normalized workflow snapshot is the authority for optional
+        # checkpoint metadata; never recover it from unstructured agent prose.
+        capture_input = dict(
+            self._step_workspace_capture_inputs.get(logical_step_id) or {}
+        )
         capture_diagnostics = list(capture.get("diagnosticRefs") or [])
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,

@@ -79,22 +79,46 @@ class OmnigentCheckpointManifest(BaseModel):
             "externalStateRef",
             "externalStateDigest",
             "bridgeSessionId",
+            "omnigentSessionId",
+            "omnigentHostId",
             "idempotencyKey",
             "lastCommittedEventCursor",
             "firstMessageDigest",
+            "terminalRef",
+            "terminalDigest",
+            "diagnosticsRef",
+            "diagnosticsDigest",
+            "resourceManifestRef",
+            "resourceManifestDigest",
+            "captureManifestRef",
+            "captureManifestDigest",
         }
         required_workspace = {
             "workspaceLocator",
             "baselineCommit",
             "checkpointRef",
             "checkpointDigest",
+            "patchCapability",
+            "sourceBranch",
+            "outputBranch",
+            "publicationState",
         }
         required_host = {
             "executionProfile",
             "launchPolicyRef",
+            "launchPolicyDigest",
             "effectiveLaunchRef",
             "providerProfileId",
+            "providerProfileRef",
+            "providerProfileDigest",
+            "providerLeaseRef",
+            "providerLeaseDigest",
             "hostBindingRef",
+            "hostBindingDigest",
+            "hostLeaseRef",
+            "hostLeaseDigest",
+            "endpointRef",
+            "endpointDigest",
         }
         required_credentials = {"credentialGeneration"}
         for plane, required in (
@@ -133,12 +157,30 @@ def _reject_unsafe_restore_authority(value: Any, path: str = "checkpoint") -> No
             _reject_unsafe_restore_authority(nested, f"{path}[{index}]")
     elif isinstance(value, str):
         lowered = value.lower()
-        if any(marker in lowered for marker in ("bearer ", "token=", "password=")):
+        if any(
+            marker in lowered
+            for marker in (
+                "bearer ",
+                "token=",
+                "password=",
+                "ghp_",
+                "github_pat_",
+                "-----begin private key-----",
+            )
+        ):
             raise ValueError(f"{path} contains credential data")
         if lowered.startswith(
-            ("file://", "/", "http://localhost", "https://localhost")
+            (
+                "file://",
+                "/",
+                "http://",
+                "https://",
+                "ssh://",
+                "docker://",
+                "podman://",
+            )
         ):
-            raise ValueError(f"{path} contains raw host-local authority")
+            raise ValueError(f"{path} contains provider-native or host-local authority")
 
 
 def artifact_digest(payload: bytes) -> str:
@@ -174,7 +216,12 @@ def validate_restore_material(
         reasons.append("credential_generation_stale")
 
     checked: list[str] = []
-    for plane in (manifest.session, manifest.workspace):
+    for plane in (
+        manifest.session,
+        manifest.workspace,
+        manifest.host,
+        manifest.source,
+    ):
         for ref_key, digest_key in (
             ("externalStateRef", "externalStateDigest"),
             ("checkpointRef", "checkpointDigest"),
@@ -182,6 +229,14 @@ def validate_restore_material(
             ("diffRef", "diffDigest"),
             ("resourceManifestRef", "resourceManifestDigest"),
             ("captureManifestRef", "captureManifestDigest"),
+            ("terminalRef", "terminalDigest"),
+            ("diagnosticsRef", "diagnosticsDigest"),
+            ("launchPolicyRef", "launchPolicyDigest"),
+            ("providerProfileRef", "providerProfileDigest"),
+            ("providerLeaseRef", "providerLeaseDigest"),
+            ("hostBindingRef", "hostBindingDigest"),
+            ("hostLeaseRef", "hostLeaseDigest"),
+            ("endpointRef", "endpointDigest"),
         ):
             ref = plane.get(ref_key)
             expected_digest = plane.get(digest_key)
