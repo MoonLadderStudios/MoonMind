@@ -26,6 +26,8 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
     WORKSPACE_LOCATOR_ADAPTER,
 )
@@ -34,8 +36,10 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
+    resolve_managed_workspace_locator,
     resolve_sandbox_workspace_locator,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
@@ -77,6 +81,7 @@ class OmnigentOAuthHostRuntime:
         server_url: str | None = None,
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
+        managed_run_store: ManagedRunStore | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -103,6 +108,12 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
         ).resolve()
+        self._managed_run_store = managed_run_store or ManagedRunStore(
+            Path(
+                os.getenv("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+            ).resolve()
+            / "managed_runs"
+        )
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
         )
@@ -801,10 +812,32 @@ class OmnigentOAuthHostRuntime:
         artifact_gateway: Any | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
-        if not isinstance(locator, SandboxWorkspaceLocator):
-            raise OmnigentOAuthHostError(
-                "Omnigent repository work requires a sandbox WorkspaceLocator",
-                code="WORKSPACE_LOCATOR_UNSUPPORTED",
+        if isinstance(locator, ManagedWorkspaceLocator):
+            workspace = resolve_managed_workspace_locator(
+                locator,
+                store=self._managed_run_store,
+                current_agent_run_id=locator.agent_run_id,
+                current_runtime_id=locator.runtime_id,
+            )
+            if not workspace.is_dir():
+                raise OmnigentOAuthHostError(
+                    "authorized managed-runtime workspace is unavailable",
+                    code="WORKSPACE_AUTHORITY_MISMATCH",
+                )
+            return workspace
+
+        external_state_ref: str | None = None
+        if isinstance(locator, ExternalStateLocator):
+            # External state is a durable restore input, not a caller-selected
+            # filesystem path. Materialize it into this step's owned sandbox.
+            external_state_ref = locator.artifact_ref
+            locator = SandboxWorkspaceLocator(
+                workspaceId=hashlib.sha256(
+                    f"{current_workflow_id}:{current_step_execution_id}".encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:24],
+                relativePath="repo",
             )
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
@@ -819,6 +852,8 @@ class OmnigentOAuthHostRuntime:
             must_exist=False,
         )
         spec = dict(workspace_spec or {})
+        if external_state_ref is not None:
+            input_refs = tuple(dict.fromkeys((*input_refs, external_state_ref)))
         repository = str(spec.get("repository") or spec.get("repo") or "").strip()
         starting_branch = str(
             spec.get("startingBranch") or spec.get("branch") or ""
