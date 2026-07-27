@@ -8,11 +8,13 @@ that the context explicitly names.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +31,7 @@ from moonmind.workflows.temporal.remediation_context import (
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
+logger = logging.getLogger(__name__)
 MAX_REMEDIATION_EVIDENCE_PAGE_ITEMS = 100
 MAX_REMEDIATION_ARTIFACT_READ_BYTES = 1024 * 1024
 _TYPED_EVIDENCE_PATHS = {
@@ -343,6 +346,67 @@ class RemediationEvidenceToolService:
         self._cursor_recorder = cursor_recorder
         self._context_payload_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
+    async def _audit_read(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        principal: str,
+        operation: str,
+        evidence_class: str,
+        evidence_ref: str | None = None,
+        cursor: int | str | None = None,
+        bound: int | None = None,
+        outcome: str,
+        degraded_reason: str | None = None,
+    ) -> None:
+        """Best-effort durable audit evidence for a bounded remediation read.
+
+        Audit publication is deliberately auxiliary: an artifact outage must not
+        turn a successful, authorized evidence read into a failed read.
+        """
+
+        event_id = f"remediation-read-{uuid4()}"
+        metadata = {
+            "operation": operation,
+            "evidenceClass": evidence_class,
+            "evidenceRef": evidence_ref,
+            "cursor": cursor,
+            "bound": bound,
+            "outcome": outcome,
+            "degradedReason": degraded_reason,
+        }
+        try:
+            payload = build_remediation_audit_event(
+                event_id=event_id,
+                event_type="evidence_read",
+                actor_user=principal,
+                execution_principal=principal,
+                remediation_workflow_id=link.remediation_workflow_id,
+                remediation_run_id=link.remediation_run_id,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                action_kind=None,
+                risk_tier=None,
+                approval_decision=None,
+                timestamp=datetime.now(timezone.utc),
+                metadata={key: value for key, value in metadata.items() if value is not None},
+            )
+            await self._lifecycle_publisher.publish_json_artifact(
+                remediation_workflow_id=link.remediation_workflow_id,
+                artifact_type="remediation.audit_event",
+                name=f"reports/remediation_evidence_read-{event_id}.json",
+                payload=payload,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal=principal,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to publish remediation evidence-read audit for %s",
+                link.remediation_workflow_id,
+                exc_info=True,
+            )
+
     async def get_context(
         self,
         *,
@@ -416,6 +480,16 @@ class RemediationEvidenceToolService:
             safe_payload = payload
         end = min(len(safe_payload), start + bounded_size)
         content = safe_payload[start:end]
+        await self._audit_read(
+            link=link,
+            principal=principal,
+            operation="artifact_slice",
+            evidence_class="artifact",
+            evidence_ref=artifact_id,
+            cursor=start,
+            bound=bounded_size,
+            outcome="available",
+        )
         return RemediationArtifactReadResult(
             artifact_id=artifact_id,
             content_type=content_type,
@@ -445,6 +519,16 @@ class RemediationEvidenceToolService:
         context = await self._read_context_payload(link=link, principal=principal)
         value = _resolve_evidence_path(context, path)
         if value in (None, [], {}):
+            await self._audit_read(
+                link=link,
+                principal=principal,
+                operation="evidence_page",
+                evidence_class=normalized_class,
+                cursor=max(0, int(cursor)),
+                bound=max(1, min(int(limit), MAX_REMEDIATION_EVIDENCE_PAGE_ITEMS)),
+                outcome="degraded",
+                degraded_reason="historical evidence was not captured",
+            )
             return RemediationEvidencePage(
                 evidence_class=normalized_class,
                 status="degraded",
@@ -456,6 +540,15 @@ class RemediationEvidenceToolService:
         start = max(0, int(cursor))
         page_size = max(1, min(int(limit), MAX_REMEDIATION_EVIDENCE_PAGE_ITEMS))
         end = min(len(values), start + page_size)
+        await self._audit_read(
+            link=link,
+            principal=principal,
+            operation="evidence_page",
+            evidence_class=normalized_class,
+            cursor=start,
+            bound=page_size,
+            outcome="available",
+        )
         return RemediationEvidencePage(
             evidence_class=normalized_class,
             status="available",
@@ -484,12 +577,23 @@ class RemediationEvidenceToolService:
             )
         normalized_stream = _normalize_log_stream(stream)
         bounded_tail_lines = _bounded_tail_lines(context, tail_lines)
-        return await self._log_reader.read_logs(
+        result = await self._log_reader.read_logs(
             agent_run_id=normalized_agent_run_id,
             stream=normalized_stream,
             cursor=cursor,
             tail_lines=bounded_tail_lines,
         )
+        await self._audit_read(
+            link=link,
+            principal=principal,
+            operation="historical_logs",
+            evidence_class=f"{normalized_stream}_logs",
+            evidence_ref=normalized_agent_run_id,
+            cursor=cursor,
+            bound=bounded_tail_lines,
+            outcome="available",
+        )
+        return result
 
     async def follow_target_logs(
         self,
@@ -537,6 +641,16 @@ class RemediationEvidenceToolService:
         )
         if self._cursor_recorder is not None:
             await self._cursor_recorder(link.remediation_workflow_id, result.resume_cursor)
+        await self._audit_read(
+            link=link,
+            principal=principal,
+            operation="live_follow",
+            evidence_class="bridge_events",
+            evidence_ref=selected_agent_run_id,
+            cursor=sequence,
+            bound=len(result.events),
+            outcome="available",
+        )
         return result
 
     async def prepare_action_request(

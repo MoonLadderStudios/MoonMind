@@ -1604,6 +1604,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/remediation/logs/{agent_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Remediation Target Logs
+         * @description Read redacted bounded logs only for a run named by remediation context.
+         */
+        get: operations["read_remediation_target_logs_api_executions__workflow_id__remediation_logs__agent_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/remediation/logs/{agent_run_id}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Follow Remediation Target Logs
+         * @description Return one bounded live-follow page with a resumable sequence cursor.
+         */
+        get: operations["follow_remediation_target_logs_api_executions__workflow_id__remediation_logs__agent_run_id__follow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediation/checkpoint-branches": {
         parameters: {
             query?: never;
@@ -10900,6 +10940,19 @@ export interface components {
             /** Items */
             items: components["schemas"]["RemediationLinkSummaryModel"][];
         };
+        /** RemediationLiveFollowPageModel */
+        RemediationLiveFollowPageModel: {
+            /** Agentrunid */
+            agentRunId: string;
+            /** Events */
+            events: {
+                [key: string]: unknown;
+            }[];
+            /** Resumecursor */
+            resumeCursor?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** RemediationLiveObservationModel */
         RemediationLiveObservationModel: {
             /** Status */
@@ -10923,6 +10976,17 @@ export interface components {
             holder?: string | null;
             /** Releasedat */
             releasedAt?: string | null;
+        };
+        /** RemediationLogPageModel */
+        RemediationLogPageModel: {
+            /** Agentrunid */
+            agentRunId: string;
+            /** Stream */
+            stream: string;
+            /** Lines */
+            lines: string[];
+            /** Nextcursor */
+            nextCursor?: string | null;
         };
         /** RemediationNextActionBaselineModel */
         RemediationNextActionBaselineModel: {
@@ -15952,6 +16016,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_remediation_target_logs_api_executions__workflow_id__remediation_logs__agent_run_id__get: {
+        parameters: {
+            query?: {
+                stream?: "stdout" | "stderr" | "merged" | "diagnostics";
+                cursor?: string | null;
+                tail_lines?: number;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+                agent_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationLogPageModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    follow_remediation_target_logs_api_executions__workflow_id__remediation_logs__agent_run_id__follow_get: {
+        parameters: {
+            query?: {
+                fromSequence?: number | null;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+                agent_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationLiveFollowPageModel"];
                 };
             };
             /** @description Validation Error */

@@ -11513,6 +11513,78 @@ def test_read_remediation_evidence_route_rejects_cursor_over_bound() -> None:
     assert response.status_code == 422
 
 
+def test_remediation_log_routes_use_typed_bounded_service() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    user = _override_user_dependencies(app, is_superuser=True)
+    tool_service = SimpleNamespace(
+        read_target_logs=AsyncMock(
+            return_value=SimpleNamespace(
+                agent_run_id="agent-1",
+                stream="merged",
+                lines=("safe line",),
+                next_cursor="9",
+            )
+        ),
+        follow_target_logs=AsyncMock(
+            return_value=SimpleNamespace(
+                agent_run_id="agent-1",
+                events=(
+                    SimpleNamespace(
+                        sequence=10,
+                        stream="stdout",
+                        text="safe live line",
+                        timestamp="2026-07-27T00:00:00Z",
+                    ),
+                ),
+                resume_cursor={"sequence": 10},
+            )
+        ),
+    )
+
+    with patch(
+        "api_service.api.routers.executions.RemediationEvidenceToolService",
+        return_value=tool_service,
+    ):
+        with TestClient(app) as test_client:
+            history = test_client.get(
+                "/api/executions/mm:wf-1/remediation/logs/agent-1"
+                "?stream=merged&cursor=4&tail_lines=25"
+            )
+            live = test_client.get(
+                "/api/executions/mm:wf-1/remediation/logs/agent-1/follow"
+                "?fromSequence=9"
+            )
+
+    assert history.status_code == 200
+    assert history.json() == {
+        "agentRunId": "agent-1",
+        "stream": "merged",
+        "lines": ["safe line"],
+        "nextCursor": "9",
+    }
+    assert live.status_code == 200
+    assert live.json()["resumeCursor"] == {"sequence": 10}
+    tool_service.read_target_logs.assert_awaited_once_with(
+        remediation_workflow_id="mm:wf-1",
+        agent_run_id="agent-1",
+        stream="merged",
+        cursor="4",
+        tail_lines=25,
+        principal=str(user.id),
+    )
+    tool_service.follow_target_logs.assert_awaited_once_with(
+        remediation_workflow_id="mm:wf-1",
+        agent_run_id="agent-1",
+        from_sequence=9,
+        principal=str(user.id),
+    )
+
+
 def test_get_execution_step_executions_preserves_artifact_authorization() -> None:
     app = FastAPI()
     app.include_router(router)

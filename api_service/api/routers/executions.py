@@ -77,6 +77,10 @@ from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationEvidenceToolError,
     RemediationEvidenceToolService,
+    RemediationLiveFollowEvent,
+    RemediationLiveFollowResult,
+    RemediationLogReadResult,
+    RemediationLogStream,
 )
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
@@ -667,6 +671,19 @@ class RemediationEvidencePageModel(BaseModel):
     items: list[Any]
     nextCursor: int | None = None
     degradedReason: str | None = None
+
+
+class RemediationLogPageModel(BaseModel):
+    agentRunId: str
+    stream: str
+    lines: list[str]
+    nextCursor: str | None = None
+
+
+class RemediationLiveFollowPageModel(BaseModel):
+    agentRunId: str
+    events: list[dict[str, Any]]
+    resumeCursor: dict[str, Any] | None = None
 
 
 class PublicationRecoveryResponse(BaseModel):
@@ -11465,6 +11482,137 @@ async def _read_remediation_context_payload(
         )
     return decoded
 
+
+class _ApiRemediationLogAdapter:
+    """Bounded adapter over the API-owned managed-run observability store."""
+
+    _MAX_EVENTS = 1000
+
+    async def _events(
+        self,
+        *,
+        agent_run_id: str,
+        since: int | None,
+        limit: int,
+        stream: RemediationLogStream,
+    ) -> list[Mapping[str, Any]]:
+        from api_service.api.routers import agent_runs
+        from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+        store = ManagedRunStore(agent_runs._get_agent_runtime_store_root())
+        record = await agent_runs._load_managed_run_record(store, agent_run_id)
+        if record is None:
+            raise RemediationEvidenceToolError(
+                f"Historical evidence is unavailable for agent run {agent_run_id}."
+            )
+        stream_filters = (
+            {"stdout"}
+            if stream == "stdout"
+            else {"stderr"}
+            if stream == "stderr"
+            else {"system"}
+            if stream == "diagnostics"
+            else set()
+        )
+        session_record = await asyncio.to_thread(
+            agent_runs._load_agent_run_session_record, agent_run_id
+        )
+        events, source = await asyncio.to_thread(
+            agent_runs._load_agent_run_observability_events,
+            record=record,
+            session_record=session_record,
+            limit=min(max(1, limit), self._MAX_EVENTS),
+            since=since,
+            streams=stream_filters,
+            kinds=set(),
+            session_epochs=set(),
+            thread_ids=set(),
+        )
+        if source == "artifacts":
+            events = agent_runs._filter_observability_events(
+                events,
+                since=since,
+                streams=stream_filters,
+                kinds=set(),
+                session_epochs=set(),
+                thread_ids=set(),
+            )
+        events.sort(key=agent_runs._event_sort_key)
+        return [event for event in events[:limit] if isinstance(event, Mapping)]
+
+    async def read_logs(
+        self,
+        *,
+        agent_run_id: str,
+        stream: RemediationLogStream,
+        cursor: str | None = None,
+        tail_lines: int | None = None,
+    ) -> RemediationLogReadResult:
+        try:
+            since = int(cursor) if cursor is not None else None
+        except (TypeError, ValueError) as exc:
+            raise RemediationEvidenceToolError("log cursor must be an integer sequence") from exc
+        limit = min(max(1, tail_lines or 200), self._MAX_EVENTS)
+        events = await self._events(
+            agent_run_id=agent_run_id,
+            since=since,
+            limit=limit,
+            stream=stream,
+        )
+        lines: list[str] = []
+        next_cursor = cursor
+        for event in events[-limit:]:
+            text = event.get("text") or event.get("message") or event.get("data") or ""
+            redacted = redact_sensitive_text(str(text)) or ""
+            lines.append(redacted)
+            sequence = event.get("sequence")
+            if isinstance(sequence, int):
+                next_cursor = str(sequence)
+        return RemediationLogReadResult(
+            agent_run_id=agent_run_id,
+            stream=stream,
+            lines=tuple(lines),
+            next_cursor=next_cursor,
+        )
+
+    async def follow_logs(
+        self,
+        *,
+        agent_run_id: str,
+        from_sequence: int | None = None,
+    ) -> RemediationLiveFollowResult:
+        events = await self._events(
+            agent_run_id=agent_run_id,
+            since=from_sequence,
+            limit=100,
+            stream="merged",
+        )
+        output: list[RemediationLiveFollowEvent] = []
+        last_sequence = from_sequence
+        for event in events[:100]:
+            sequence = event.get("sequence")
+            if not isinstance(sequence, int):
+                continue
+            output.append(
+                RemediationLiveFollowEvent(
+                    sequence=sequence,
+                    stream=str(event.get("stream") or "system"),
+                    text=redact_sensitive_text(
+                        str(event.get("text") or event.get("message") or event.get("data") or "")
+                    )
+                    or "",
+                    timestamp=str(event.get("timestamp")) if event.get("timestamp") else None,
+                )
+            )
+            last_sequence = sequence
+        return RemediationLiveFollowResult(
+            agent_run_id=agent_run_id,
+            events=tuple(output),
+            resume_cursor=(
+                {"sequence": last_sequence} if last_sequence is not None else None
+            ),
+        )
+
 @router.get("/remediations", response_model=RemediationCollectionResponseModel)
 async def list_remediation_collection(
     service: TemporalExecutionService = Depends(_get_service),
@@ -11568,6 +11716,8 @@ async def read_remediation_evidence_class(
     tools = RemediationEvidenceToolService(
         session=session,
         artifact_service=get_temporal_artifact_service(session),
+        log_reader=_ApiRemediationLogAdapter(),
+        live_follower=_ApiRemediationLogAdapter(),
     )
     try:
         page = await tools.read_evidence_class(
@@ -11607,6 +11757,8 @@ async def read_remediation_artifact_content(
     tools = RemediationEvidenceToolService(
         session=session,
         artifact_service=get_temporal_artifact_service(session),
+        log_reader=_ApiRemediationLogAdapter(),
+        live_follower=_ApiRemediationLogAdapter(),
     )
     try:
         result = await tools.read_target_artifact_bounded(
@@ -11631,6 +11783,99 @@ async def read_remediation_artifact_content(
         content=result.content,
         media_type=result.content_type,
         headers=headers,
+    )
+
+
+@router.get(
+    "/{workflow_id}/remediation/logs/{agent_run_id}",
+    response_model=RemediationLogPageModel,
+)
+async def read_remediation_target_logs(
+    workflow_id: str,
+    agent_run_id: str,
+    stream: RemediationLogStream = Query("merged"),
+    cursor: str | None = Query(None),
+    tail_lines: int = Query(200, ge=1, le=1000),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> RemediationLogPageModel:
+    """Read redacted bounded logs only for a run named by remediation context."""
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=get_temporal_artifact_service(session),
+        log_reader=_ApiRemediationLogAdapter(),
+        live_follower=_ApiRemediationLogAdapter(),
+    )
+    try:
+        result = await tools.read_target_logs(
+            remediation_workflow_id=workflow_id,
+            agent_run_id=agent_run_id,
+            stream=stream,
+            cursor=cursor,
+            tail_lines=tail_lines,
+            principal=_owner_id(user) or "service:remediation-tools",
+        )
+    except RemediationEvidenceToolError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_remediation_log_read", "message": str(exc)},
+        ) from exc
+    return RemediationLogPageModel(
+        agentRunId=result.agent_run_id,
+        stream=result.stream,
+        lines=list(result.lines),
+        nextCursor=result.next_cursor,
+    )
+
+
+@router.get(
+    "/{workflow_id}/remediation/logs/{agent_run_id}/follow",
+    response_model=RemediationLiveFollowPageModel,
+)
+async def follow_remediation_target_logs(
+    workflow_id: str,
+    agent_run_id: str,
+    from_sequence: int | None = Query(None, alias="fromSequence", ge=0),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> RemediationLiveFollowPageModel:
+    """Return one bounded live-follow page with a resumable sequence cursor."""
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=get_temporal_artifact_service(session),
+        log_reader=_ApiRemediationLogAdapter(),
+        live_follower=_ApiRemediationLogAdapter(),
+    )
+    try:
+        result = await tools.follow_target_logs(
+            remediation_workflow_id=workflow_id,
+            agent_run_id=agent_run_id,
+            from_sequence=from_sequence,
+            principal=_owner_id(user) or "service:remediation-tools",
+        )
+    except RemediationEvidenceToolError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_remediation_live_follow", "message": str(exc)},
+        ) from exc
+    return RemediationLiveFollowPageModel(
+        agentRunId=result.agent_run_id,
+        events=[
+            {
+                "sequence": event.sequence,
+                "stream": event.stream,
+                "text": event.text,
+                "timestamp": event.timestamp,
+            }
+            for event in result.events
+        ],
+        resumeCursor=result.resume_cursor,
     )
 
 

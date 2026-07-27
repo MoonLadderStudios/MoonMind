@@ -1991,6 +1991,28 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             }
         ]
         assert context_reads == 1
+        audit_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                    TemporalArtifactLink.link_type == "remediation.audit_event",
+                )
+            )
+        ).scalars().all()
+        assert len(audit_links) >= 6
+        audit_artifact, audit_payload = await original_read(
+            artifact_id=audit_links[-1].artifact_id,
+            principal="service:remediation-tools",
+        )
+        assert audit_artifact.metadata_json["artifact_type"] == "remediation.audit_event"
+        decoded_audit = json.loads(audit_payload)
+        assert decoded_audit["eventType"] == "evidence_read"
+        assert decoded_audit["metadata"]["outcome"] in {"available", "degraded"}
+        assert decoded_audit["metadata"]["operation"] in {
+            "artifact_slice",
+            "evidence_page",
+            "historical_logs",
+        }
 
         with pytest.raises(RemediationEvidenceToolError, match="not listed"):
             await tools.read_target_artifact(
