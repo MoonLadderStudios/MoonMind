@@ -5296,8 +5296,21 @@ function StepExecutionHistoryRow({
                     checkpointRecovery.branchCreation.reasonCode ?? 'unavailable',
                   )}
               <br />
+              Validation: {checkpointRecovery.valid ? 'valid' : formatStatusLabel(
+                checkpointRecovery.reasonCode ?? 'invalid',
+              )}
+              {checkpointRecovery.readinessBlocked ? ' · Profile readiness blocked' : ''}
+              {checkpointRecovery.capacityBlocked ? ' · Capacity blocked' : ''}
+              <br />
               Profile <code>{checkpointRecovery.requiredProfileId}</code> · Policy{' '}
               <code>{checkpointRecovery.requiredLaunchPolicyRef}</code>
+              {checkpointRecovery.validatedRefs.length > 0 ? (
+                <>
+                  <br />
+                  Evidence: {checkpointRecovery.validatedRefs.length} digest-validated artifact
+                  {checkpointRecovery.validatedRefs.length === 1 ? '' : 's'}
+                </>
+              ) : null}
             </dd>
           </div>
         ) : null}

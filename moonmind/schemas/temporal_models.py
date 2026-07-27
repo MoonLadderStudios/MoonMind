@@ -1330,10 +1330,17 @@ class StepExecutionCheckpointModel(BaseModel):
             raise ValueError("checkpoint requires planRef or planDigest")
         if self.omnigent_checkpoint is not None:
             manifest = self.omnigent_checkpoint
+            expected_step_execution_id = (
+                f"{self.source.workflow_id}:{self.source.run_id}:"
+                f"{self.source.logical_step_id}:execution:"
+                f"{self.source.execution_ordinal}"
+            )
             if (
                 manifest.workflow_id != self.source.workflow_id
                 or manifest.run_id != self.source.run_id
                 or manifest.logical_step_id != self.source.logical_step_id
+                or manifest.step_execution_id != expected_step_execution_id
+                or manifest.attempt_ordinal != self.source.execution_ordinal
                 or manifest.boundary != self.boundary
             ):
                 raise ValueError(

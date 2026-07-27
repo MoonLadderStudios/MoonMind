@@ -5901,6 +5901,16 @@ class MoonMindRunWorkflow:
     ) -> str | None:
         if not workflow.patched(RUN_CANONICAL_STEP_CHECKPOINTS_PATCH):
             return None
+        if self._step_external_agent_ids.get(logical_step_id) == "omnigent":
+            omnigent_boundary = {
+                "after_prepare": "before_first_message",
+                "before_execution": "before_first_message",
+                "after_execution": "after_turn",
+                "before_recovery_restoration": "before_remediation",
+                "before_publication": "terminal_harvest",
+            }.get(boundary)
+            if omnigent_boundary is not None:
+                boundary = omnigent_boundary
         identity = self._canonical_step_checkpoint_identity(logical_step_id)
         if identity is None:
             return None

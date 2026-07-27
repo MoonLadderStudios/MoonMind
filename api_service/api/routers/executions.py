@@ -67,6 +67,7 @@ from api_service.services.checkpoint_branch_service import (
     build_branch_turn_launch_idempotency_key,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.checkpoints import OmnigentCheckpointManifest
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
@@ -6722,6 +6723,7 @@ def _step_execution_projection_payload(
             _field_value(execution, "summary"),
         )
     )
+    checkpoint_recovery = _checkpoint_recovery_projection(outputs)
     return {
         "manifestArtifactRef": manifest_artifact_ref,
         "stepExecutionId": manifest.step_execution_id,
@@ -6752,11 +6754,48 @@ def _step_execution_projection_payload(
         "outputRefs": _bounded_ref_projection(outputs),
         "stepEvidence": _step_evidence_summary_payload(manifest),
         "recoveryEligibility": _recovery_eligibility_payload(manifest),
-        "checkpointRecovery": (
-            _field_value(outputs, "checkpointRecovery")
-            if isinstance(_field_value(outputs, "checkpointRecovery"), Mapping)
-            else None
+        "checkpointRecovery": checkpoint_recovery,
+    }
+
+
+def _checkpoint_recovery_projection(outputs: Any) -> dict[str, Any] | None:
+    """Project only typed checkpoint authority, never caller-authored capability data."""
+
+    raw = _field_value(outputs, "omnigentCheckpoint")
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        manifest = OmnigentCheckpointManifest.model_validate(raw)
+    except ValidationError:
+        return None
+    valid = manifest.validation_status == "valid"
+    return {
+        "valid": valid,
+        "reasonCode": None if valid else f"checkpoint_{manifest.validation_status}",
+        "message": (
+            "checkpoint authority validated"
+            if valid
+            else f"checkpoint authority is {manifest.validation_status}"
         ),
+        "liveReattach": manifest.live_reattach.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        ),
+        "workspaceColdRestore": manifest.workspace_cold_restore.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        ),
+        "branchCreation": manifest.branch_creation.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        ),
+        "requiredProfileId": manifest.identity.provider_profile_id,
+        "requiredLaunchPolicyRef": manifest.launch_policy_ref,
+        "readinessBlocked": (
+            manifest.workspace_cold_restore.reason_code == "profile_not_ready"
+        ),
+        "capacityBlocked": (
+            manifest.workspace_cold_restore.reason_code == "capacity_unavailable"
+        ),
+        "validatedRefs": sorted(manifest.artifact_digests),
+        "validatedDigests": dict(manifest.artifact_digests),
     }
 
 

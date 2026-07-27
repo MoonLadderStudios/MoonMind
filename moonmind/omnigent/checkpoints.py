@@ -142,6 +142,8 @@ class OmnigentCheckpointManifest(BaseModel):
     )
     instruction_refs: list[str] = Field(default_factory=list, alias="instructionRefs")
     context_refs: list[str] = Field(default_factory=list, alias="contextRefs")
+    artifact_digests: dict[str, str] = Field(..., alias="artifactDigests")
+    head_commit: str = Field(..., alias="headCommit", min_length=1)
     source_branch: str = Field(..., alias="sourceBranch", min_length=1)
     output_branch: str | None = Field(None, alias="outputBranch")
     publication_state: str = Field(..., alias="publicationState", min_length=1)
@@ -185,6 +187,34 @@ class OmnigentCheckpointManifest(BaseModel):
             raise ValueError("workspaceLocator cannot contain a raw host path")
         if bool(self.diff_ref) != bool(self.diff_digest):
             raise ValueError("diffRef and diffDigest must be provided together")
+        required_digest_refs = set(refs.values())
+        required_digest_refs.update(self.instruction_refs)
+        required_digest_refs.update(self.context_refs)
+        if self.identity.terminal_ref:
+            required_digest_refs.add(self.identity.terminal_ref)
+        if self.identity.diagnostics_ref:
+            required_digest_refs.add(self.identity.diagnostics_ref)
+        if set(self.artifact_digests) != required_digest_refs:
+            raise ValueError(
+                "artifactDigests must pin every independently resolvable checkpoint artifact"
+            )
+        for ref, digest in self.artifact_digests.items():
+            if not ref.startswith("artifact://"):
+                raise ValueError("artifactDigests keys must be durable artifact references")
+            if not _is_sha256_digest(digest):
+                raise ValueError("artifactDigests values must be sha256 digests")
+        expected_legacy_digests = {
+            self.identity.external_state_ref: self.external_state_digest,
+            self.head_ref: self.head_digest,
+            self.checkpoint_ref: self.checkpoint_digest,
+        }
+        if self.diff_ref and self.diff_digest:
+            expected_legacy_digests[self.diff_ref] = self.diff_digest
+        if any(
+            self.artifact_digests.get(ref) != digest
+            for ref, digest in expected_legacy_digests.items()
+        ):
+            raise ValueError("named checkpoint digests must match artifactDigests")
         if self.identity.endpoint_ref.startswith(("http://", "https://", "file://", "/")):
             raise ValueError("endpointRef cannot use provider-native URL or raw path authority")
         if self.validation_status == "valid" and not (
@@ -239,9 +269,9 @@ def validate_restore_material(
     artifact_reader: Callable[[str], bytes],
     repository_baseline: str | None = None,
     repository_head: str | None = None,
-    step_execution_id: str | None = None,
-    attempt_ordinal: int | None = None,
-    boundary: str | None = None,
+    step_execution_id: str,
+    attempt_ordinal: int,
+    boundary: str,
     expected_first_message_identity: str | None = None,
     expected_first_message_digest: str | None = None,
     expected_bridge_event_cursor: str | None = None,
@@ -287,7 +317,7 @@ def validate_restore_material(
         return denied("baseline_mismatch", "repository baseline is incompatible")
     if repository_head and repository_head not in {
         manifest.baseline_commit,
-        manifest.head_digest,
+        manifest.head_commit,
     }:
         return denied("head_mismatch", "repository head is incompatible")
     identity_expectations = (
@@ -311,18 +341,11 @@ def validate_restore_material(
         ),
     )
     for code, expected, actual in identity_expectations:
-        if expected is not None and expected != actual:
+        if expected != actual:
             return denied(code, code.replace("_", " "))
     if manifest.patch_capability not in set(supported_patch_capabilities):
         return denied("unsupported_patch", "checkpoint patch capability is unsupported")
 
-    digest_refs: list[tuple[str | None, str | None]] = [
-        (manifest.identity.external_state_ref, manifest.external_state_digest),
-        (manifest.head_ref, manifest.head_digest),
-        (manifest.checkpoint_ref, manifest.checkpoint_digest),
-    ]
-    if manifest.diff_ref:
-        digest_refs.append((manifest.diff_ref, manifest.diff_digest))
     required_refs = {
         manifest.identity.external_state_ref,
         manifest.execution_profile_ref,
@@ -350,10 +373,10 @@ def validate_restore_material(
                 f"required artifact is unavailable: {ref}",
             )
     validated_digests: dict[str, str] = {}
-    for ref, expected_digest in digest_refs:
-        payload = resolved[str(ref)]
+    for ref, expected_digest in manifest.artifact_digests.items():
+        payload = resolved[ref]
         actual = f"sha256:{hashlib.sha256(payload).hexdigest()}"
-        validated_digests[str(ref)] = actual
+        validated_digests[ref] = actual
         if actual != expected_digest:
             return denied("digest_mismatch", f"artifact digest mismatch: {ref}")
 
@@ -422,6 +445,7 @@ def build_cold_restore_inputs(
     return {
         "destinationWorkspaceLocator": destination,
         "baselineCommit": manifest.baseline_commit,
+        "headCommit": manifest.head_commit,
         "headRef": manifest.head_ref,
         "checkpointRef": manifest.checkpoint_ref,
         "diffRef": manifest.diff_ref,
@@ -505,6 +529,16 @@ def _reject_credential_material(value: Any, path: str = "checkpoint") -> None:
             for marker in ("bearer ", "token=", "password=", "oauth/")
         ):
             raise ValueError(f"{path} must contain references, not credential material")
+
+
+def _is_sha256_digest(value: str) -> bool:
+    if not value.startswith("sha256:") or len(value) != 71:
+        return False
+    try:
+        int(value[7:], 16)
+    except ValueError:
+        return False
+    return True
 
 
 def recovery_mode(

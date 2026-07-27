@@ -15397,6 +15397,19 @@ class TemporalCheckpointActivities:
             if isinstance(request, StepCheckpointCreateInput)
             else StepCheckpointCreateInput.model_validate(request)
         )
+        if model.omnigent_checkpoint is not None:
+            for artifact_ref, expected_digest in (
+                model.omnigent_checkpoint.artifact_digests.items()
+            ):
+                artifact_payload = await self._read_bytes(artifact_ref)
+                actual_digest = (
+                    f"sha256:{hashlib.sha256(artifact_payload).hexdigest()}"
+                )
+                if actual_digest != expected_digest:
+                    raise ValueError(
+                        "Omnigent checkpoint artifact digest mismatch: "
+                        f"{artifact_ref}"
+                    )
         payload = build_step_checkpoint_payload(
             identity=model.identity,
             boundary=model.boundary,

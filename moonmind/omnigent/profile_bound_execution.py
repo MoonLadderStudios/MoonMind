@@ -17,10 +17,12 @@ from api_service.services.provider_profile_readiness import (
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
-    OmnigentCheckpointIdentity,
+    OmnigentCheckpointManifest,
     OmnigentRecoveryMode,
+    OmnigentRestoreValidation,
     recovery_mode,
     validate_cold_restore_target,
+    validate_restore_material,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.remediation_workspace import (
@@ -860,7 +862,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         self,
         *,
         request: AgentExecutionRequest,
-        checkpoint: OmnigentCheckpointIdentity,
+        checkpoint: OmnigentCheckpointManifest,
         provider_lease: Mapping[str, Any] | None,
         host_lease: Mapping[str, Any] | None,
         host_registered: bool,
@@ -871,8 +873,23 @@ class OmnigentProfileBoundExecutionCoordinator:
     ) -> AgentRunResult:
         """Live-reattach when safe; otherwise cold-restore on a new lease/session."""
 
+        validation = await self._validate_checkpoint_restore(
+            request=request,
+            checkpoint=checkpoint,
+            candidate_workspace=candidate_workspace,
+            current_credential_generation=current_credential_generation,
+            provider_lease=provider_lease,
+            host_lease=host_lease,
+            host_registered=host_registered,
+            session_valid=session_valid,
+        )
+        if not validation.valid:
+            raise ValueError(
+                f"checkpoint recovery denied: {validation.reason_code or 'invalid'}"
+            )
+        identity = checkpoint.identity
         mode = recovery_mode(
-            checkpoint,
+            identity,
             provider_lease=provider_lease,
             host_lease=host_lease,
             host_registered=host_registered,
@@ -880,15 +897,17 @@ class OmnigentProfileBoundExecutionCoordinator:
             first_message_consistent=first_message_consistent,
         )
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
-            if request.execution_profile_ref != checkpoint.provider_profile_id:
+            if not validation.live_reattach.available:
+                raise ValueError("checkpoint live reattach authority is unavailable")
+            if request.execution_profile_ref != identity.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
             live_request = _bind_candidate_workspace(request, candidate_workspace)
             live_request = live_request.model_copy(
                 update={
-                    "idempotency_key": checkpoint.idempotency_key,
+                    "idempotency_key": identity.idempotency_key,
                     "input_refs": list(
                         dict.fromkeys(
-                            [*live_request.input_refs, checkpoint.external_state_ref]
+                            [*live_request.input_refs, identity.external_state_ref]
                         )
                     ),
                 }
@@ -896,9 +915,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             return await self._execute(
                 _bind_exact_host(
                     live_request,
-                    host_id=str(checkpoint.omnigent_host_id),
+                    host_id=str(identity.omnigent_host_id),
                     workspace_path="/workspaces/run",
-                    profile_authorization=checkpoint.model_dump(
+                    profile_authorization=identity.model_dump(
                         by_alias=True, mode="json", exclude_none=True
                     ),
                 ),
@@ -907,20 +926,31 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
 
         validate_cold_restore_target(
-            checkpoint,
+            identity,
             provider_profile_id=str(request.execution_profile_ref or ""),
             credential_generation=current_credential_generation,
         )
+        if not validation.workspace_cold_restore.available:
+            raise ValueError("checkpoint workspace cold restore authority is unavailable")
         cold_key = deterministic_lease_owner_id(
-            profile_id=checkpoint.provider_profile_id,
+            profile_id=identity.provider_profile_id,
             purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
-            idempotency_key=f"{checkpoint.idempotency_key}:cold:{request.idempotency_key}",
+            idempotency_key=f"{identity.idempotency_key}:cold:{request.idempotency_key}",
         )
         parameters = dict(request.parameters or {})
         parameters["checkpointRestore"] = {
             "mode": "cold_restore",
-            "externalStateRef": checkpoint.external_state_ref,
-            "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "externalStateRef": identity.external_state_ref,
+            "sourceBridgeSessionId": identity.bridge_session_id,
+            "baselineCommit": checkpoint.baseline_commit,
+            "headCommit": checkpoint.head_commit,
+            "headRef": checkpoint.head_ref,
+            "checkpointRef": checkpoint.checkpoint_ref,
+            "diffRef": checkpoint.diff_ref,
+            "patchCapability": checkpoint.patch_capability,
+            "instructionRefs": checkpoint.instruction_refs,
+            "contextRefs": checkpoint.context_refs,
+            "sourceEffectiveLaunchRef": checkpoint.source_effective_launch_ref,
             "candidateWorkspace": candidate_workspace.model_dump(
                 by_alias=True, mode="json"
             ),
@@ -934,7 +964,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                         dict.fromkeys(
                             [
                                 *request.input_refs,
-                                checkpoint.external_state_ref,
+                                identity.external_state_ref,
+                                checkpoint.head_ref,
+                                checkpoint.checkpoint_ref,
+                                *([checkpoint.diff_ref] if checkpoint.diff_ref else []),
+                                *checkpoint.instruction_refs,
+                                *checkpoint.context_refs,
                                 candidate_workspace.head_ref,
                                 candidate_workspace.checkpoint_ref,
                             ]
@@ -948,24 +983,42 @@ class OmnigentProfileBoundExecutionCoordinator:
         self,
         *,
         request: AgentExecutionRequest,
-        checkpoint: OmnigentCheckpointIdentity,
+        checkpoint: OmnigentCheckpointManifest,
         current_credential_generation: int,
         candidate_workspace: CandidateWorkspaceAuthority,
     ) -> AgentRunResult:
         """Create a new capacity-gated host lease and session from checkpoint refs."""
 
+        validation = await self._validate_checkpoint_restore(
+            request=request,
+            checkpoint=checkpoint,
+            candidate_workspace=candidate_workspace,
+            current_credential_generation=current_credential_generation,
+        )
+        if not validation.valid or not validation.branch_creation.available:
+            raise ValueError("checkpoint branch authority is unavailable")
+        identity = checkpoint.identity
         validate_cold_restore_target(
-            checkpoint,
+            identity,
             provider_profile_id=str(request.execution_profile_ref or ""),
             credential_generation=current_credential_generation,
         )
-        if request.idempotency_key == checkpoint.idempotency_key:
+        if request.idempotency_key == identity.idempotency_key:
             raise ValueError("checkpoint branch requires a new idempotency key")
         parameters = dict(request.parameters or {})
         parameters["checkpointRestore"] = {
             "mode": "branch",
-            "externalStateRef": checkpoint.external_state_ref,
-            "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "externalStateRef": identity.external_state_ref,
+            "sourceBridgeSessionId": identity.bridge_session_id,
+            "baselineCommit": checkpoint.baseline_commit,
+            "headCommit": checkpoint.head_commit,
+            "headRef": checkpoint.head_ref,
+            "checkpointRef": checkpoint.checkpoint_ref,
+            "diffRef": checkpoint.diff_ref,
+            "patchCapability": checkpoint.patch_capability,
+            "instructionRefs": checkpoint.instruction_refs,
+            "contextRefs": checkpoint.context_refs,
+            "sourceEffectiveLaunchRef": checkpoint.source_effective_launch_ref,
             "candidateWorkspace": candidate_workspace.model_dump(
                 by_alias=True, mode="json"
             ),
@@ -978,7 +1031,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                         dict.fromkeys(
                             [
                                 *request.input_refs,
-                                checkpoint.external_state_ref,
+                                identity.external_state_ref,
+                                checkpoint.head_ref,
+                                checkpoint.checkpoint_ref,
+                                *([checkpoint.diff_ref] if checkpoint.diff_ref else []),
+                                *checkpoint.instruction_refs,
+                                *checkpoint.context_refs,
                                 candidate_workspace.head_ref,
                                 candidate_workspace.checkpoint_ref,
                             ]
@@ -986,6 +1044,63 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                 }
             )
+        )
+
+    async def _validate_checkpoint_restore(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        checkpoint: OmnigentCheckpointManifest,
+        candidate_workspace: CandidateWorkspaceAuthority,
+        current_credential_generation: int,
+        provider_lease: Mapping[str, Any] | None = None,
+        host_lease: Mapping[str, Any] | None = None,
+        host_registered: bool = False,
+        session_valid: bool = False,
+    ) -> OmnigentRestoreValidation:
+        """Validate all artifact and lineage authority before recovery side effects."""
+
+        launch = request.step_execution
+        if launch is None:
+            raise ValueError("checkpoint recovery requires Step Execution lineage")
+        if (
+            candidate_workspace.head_ref != checkpoint.head_ref
+            or candidate_workspace.head_digest != checkpoint.head_digest
+            or candidate_workspace.checkpoint_ref != checkpoint.checkpoint_ref
+            or candidate_workspace.checkpoint_digest != checkpoint.checkpoint_digest
+        ):
+            raise ValueError("candidate workspace authority does not match checkpoint")
+        artifacts = {
+            ref: await self._artifact_gateway.read_bytes(ref)
+            for ref in checkpoint.artifact_digests
+        }
+        return validate_restore_material(
+            checkpoint,
+            workflow_id=launch.workflow_id,
+            run_id=launch.run_id,
+            logical_step_id=launch.logical_step_id,
+            step_execution_id=launch.step_execution_id,
+            attempt_ordinal=launch.execution_ordinal,
+            boundary=checkpoint.boundary,
+            provider_profile_id=str(request.execution_profile_ref or ""),
+            credential_generation=current_credential_generation,
+            repository_baseline=checkpoint.baseline_commit,
+            repository_head=checkpoint.head_commit,
+            artifact_reader=artifacts.__getitem__,
+            current_provider_lease_ref=str(
+                (provider_lease or {}).get("lease_id")
+                or (provider_lease or {}).get("leaseId")
+                or ""
+            )
+            or None,
+            current_host_lease_ref=str(
+                (host_lease or {}).get("lease_id")
+                or (host_lease or {}).get("leaseId")
+                or ""
+            )
+            or None,
+            host_registered=host_registered,
+            session_valid=session_valid,
         )
 
     async def _resolve_profile(self, profile_id: str) -> ManagedAgentProviderProfile:

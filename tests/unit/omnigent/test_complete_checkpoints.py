@@ -23,12 +23,20 @@ def _manifest(**updates: object) -> OmnigentCheckpointManifest:
         "artifact://external": b"external",
         "artifact://head": b"head",
         "artifact://checkpoint": b"checkpoint",
+        "artifact://execution-profile": b"profile",
+        "artifact://launch-policy": b"policy",
+        "artifact://resources": b"resources",
+        "artifact://capture": b"capture",
+        "artifact://instructions": b"instructions",
+        "artifact://context": b"context",
+        "artifact://terminal": b"terminal",
+        "artifact://diagnostics": b"diagnostics",
     }
     data = {
         "workflowId": "workflow-1",
         "runId": "run-1",
         "logicalStepId": "step-1",
-        "stepExecutionId": "step-1:execution:1",
+        "stepExecutionId": "workflow-1:run-1:step-1:execution:1",
         "attemptOrdinal": 1,
         "boundary": "after_turn",
         "identity": {
@@ -63,12 +71,16 @@ def _manifest(**updates: object) -> OmnigentCheckpointManifest:
             "relativePath": "repo",
         },
         "baselineCommit": "abc123",
+        "headCommit": "def456",
         "headRef": "artifact://head",
         "headDigest": _digest(payloads["artifact://head"]),
         "checkpointRef": "artifact://checkpoint",
         "checkpointDigest": _digest(payloads["artifact://checkpoint"]),
         "instructionRefs": ["artifact://instructions"],
         "contextRefs": ["artifact://context"],
+        "artifactDigests": {
+            ref: _digest(payload) for ref, payload in payloads.items()
+        },
         "sourceBranch": "main",
         "outputBranch": "issue-3509",
         "publicationState": "unpublished",
@@ -106,6 +118,9 @@ def test_complete_manifest_validates_and_builds_clean_restore() -> None:
         provider_profile_id="profile-1",
         credential_generation=3,
         repository_baseline="abc123",
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
         artifact_reader=artifacts.__getitem__,
     )
     assert result.valid
@@ -155,6 +170,10 @@ def test_complete_manifest_validates_and_builds_clean_restore() -> None:
         ({"provider_profile_id": "wrong"}, "profile_mismatch"),
         ({"credential_generation": 4}, "credential_generation_mismatch"),
         ({"repository_baseline": "wrong"}, "baseline_mismatch"),
+        ({"repository_head": "wrong"}, "head_mismatch"),
+        ({"step_execution_id": "wrong"}, "step_execution_mismatch"),
+        ({"attempt_ordinal": 2}, "attempt_mismatch"),
+        ({"boundary": "terminal"}, "boundary_mismatch"),
     ],
 )
 def test_restore_validation_fails_closed(kwargs: dict[str, object], reason: str) -> None:
@@ -165,6 +184,9 @@ def test_restore_validation_fails_closed(kwargs: dict[str, object], reason: str)
         "provider_profile_id": "profile-1",
         "credential_generation": 3,
         "repository_baseline": "abc123",
+        "step_execution_id": "workflow-1:run-1:step-1:execution:1",
+        "attempt_ordinal": 1,
+        "boundary": "after_turn",
         "artifact_reader": {
             "artifact://external": b"external",
             "artifact://head": b"head",
@@ -193,6 +215,9 @@ def test_digest_mismatch_and_unresolvable_artifact_are_bounded() -> None:
         logical_step_id="step-1",
         provider_profile_id="profile-1",
         credential_generation=3,
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
         artifact_reader=lambda _ref: b"wrong",
     )
     assert bad.reason_code == "digest_mismatch"
@@ -204,9 +229,20 @@ def test_digest_mismatch_and_unresolvable_artifact_are_bounded() -> None:
         logical_step_id="step-1",
         provider_profile_id="profile-1",
         credential_generation=3,
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
+        attempt_ordinal=1,
+        boundary="after_turn",
         artifact_reader=lambda _ref: (_ for _ in ()).throw(KeyError()),
     )
     assert missing.reason_code == "artifact_unresolvable"
+
+
+def test_every_artifact_evidence_class_requires_a_pinned_digest() -> None:
+    manifest = _manifest()
+    digests = dict(manifest.artifact_digests)
+    digests.pop("artifact://execution-profile")
+    with pytest.raises(ValidationError, match="artifactDigests"):
+        _manifest(artifactDigests=digests)
 
 
 def test_restore_recomputes_independent_capabilities_and_identity_checks() -> None:
@@ -228,7 +264,7 @@ def test_restore_recomputes_independent_capabilities_and_identity_checks() -> No
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="step-1",
-        step_execution_id="step-1:execution:1",
+        step_execution_id="workflow-1:run-1:step-1:execution:1",
         attempt_ordinal=1,
         boundary="after_turn",
         expected_first_message_identity="message-1",
