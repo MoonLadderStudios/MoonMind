@@ -26,14 +26,17 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.schemas.workspace_locator_models import (
+    ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
     WORKSPACE_LOCATOR_ADAPTER,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
+    resolve_managed_workspace_locator,
     resolve_sandbox_workspace_locator,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
@@ -77,6 +80,7 @@ class OmnigentOAuthHostRuntime:
         server_url: str | None = None,
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
+        managed_run_store: ManagedRunStore | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -103,6 +107,14 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
         ).resolve()
+        self._managed_run_store = managed_run_store or ManagedRunStore(
+            Path(
+                os.getenv(
+                    "MOONMIND_AGENT_RUNTIME_STORE", str(self._workspace_root)
+                )
+            ).resolve()
+            / "managed_runs"
+        )
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
         )
@@ -222,8 +234,11 @@ class OmnigentOAuthHostRuntime:
             validated["workspaceEvidence"] = {
                 key: evidence.get(key)
                 for key in (
-                    "intentDigest", "sourceCommit", "startingBranch",
-                    "targetBranch", "inputRefs", "resolvedSkillsetRef",
+                    "intentDigest", "sourceIdentity", "sourceCommit",
+                    "startingBranch", "targetBranch", "inputRefs",
+                    "materializedInputRefs", "resolvedSkillsetRef",
+                    "publishMode", "repositoryMutationRequired",
+                    "requiredCapabilities",
                 )
                 if evidence.get(key) is not None
             }
@@ -781,14 +796,11 @@ class OmnigentOAuthHostRuntime:
         artifact_gateway: Any | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
-        if not isinstance(locator, SandboxWorkspaceLocator):
+        if not isinstance(locator, (SandboxWorkspaceLocator, ManagedWorkspaceLocator)):
             raise OmnigentOAuthHostError(
-                "Omnigent repository work requires a sandbox WorkspaceLocator",
+                "Omnigent repository work requires a worker-owned workspace locator",
                 code="WORKSPACE_LOCATOR_UNSUPPORTED",
             )
-        expected_id = hashlib.sha256(
-            f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
-        ).hexdigest()[:24]
         spec = dict(workspace_spec or {})
         repository = str(spec.get("repository") or spec.get("repo") or "").strip()
         starting_branch = str(
@@ -797,8 +809,15 @@ class OmnigentOAuthHostRuntime:
         target_branch = str(spec.get("targetBranch") or "").strip()
         intent = {
             "schemaVersion": 1,
-            "issueRef": "MoonLadderStudios/MoonMind#3507",
-            "workspaceId": locator.workspace_id,
+            "sourceIdentity": (
+                spec.get("sourceIdentity")
+                or spec.get("issueRef")
+                or repository
+                or None
+            ),
+            "workspaceLocator": locator.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
             "workflowId": current_workflow_id,
             "stepExecutionId": current_step_execution_id,
             "repository": repository or None,
@@ -808,43 +827,53 @@ class OmnigentOAuthHostRuntime:
             "resolvedSkillsetRef": resolved_skillset_ref,
             "publishMode": spec.get("publishMode"),
             "repositoryMutationRequired": spec.get("repositoryMutationRequired"),
+            "requiredCapabilities": list(spec.get("requiredCapabilities") or ()),
         }
         intent_digest = hashlib.sha256(
             json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        # Claim and validate the durable owner identity before creating the
-        # workspace, cloning a repository, or writing workspace evidence.
-        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
-        authoritative_record = record_store.load(locator.workspace_id)
-        proposed_record = SandboxWorkspaceRecord(
-            workspace_id=locator.workspace_id,
-            workflow_id=current_workflow_id,
-            step_execution_id=current_step_execution_id,
-            relative_path=locator.relative_path,
-            intent_digest=intent_digest,
-        )
-        if authoritative_record is None:
-            record_store.ensure(proposed_record)
-            authoritative_record = proposed_record
-        elif (
-            authoritative_record.workflow_id != current_workflow_id
-            or authoritative_record.step_execution_id != current_step_execution_id
-            or authoritative_record.relative_path != locator.relative_path
-            or authoritative_record.intent_digest != intent_digest
-        ):
-            raise OmnigentOAuthHostError(
-                "workspace intent conflicts with its durable owner record",
-                code="WORKSPACE_IDENTITY_MISMATCH",
+        if isinstance(locator, SandboxWorkspaceLocator):
+            expected_id = hashlib.sha256(
+                f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+            authoritative_record = record_store.load(locator.workspace_id)
+            proposed_record = SandboxWorkspaceRecord(
+                workspace_id=locator.workspace_id,
+                workflow_id=current_workflow_id,
+                step_execution_id=current_step_execution_id,
+                relative_path=locator.relative_path,
+                intent_digest=intent_digest,
             )
-        workspace = resolve_sandbox_workspace_locator(
-            locator,
-            workspace_root=self._workspace_root,
-            expected_workspace_id=expected_id,
-            owner_record=authoritative_record,
-            expected_workflow_id=current_workflow_id,
-            expected_step_execution_id=current_step_execution_id,
-            must_exist=False,
-        )
+            if authoritative_record is None:
+                record_store.ensure(proposed_record)
+                authoritative_record = proposed_record
+            elif (
+                authoritative_record.workflow_id != current_workflow_id
+                or authoritative_record.step_execution_id != current_step_execution_id
+                or authoritative_record.relative_path != locator.relative_path
+                or authoritative_record.intent_digest != intent_digest
+            ):
+                raise OmnigentOAuthHostError(
+                    "workspace intent conflicts with its durable owner record",
+                    code="WORKSPACE_IDENTITY_MISMATCH",
+                )
+            workspace = resolve_sandbox_workspace_locator(
+                locator,
+                workspace_root=self._workspace_root,
+                expected_workspace_id=expected_id,
+                owner_record=authoritative_record,
+                expected_workflow_id=current_workflow_id,
+                expected_step_execution_id=current_step_execution_id,
+                must_exist=False,
+            )
+        else:
+            workspace = resolve_managed_workspace_locator(
+                locator,
+                store=self._managed_run_store,
+                current_agent_run_id=current_step_execution_id,
+                current_runtime_id="codex_cli",
+            )
         workspace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         evidence_path = workspace.parent / ".moonmind-workspace.json"
         if evidence_path.is_file():
@@ -909,15 +938,21 @@ class OmnigentOAuthHostRuntime:
             )
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 stream.write(json.dumps(evidence, sort_keys=True))
-        workspace = resolve_sandbox_workspace_locator(
-            locator,
-            workspace_root=self._workspace_root,
-            expected_workspace_id=expected_id,
-            owner_record=authoritative_record,
-            expected_workflow_id=current_workflow_id,
-            expected_step_execution_id=current_step_execution_id,
-            must_exist=True,
-        )
+        if isinstance(locator, SandboxWorkspaceLocator):
+            workspace = resolve_sandbox_workspace_locator(
+                locator,
+                workspace_root=self._workspace_root,
+                expected_workspace_id=expected_id,
+                owner_record=authoritative_record,
+                expected_workflow_id=current_workflow_id,
+                expected_step_execution_id=current_step_execution_id,
+                must_exist=True,
+            )
+        elif not workspace.is_dir():
+            raise OmnigentOAuthHostError(
+                "authorized managed workspace is unavailable",
+                code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
         return workspace
 
     async def _materialize_input_refs(

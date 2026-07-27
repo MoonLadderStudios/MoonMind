@@ -1,11 +1,14 @@
 import hashlib
 import json
 import subprocess
+from datetime import UTC, datetime
 
 import pytest
 
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -69,6 +72,8 @@ async def test_normal_workflow_materializes_owned_repository_once(tmp_path) -> N
         (workspace.parent / ".moonmind-workspace.json").read_text(encoding="utf-8")
     )
     assert evidence["sourceCommit"] == source_commit
+    assert evidence["sourceIdentity"] == str(source)
+    assert "issueRef" not in evidence
     assert evidence["inputRefs"] == [
         "artifact:attachment-1",
         "checkpoint:restore-1",
@@ -104,6 +109,88 @@ async def test_normal_workflow_materializes_owned_repository_once(tmp_path) -> N
     )
     assert retry == workspace
     assert (retry / "dirty.txt").read_text(encoding="utf-8") == "preserve me"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_restored_managed_workspace_is_adopted_in_place(tmp_path) -> None:
+    authority = tmp_path / "managed_runtime"
+    workspace = authority / "runs" / "agent-run-1" / "repo"
+    workspace.mkdir(parents=True)
+    (workspace / "restored.txt").write_text("checkpoint state", encoding="utf-8")
+    store = ManagedRunStore(authority / "records")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1",
+            workflowId="workflow-1",
+            agentId="omnigent",
+            runtimeId="codex_cli",
+            status="running",
+            startedAt=datetime.now(UTC),
+            workspacePath=str(workspace),
+        )
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=None,
+        workspace_root=tmp_path,
+        managed_run_store=store,
+    )
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={
+            "kind": "managed_runtime",
+            "runtimeId": "codex_cli",
+            "agentRunId": "agent-run-1",
+            "relativePath": ".",
+        },
+        current_workflow_id="workflow-1",
+        current_step_execution_id="agent-run-1",
+        workspace_spec={"sourceIdentity": "checkpoint:boundary-1"},
+    )
+
+    assert resolved == workspace
+    assert (resolved / "restored.txt").read_text(encoding="utf-8") == "checkpoint state"
+    evidence = json.loads(
+        (workspace.parent / ".moonmind-workspace.json").read_text(encoding="utf-8")
+    )
+    assert evidence["sourceIdentity"] == "checkpoint:boundary-1"
+    assert evidence["workspaceLocator"]["kind"] == "managed_runtime"
+
+
+@pytest.mark.asyncio
+async def test_managed_workspace_rejects_runtime_identity_mismatch(tmp_path) -> None:
+    authority = tmp_path / "managed_runtime"
+    workspace = authority / "runs" / "agent-run-1" / "repo"
+    workspace.mkdir(parents=True)
+    store = ManagedRunStore(authority / "records")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1",
+            agentId="omnigent",
+            runtimeId="claude_code",
+            status="running",
+            startedAt=datetime.now(UTC),
+            workspacePath=str(workspace),
+        )
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=None,
+        workspace_root=tmp_path,
+        managed_run_store=store,
+    )
+
+    with pytest.raises(ValueError, match="WORKSPACE_IDENTITY_MISMATCH"):
+        await runtime._prepare_workspace(
+            workspace_locator={
+                "kind": "managed_runtime",
+                "runtimeId": "claude_code",
+                "agentRunId": "agent-run-1",
+                "relativePath": ".",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="agent-run-1",
+        )
+
+    assert not (workspace.parent / ".moonmind-workspace.json").exists()
 
 
 @pytest.mark.asyncio

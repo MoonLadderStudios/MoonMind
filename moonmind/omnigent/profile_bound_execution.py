@@ -584,10 +584,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "repositoryMutationRequired": self._repository_mutation_required(
                         request
                     ),
+                    "requiredCapabilities": list(
+                        self._required_capabilities(request)
+                    ),
                 },
                 input_refs=tuple(request.input_refs),
             )
-            await emit(current_stage, "completed")
+            workspace_evidence = dict(preflight.get("workspaceEvidence") or {})
+            await emit(
+                current_stage,
+                "completed",
+                metadata={
+                    "workspaceResolution": workspace_evidence,
+                    "effectiveLaunchRef": effective_launch["snapshotRef"],
+                    "mountClasses": list(effective_launch.get("mountClasses") or ()),
+                },
+            )
             current_stage = "container_start"
             await emit(current_stage, "started")
             await emit(current_stage, "completed")
@@ -683,6 +695,23 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ),
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
+            )
+            result = result.model_copy(
+                update={
+                    "metadata": {
+                        **dict(result.metadata or {}),
+                        "workspaceResolution": workspace_evidence,
+                        "effectiveLaunchRef": effective_launch["snapshotRef"],
+                        "mountClasses": list(
+                            effective_launch.get("mountClasses") or ()
+                        ),
+                        "hostOwnership": {
+                            "hostLeaseRef": host_lease.lease_id,
+                            "hostBindingRef": binding.binding_ref,
+                        },
+                        "declaredOutputs": list(result.output_refs),
+                    }
+                }
             )
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"

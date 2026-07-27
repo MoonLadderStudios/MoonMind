@@ -1285,7 +1285,19 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     class Runtime:
         async def prepare_host(self, **_kwargs):
             actions.append("preflight")
-            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+            return {
+                "hostId": "host-1",
+                "workspacePath": "/workspaces/run",
+                "workspaceEvidence": {
+                    "sourceCommit": "a" * 40,
+                    "materializedInputRefs": [
+                        {
+                            "artifactRef": "artifact:input-1",
+                            "localPath": ".moonmind/inputs/1",
+                        }
+                    ],
+                },
+            }
 
         async def stop_host(self, **_kwargs):
             actions.append("host_cleanup")
@@ -1310,7 +1322,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             "workspace": "/workspaces/run",
         }
         actions.append("executed")
-        return AgentRunResult(summary="done")
+        return AgentRunResult(summary="done", outputRefs=["artifact:output-1"])
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -1356,6 +1368,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
+    assert result.metadata["workspaceResolution"]["sourceCommit"] == "a" * 40
+    assert result.metadata["declaredOutputs"] == ["artifact:output-1"]
+    assert result.metadata["hostOwnership"]["hostLeaseRef"] == "host-lease-1"
+    assert result.metadata["effectiveLaunchRef"].startswith(
+        "omnigent-launch:sha256:"
+    )
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
