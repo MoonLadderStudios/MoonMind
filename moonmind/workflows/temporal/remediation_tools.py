@@ -368,21 +368,23 @@ class RemediationEvidenceToolService:
             artifact_id=artifact_id,
             principal=principal,
         )
-        end = min(len(payload), start + bounded_size)
-        content = payload[start:end]
         content_type = str(artifact.content_type or "application/octet-stream")
         if content_type.startswith("text/") or content_type in {
             "application/json",
             "application/x-ndjson",
         }:
-            decoded = content.decode("utf-8", errors="replace")
-            content = (_redact_text(decoded) or "").encode("utf-8")
+            decoded = payload.decode("utf-8", errors="replace")
+            safe_payload = (_redact_text(decoded) or "").encode("utf-8")
+        else:
+            safe_payload = payload
+        end = min(len(safe_payload), start + bounded_size)
+        content = safe_payload[start:end]
         return RemediationArtifactReadResult(
             artifact_id=artifact_id,
             content_type=content_type,
             content=content,
-            next_cursor=end if end < len(payload) else None,
-            truncated=end < len(payload),
+            next_cursor=end if end < len(safe_payload) else None,
+            truncated=end < len(safe_payload),
         )
 
     async def read_evidence_class(

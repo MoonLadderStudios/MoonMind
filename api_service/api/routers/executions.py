@@ -73,6 +73,11 @@ from moonmind.statuses.compat import (
 )
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
+from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.temporal.remediation_tools import (
+    RemediationEvidenceToolError,
+    RemediationEvidenceToolService,
+)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -654,6 +659,14 @@ class RemediationApprovalDecisionResponse(BaseModel):
     workflowId: str
     requestId: str
     decision: str
+
+
+class RemediationEvidencePageModel(BaseModel):
+    evidenceClass: str
+    status: str
+    items: list[Any]
+    nextCursor: int | None = None
+    degradedReason: str | None = None
 
 
 class PublicationRecoveryResponse(BaseModel):
@@ -11534,6 +11547,92 @@ async def list_execution_remediations(
         direction=direction,
         items=[_serialize_remediation_link_summary(link) for link in links],
     )
+
+
+@router.get(
+    "/{workflow_id}/remediation/evidence/{evidence_class}",
+    response_model=RemediationEvidencePageModel,
+)
+async def read_remediation_evidence_class(
+    workflow_id: str,
+    evidence_class: str,
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> RemediationEvidencePageModel:
+    """Read one bounded evidence class through the remediation authorization link."""
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=get_temporal_artifact_service(session),
+    )
+    try:
+        page = await tools.read_evidence_class(
+            remediation_workflow_id=workflow_id,
+            evidence_class=evidence_class,
+            cursor=cursor,
+            limit=limit,
+            principal=_owner_id(user) or "service:remediation-tools",
+        )
+    except RemediationEvidenceToolError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_remediation_evidence_read", "message": str(exc)},
+        ) from exc
+    return RemediationEvidencePageModel(
+        evidenceClass=page.evidence_class,
+        status=page.status,
+        items=list(page.items),
+        nextCursor=page.next_cursor,
+        degradedReason=page.degraded_reason,
+    )
+
+
+@router.get("/{workflow_id}/remediation/artifacts/content")
+async def read_remediation_artifact_content(
+    workflow_id: str,
+    artifact_ref: str = Query(..., min_length=1),
+    cursor: int = Query(0, ge=0),
+    max_bytes: int = Query(65536, ge=1, le=1024 * 1024),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Return a redacted, bounded slice without exposing storage coordinates."""
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=get_temporal_artifact_service(session),
+    )
+    try:
+        result = await tools.read_target_artifact_bounded(
+            remediation_workflow_id=workflow_id,
+            artifact_ref=artifact_ref,
+            cursor=cursor,
+            max_bytes=max_bytes,
+            principal=_owner_id(user) or "service:remediation-tools",
+        )
+    except RemediationEvidenceToolError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_remediation_artifact_read", "message": str(exc)},
+        ) from exc
+    headers = {
+        "X-MoonMind-Artifact-Id": result.artifact_id,
+        "X-MoonMind-Truncated": str(result.truncated).lower(),
+    }
+    if result.next_cursor is not None:
+        headers["X-MoonMind-Next-Cursor"] = str(result.next_cursor)
+    return Response(
+        content=result.content,
+        media_type=result.content_type,
+        headers=headers,
+    )
+
 
 @router.post(
     "/{workflow_id}/remediation/checkpoint-branches",

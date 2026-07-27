@@ -287,6 +287,7 @@ class RemediationContextBuilder:
         omnigent = await self._omnigent_evidence_payload(
             target_record=target_record,
             target_evidence=target_evidence,
+            remediation_workflow_id=link.remediation_workflow_id,
         )
         omnigent_availability = self._omnigent_availability(omnigent)
         unavailable_classes.extend(
@@ -349,6 +350,7 @@ class RemediationContextBuilder:
         *,
         target_record: db_models.TemporalExecutionCanonicalRecord,
         target_evidence: Mapping[str, Any],
+        remediation_workflow_id: str,
     ) -> dict[str, Any]:
         """Project the bounded, secret-free Omnigent control-plane evidence index."""
 
@@ -424,6 +426,75 @@ class RemediationContextBuilder:
                 )
             ).all()
         )
+        branch_ids = [item.branch_id for item in branches]
+        branch_turns: list[db_models.WorkflowCheckpointBranchTurn] = []
+        branch_artifacts: list[db_models.WorkflowCheckpointBranchArtifact] = []
+        branch_operations: list[db_models.WorkflowCheckpointBranchOperation] = []
+        if branch_ids:
+            branch_turns = list(
+                (
+                    await self._session.scalars(
+                        select(db_models.WorkflowCheckpointBranchTurn)
+                        .where(
+                            db_models.WorkflowCheckpointBranchTurn.branch_id.in_(
+                                branch_ids
+                            )
+                        )
+                        .order_by(
+                            db_models.WorkflowCheckpointBranchTurn.created_at.desc()
+                        )
+                        .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                    )
+                ).all()
+            )
+            branch_artifacts = list(
+                (
+                    await self._session.scalars(
+                        select(db_models.WorkflowCheckpointBranchArtifact)
+                        .where(
+                            db_models.WorkflowCheckpointBranchArtifact.branch_id.in_(
+                                branch_ids
+                            )
+                        )
+                        .order_by(
+                            db_models.WorkflowCheckpointBranchArtifact.created_at.desc()
+                        )
+                        .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                    )
+                ).all()
+            )
+            branch_operations = list(
+                (
+                    await self._session.scalars(
+                        select(db_models.WorkflowCheckpointBranchOperation)
+                        .where(
+                            db_models.WorkflowCheckpointBranchOperation.workflow_id
+                            == target_record.workflow_id
+                        )
+                        .order_by(
+                            db_models.WorkflowCheckpointBranchOperation.created_at.desc()
+                        )
+                        .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                    )
+                ).all()
+            )
+        prior_remediation_links = list(
+            (
+                await self._session.scalars(
+                    select(db_models.TemporalExecutionRemediationLink)
+                    .where(
+                        db_models.TemporalExecutionRemediationLink.target_workflow_id
+                        == target_record.workflow_id,
+                        db_models.TemporalExecutionRemediationLink.remediation_workflow_id
+                        != remediation_workflow_id,
+                    )
+                    .order_by(
+                        db_models.TemporalExecutionRemediationLink.created_at.desc()
+                    )
+                    .limit(MAX_REMEDIATION_CONTEXT_INDEX_ITEMS)
+                )
+            ).all()
+        )
 
         event_pages: dict[str, list[dict[str, Any]]] = {}
         for event in events:
@@ -440,6 +511,119 @@ class RemediationContextBuilder:
             )
 
         durable = _safe_evidence_index(target_evidence)
+        capture_resources = [
+            {
+                "bridgeSessionId": row.bridge_session_id,
+                "captureManifestRef": _artifact_ref_payload(
+                    row.capture_manifest_ref, kind="capture_manifest"
+                ),
+                "initialSnapshotRef": _artifact_ref_payload(
+                    row.initial_snapshot_ref, kind="initial_snapshot"
+                ),
+                "finalSnapshotRef": _artifact_ref_payload(
+                    row.final_snapshot_ref, kind="final_snapshot"
+                ),
+                "rawEventJournalRef": _artifact_ref_payload(
+                    row.raw_events_ref, kind="raw_event_journal"
+                ),
+                "normalizedEventJournalRef": _artifact_ref_payload(
+                    row.normalized_events_ref, kind="normalized_event_journal"
+                ),
+            }
+            for row in bridge_sessions
+            if any(
+                (
+                    row.capture_manifest_ref,
+                    row.initial_snapshot_ref,
+                    row.final_snapshot_ref,
+                    row.raw_events_ref,
+                    row.normalized_events_ref,
+                )
+            )
+        ]
+        checkpoint_recovery = [
+            {
+                "bridgeSessionId": row.bridge_session_id,
+                "externalStateRef": _artifact_ref_payload(
+                    row.external_state_ref, kind="external_state"
+                ),
+                "workspaceAuthority": _safe_policy_mapping(
+                    (row.metadata_ or {}).get("workspaceAuthority")
+                ),
+                "recoveryDecision": _safe_policy_mapping(
+                    (row.metadata_ or {}).get("recoveryDecision")
+                ),
+                "resumabilityReasons": _redacted_sequence(
+                    (row.metadata_ or {}).get("resumabilityReasons")
+                ),
+            }
+            for row in bridge_sessions
+            if row.external_state_ref
+            or any(
+                key in (row.metadata_ or {})
+                for key in (
+                    "workspaceAuthority",
+                    "recoveryDecision",
+                    "resumabilityReasons",
+                )
+            )
+        ]
+        incident_cleanup = [
+            {
+                "bridgeSessionId": row.bridge_session_id,
+                "status": row.status,
+                "diagnosticsRef": _artifact_ref_payload(
+                    row.diagnostics_ref, kind="diagnostics"
+                ),
+                "terminalRefs": {
+                    key: ref
+                    for key, value in (row.terminal_refs or {}).items()
+                    if (
+                        ref := _artifact_ref_payload(
+                            value, kind=str(key)
+                        )
+                    )
+                    is not None
+                },
+            }
+            for row in bridge_sessions
+            if row.diagnostics_ref or row.terminal_refs
+        ]
+        policy_approvals = [
+            {
+                "bridgeSessionId": row.bridge_session_id,
+                "effectiveLaunchSnapshot": _safe_policy_mapping(
+                    row.effective_launch_snapshot_json
+                ),
+            }
+            for row in bridge_sessions
+            if row.effective_launch_snapshot_json
+        ]
+        prior_remediation = [
+            {
+                "remediationWorkflowId": row.remediation_workflow_id,
+                "remediationRunId": row.remediation_run_id,
+                "targetRunId": row.target_run_id,
+                "status": row.status,
+                "outcome": row.outcome,
+                "latestActionSummary": _redacted_optional_text(
+                    row.latest_action_summary
+                ),
+                "contextArtifactRef": _artifact_ref_payload(
+                    row.context_artifact_ref, kind="remediation_context"
+                ),
+                "updatedAt": _timestamp_string(row.updated_at),
+            }
+            for row in prior_remediation_links
+        ]
+        durable = {
+            **durable,
+            "captureResources": capture_resources,
+            "checkpointRecovery": checkpoint_recovery,
+            "incidentCleanup": incident_cleanup,
+            "policyApprovals": policy_approvals,
+            "priorRemediation": prior_remediation,
+        }
         return {
             "bridgeSessions": [
                 {
@@ -534,6 +718,78 @@ class RemediationContextBuilder:
                         "baseCommit": row.git_base_commit,
                         "workBranch": row.git_work_branch,
                     },
+                    "currentHead": {
+                        "checkpointRef": row.current_head_checkpoint_ref,
+                        "version": row.current_head_version,
+                        "attemptOrdinal": row.current_head_attempt_ordinal,
+                        "commit": row.current_head_commit,
+                    },
+                    "remediation": {
+                        "loopId": row.remediation_loop_id,
+                        "headStatus": row.remediation_head_status,
+                        "latestVerificationRef": _artifact_ref_payload(
+                            row.latest_verification_ref, kind="verification"
+                        ),
+                        "latestVerificationVerdict": row.latest_verification_verdict,
+                    },
+                    "comparisonPromotion": _safe_policy_mapping(
+                        row.promotion_evidence
+                    ),
+                    "artifactRefs": {
+                        key: ref
+                        for key, value in (row.artifact_refs or {}).items()
+                        if (
+                            ref := _artifact_ref_payload(value, kind=str(key))
+                        )
+                        is not None
+                    },
+                    "turns": [
+                        {
+                            "branchTurnId": turn.branch_turn_id,
+                            "parentTurnId": turn.parent_turn_id,
+                            "status": turn.status,
+                            "sourceCheckpointRef": turn.source_checkpoint_ref,
+                            "sourceStateRef": turn.source_state_ref,
+                            "contextBundleRef": _artifact_ref_payload(
+                                turn.context_bundle_ref, kind="context_bundle"
+                            ),
+                            "workspaceRestoreRef": _artifact_ref_payload(
+                                turn.workspace_restore_ref, kind="workspace_restore"
+                            ),
+                            "stepExecutionManifestRef": _artifact_ref_payload(
+                                turn.step_execution_manifest_ref,
+                                kind="step_execution_manifest",
+                            ),
+                            "runtimeAgentRunId": turn.runtime_agent_run_id,
+                        }
+                        for turn in branch_turns
+                        if turn.branch_id == row.branch_id
+                    ],
+                    "evidenceRefs": [
+                        {
+                            "branchTurnId": artifact.branch_turn_id,
+                            "kind": artifact.artifact_kind,
+                            "artifactRef": _artifact_ref_payload(
+                                artifact.artifact_ref,
+                                kind=artifact.artifact_kind,
+                            ),
+                            "digest": artifact.digest,
+                        }
+                        for artifact in branch_artifacts
+                        if artifact.branch_id == row.branch_id
+                    ],
+                    "operations": [
+                        {
+                            "operation": operation.operation,
+                            "branchTurnId": operation.branch_turn_id,
+                            "response": _safe_policy_mapping(
+                                operation.response_payload
+                            ),
+                            "createdAt": _timestamp_string(operation.created_at),
+                        }
+                        for operation in branch_operations
+                        if operation.branch_id == row.branch_id
+                    ],
                 }
                 for row in branches
             ],
@@ -544,7 +800,17 @@ class RemediationContextBuilder:
                 "bridgeEventCount": len(events),
                 "truncated": any(
                     len(items) >= MAX_REMEDIATION_CONTEXT_INDEX_ITEMS
-                    for items in (bridge_sessions, events, provider_leases, host_leases, branches)
+                    for items in (
+                        bridge_sessions,
+                        events,
+                        provider_leases,
+                        host_leases,
+                        branches,
+                        branch_turns,
+                        branch_artifacts,
+                        branch_operations,
+                        prior_remediation_links,
+                    )
                 ),
             },
         }
@@ -1850,6 +2116,15 @@ def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
         if safe_item is not None:
             sanitized[key] = safe_item
     return sanitized
+
+def _redacted_sequence(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [
+        redacted
+        for item in value[:MAX_REMEDIATION_CONTEXT_INDEX_ITEMS]
+        if (redacted := _redacted_optional_text(item)) is not None
+    ]
 
 def _safe_evidence_index(value: Mapping[str, Any]) -> dict[str, Any]:
     """Copy bounded declarative evidence classes while filtering unsafe values."""
