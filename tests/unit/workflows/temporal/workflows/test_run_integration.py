@@ -75,6 +75,27 @@ def _loop_controller_node(loop: dict[str, Any]) -> dict[str, Any]:
         "annotations": {"remediationLoop": loop},
     }
 
+
+def _remediation_tool(tool_type: str = "skill") -> dict[str, Any]:
+    return {
+        "type": tool_type,
+        "name": "auto",
+        "inputs": {"instructions": "Fix the remaining verified gaps."},
+    }
+
+
+def _verification_tool(
+    tool_type: str = "skill",
+    *,
+    name: str = "moonspec-verify",
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = {
+        "instructions": "Verify the remediated candidate.",
+    }
+    if name == "auto":
+        inputs["selectedSkill"] = "moonspec-verify"
+    return {"type": tool_type, "name": name, "inputs": inputs}
+
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
     return json.dumps({
@@ -3440,8 +3461,8 @@ def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {
             "hardMaxAttempts": 6,
@@ -3481,11 +3502,14 @@ def test_materialized_loop_attempts_dispatch_on_the_selected_managed_runtime(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "remediationTool": _remediation_tool("agent_runtime"),
         "verificationTool": {
             "type": "agent_runtime",
             "name": "auto",
-            "inputs": {"selectedSkill": "moonspec-verify"},
+            "inputs": {
+                "selectedSkill": "moonspec-verify",
+                "instructions": "Verify the remediated candidate.",
+            },
         },
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
@@ -3519,6 +3543,7 @@ def test_materialized_loop_attempts_dispatch_on_the_selected_managed_runtime(
         assert request.agent_id == "codex_cli"
         assert request.agent_kind == "managed"
         assert request.execution_profile_ref == "codex_openai_oauth"
+        assert request.instruction_ref == node["inputs"]["instructions"]
 
 
 def test_loop_attempt_materialization_requires_a_resolved_controller_runtime(
@@ -3527,8 +3552,8 @@ def test_loop_attempt_materialization_requires_a_resolved_controller_runtime(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "agent_runtime", "name": "auto"},
-        "verificationTool": {"type": "agent_runtime", "name": "auto"},
+        "remediationTool": _remediation_tool("agent_runtime"),
+        "verificationTool": _verification_tool("agent_runtime", name="auto"),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -3565,8 +3590,8 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -3622,8 +3647,8 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -3711,8 +3736,8 @@ async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -3763,8 +3788,8 @@ async def test_dynamic_verifier_inserts_attempt_before_handoff_nodes(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "agent_runtime", "name": "auto"},
-        "verificationTool": {"type": "agent_runtime", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool("agent_runtime"),
+        "verificationTool": _verification_tool("agent_runtime"),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 2},
         "terminalPolicy": {
@@ -3814,8 +3839,8 @@ async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 1},
         "terminalPolicy": {
@@ -3861,8 +3886,8 @@ async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -3949,11 +3974,18 @@ def _dynamic_loop_spec_payload() -> dict[str, Any]:
     return {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "remediationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {"instructions": "Fix the remaining verified gaps."},
+        },
         "verificationTool": {
             "type": "agent_runtime",
             "name": "auto",
-            "inputs": {"selectedSkill": "moonspec-verify"},
+            "inputs": {
+                "selectedSkill": "moonspec-verify",
+                "instructions": "Verify the remediated candidate.",
+            },
         },
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
@@ -4603,8 +4635,8 @@ def test_dynamic_loop_restart_at_each_nonterminal_phase_preserves_identity_and_e
     mock_run_workflow._remediation_loop_spec = RemediationLoopSpec.model_validate(
         {
             "loopId": "loop",
-            "remediationTool": {"type": "skill", "name": "auto"},
-            "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+            "remediationTool": _remediation_tool(),
+            "verificationTool": _verification_tool(),
             "workspacePolicy": "continue_from_loop_head",
             "budgets": {"hardMaxAttempts": 6},
             "terminalPolicy": {
@@ -4808,8 +4840,8 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
     loop = {
         "kind": "remediation_loop",
         "loopId": "issue-implementation-remediation",
-        "remediationTool": {"type": "skill", "name": "auto"},
-        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "remediationTool": _remediation_tool(),
+        "verificationTool": _verification_tool(),
         "workspacePolicy": "continue_from_loop_head",
         "budgets": {"hardMaxAttempts": 6},
         "terminalPolicy": {
@@ -4941,8 +4973,8 @@ async def test_duplicate_verifier_delivery_cannot_admit_an_attempt_twice(
     mock_run_workflow._remediation_loop_spec = RemediationLoopSpec.model_validate(
         {
             "loopId": "loop",
-            "remediationTool": {"type": "skill", "name": "auto"},
-            "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+            "remediationTool": _remediation_tool(),
+            "verificationTool": _verification_tool(),
             "workspacePolicy": "continue_from_loop_head",
             "budgets": {"hardMaxAttempts": 6},
             "terminalPolicy": {

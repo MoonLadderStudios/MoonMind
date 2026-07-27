@@ -1519,6 +1519,7 @@ async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
         assert request.agent_kind == expected["agentKind"]
         assert request.agent_id == expected["agentId"]
         assert request.execution_profile_ref == expected["executionProfileRef"]
+        assert request.instruction_ref == node["inputs"]["instructions"]
         assert request.parameters["model"] == expected["model"]
         assert request.parameters["effort"] == expected["effort"]
 
@@ -1526,3 +1527,42 @@ async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
     # which no provider can satisfy. Keep that boundary failing loudly.
     with pytest.raises(ValueError, match=expected["rejectedDispatchError"]):
         await agent_run_module.resolve_adapter_metadata(expected["rejectedAgentId"])
+
+
+async def test_instructionless_remediation_verifier_is_rejected_before_dispatch() -> None:
+    """Replay mm:35d1ad7b at remediation-loop controller admission."""
+
+    replay_id = "remediation-loop-missing-verifier-instructions"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+
+    with pytest.raises(ValueError, match=expected["error"]):
+        parent._initialize_remediation_loop_controller(
+            ordered_nodes=[manifest["controllerPlanNode"]]
+        )
+
+
+async def test_instructionless_inflight_remediation_loop_remains_replayable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The admission invariant must not rewrite an already-recorded history."""
+
+    manifest = load_replay(
+        "remediation-loop-missing-verifier-instructions",
+        "manifest.json",
+    )
+    parent = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: SimpleNamespace(run_id="inflight-replay-run"),
+    )
+
+    parent._initialize_remediation_loop_controller(
+        ordered_nodes=[manifest["controllerPlanNode"]],
+        require_agent_instructions=False,
+    )
+
+    assert parent._remediation_loop_spec is not None
+    assert parent._remediation_loop_spec.loop_id == "issue-implementation-remediation"

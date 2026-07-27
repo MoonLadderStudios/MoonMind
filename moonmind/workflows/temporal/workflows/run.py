@@ -159,6 +159,7 @@ with workflow.unsafe.imports_passed_through():
         should_continue_as_new,
         start_remediation_attempt,
         start_verification,
+        validate_remediation_loop_agent_instructions,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -730,6 +731,12 @@ RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = (
 )
 RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
     "run-dynamic-remediation-loop-controller-v1"
+)
+# New controller admissions require executable instructions on both agent steps.
+# Gate the workflow-side validation so histories admitted before this invariant
+# keep replaying their recorded command sequence.
+RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH = (
+    "run-remediation-loop-agent-instructions-v1"
 )
 # Explicit cutover from the legacy, statically expanded remediation history to
 # the compact controller-owned continuation schema.  Keep this separate from
@@ -3824,6 +3831,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         ordered_nodes: Sequence[Mapping[str, Any]],
+        require_agent_instructions: bool = True,
     ) -> None:
         """Freeze the one authored loop contract into compact workflow state."""
 
@@ -3840,6 +3848,8 @@ class MoonMindRunWorkflow:
         if len(controllers) != 1:
             raise ValueError("a plan must contain at most one remediation loop")
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
+        if require_agent_instructions:
+            validate_remediation_loop_agent_instructions(spec)
         # Loop tools are authored as ``auto``: they inherit the run's resolved
         # runtime from the controller plan node so every materialized attempt
         # routes exactly like the authored steps of the same run. An unresolvable
@@ -10477,6 +10487,9 @@ class MoonMindRunWorkflow:
         if workflow.patched(RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH):
             self._initialize_remediation_loop_controller(
                 ordered_nodes=ordered_nodes,
+                require_agent_instructions=workflow.patched(
+                    RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH
+                ),
             )
             self._restore_remediation_loop_continuation(
                 ordered_nodes=ordered_nodes,

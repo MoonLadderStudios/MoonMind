@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     should_continue_as_new,
     start_remediation_attempt,
     start_verification,
+    validate_remediation_loop_agent_instructions,
 )
 
 _LOOP_RUNTIME = {
@@ -34,8 +35,16 @@ def _spec(max_attempts: int = 2) -> RemediationLoopSpec:
         {
             "kind": "remediation_loop",
             "loopId": "issue-implementation-remediation",
-            "remediationTool": {"type": "skill", "name": "auto"},
-            "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+            "remediationTool": {
+                "type": "skill",
+                "name": "auto",
+                "inputs": {"instructions": "Fix the remaining verified gaps."},
+            },
+            "verificationTool": {
+                "type": "skill",
+                "name": "moonspec-verify",
+                "inputs": {"instructions": "Verify the remediated candidate."},
+            },
             "workspacePolicy": "continue_from_loop_head",
             "budgets": {
                 "hardMaxAttempts": max_attempts,
@@ -228,6 +237,20 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
     assert remediation["inputs"]["selectedSkill"] == "auto"
     assert verification["inputs"]["selectedSkill"] == "moonspec-verify"
     assert verification["inputs"]["readOnlyWorkspaceHead"] is True
+
+
+@pytest.mark.parametrize("tool_name", ["remediationTool", "verificationTool"])
+def test_remediation_loop_rejects_instructionless_agent_steps(tool_name: str) -> None:
+    payload = _spec().model_dump(by_alias=True, mode="json")
+    payload[tool_name]["inputs"].pop("instructions")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{tool_name}\.inputs\.instructions is required",
+    ):
+        validate_remediation_loop_agent_instructions(
+            RemediationLoopSpec.model_validate(payload)
+        )
 
 
 def test_materialized_attempts_route_to_the_runs_resolved_runtime() -> None:
