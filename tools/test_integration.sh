@@ -92,6 +92,9 @@ export MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1
 "${COMPOSE_CMD[@]}" --project-name "${TEST_COMPOSE_PROJECT_NAME}-egress" \
   -f "$EGRESS_COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" \
   run --rm conformance-runner
+"${COMPOSE_CMD[@]}" --project-name "${TEST_COMPOSE_PROJECT_NAME}-egress" \
+  -f "$EGRESS_COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" \
+  run --rm managed-helper
 
 # Build pytest service
 "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" build pytest

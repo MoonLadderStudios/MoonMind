@@ -1,4 +1,13 @@
 services:
+  dns-fixture:
+    image: python:3.13-alpine
+    command: ["python", "/dns_fixture.py"]
+    volumes:
+      - ./tests/integration/security/dns_fixture.py:/dns_fixture.py:ro
+    networks:
+      fixture-network:
+        ipv4_address: 198.18.0.53
+
   allowed-origin:
     image: nginx:1.27-alpine
     command:
@@ -27,6 +36,7 @@ services:
       - restricted-network
     depends_on:
       - allowed-origin
+      - dns-fixture
 
   conformance-runner:
     image: curlimages/curl:8.12.1
@@ -43,6 +53,26 @@ services:
     volumes:
       - ./tests/integration/security/run_conformance.sh:/run_conformance.sh:ro
     command: ["/bin/sh", "/run_conformance.sh"]
+    networks:
+      - restricted-network
+    depends_on:
+      - egress-proxy
+
+  managed-helper:
+    image: curlimages/curl:8.12.1
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: ""
+    volumes:
+      - ./tests/integration/security/run_helper_conformance.sh:/run_helper_conformance.sh:ro
+    command: ["/bin/sh", "/run_helper_conformance.sh"]
     networks:
       - restricted-network
     depends_on:

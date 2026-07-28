@@ -30,6 +30,16 @@ expect_denied https://[::1]/
 expect_denied https://[::ffff:127.0.0.1]/
 expect_denied https://allowed.test:444/
 expect_denied https://allowed.test/redirect-forbidden
+expect_denied https://cname.allowed.test/
+expect_denied https://mixed.allowed.test/
+
+# The DNS fixture returns the approved origin once, then rotates the same
+# reviewed name to loopback. Squid's one-second DNS TTL makes the second
+# request re-resolve the name at request time instead of trusting stale state.
+curl --proxy "$proxy" --insecure --fail --silent --max-time 4 \
+  https://rebind.allowed.test/health | grep -q approved
+sleep 2
+expect_denied https://rebind.allowed.test/
 
 # CONNECT is the sole accepted method and only to TLS port 443.
 if curl --proxy "$proxy" --request TRACE --fail --silent --max-time 4 \
@@ -44,5 +54,21 @@ if HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY=allowed.test \
   curl --insecure --fail --silent --max-time 4 \
   https://allowed.test/health >/dev/null 2>&1; then
   echo "direct proxy bypass unexpectedly allowed" >&2
+  exit 1
+fi
+
+# The restricted bridge gateway is not an egress path, no host-gateway alias is
+# injected, and the unprivileged workload cannot alter routes or namespaces.
+expect_denied https://198.19.0.1/
+if getent hosts host.docker.internal >/dev/null 2>&1; then
+  echo "host-gateway alias unexpectedly present" >&2
+  exit 1
+fi
+if busybox route add default gw 198.19.0.1 >/dev/null 2>&1; then
+  echo "route mutation unexpectedly allowed" >&2
+  exit 1
+fi
+if test -S /var/run/docker.sock; then
+  echo "Docker socket unexpectedly available for secondary attachment" >&2
   exit 1
 fi
