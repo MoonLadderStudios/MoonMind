@@ -499,7 +499,9 @@ class OmnigentPolicyVersion(Base):
     policy_id: Mapped[str] = mapped_column(ForeignKey("omnigent_policies.policy_id"), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
-    document_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False)
+    # Deliberately not MutableDict: document authority is append-only. Lifecycle
+    # changes are recorded separately and never dirty this JSON value in place.
+    document_json: Mapped[dict[str, Any]] = mapped_column(_json_variant(), nullable=False)
     digest: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     parent_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     clone_source_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -514,6 +516,27 @@ class OmnigentPolicyVersion(Base):
     compatibility_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
     rollout_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
     env_fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class OmnigentPolicyEvent(Base):
+    """Append-only audit event for lifecycle and default-selection changes."""
+
+    __tablename__ = "omnigent_policy_events"
+    __table_args__ = (
+        Index("ix_omnigent_policy_events_policy_created", "policy_id", "created_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("omnigent_policies.policy_id"), nullable=False
+    )
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(_json_variant(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class OmnigentBridgeSessionEvent(Base):

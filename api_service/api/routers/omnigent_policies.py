@@ -17,6 +17,7 @@ from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
     PolicyNotFound,
+    validate_policy,
 )
 from api_service.services.settings_catalog import has_settings_permission
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
@@ -96,6 +97,41 @@ async def list_versions(policy_id: str, session: AsyncSession = Depends(get_asyn
         return {"items": [_version_json(row) for row in await OmnigentPolicyService(session).versions(policy_id)]}
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/{policy_id}/versions/{version}/validate")
+async def validate_version(policy_id: str, version: int, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
+    _require(user, "settings.system.write")
+    service = OmnigentPolicyService(session)
+    try:
+        row = await service.get_version(policy_id, version)
+    except PolicyNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    validation, compatibility = validate_policy(PolicyDocument.model_validate(row.document_json))
+    # Validation is derived evidence, not document authority. Revalidation is
+    # explicit so operators can inspect deployment drift before activation.
+    row.validation_json = validation
+    row.compatibility_json = compatibility
+    await session.commit()
+    return _version_json(row)
+
+
+@router.get("/{policy_id}/audit")
+async def policy_audit(policy_id: str, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
+    _require(user, "settings.catalog.read")
+    try:
+        events = await OmnigentPolicyService(session).audit(policy_id)
+    except PolicyNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"items": [{
+        "eventId": str(event.event_id),
+        "policyId": event.policy_id,
+        "version": event.version,
+        "type": event.event_type,
+        "actor": event.actor,
+        "detail": event.detail_json,
+        "createdAt": event.created_at,
+    } for event in events]}
 
 
 @router.post("/{policy_id}/versions", status_code=201)

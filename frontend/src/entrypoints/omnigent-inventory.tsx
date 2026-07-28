@@ -16,6 +16,16 @@ type InventoryRow = {
   validation?: { valid?: boolean; diagnostics?: Array<{ code: string; message: string }> };
   document?: Record<string, unknown>;
 };
+type PolicyVersion = {
+  policyId: string;
+  version: number;
+  ref: string;
+  state: string;
+  digest: string;
+  document: Record<string, unknown>;
+  validation: { valid?: boolean; diagnostics?: Array<{ code: string; path?: string; message: string }> };
+};
+type AuditEvent = { eventId: string; version: number | null; type: string; actor: string; createdAt: string };
 
 function text(record: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
@@ -43,7 +53,11 @@ function compactRows(payload: unknown): InventoryRow[] {
       summary: text(row, 'description', 'summary', 'scope') || 'No summary provided.',
       freshness,
       formattedFreshness: freshness ? new Date(freshness).toLocaleString() : null,
-      version: typeof row.defaultVersion === 'number' ? row.defaultVersion : null,
+      version: typeof row.defaultVersion === 'number'
+        ? row.defaultVersion
+        : row.version && typeof row.version === 'object' && typeof (row.version as { version?: unknown }).version === 'number'
+          ? (row.version as { version: number }).version
+          : null,
       validation: row.version && typeof row.version === 'object'
         ? (row.version as { validation?: InventoryRow['validation'] }).validation : undefined,
       document: row.version && typeof row.version === 'object'
@@ -57,6 +71,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<InventoryRow | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<PolicyVersion | null>(null);
   const [notice, setNotice] = useState('');
   const [editor, setEditor] = useState<{ mode: 'create' | 'clone' | 'version'; id: string; name: string; document: string } | null>(null);
   const kind: InventoryKind = location.pathname === '/omnigent/policies'
@@ -83,6 +98,34 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       return compactRows(await response.json());
     },
   });
+  const versions = useQuery({
+    queryKey: ['omnigent-policy-versions', selected?.id],
+    enabled: kind === 'policies' && Boolean(endpoint && selected),
+    queryFn: async () => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/versions`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Version history request failed (${response.status})`);
+      return (await response.json() as { items: PolicyVersion[] }).items;
+    },
+  });
+  const audit = useQuery({
+    queryKey: ['omnigent-policy-audit', selected?.id],
+    enabled: kind === 'policies' && Boolean(endpoint && selected),
+    queryFn: async () => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/audit`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Audit history request failed (${response.status})`);
+      return (await response.json() as { items: AuditEvent[] }).items;
+    },
+  });
+  const visibleVersion = selectedVersion ?? versions.data?.[0] ?? null;
+  const versionDiff = useQuery({
+    queryKey: ['omnigent-policy-diff', selected?.id, visibleVersion?.version, selected?.version],
+    enabled: Boolean(endpoint && selected && visibleVersion && selected.version && visibleVersion.version !== selected.version),
+    queryFn: async () => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/diff?from_version=${visibleVersion!.version}&to_version=${selected!.version}`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Version diff request failed (${response.status})`);
+      return response.json() as Promise<{ diff: string }>;
+    },
+  });
   const rows = (result.data ?? []).filter((row) =>
     `${row.name} ${row.status} ${row.summary}`.toLowerCase().includes(filter.toLowerCase()),
   );
@@ -98,6 +141,20 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     onSuccess: async (_, variables) => {
       setNotice(`${variables.row.name} is now ${variables.state}.`);
       await queryClient.invalidateQueries({ queryKey: ['omnigent-inventory', kind] });
+    },
+  });
+  const validate = useMutation({
+    mutationFn: async (version: PolicyVersion) => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(version.policyId)}/versions/${version.version}/validate`, {
+        method: 'POST', credentials: 'same-origin',
+      });
+      if (!response.ok) throw new Error(`Policy validation failed (${response.status})`);
+      return response.json() as Promise<PolicyVersion>;
+    },
+    onSuccess: async (version) => {
+      setSelectedVersion(version);
+      setNotice(version.validation.valid ? `${version.ref} is compatible.` : `${version.ref} needs attention.`);
+      await queryClient.invalidateQueries({ queryKey: ['omnigent-policy-versions', version.policyId] });
     },
   });
   const savePolicy = useMutation({
@@ -141,14 +198,23 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th>{kind === 'policies' ? <th>Actions</th> : null}</tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}{row.version ? `@${row.version}` : ''}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td>{kind === 'policies' ? <td><button type="button" onClick={() => setSelected(row)}>Inspect</button>{row.version ? <><button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button><button type="button" onClick={() => transition.mutate({ row, state: 'disabled' })}>Disable</button><button type="button" onClick={() => transition.mutate({ row, state: 'deprecated' })}>Deprecate</button></> : null}</td> : null}</tr>)}</tbody></table></div> : null}
       {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
-        <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => setSelected(null)}>Close</button></div>
-        <p>Validation: {selected.validation?.valid ? 'Valid' : 'Needs attention'}</p>
-        {selected.validation?.diagnostics?.map((diagnostic) => <p role="alert" key={diagnostic.code}>{diagnostic.code}: {diagnostic.message}</p>)}
+        <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
+        {versions.isError || audit.isError ? <p role="alert">{versions.error?.message ?? audit.error?.message}</p> : null}
+        {versions.data ? <div><h3>Version history</h3>{versions.data.map((version) =>
+          <button type="button" key={version.ref} aria-pressed={visibleVersion?.ref === version.ref}
+            onClick={() => setSelectedVersion(version)}>{version.ref} · {version.state}</button>)}</div> : <p role="status">Loading immutable history…</p>}
+        <p>Validation: {(visibleVersion?.validation ?? selected.validation)?.valid ? 'Valid' : 'Needs attention'}</p>
+        {(visibleVersion?.validation ?? selected.validation)?.diagnostics?.map((diagnostic) => <p role="alert" key={`${diagnostic.code}-${diagnostic.path}`}>{diagnostic.path ? `${diagnostic.path}: ` : ''}{diagnostic.code}: {diagnostic.message}</p>)}
         <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
-        <pre>{JSON.stringify(selected.document, null, 2)}</pre>
-        <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(selected.document, null, 2) })}>Edit as new version</button>
-        <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: JSON.stringify(selected.document, null, 2) })}>Clone</button>
-        <p>Audit history, dependent usage, activation impact, and normalized version diffs are available from this policy’s version API without exposing secret values or host paths.</p>
+        <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
+        {visibleVersion ? <button type="button" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</button> : null}
+        {visibleVersion && visibleVersion.version !== selected.version ? <button type="button" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</button> : null}
+        <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Edit as new version</button>
+        <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Clone</button>
+        {versionDiff.data ? <><h3>Normalized diff to current default</h3><pre>{versionDiff.data.diff || 'No document differences.'}</pre></> : null}
+        <h3>Audit history</h3>
+        {audit.data?.length ? <ol>{audit.data.map((event) => <li key={event.eventId}>{event.type} · version {event.version ?? 'identity'} · {event.actor}</li>)}</ol> : <p>No lifecycle events recorded.</p>}
+        <p>Activation is blocked when deployment compatibility diagnostics fail. Policy documents render references only; secret values and host paths are rejected by the API.</p>
       </section> : null}
       {editor ? <form className="omnigent-policy-editor" onSubmit={(event) => { event.preventDefault(); savePolicy.mutate(editor); }}>
         <h2>{editor.mode === 'version' ? 'Edit as immutable new version' : editor.mode === 'clone' ? 'Clone policy' : 'Create policy'}</h2>

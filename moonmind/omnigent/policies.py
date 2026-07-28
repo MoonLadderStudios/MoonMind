@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import StrEnum
-from typing import Any, Literal, Mapping
+from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,37 +22,166 @@ class PolicyState(StrEnum):
     SUPERSEDED = "superseded"
 
 
+Ref = Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$")]
+PositiveInt = Annotated[int, Field(gt=0)]
+NonNegativeInt = Annotated[int, Field(ge=0)]
+
+
+class PolicySection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EndpointPolicy(PolicySection):
+    ref: Ref
+    bridge_modes: list[Literal["embedded", "proxy"]] = Field(alias="bridgeModes", min_length=1)
+
+
+class ExecutionPolicy(PolicySection):
+    profile_ref: Ref = Field(alias="profileRef")
+    harness: Ref
+    agent_identities: list[Ref] = Field(alias="agentIdentities", min_length=1)
+
+
+class HostPolicy(PolicySection):
+    mode: Literal["static_compose", "on_demand_docker"]
+    backend_ref: Ref = Field(alias="backendRef")
+    architectures: list[Literal["amd64", "arm64"]] = Field(min_length=1)
+    server_image_ref: Ref = Field(alias="serverImageRef")
+    host_image_ref: Ref = Field(alias="hostImageRef")
+
+
+class ResourcePolicy(PolicySection):
+    cpu_millis: PositiveInt = Field(alias="cpuMillis")
+    memory_mib: PositiveInt = Field(alias="memoryMiB")
+    processes: PositiveInt
+    timeout_seconds: PositiveInt = Field(alias="timeoutSeconds")
+    temporary_storage_mib: PositiveInt = Field(alias="temporaryStorageMiB")
+    concurrency: PositiveInt
+
+
+class NetworkPolicy(PolicySection):
+    attachment_ref: Ref = Field(alias="attachmentRef")
+    egress_profile_ref: Ref = Field(alias="egressProfileRef")
+
+
+class WorkspacePolicy(PolicySection):
+    allowed_classes: list[Ref] = Field(alias="allowedClasses", min_length=1)
+    repository_mutation: bool = Field(alias="repositoryMutation")
+    mount_classes: list[Literal["workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"]] = Field(alias="mountClasses")
+    runtime_uid: NonNegativeInt = Field(alias="runtimeUid")
+    runtime_gid: NonNegativeInt = Field(alias="runtimeGid")
+
+
+class ProviderProfilePolicy(PolicySection):
+    compatible_providers: list[Ref] = Field(alias="compatibleProviders", min_length=1)
+    queue_when_busy: bool = Field(alias="queueWhenBusy")
+
+
+class SessionPolicy(PolicySection):
+    create: bool
+    first_message: Literal["required", "optional", "forbidden"] = Field(alias="firstMessage")
+    continuation: bool
+    interruption: bool
+    cancellation: bool
+    cleanup: Literal["drain", "remove"]
+
+
+class CapturePolicy(PolicySection):
+    required: bool
+    artifact_classes: list[Ref] = Field(alias="artifactClasses", min_length=1)
+    max_log_bytes: PositiveInt = Field(alias="maxLogBytes")
+    redaction: Literal["required", "best_effort"]
+
+
+class CheckpointPolicy(PolicySection):
+    capture: bool
+    resume: bool
+    branch: bool
+    publication: Literal["deny", "approval", "allow"]
+    promotion: Literal["deny", "verified", "approval"]
+
+
+class RemediationPolicy(PolicySection):
+    actions: list[Ref]
+    risk_tiers: dict[str, Literal["low", "medium", "high", "critical"]] = Field(alias="riskTiers")
+    locks: bool
+    max_actions: NonNegativeInt = Field(alias="maxActions")
+    autonomous: bool
+
+
+class RagPolicy(PolicySection):
+    initial_scope: Ref = Field(alias="initialScope")
+    followup_scope: Ref = Field(alias="followupScope")
+    collection_refs: list[Ref] = Field(alias="collectionRefs")
+    token_budget: PositiveInt = Field(alias="tokenBudget")
+    fallback: Literal["deny", "empty"]
+    credential_ref: Ref = Field(alias="credentialRef")
+
+
+class ApprovalRule(PolicySection):
+    decision: Literal["allow", "approval_required", "deny"]
+    approval_class: Ref | None = Field(None, alias="approvalClass")
+    reviewer_rule: Ref | None = Field(None, alias="reviewerRule")
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def require_approval_authority(self) -> "ApprovalRule":
+        if self.decision == "approval_required" and not (
+            self.approval_class and self.reviewer_rule
+        ):
+            raise ValueError("approval_required needs approvalClass and reviewerRule")
+        return self
+
+
+class ApprovalPolicy(PolicySection):
+    actions: dict[str, ApprovalRule]
+
+
+class RetentionPolicy(PolicySection):
+    days: PositiveInt
+    deletion: Literal["after-expiry", "manual"]
+
+
+class RolloutPolicy(PolicySection):
+    cohort: Ref
+    gate: Ref
+    diagnostics: bool
+
+
 class PolicyDocument(BaseModel):
     """Complete authority consumed at all Omnigent enforcement boundaries."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1] = Field(1, alias="schemaVersion")
-    endpoint: dict[str, Any]
-    execution: dict[str, Any]
-    host: dict[str, Any]
-    resources: dict[str, Any]
-    network: dict[str, Any]
-    workspace: dict[str, Any]
-    provider_profile: dict[str, Any] = Field(alias="providerProfile")
-    session: dict[str, Any]
-    capture: dict[str, Any]
-    checkpoint: dict[str, Any]
-    remediation: dict[str, Any]
-    rag: dict[str, Any]
-    approvals: dict[str, Any]
-    retention: dict[str, Any]
-    rollout: dict[str, Any]
+    endpoint: EndpointPolicy
+    execution: ExecutionPolicy
+    host: HostPolicy
+    resources: ResourcePolicy
+    network: NetworkPolicy
+    workspace: WorkspacePolicy
+    provider_profile: ProviderProfilePolicy = Field(alias="providerProfile")
+    session: SessionPolicy
+    capture: CapturePolicy
+    checkpoint: CheckpointPolicy
+    remediation: RemediationPolicy
+    rag: RagPolicy
+    approvals: ApprovalPolicy
+    retention: RetentionPolicy
+    rollout: RolloutPolicy
 
     @model_validator(mode="after")
     def reject_ambient_authority(self) -> "PolicyDocument":
-        forbidden_keys = ("password", "token", "secretbody", "credentialbody")
+        forbidden_keys = {
+            "password", "accesstoken", "authtoken", "refreshtoken",
+            "secretbody", "credentialbody",
+        }
 
         def inspect(value: object, path: str = "") -> None:
             if isinstance(value, Mapping):
                 for key, item in value.items():
                     lowered = str(key).lower().replace("_", "")
-                    if any(marker in lowered for marker in forbidden_keys):
+                    if lowered in forbidden_keys:
                         raise ValueError(f"{path}{key} must be a reference, not secret material")
                     inspect(item, f"{path}{key}.")
             elif isinstance(value, list):
@@ -63,6 +192,15 @@ class PolicyDocument(BaseModel):
                     raise ValueError(f"{path[:-1]} contains a forbidden raw machine path")
 
         inspect(self.model_dump(by_alias=True, mode="json"))
+        if self.host.mode == "static_compose" and self.session.cleanup != "drain":
+            raise ValueError("static_compose requires session.cleanup=drain")
+        if self.host.mode == "on_demand_docker" and self.session.cleanup != "remove":
+            raise ValueError("on_demand_docker requires session.cleanup=remove")
+        if self.remediation.autonomous and not self.remediation.locks:
+            raise ValueError("autonomous remediation requires locks")
+        missing_tiers = set(self.remediation.actions) - set(self.remediation.risk_tiers)
+        if missing_tiers:
+            raise ValueError(f"remediation actions lack risk tiers: {sorted(missing_tiers)}")
         return self
 
 

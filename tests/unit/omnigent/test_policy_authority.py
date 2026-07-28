@@ -9,6 +9,7 @@ from moonmind.omnigent.policies import (
     document_digest,
     resolve_action,
 )
+from api_service.services.omnigent_policies import validate_policy
 
 
 def policy_document() -> dict:
@@ -75,3 +76,52 @@ def test_actions_resolve_deterministically_and_fail_closed():
         "approvalClass": "release", "reviewerRule": "owner",
     }
     assert resolve_action(snapshot, "unknown")["decision"] == "deny"
+
+
+def test_policy_sections_are_typed_and_cross_field_combinations_fail_closed():
+    document = policy_document()
+    document["session"]["cleanup"] = "remove"
+    with pytest.raises(ValidationError, match="static_compose requires"):
+        PolicyDocument.model_validate(document)
+
+    document = policy_document()
+    document["remediation"]["autonomous"] = True
+    document["remediation"]["locks"] = False
+    with pytest.raises(ValidationError, match="autonomous remediation requires locks"):
+        PolicyDocument.model_validate(document)
+
+    document = policy_document()
+    document["workspace"]["unrecognizedAuthority"] = True
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        PolicyDocument.model_validate(document)
+
+
+def test_activation_validation_checks_deployment_capabilities_and_digest_images():
+    document = policy_document()
+    document["host"]["serverImageRef"] = "image-ref:mutable"
+    validation, compatibility = validate_policy(
+        PolicyDocument.model_validate(document),
+        capabilities={
+            "hostModes": {"on_demand_docker"},
+            "backends": {"container-backend"},
+            "architectures": {"amd64"},
+            "providers": {"other"},
+            "workspaceClasses": {"scratch"},
+        },
+    )
+    assert validation["valid"] is False
+    assert compatibility["compatible"] is False
+    assert set(compatibility["diagnosticCodes"]) >= {
+        "OMNIGENT_INVALID_IMAGE_REF",
+        "OMNIGENT_HOST_MODE_UNAVAILABLE",
+        "OMNIGENT_BACKEND_UNAVAILABLE",
+        "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE",
+        "OMNIGENT_WORKSPACE_CLASS_UNSUPPORTED",
+    }
+
+
+def test_approval_required_rule_must_be_complete_at_document_validation():
+    document = policy_document()
+    del document["approvals"]["actions"]["publish"]["reviewerRule"]
+    with pytest.raises(ValidationError, match="approval_required needs"):
+        PolicyDocument.model_validate(document)

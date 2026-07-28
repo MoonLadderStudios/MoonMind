@@ -68,15 +68,31 @@ describe('OmnigentInventoryPage', () => {
 
   it('renders immutable policy inspection and lifecycle actions', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ items: [{
-        id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2,
-        summary: 'Immutable policy authority', version: {
-          validation: { valid: true }, document: { host: { mode: 'static_compose' } },
-        },
-      }] }),
-    } as Response);
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/versions')) return {
+        ok: true, json: async () => ({ items: [
+          { policyId: 'codex-static', version: 2, ref: 'codex-static@2', state: 'active', digest: 'sha256:2',
+            validation: { valid: true }, document: { host: { mode: 'static_compose' } } },
+          { policyId: 'codex-static', version: 1, ref: 'codex-static@1', state: 'superseded', digest: 'sha256:1',
+            validation: { valid: true }, document: { host: { mode: 'static_compose' } } },
+        ] }),
+      } as Response;
+      if (url.endsWith('/audit')) return {
+        ok: true, json: async () => ({ items: [
+          { eventId: 'event-1', version: 2, type: 'default_changed', actor: 'operator', createdAt: '2026-01-01T00:00:00Z' },
+        ] }),
+      } as Response;
+      return {
+        ok: true,
+        json: async () => ({ items: [{
+          id: 'codex-static', name: 'Static Codex', status: 'active', defaultVersion: 2,
+          summary: 'Immutable policy authority', version: {
+            validation: { valid: true }, document: { host: { mode: 'static_compose' } },
+          },
+        }] }),
+      } as Response;
+    });
     renderPage({
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
       initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/policies' } },
@@ -86,5 +102,8 @@ describe('OmnigentInventoryPage', () => {
     expect(screen.getByRole('region', { name: 'Immutable policy version' })).toBeTruthy();
     expect(screen.getByText('Validation: Valid')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Activate / rollback' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'codex-static@1 · superseded' })).toBeTruthy();
+    expect(await screen.findByText(/default_changed/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Validate against deployment' })).toBeTruthy();
   });
 });

@@ -49,9 +49,26 @@ def upgrade() -> None:
     )
     op.create_index("ix_omnigent_policy_versions_policy_id", "omnigent_policy_versions", ["policy_id"])
     op.create_index("ix_omnigent_policy_versions_digest", "omnigent_policy_versions", ["digest"])
+    op.create_table(
+        "omnigent_policy_events",
+        sa.Column("event_id", sa.Uuid(), primary_key=True),
+        sa.Column("policy_id", sa.String(128), sa.ForeignKey("omnigent_policies.policy_id"), nullable=False),
+        sa.Column("version", sa.Integer(), nullable=True),
+        sa.Column("event_type", sa.String(64), nullable=False),
+        sa.Column("actor", sa.String(255), nullable=False),
+        sa.Column("detail_json", sa.JSON(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+    op.create_index(
+        "ix_omnigent_policy_events_policy_created",
+        "omnigent_policy_events",
+        ["policy_id", "created_at"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_omnigent_policy_events_policy_created", table_name="omnigent_policy_events")
+    op.drop_table("omnigent_policy_events")
     op.drop_index("ix_omnigent_policy_versions_digest", table_name="omnigent_policy_versions")
     op.drop_index("ix_omnigent_policy_versions_policy_id", table_name="omnigent_policy_versions")
     op.drop_table("omnigent_policy_versions")

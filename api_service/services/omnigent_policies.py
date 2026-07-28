@@ -9,9 +9,14 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import OmnigentPolicy, OmnigentPolicyVersion
+from api_service.db.models import (
+    OmnigentPolicy,
+    OmnigentPolicyEvent,
+    OmnigentPolicyVersion,
+)
 from moonmind.omnigent.policies import (
     PolicyDocument,
     PolicyState,
@@ -29,21 +34,57 @@ class PolicyNotFound(LookupError):
     pass
 
 
-def validate_policy(document: PolicyDocument) -> tuple[dict[str, Any], dict[str, Any]]:
+def validate_policy(
+    document: PolicyDocument,
+    *,
+    capabilities: dict[str, set[str]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return stable diagnostics consumed before credentials or host mutation."""
 
     diagnostics: list[dict[str, str]] = []
-    required_checks = (
-        ("host", "mode", "OMNIGENT_HOST_MODE_UNAVAILABLE"),
-        ("host", "serverImageRef", "OMNIGENT_INVALID_IMAGE_REF"),
-        ("network", "egressProfileRef", "OMNIGENT_ENFORCED_EGRESS_MISSING"),
-        ("workspace", "allowedClasses", "OMNIGENT_WORKSPACE_CLASS_UNSUPPORTED"),
-        ("capture", "required", "OMNIGENT_CAPTURE_AUTHORITY_MISSING"),
-    )
     payload = document.model_dump(by_alias=True, mode="json")
-    for section, field, code in required_checks:
-        if payload.get(section, {}).get(field) in (None, "", [], False):
-            diagnostics.append({"code": code, "path": f"{section}.{field}", "message": "Required policy authority is missing."})
+    image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+    for field in ("serverImageRef", "hostImageRef"):
+        if not image_pattern.fullmatch(payload["host"][field]):
+            diagnostics.append({
+                "code": "OMNIGENT_INVALID_IMAGE_REF",
+                "path": f"host.{field}",
+                "message": "Runtime images must use immutable sha256 digest references.",
+            })
+    if not payload["capture"]["required"]:
+        diagnostics.append({
+            "code": "OMNIGENT_CAPTURE_AUTHORITY_MISSING",
+            "path": "capture.required",
+            "message": "Activation requires complete capture authority.",
+        })
+    if payload["network"]["egressProfileRef"] == payload["network"]["attachmentRef"]:
+        diagnostics.append({
+            "code": "OMNIGENT_ENFORCED_EGRESS_MISSING",
+            "path": "network.egressProfileRef",
+            "message": "Network attachment and enforced-egress authority must be distinct references.",
+        })
+    declared = capabilities or {
+        "hostModes": {"static_compose", "on_demand_docker"},
+        "backends": {"compose", "container-backend"},
+        "architectures": {"amd64", "arm64"},
+        "providers": {"codex"},
+        "workspaceClasses": {"workflow"},
+    }
+    capability_checks = (
+        ("hostModes", payload["host"]["mode"], "host.mode", "OMNIGENT_HOST_MODE_UNAVAILABLE"),
+        ("backends", payload["host"]["backendRef"], "host.backendRef", "OMNIGENT_BACKEND_UNAVAILABLE"),
+    )
+    for capability, value, path, code in capability_checks:
+        if value not in declared.get(capability, set()):
+            diagnostics.append({"code": code, "path": path, "message": f"{value!r} is not available in this deployment."})
+    for capability, values, path, code in (
+        ("architectures", payload["host"]["architectures"], "host.architectures", "OMNIGENT_ARCHITECTURE_UNAVAILABLE"),
+        ("providers", payload["providerProfile"]["compatibleProviders"], "providerProfile.compatibleProviders", "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE"),
+        ("workspaceClasses", payload["workspace"]["allowedClasses"], "workspace.allowedClasses", "OMNIGENT_WORKSPACE_CLASS_UNSUPPORTED"),
+    ):
+        unsupported = sorted(set(values) - declared.get(capability, set()))
+        if unsupported:
+            diagnostics.append({"code": code, "path": path, "message": f"Unsupported values: {', '.join(unsupported)}."})
     valid = not diagnostics
     return (
         {"valid": valid, "diagnostics": diagnostics, "validatedAt": datetime.now(UTC).isoformat()},
@@ -62,6 +103,13 @@ class OmnigentPolicyService:
             version = None
             if policy.default_version is not None:
                 version = await self.get_version(policy.policy_id, policy.default_version)
+            else:
+                version = (await self.session.execute(
+                    select(OmnigentPolicyVersion)
+                    .where(OmnigentPolicyVersion.policy_id == policy.policy_id)
+                    .order_by(OmnigentPolicyVersion.version.desc())
+                    .limit(1)
+                )).scalar_one_or_none()
             result.append((policy, version))
         return result
 
@@ -94,12 +142,23 @@ class OmnigentPolicyService:
         self.session.add(policy)
         row = self._version(policy_id, 1, document, actor, clone_source_ref=clone_source_ref)
         self.session.add(row)
+        self._event(policy_id, 1, "version_created", actor, {
+            "cloneSourceRef": clone_source_ref, "digest": row.digest,
+        })
         await self.session.commit()
         return row
 
     async def new_version(self, *, policy_id: str, document: PolicyDocument, actor: str,
                           expected_parent_ref: str) -> OmnigentPolicyVersion:
-        await self.get_policy(policy_id)
+        # Serialize allocation on the stable identity. The unique constraint is
+        # the final authority on engines where row locking is unavailable.
+        policy = (await self.session.execute(
+            select(OmnigentPolicy)
+            .where(OmnigentPolicy.policy_id == policy_id)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if policy is None:
+            raise PolicyNotFound(policy_id)
         latest = (await self.session.execute(select(func.max(OmnigentPolicyVersion.version)).where(
             OmnigentPolicyVersion.policy_id == policy_id
         ))).scalar_one()
@@ -107,27 +166,62 @@ class OmnigentPolicyService:
             raise PolicyConflict("stale policy version; reload before editing")
         row = self._version(policy_id, latest + 1, document, actor, parent_ref=expected_parent_ref)
         self.session.add(row)
-        await self.session.commit()
+        self._event(policy_id, row.version, "version_created", actor, {
+            "parentRef": expected_parent_ref, "digest": row.digest,
+        })
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise PolicyConflict("concurrent policy edit; reload before editing") from exc
         return row
 
     async def transition(self, *, policy_id: str, version: int, state: PolicyState, actor: str,
                          make_default: bool = False) -> OmnigentPolicyVersion:
         policy = await self.get_policy(policy_id)
         row = await self.get_version(policy_id, version)
+        allowed = {
+            PolicyState.DRAFT: {PolicyState.ACTIVE, PolicyState.DISABLED},
+            PolicyState.ACTIVE: {PolicyState.DISABLED, PolicyState.DEPRECATED, PolicyState.SUPERSEDED},
+            PolicyState.DEPRECATED: {PolicyState.ACTIVE, PolicyState.DISABLED},
+            PolicyState.DISABLED: {PolicyState.ACTIVE},
+            PolicyState.SUPERSEDED: {PolicyState.ACTIVE},
+        }
+        current = PolicyState(row.state)
+        if state != current and state not in allowed[current]:
+            raise PolicyConflict(f"invalid policy transition: {current.value} -> {state.value}")
         if state == PolicyState.ACTIVE and not row.validation_json.get("valid"):
             raise PolicyConflict("invalid policy cannot be activated")
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
             row.activated_by, row.activated_at = actor, now
+            if policy.default_version not in (None, version) and not row.supersedes_ref:
+                row.supersedes_ref = f"{policy_id}@{policy.default_version}"
         if state == PolicyState.DISABLED:
             row.disabled_by, row.disabled_at = actor, now
         if make_default:
             if state != PolicyState.ACTIVE:
                 raise PolicyConflict("only an active version can be the default")
+            previous_default = policy.default_version
             policy.default_version = version
+            self._event(policy_id, version, "default_changed", actor, {
+                "previousVersion": previous_default,
+                "newVersion": version,
+            })
+        self._event(policy_id, version, "lifecycle_transition", actor, {
+            "from": current.value, "to": state.value, "makeDefault": make_default,
+        })
         await self.session.commit()
         return row
+
+    async def audit(self, policy_id: str) -> list[OmnigentPolicyEvent]:
+        await self.get_policy(policy_id)
+        return list((await self.session.execute(
+            select(OmnigentPolicyEvent)
+            .where(OmnigentPolicyEvent.policy_id == policy_id)
+            .order_by(OmnigentPolicyEvent.created_at, OmnigentPolicyEvent.event_id)
+        )).scalars())
 
     async def snapshot(self, policy_id: str, version: int) -> dict[str, Any]:
         row = await self.get_version(policy_id, version)
@@ -143,6 +237,15 @@ class OmnigentPolicyService:
             created_by=actor, validation_json=validation,
             compatibility_json=compatibility, rollout_json=normalized["rollout"], **lineage,
         )
+
+    def _event(
+        self, policy_id: str, version: int | None, event_type: str,
+        actor: str, detail: dict[str, Any],
+    ) -> None:
+        self.session.add(OmnigentPolicyEvent(
+            policy_id=policy_id, version=version, event_type=event_type,
+            actor=actor, detail_json=detail,
+        ))
 
 
 def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyDocument:
@@ -197,12 +300,20 @@ async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
         row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
                                    document=document, actor="bootstrap")
         row.env_fallback_used = any(
-            os.getenv(variable, "").strip() == document.host.get(field)
+            os.getenv(variable, "").strip() == document.model_dump(by_alias=True)["host"].get(field)
             for variable, field in (
                 ("OMNIGENT_IMAGE_REF", "serverImageRef"),
                 ("OMNIGENT_HOST_IMAGE_REF", "hostImageRef"),
             )
         )
         await session.commit()
+        if row.validation_json.get("valid"):
+            await service.transition(
+                policy_id=policy_id,
+                version=row.version,
+                state=PolicyState.ACTIVE,
+                actor="bootstrap",
+                make_default=True,
+            )
         seeded.append(policy_id)
     return seeded
