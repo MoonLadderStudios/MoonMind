@@ -78,6 +78,19 @@ changes only future default selection and never rewrites existing run evidence.
 
 ## Support and conformance matrix v1
 
+The stable machine-readable row inventory is
+`moonmind.omnigent.cutover_conformance.REQUIRED_MATRIX_ROWS`. Protected-live
+owners publish one passing
+`moonmind.codex-omnigent-cutover-artifact/v1` document for each required
+evidence kind, with disjoint `matrixRows`. Run
+`tools/build_codex_omnigent_cutover_evidence.py --release RELEASE.json
+--artifact ARTIFACT.json ... --output promotion.json` to assemble the mounted
+promotion document. The builder fails on a missing row or kind, failed
+artifact, duplicate ownership, incomplete telemetry, or failed threshold and
+derives every artifact URI and SHA-256 digest from deployment-local bytes.
+Generating the document does not turn a pending matrix row into supported
+evidence; its owning artifact must contain the protected observed result.
+
 | Capability | Mode(s) | Status | Independently resolvable evidence / gate |
 | --- | --- | --- | --- |
 | OAuth Provider Profile readiness and shared capacity | static, on-demand | implemented; live support pending | [`CodexCreateToHostContract.md`](./CodexCreateToHostContract.md), `tests/unit/omnigent/test_oauth_profile_lifecycle.py`; protected live matrix required |
