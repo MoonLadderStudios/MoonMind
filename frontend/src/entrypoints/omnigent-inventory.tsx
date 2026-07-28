@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -12,6 +12,20 @@ type InventoryRow = {
   summary: string;
   freshness: string | null;
   formattedFreshness: string | null;
+};
+type ProfileVersion = {
+  version: number;
+  digest: string;
+  validationResult?: { ready?: boolean } | null;
+};
+type AgentProfile = {
+  profileId: string;
+  displayName: string;
+  description?: string | null;
+  state: string;
+  activeVersion?: number | null;
+  defaultForRuntime?: boolean;
+  versions: ProfileVersion[];
 };
 
 function text(record: Record<string, unknown>, ...keys: string[]): string {
@@ -71,6 +85,38 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       return compactRows(await response.json());
     },
   });
+  const profiles = useQuery({
+    queryKey: ['omnigent-agent-profiles'],
+    enabled: enabled && kind === 'agents',
+    queryFn: async (): Promise<AgentProfile[]> => {
+      const response = await fetch('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Agent profiles request failed (${response.status})`);
+      const data: unknown = await response.json();
+      return Array.isArray(data) ? data as AgentProfile[] : [];
+    },
+  });
+  const profileAction = useMutation({
+    mutationFn: async ({ profile, action }: { profile: AgentProfile; action: string }) => {
+      const suffix = action === 'validate'
+        ? 'validate'
+        : action === 'activate'
+          ? `activate/${profile.versions[0]?.version ?? 1}`
+          : action;
+      const response = await fetch(
+        `/api/omnigent/agent-profiles/${encodeURIComponent(profile.profileId)}/${suffix}`,
+        {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: action === 'validate'
+            ? JSON.stringify({ version: profile.versions[0]?.version ?? null })
+            : undefined,
+        },
+      );
+      if (!response.ok) throw new Error(`${action} failed (${response.status})`);
+    },
+    onSuccess: () => void profiles.refetch(),
+  });
   const rows = (result.data ?? []).filter((row) =>
     `${row.name} ${row.status} ${row.summary}`.toLowerCase().includes(filter.toLowerCase()),
   );
@@ -93,5 +139,36 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       {result.data && rows.length === 0 ? <p>{filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}</p> : null}
       {rows.length ? <div className="omnigent-inventory__table-wrap"><table><thead><tr><th>Identity</th><th>Status</th><th>Summary</th><th>Freshness</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><small>{row.id}</small></td><td>{row.status}</td><td>{row.summary}</td><td>{row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'}</td></tr>)}</tbody></table></div> : null}
     </section>
+    {kind === 'agents' ? <section aria-labelledby="omnigent-profiles-heading">
+      <div className="omnigent-inventory__toolbar">
+        <div><p className="eyebrow">Reusable configuration</p><h2 id="omnigent-profiles-heading">Agent profiles</h2></div>
+        <button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button>
+      </div>
+      <p>Immutable, validated selections used by workflows and continuations.</p>
+      {profiles.isPending ? <p role="status">Loading agent profiles…</p> : null}
+      {profiles.isError ? <p role="alert">{profiles.error.message}</p> : null}
+      {profileAction.isError ? <p role="alert">{profileAction.error.message}</p> : null}
+      {profiles.data?.length === 0 ? <p>No persistent agent profiles are available.</p> : null}
+      {profiles.data?.length ? <div className="omnigent-inventory__table-wrap"><table>
+        <thead><tr><th>Profile</th><th>Lifecycle</th><th>Version history</th><th>Readiness</th><th>Actions</th></tr></thead>
+        <tbody>{profiles.data.map((profile) => {
+          const latest = profile.versions[0];
+          const ready = latest?.validationResult?.ready === true;
+          return <tr key={profile.profileId}>
+            <td><strong>{profile.displayName}</strong><small>{profile.profileId}</small>{profile.description ? <small>{profile.description}</small> : null}</td>
+            <td>{profile.state}{profile.defaultForRuntime ? ' · Default' : ''}</td>
+            <td>{latest ? <><span>Version {latest.version}</span><small title={latest.digest}>{latest.digest.slice(0, 18)}…</small><small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small></> : 'No versions'}</td>
+            <td>{ready ? 'Ready' : 'Validation required'}</td>
+            <td>
+              <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
+              {ready && profile.state !== 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
+              {profile.state === 'active' && !profile.defaultForRuntime ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'default' })}>Make {profile.displayName} default</button> : null}
+              {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
+              {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}
+            </td>
+          </tr>;
+        })}</tbody>
+      </table></div> : null}
+    </section> : null}
   </div>;
 }

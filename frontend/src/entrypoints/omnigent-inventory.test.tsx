@@ -10,9 +10,28 @@ describe('OmnigentInventoryPage', () => {
     renderWithClient(<BrowserRouter><OmnigentInventoryPage payload={payload} /></BrowserRouter>);
   beforeEach(() => {
     window.history.replaceState({}, '', '/omnigent/agents');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }],
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return {
+          ok: true,
+          json: async () => [{
+            profileId: 'codex-team',
+            displayName: 'Team Codex',
+            state: 'active',
+            activeVersion: 2,
+            defaultForRuntime: true,
+            versions: [{
+              version: 2,
+              digest: `sha256:${'a'.repeat(64)}`,
+              validationResult: { ready: true },
+            }],
+          }],
+        };
+      }
+      return {
+        ok: true,
+        json: async () => [{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }],
+      };
     }));
   });
   afterEach(() => {
@@ -28,8 +47,11 @@ describe('OmnigentInventoryPage', () => {
     });
 
     expect(await screen.findByText('Codex')).toBeTruthy();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/agents', { credentials: 'same-origin' });
+    expect(fetch).toHaveBeenCalledWith('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
+    expect(screen.getByText('Team Codex')).toBeTruthy();
+    expect(screen.getByText('Version 2')).toBeTruthy();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'missing' } });
     expect(await screen.findByText('No agents match this filter.')).toBeTruthy();
     expect(window.location.search).toContain('omnigent_agents_q=missing');
@@ -43,6 +65,37 @@ describe('OmnigentInventoryPage', () => {
     });
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeTruthy();
+  });
+
+  it('validates a draft profile through the authenticated lifecycle API', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/omnigent/agent-profiles/demo/validate') {
+        expect(init?.method).toBe('POST');
+        return { ok: true, json: async () => ({ ready: true, checks: [] }) } as Response;
+      }
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return {
+          ok: true,
+          json: async () => [{
+            profileId: 'demo', displayName: 'Demo', state: 'draft',
+            activeVersion: null, versions: [{ version: 1, digest: `sha256:${'b'.repeat(64)}` }],
+          }],
+        } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory',
+      apiBase: '/api',
+      features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Validate Demo' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      '/api/omnigent/agent-profiles/demo/validate',
+      expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+    ));
   });
 
   it('does not fetch or render future policy actions without a capability contract', async () => {
