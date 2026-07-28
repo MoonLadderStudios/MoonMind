@@ -419,6 +419,13 @@ async def _resolve_embedded_evidence(
                     expected_claim_type=claim_type,
                     moonmind_build_identity=build_identity,
                     bridge_config_sha256=config.evidence_policy_sha256(),
+                    expected_host_architecture=(
+                        os.getenv("OMNIGENT_HOST_ARCHITECTURE") or ""
+                    ),
+                    expected_images={
+                        "server": os.getenv("OMNIGENT_IMAGE_REF") or "",
+                        "host": os.getenv("OMNIGENT_HOST_IMAGE_REF") or "",
+                    },
                 )
                 results[key] = {
                     "status": "passed",
@@ -427,7 +434,8 @@ async def _resolve_embedded_evidence(
                     "generatedAt": claim.generated_at.isoformat(),
                     "expiresAt": claim.expires_at.isoformat(),
                     "supportedHostModes": list(claim.supported_host_modes),
-                    "images": claim.images,
+                    "hostArchitecture": claim.host_architecture,
+                    "images": dict(claim.images),
                 }
             except Exception:  # noqa: BLE001 - every resolver failure gates mode
                 # Read/auth/schema failures intentionally share one bounded,
@@ -1247,7 +1255,10 @@ async def resolve_omnigent_bridge_session_projection(
     )
     capabilities = _projection_capabilities(row)
     compatibility_profile = row.compatibility_profile
-    historical_embedded = "embedded" in compatibility_profile
+    historical_embedded = (
+        str((getattr(row, "metadata_", None) or {}).get("hostProtocolMode") or "")
+        == HOST_PROTOCOL_MODE_EMBEDDED
+    )
     compatibility_evidence_ref = (
         str(launch.get("compatibilityEvidenceRef") or "") or None
     )
@@ -1290,8 +1301,8 @@ async def resolve_omnigent_bridge_session_projection(
                 if historical_embedded
                 else None
             ),
-            "serverImage": str(launch.get("serverImage") or "") or None,
-            "hostImage": str(launch.get("hostImage") or "") or None,
+            "serverImage": str(launch.get("serverImageRef") or "") or None,
+            "hostImage": str(launch.get("hostImageRef") or "") or None,
             "hostArchitecture": str(launch.get("hostArchitecture") or "") or None,
             "authGeneration": getattr(row, "credential_generation", None),
             "evidenceRef": compatibility_evidence_ref,

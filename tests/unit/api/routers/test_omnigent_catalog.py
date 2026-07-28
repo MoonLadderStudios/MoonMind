@@ -154,6 +154,20 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     }
 
 
+def test_catalog_summarizes_persisted_stock_host_harnesses(monkeypatch):
+    lease = SimpleNamespace(host_capabilities_json={"harnesses": ["codex-native"]})
+    client = TestClient(_app(
+        monkeypatch, session=_Session([_profile()], host_leases=[lease])
+    ))
+
+    response = client.get("/api/omnigent/codex-catalog-readiness")
+
+    assert response.status_code == 200
+    assert response.json()["compatibilityDiagnostics"]["capabilitySummary"] == [
+        "codex-native"
+    ]
+
+
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
     secret = "github_pat_SHOULD_NOT_ESCAPE"
     profile = _profile(account_label=secret)

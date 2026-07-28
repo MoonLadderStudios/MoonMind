@@ -445,10 +445,9 @@ async def get_omnigent_codex_catalog_readiness(
     diagnostics["capabilitySummary"] = sorted({
         str(capability)
         for lease in host_leases
+        for field in ("harnesses", "capabilities")
         for capability in (
-            (getattr(lease, "host_capabilities_json", None) or {}).get(
-                "capabilities", []
-            )
+            (getattr(lease, "host_capabilities_json", None) or {}).get(field, [])
         )
     })
     return OmnigentCodexCatalogReadiness(

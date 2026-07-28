@@ -637,8 +637,12 @@ class OmnigentBridgeConfig(BaseModel):
         evidence_ready = bool(validation) and all(
             validation.get(key, {}).get("status") == "passed"
             and (
-                host_mode is None
-                or host_mode
+                (
+                    set(validation.get(key, {}).get("supportedHostModes", ()))
+                    >= {"static_compose", "on_demand_docker"}
+                )
+                if host_mode is None
+                else host_mode
                 in validation.get(key, {}).get("supportedHostModes", ())
             )
             for key in evidence

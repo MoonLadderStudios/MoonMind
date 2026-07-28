@@ -65,7 +65,10 @@ def _validated_embedded_evidence(monkeypatch):
 
     async def resolved(_config):
         return {
-            key: {"status": "passed"}
+            key: {
+                "status": "passed",
+                "supportedHostModes": ["static_compose", "on_demand_docker"],
+            }
             for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
         }
 
@@ -88,7 +91,7 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["conformanceState"] == "ready"
     diagnostics = response.json()["compatibilityDiagnostics"]
     assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
-    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["compatibilityProfile"] == "omnigent.runner_tunnel.983c93c6"
     assert diagnostics["rollbackRecommendation"] is None
     assert [row["hostMode"] for row in diagnostics["supportMatrix"]] == [
         "static_compose",
@@ -1019,8 +1022,8 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
             "launchPolicyRef": "restricted@3",
             "snapshotRef": "omnigent-launch:sha256:safe-ref",
             "compatibilityEvidenceRef": "artifact://embedded-mode-row",
-            "serverImage": "registry.test/server@sha256:" + "1" * 64,
-            "hostImage": "registry.test/host@sha256:" + "2" * 64,
+            "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+            "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
             "hostArchitecture": "linux/amd64",
         },
     }))
@@ -1048,6 +1051,8 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
     assert diagnostics["authGeneration"] == 4
     assert diagnostics["evidenceRef"] == "artifact://embedded-mode-row"
     assert diagnostics["lifecycleState"] == "active"
+    assert diagnostics["serverImage"].startswith("registry.test/server@sha256:")
+    assert diagnostics["hostImage"].startswith("registry.test/host@sha256:")
     assert diagnostics["supportedCapabilities"] == []
 
 

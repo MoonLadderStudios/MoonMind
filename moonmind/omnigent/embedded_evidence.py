@@ -76,6 +76,7 @@ class EmbeddedEnablementEvidence(BaseModel):
     supported_host_modes: tuple[EmbeddedHostMode, ...] = Field(
         ..., alias="supportedHostModes", min_length=1
     )
+    host_architecture: str = Field(..., alias="hostArchitecture", min_length=1)
     images: dict[str, str]
     test_matrix: dict[str, EvidenceOutcome] = Field(..., alias="testMatrix")
     generated_at: datetime = Field(..., alias="generatedAt")
@@ -100,6 +101,8 @@ class EmbeddedEnablementEvidence(BaseModel):
             raise ValueError("testMatrix must contain passing cases")
         if not self.images:
             raise ValueError("immutable server/host images are required")
+        if set(self.images) != {"server", "host"}:
+            raise ValueError("images must contain only the server and host roles")
         if len(set(self.supported_host_modes)) != len(self.supported_host_modes):
             raise ValueError("supportedHostModes must not contain duplicates")
         for role in ("server", "host"):
@@ -115,6 +118,8 @@ def validate_embedded_evidence(
     expected_claim_type: EmbeddedClaimType,
     moonmind_build_identity: str,
     bridge_config_sha256: str,
+    expected_host_architecture: str,
+    expected_images: Mapping[str, str],
     now: datetime | None = None,
 ) -> EmbeddedEnablementEvidence:
     """Parse and policy-bind one artifact claim to the running deployment."""
@@ -134,6 +139,10 @@ def validate_embedded_evidence(
         raise EmbeddedEvidenceError("evidence is for a different MoonMind build")
     if claim.bridge_config_sha256 != bridge_config_sha256:
         raise EmbeddedEvidenceError("evidence is for a different bridge configuration")
+    if claim.host_architecture != expected_host_architecture:
+        raise EmbeddedEvidenceError("evidence is for a different host architecture")
+    if claim.images != dict(expected_images):
+        raise EmbeddedEvidenceError("evidence is for different runtime images")
     current = now or datetime.now(timezone.utc)
     if current < claim.generated_at:
         raise EmbeddedEvidenceError("embedded evidence is not yet valid")
