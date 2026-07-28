@@ -770,6 +770,18 @@ class TemporalExecutionService:
 
         evidence_policy = remediation.get("evidencePolicy")
         self._validate_remediation_evidence_policy(evidence_policy)
+        for policy_name in (
+            "approvalPolicy",
+            "lockPolicy",
+            "verificationPolicy",
+        ):
+            policy = remediation.get(policy_name)
+            if policy is None:
+                continue
+            if not isinstance(policy, Mapping):
+                raise TemporalExecutionValidationError(
+                    f"workflow.remediation.{policy_name} must be an object."
+                )
         checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
         if checkpoint_branch_policy is not None:
             if not isinstance(checkpoint_branch_policy, Mapping):
@@ -2021,6 +2033,33 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)
+        return response
+
+    async def create_fresh_rerun_execution(
+        self,
+        *,
+        workflow_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create a distinct rerun execution through the canonical service boundary."""
+
+        record = await self._require_source_execution(workflow_id)
+        if (
+            idempotency_key == record.last_update_idempotency_key
+            and isinstance(record.last_update_response, dict)
+        ):
+            return dict(record.last_update_response)
+        response = await self._create_fresh_rerun_execution(
+            record,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            idempotency_key=idempotency_key,
+        )
+        record.last_update_idempotency_key = idempotency_key
+        record.last_update_response = dict(response)
+        await self._session.commit()
+        await self._session.refresh(record)
         return response
 
     @staticmethod
