@@ -273,6 +273,90 @@ def _host_lease() -> OmnigentHostLease:
     )
 
 
+def test_claude_profile_materializes_exact_oauth_home_without_secret_data() -> None:
+    profile = SimpleNamespace(
+        profile_id="claude-oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        credential_generation=4,
+        owner_user_id="user-1",
+    )
+
+    mount = OmnigentOAuthHostRepository._mount_from_profile(profile)
+
+    assert mount.target_path == "/home/app/.claude"
+    assert mount.auth_volume_ref.runtime_id == "claude_code"
+    assert mount.auth_volume_ref.provider_id == "anthropic"
+    assert (
+        OmnigentOAuthHostRepository._harness_for_mount(mount)
+        == "claude-native"
+    )
+    assert "token" not in str(mount.model_dump()).lower()
+
+
+def test_claude_preflight_requires_exact_profile_generation_and_harness() -> None:
+    now = datetime(2026, 7, 12, tzinfo=UTC)
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:claude",
+        providerProfileId="claude",
+        endpointRef="default",
+        harness="claude-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="claude",
+                runtimeId="claude_code",
+                providerId="anthropic",
+                volumeRef="claude_auth_volume",
+                credentialGeneration=4,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.claude",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        staticHostId="claude-host-1",
+    )
+    lease = OmnigentHostLease(
+        leaseId="host-lease-claude",
+        providerProfileId="claude",
+        providerLeaseId="provider-lease-claude",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=4,
+        omnigentHostId="claude-host-1",
+        status="ready",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(hours=1),
+    )
+    result = {
+        "providerProfileId": "claude",
+        "runtimeId": "claude_code",
+        "providerId": "anthropic",
+        "credentialGeneration": 4,
+        "mountPath": "/home/app/.claude",
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "harness": "claude-native",
+        "competingCredentialsPresent": False,
+        "loginStatus": "authenticated",
+        "hostId": "claude-host-1",
+    }
+
+    assert validate_preflight_result(
+        result=result, binding=binding, host_lease=lease
+    )["status"] == "ready"
+    with pytest.raises(OmnigentOAuthHostError):
+        validate_preflight_result(
+            result={**result, "harness": "codex-native"},
+            binding=binding,
+            host_lease=lease,
+        )
+
+
 def _checkpoint() -> OmnigentCheckpointIdentity:
     return OmnigentCheckpointIdentity(
         providerProfileId="codex",

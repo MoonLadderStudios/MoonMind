@@ -6,7 +6,10 @@ import pytest
 
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
+    is_claude_oauth_profile,
     is_codex_oauth_profile,
+    is_omnigent_oauth_profile,
+    validate_claude_oauth_capacity,
     validate_codex_oauth_capacity,
 )
 
@@ -36,13 +39,25 @@ def test_codex_oauth_capacity_rejects_new_parallel_writes() -> None:
         )
 
 
-def test_finalization_repairs_only_codex_oauth_capacity() -> None:
+def test_claude_oauth_identity_and_capacity_are_exclusive() -> None:
+    values = {
+        "runtime_id": "claude_code",
+        "credential_source": "oauth_volume",
+        "materialization_mode": "oauth_home",
+    }
+    assert is_claude_oauth_profile(**values)
+    assert is_omnigent_oauth_profile(**values)
+    with pytest.raises(ValueError, match="require max_parallel_runs=1"):
+        validate_claude_oauth_capacity(**values, max_parallel_runs=2)
+
+
+def test_finalization_repairs_first_party_oauth_capacity() -> None:
     assert effective_oauth_capacity_for_finalization(
         runtime_id="codex_cli", requested_capacity=3
     ) == 1
     assert effective_oauth_capacity_for_finalization(
         runtime_id="claude_code", requested_capacity=3
-    ) == 3
+    ) == 1
 
 
 @pytest.mark.parametrize("value", [None, "bad", 0, -1, True])

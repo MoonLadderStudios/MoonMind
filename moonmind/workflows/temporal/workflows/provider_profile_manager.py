@@ -27,7 +27,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.billing.costs import pricing_from_profile_metadata
     from moonmind.provider_profiles.oauth_policy import (
         CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+        CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+        is_claude_oauth_profile,
         is_codex_oauth_profile,
+        validate_claude_oauth_capacity,
         validate_codex_oauth_capacity,
     )
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
@@ -130,19 +133,29 @@ def _validated_profile_capacity(
         runtime_id=runtime_id,
         infer_legacy_source=repair_legacy,
     )
-    if is_codex_oauth and capacity != 1:
+    identity = {
+        "runtime_id": profile.get("runtime_id", runtime_id),
+        "credential_source": profile.get("credential_source"),
+        "materialization_mode": profile.get("runtime_materialization_mode"),
+    }
+    is_claude_oauth = is_claude_oauth_profile(**identity)
+    if (is_codex_oauth or is_claude_oauth) and capacity != 1:
         if repair_legacy:
             return 1
         try:
-            validate_codex_oauth_capacity(
-                runtime_id=profile.get("runtime_id", runtime_id),
-                credential_source=profile.get("credential_source"),
-                materialization_mode=profile.get("runtime_materialization_mode"),
-                max_parallel_runs=capacity,
+            validator = (
+                validate_codex_oauth_capacity
+                if is_codex_oauth
+                else validate_claude_oauth_capacity
             )
+            validator(**identity, max_parallel_runs=capacity)
         except ValueError as exc:
             raise exceptions.ApplicationError(
-                CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+                (
+                    CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR
+                    if is_codex_oauth
+                    else CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_ERROR
+                ),
                 non_retryable=True,
             ) from exc
     return capacity
