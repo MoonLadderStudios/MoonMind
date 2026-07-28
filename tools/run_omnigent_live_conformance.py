@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run credentialed Omnigent conformance and product journeys for #3456.
+"""Run credentialed Omnigent conformance and browser product journeys for #3508.
 
 The runner owns only an isolated Compose project.  In particular, it never
 removes volumes: the enrolled Codex OAuth volume is operator-owned evidence,
@@ -39,6 +39,7 @@ PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
+    "browser": {"product.normal-create-api"},
     "product": {"product.normal-create-api"},
     "cumulative": {"product.cumulative-remediation"},
     "stock": {
@@ -51,6 +52,100 @@ LIVE_CASES = {
     "static": {"compose.static-codex-oauth"},
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
+}
+BROWSER_ROWS = (
+    "static_profile_bound",
+    "static_restart_replay",
+    "on_demand_policy_selected",
+    "repository_read_analysis",
+    "repository_mutation_publication",
+    "failed_credential_readiness_admission",
+    "failed_host_registration_readiness",
+    "active_cancellation_interruption",
+    "partial_start_cleanup_janitor",
+)
+BROWSER_AUTHORITY_FIELDS = (
+    "authoredWorkflowRef",
+    "taskInputSnapshotRef",
+    "compiledRuntimeRequestRef",
+    "executionProfileRef",
+    "launchPolicyRef",
+    "effectiveLaunchSnapshotRef",
+    "providerProfileRef",
+    "providerLeaseId",
+    "hostBindingRef",
+    "hostLeaseId",
+    "hostId",
+    "hostCapability",
+    "bridgeSessionId",
+    "omnigentSessionId",
+    "firstMessageId",
+    "eventCursor",
+    "workspaceLocator",
+    "sourceCommit",
+    "resourceRefs",
+    "artifactRefs",
+    "terminalState",
+    "cleanupState",
+    "janitorState",
+    "providerProfileRelease",
+    "networkPolicyRef",
+    "runtime",
+    "hostMode",
+)
+BROWSER_RECORD_ORDER = (
+    "browserTrace",
+    "createRequest",
+    "authoredWorkflow",
+    "taskInputSnapshot",
+    "compiledExecutionRequest",
+    "executionProfile",
+    "launchPolicy",
+    "effectiveLaunchSnapshot",
+    "profileLease",
+    "hostBinding",
+    "hostLease",
+    "hostRegistration",
+    "bridgeSession",
+    "omnigentSession",
+    "bridgeEvents",
+    "workspace",
+    "artifactInventory",
+    "terminalProjection",
+    "cleanupResult",
+    "janitorState",
+    "sideEffectAudit",
+)
+BROWSER_RECORD_TYPES = set(BROWSER_RECORD_ORDER)
+ADMISSION_RECORD_TYPES = {"browserTrace", "sideEffectAudit"}
+BROWSER_FIELD_RECORD_TYPE = {
+    "authoredWorkflowRef": "authoredWorkflow",
+    "taskInputSnapshotRef": "taskInputSnapshot",
+    "compiledRuntimeRequestRef": "compiledExecutionRequest",
+    "executionProfileRef": "executionProfile",
+    "launchPolicyRef": "launchPolicy",
+    "effectiveLaunchSnapshotRef": "effectiveLaunchSnapshot",
+    "providerProfileRef": "profileLease",
+    "providerLeaseId": "profileLease",
+    "hostBindingRef": "hostBinding",
+    "hostLeaseId": "hostLease",
+    "hostId": "hostRegistration",
+    "hostCapability": "hostRegistration",
+    "bridgeSessionId": "bridgeSession",
+    "omnigentSessionId": "omnigentSession",
+    "firstMessageId": "bridgeEvents",
+    "eventCursor": "bridgeEvents",
+    "workspaceLocator": "workspace",
+    "sourceCommit": "workspace",
+    "resourceRefs": "artifactInventory",
+    "artifactRefs": "artifactInventory",
+    "terminalState": "terminalProjection",
+    "cleanupState": "cleanupResult",
+    "janitorState": "janitorState",
+    "providerProfileRelease": "profileLease",
+    "networkPolicyRef": "effectiveLaunchSnapshot",
+    "runtime": "compiledExecutionRequest",
+    "hostMode": "launchPolicy",
 }
 STOCK_ROUTES = (
     "agents", "hosts", "session.create", "session.get", "event.post",
@@ -116,6 +211,7 @@ ONDEMAND_ACTIONS = (
     "host_removed", "workflow_detail_reloaded", "lease_released",
 )
 SCENARIOS = {
+    "browser": f"{PROVIDER_TEST}::test_live_browser_release_matrix",
     "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
     "cumulative": f"{PROVIDER_TEST}::test_live_cumulative_remediation_journey",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
@@ -130,6 +226,7 @@ EVIDENCE_ENV = {
     "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
 }
 SCENARIO_EVIDENCE_ENV = {
+    "browser": "MOONMIND_OMNIGENT_BROWSER_EVIDENCE",
     "product": "MOONMIND_OMNIGENT_PRODUCT_EVIDENCE",
     "cumulative": "MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
@@ -217,7 +314,7 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
-        if scenario in {"product", "cumulative", "failures"}:
+        if scenario in {"browser", "product", "cumulative", "failures"}:
             records = [
                 record
                 for item in observations
@@ -225,7 +322,16 @@ class LiveRunner:
                 if isinstance(record, dict)
             ]
             required_types = (
-                PRODUCT_RECORD_TYPES[action]
+                (
+                    ADMISSION_RECORD_TYPES
+                    if action in {
+                        "failed_credential_readiness_admission",
+                        "failed_host_registration_readiness",
+                    }
+                    else BROWSER_RECORD_TYPES
+                )
+                if scenario == "browser"
+                else PRODUCT_RECORD_TYPES[action]
                 if scenario == "product"
                 else {"cumulativeRunState", "sideEffectAudit"}
                 if scenario == "cumulative"
@@ -250,7 +356,14 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"{scenario}/{action} source record digest does not match: {record['type']}"
                     )
+                try:
+                    record["_resolved"] = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ConformanceContractError(
+                        f"{scenario}/{action} source record is not JSON: {record['type']}"
+                    ) from exc
             payload["_sourceRecordTypes"] = sorted(observed_types)
+            payload["_sourceRecords"] = records
         returned_ids = {
             key: value for key, value in payload.items()
             if key in {
@@ -290,6 +403,49 @@ class LiveRunner:
                 f"{scenario}/{action} durable failure claims are not bound to evidence"
             )
         return payload
+
+    def browser_observation(self, row: str) -> dict[str, object]:
+        """Run the fixed repository-owned Playwright journey for one matrix row."""
+        browser_dir = self.output_dir / "browser"
+        browser_dir.mkdir(parents=True, exist_ok=True)
+        env = dict(self.env)
+        env.update({
+            "MOONMIND_OMNIGENT_BROWSER_ROW": row,
+            "MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR": str(browser_dir),
+        })
+        result = subprocess.run(
+            ["node", "tools/run_omnigent_browser_journey.mjs"],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        log_path = browser_dir / f"{row}.log"
+        log_path.write_text(
+            f"--- STDOUT ---\n{result.stdout}\n--- STDERR ---\n{result.stderr}",
+            encoding="utf-8",
+        )
+        self.logs.append(log_path)
+        if result.returncode:
+            raise RuntimeError(f"browser/{row} failed; see {log_path}")
+        try:
+            observation = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ConformanceContractError(
+                f"browser/{row} controller returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(observation, dict)
+            or observation.get("schemaVersion")
+            != "moonmind.omnigent.browser-observation/v1"
+            or observation.get("row") != row
+        ):
+            raise ConformanceContractError(
+                f"browser/{row} controller returned a mismatched observation"
+            )
+        return observation
 
     def _resolve_evidence_ref(self, ref: str) -> dict[str, object]:
         """Resolve durable evidence and reject opaque or unreachable attestations."""
@@ -393,6 +549,191 @@ class LiveRunner:
             }),
         })
         self.scenario("product")
+
+    def browser(self) -> None:
+        """Control /workflows/new and prove every #3508 release row."""
+        rows: dict[str, dict[str, object]] = {}
+        evidence_refs: list[str] = []
+        for row in BROWSER_ROWS:
+            setup = self.action("browser-setup", row)
+            observation = self.browser_observation(row)
+            result = self.action("browser", row, browserObservation=observation)
+            if result.get("row") != row:
+                raise ConformanceContractError(
+                    f"browser row identity mismatch: expected {row!r}"
+                )
+            admission_failure = row in {
+                "failed_credential_readiness_admission",
+                "failed_host_registration_readiness",
+            }
+            if admission_failure:
+                expected_reason = (
+                    "credential_readiness"
+                    if row == "failed_credential_readiness_admission"
+                    else "host_registration_readiness"
+                )
+                selected = observation.get("selected")
+                admission_authority = result.get("admissionAuthority")
+                if (
+                    observation.get("admissionRejected") is not True
+                    or observation.get("createRequestCount") != 0
+                    or observation.get("admissionReason") != expected_reason
+                    or not isinstance(selected, dict)
+                    or not isinstance(admission_authority, dict)
+                    or selected.get("profileId")
+                    != admission_authority.get("providerProfileRef")
+                ):
+                    raise ConformanceContractError(
+                        f"browser/{row} did not prove its distinct fail-closed admission"
+                    )
+                rows[row] = {
+                    "status": "passed",
+                    "assertions": {
+                        "browser_originated": True,
+                        "normal_create_request_rejected": True,
+                        "distinct_admission_reason": True,
+                        "no_fallback": bool(result.get("noFallback")),
+                    },
+                    "authorityChain": admission_authority,
+                    "browserObservation": observation,
+                    "evidenceRefs": result["evidenceRefs"],
+                }
+                if not all(rows[row]["assertions"].values()):
+                    raise ConformanceContractError(
+                        f"browser/{row} did not prove no fallback"
+                    )
+                evidence_refs.extend(setup["evidenceRefs"])
+                evidence_refs.extend(result["evidenceRefs"])
+                continue
+            authority = result.get("authorityChain")
+            if not isinstance(authority, dict):
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the complete authority chain"
+                )
+            missing = [field for field in BROWSER_AUTHORITY_FIELDS if not authority.get(field)]
+            if missing:
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the complete authority chain: {missing}"
+                )
+            if authority.get("hostCapability") != "codex-native":
+                raise ConformanceContractError(
+                    f"browser/{row} did not reach the codex-native capability"
+                )
+            if authority.get("runtime") != "external/omnigent":
+                raise ConformanceContractError(
+                    f"browser/{row} used a non-Omnigent runtime"
+                )
+            selected = observation.get("selected")
+            if not isinstance(selected, dict):
+                raise ConformanceContractError(
+                    f"browser/{row} lacks the selected browser authorities"
+                )
+            expected = {
+                "providerProfileRef": selected.get("profileId"),
+                "executionProfileRef": selected.get("executionTargetRef"),
+                "launchPolicyRef": selected.get("launchPolicyRef"),
+                "runtime": "external/omnigent",
+                "hostCapability": "codex-native",
+            }
+            if selected.get("hostMode"):
+                expected["hostMode"] = selected["hostMode"]
+            mismatches = {
+                key: (value, authority.get(key))
+                for key, value in expected.items()
+                if authority.get(key) != value
+            }
+            if mismatches:
+                raise ConformanceContractError(
+                    f"browser/{row} selected authorities do not match observed records: {mismatches}"
+                )
+            records = result.get("_sourceRecords")
+            if not isinstance(records, list):
+                raise ConformanceContractError(f"browser/{row} lacks resolved records")
+            positions = {
+                record.get("type"): index
+                for index, record in enumerate(records)
+                if isinstance(record, dict)
+            }
+            if any(
+                positions[BROWSER_RECORD_ORDER[index]]
+                >= positions[BROWSER_RECORD_ORDER[index + 1]]
+                for index in range(len(BROWSER_RECORD_ORDER) - 1)
+            ):
+                raise ConformanceContractError(
+                    f"browser/{row} authority records are not lifecycle ordered"
+                )
+            resolved_by_type = {
+                record["type"]: json.dumps(record.get("_resolved"), sort_keys=True)
+                for record in records
+            }
+            unbound = [
+                field
+                for field, value in authority.items()
+                if field in BROWSER_AUTHORITY_FIELDS
+                and json.dumps(value, sort_keys=True)
+                not in resolved_by_type[BROWSER_FIELD_RECORD_TYPE[field]]
+            ]
+            if unbound:
+                raise ConformanceContractError(
+                    f"browser/{row} authority values are not bound to resolved records: {unbound}"
+                )
+            assertions = {
+                "browser_originated": observation.get("workflowId") == result.get("workflowId"),
+                "normal_create_request": bool(observation.get("createRequest")),
+                "workflow_detail_terminal_replay": (
+                    observation.get("terminalUrl") == observation.get("replayUrl")
+                    and observation.get("replayComplete") is True
+                    and observation.get("hostRemovedBeforeReplay") is True
+                ),
+                "no_fallback": not mismatches,
+            }
+            if row == "active_cancellation_interruption":
+                assertions["active_control"] = (
+                    observation.get("controlAction") == "cancel_or_interrupt"
+                    and authority.get("terminalState") in {"cancelled", "interrupted"}
+                )
+            if row == "partial_start_cleanup_janitor":
+                assertions["janitor_reconciliation"] = (
+                    observation.get("janitorReconciled") is True
+                    and authority.get("janitorState") in {"reconciled", "completed"}
+                )
+            if row in {"repository_read_analysis", "repository_mutation_publication"}:
+                assertions["repository_outcome"] = (
+                    observation.get("repositoryOutcome") == "read_analysis"
+                    if row == "repository_read_analysis"
+                    else result.get("repositoryMutationPublished") is True
+                    and bool(result.get("repositoryCommitSha"))
+                    and bool(result.get("publicationRef"))
+                )
+            if row == "static_restart_replay":
+                assertions["static_restart"] = (
+                    result.get("staticHostRestarted") is True
+                    and bool(result.get("hostIdentityBeforeRestart"))
+                    and bool(result.get("hostIdentityAfterRestart"))
+                    and result.get("hostIdentityBeforeRestart")
+                    != result.get("hostIdentityAfterRestart")
+                )
+            if not all(assertions.values()):
+                raise ConformanceContractError(
+                    f"browser/{row} did not prove browser control or no fallback"
+                )
+            rows[row] = {
+                "status": "passed",
+                "assertions": assertions,
+                "authorityChain": authority,
+                "browserObservation": observation,
+                "evidenceRefs": result["evidenceRefs"],
+            }
+            evidence_refs.extend(setup["evidenceRefs"])
+            evidence_refs.extend(result["evidenceRefs"])
+        self.write_evidence("browser", {
+            "issue": "MoonLadderStudios/MoonMind#3508",
+            "parentIssue": "MoonLadderStudios/MoonMind#3448",
+            "entrypoint": "/workflows/new",
+            "rows": rows,
+            "evidenceRefs": evidence_refs,
+        })
+        self.scenario("browser")
 
     def cumulative(self) -> None:
         """Prove cumulative remediation through the production action boundary."""
@@ -601,10 +942,13 @@ class LiveRunner:
             paths = [Path(item) for item in raw.split(os.pathsep) if item]
             if channel == "logs":
                 paths.extend(self.logs)
+            if channel == "screenshots":
+                paths.extend(sorted(self.output_dir.glob("*-terminal.png")))
+                paths.extend(sorted(self.output_dir.glob("*-replay.png")))
             if not paths or any(not path.is_file() for path in paths):
                 raise ConformanceContractError(f"{channel} evidence was not collected")
             for evidence in paths:
-                assert_secret_free(evidence.read_text(encoding="utf-8", errors="replace"))
+                assert_secret_free(evidence.read_bytes().decode("utf-8", errors="replace"))
             scan_path = self.output_dir / f"secret-scan-{channel}.json"
             scan_path.write_text(json.dumps({"status": "passed", "files": [str(p) for p in paths]}) + "\n")
             scans[channel] = {"status": "passed", "evidenceRef": str(scan_path)}
@@ -637,7 +981,9 @@ def main() -> int:
     try:
         for mode in selected:
             try:
-                if mode == "product":
+                if mode == "browser":
+                    runner.browser()
+                elif mode == "product":
                     runner.product()
                 elif mode == "cumulative":
                     runner.cumulative()

@@ -241,6 +241,56 @@ async def test_live_product_create_api_journey(bridge_store) -> None:
     assert evidence.get("schemaVersions")
 
 
+async def test_live_browser_release_matrix(bridge_store) -> None:
+    _require_mode("browser")
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_BROWSER_EVIDENCE")
+    assert evidence.get("issue") == "MoonLadderStudios/MoonMind#3508"
+    assert evidence.get("parentIssue") == "MoonLadderStudios/MoonMind#3448"
+    assert evidence.get("entrypoint") == "/workflows/new"
+    rows = evidence.get("rows")
+    assert isinstance(rows, dict)
+    assert set(rows) == {
+        "static_profile_bound", "static_restart_replay",
+        "on_demand_policy_selected", "repository_read_analysis",
+        "repository_mutation_publication",
+        "failed_credential_readiness_admission",
+        "failed_host_registration_readiness",
+        "active_cancellation_interruption",
+        "partial_start_cleanup_janitor",
+    }
+    admission_rows = {
+        "failed_credential_readiness_admission",
+        "failed_host_registration_readiness",
+    }
+    for name, row in rows.items():
+        assert row.get("status") == "passed"
+        _assert_passed(
+            row,
+            {
+                "browser_originated", "normal_create_request_rejected",
+                "distinct_admission_reason", "no_fallback",
+            }
+            if name in admission_rows
+            else {
+                "browser_originated", "normal_create_request",
+                "workflow_detail_terminal_replay", "no_fallback",
+            },
+        )
+        authority = row.get("authorityChain")
+        assert isinstance(authority, dict)
+        if name in admission_rows:
+            assert set(authority) == {"providerProfileRef"}
+            assert authority.get("providerProfileRef")
+            continue
+        assert authority.get("hostCapability") == "codex-native"
+        assert authority.get("runtime") == "external/omnigent"
+        observation = row.get("browserObservation")
+        assert isinstance(observation, dict)
+        assert observation.get("schemaVersion") == "moonmind.omnigent.browser-observation/v1"
+        assert observation.get("startPath", "/workflows/new") == "/workflows/new"
+        assert observation.get("workflowId")
+
+
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:
     _require_mode("cumulative")
     evidence = _scenario_evidence("MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE")
