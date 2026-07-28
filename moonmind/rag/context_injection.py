@@ -211,6 +211,8 @@ class ContextInjectionService:
 
         filters = settings.as_filter_metadata()
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        authored_rag = parameters.get("rag")
+        authored_rag = authored_rag if isinstance(authored_rag, dict) else {}
         repo_filter = self._repository_filter_value(
             parameters.get("repository", "")
             or request.workspace_spec.get("repository", "")
@@ -228,7 +230,12 @@ class ContextInjectionService:
         )
         return (
             service.retrieve(
-                query=request.instruction_ref or "",
+                query=str(
+                    authored_rag.get("queryOverride")
+                    or authored_rag.get("query")
+                    or request.instruction_ref
+                    or ""
+                ),
                 filters=filters,
                 top_k=settings.similarity_top_k,
                 overlay_policy=self._resolve_rag_overlay_policy(),

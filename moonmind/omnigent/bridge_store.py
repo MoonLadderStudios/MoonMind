@@ -1549,6 +1549,30 @@ class OmnigentBridgeSessionStore:
             await session.refresh(row)
             return _detached(session, row)
 
+    async def record_initial_context(
+        self,
+        idempotency_key: str,
+        *,
+        evidence: dict[str, Any],
+    ) -> OmnigentBridgeSession:
+        """Persist bounded initial-retrieval evidence before message commitment."""
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.first_message_state != FIRST_MESSAGE_NOT_PREPARED:
+                existing = dict((row.metadata_ or {}).get("initialRetrieval") or {})
+                if existing != evidence:
+                    raise OmnigentDigestMismatchError(
+                        "initial retrieval changed after first-message preparation"
+                    )
+                return _detached(session, row)
+            metadata = dict(row.metadata_ or {})
+            metadata["initialRetrieval"] = redact_sensitive_payload(evidence)
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def mark_posting(self, idempotency_key: str) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
             row = await self._require(session, idempotency_key)

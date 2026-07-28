@@ -8221,6 +8221,13 @@ describe('Workflow Detail Entrypoint', () => {
             bridgeSessionId: 'brs-1',
             workflowId: 'test-123',
             status: 'completed',
+            initialRetrieval: {
+              state: 'degraded',
+              contextPackRef: 'artifact://context/pack.json',
+              resultCount: 2,
+              truncated: true,
+              reason: 'gateway unavailable',
+            },
           }),
         } as Response);
       }
@@ -8266,6 +8273,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'Initial context: degraded · 2 sources · truncated · gateway unavailable',
+    );
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);

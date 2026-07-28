@@ -2608,6 +2608,7 @@ type BridgeSessionProjection = {
   omnigentHostRef?: string | undefined;
   omnigentRunnerRef?: string | undefined;
   firstMessageState?: string | undefined;
+  initialRetrieval?: Record<string, unknown> | undefined;
   capabilities: Record<string, boolean>;
 };
 
@@ -2775,6 +2776,9 @@ async function resolveBridgeSessionProjection({
     omnigentHostRef: typeof body.omnigentHostRef === 'string' ? body.omnigentHostRef : undefined,
     omnigentRunnerRef: typeof body.omnigentRunnerRef === 'string' ? body.omnigentRunnerRef : undefined,
     firstMessageState: typeof body.firstMessageState === 'string' ? body.firstMessageState : undefined,
+    initialRetrieval: body.initialRetrieval && typeof body.initialRetrieval === 'object'
+      ? body.initialRetrieval as Record<string, unknown>
+      : undefined,
     capabilities: body.capabilities && typeof body.capabilities === 'object'
       ? Object.fromEntries(Object.entries(body.capabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
       : {},
@@ -6224,6 +6228,17 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {projection.initialRetrieval ? (
+        <p className="small" data-testid="omnigent-initial-retrieval">
+          Initial context: {String(projection.initialRetrieval.state ?? 'unknown')}
+          {' · '}{Number(projection.initialRetrieval.resultCount ?? 0)} sources
+          {projection.initialRetrieval.truncated ? ' · truncated' : ''}
+          {projection.initialRetrieval.reason ? ` · ${String(projection.initialRetrieval.reason)}` : ''}
+          {projection.initialRetrieval.contextPackRef
+            ? <> · <code className="text-xs">{String(projection.initialRetrieval.contextPackRef)}</code></>
+            : null}
+        </p>
+      ) : null}
       <section className="card stack" aria-label="Omnigent runtime identity">
         <h3>Codex via Omnigent</h3>
         <dl className="details-grid">

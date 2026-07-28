@@ -21,11 +21,14 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
+    _first_message_text,
     _resolve_agent_id,
+    _resolve_initial_context_message,
     _restore_active_journals,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
+from moonmind.rag.context_injection import PromptContextResolution
 from moonmind.omnigent.bridge_store import OmnigentDigestMismatchError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -38,6 +41,151 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_initial_context_is_persisted_before_first_message_digest(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}}
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    recorded: list[dict[str, Any]] = []
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifact://context/pack.json",
+            "retrievedContextTransport": "gateway",
+            "retrievedContextItemCount": 2,
+            "retrievalMode": "semantic",
+            "retrievalContextTruncated": True,
+            "retrievalDurabilityAuthority": "artifact_ref",
+        }
+        framed = "SYSTEM SAFETY NOTICE:\nBEGIN_RETRIEVED_CONTEXT\nuntrusted\nEND_RETRIEVED_CONTEXT\n\nDo work"
+        request.instruction_ref = framed
+        return PromptContextResolution(instruction=framed, items_count=2)
+
+    class Store:
+        async def record_initial_context(self, key, *, evidence):
+            assert key == "idem-1"
+            recorded.append(dict(evidence))
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    message, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Do work"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=Store(),
+        durable_row=None,
+        workspace=str(tmp_path),
+    )
+
+    assert "SYSTEM SAFETY NOTICE" in _first_message_text(message)
+    assert evidence["contextPackRef"] == "artifact://context/pack.json"
+    assert evidence["state"] == "completed"
+    assert evidence["truncated"] is True
+    assert evidence["firstMessageConsumedContextRef"] is True
+    assert evidence["preparedMessageRef"].startswith("artifact://omnigent/")
+    assert recorded == [evidence]
+
+
+@pytest.mark.asyncio
+async def test_initial_context_retry_reuses_exact_prepared_message(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    prepared = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "persisted context message"}],
+        },
+    }
+    prepared_ref = await gateway.write_json(
+        request=request,
+        name="input.omnigent.first_message.prepared.json",
+        payload=prepared,
+        link_type="input.omnigent.first_message.prepared",
+    )
+
+    class Row:
+        metadata_ = {
+            "initialRetrieval": {
+                "state": "completed",
+                "contextPackRef": "artifact://context/pack.json",
+                "preparedMessageRef": prepared_ref,
+            }
+        }
+
+    async def unexpected_injection(*args, **kwargs):
+        raise AssertionError("retry must not rerun retrieval")
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        unexpected_injection,
+    )
+    message, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "new message"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=Row(),
+        workspace=str(tmp_path),
+    )
+
+    assert message == prepared
+    assert evidence == Row.metadata_["initialRetrieval"]
+
+
+@pytest.mark.asyncio
+async def test_required_initial_context_fails_before_message_commit(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"rag": {"required": True}, "metadata": {}}
+
+    async def disabled_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "retrievalMode": "disabled",
+            "retrievalDisabledReason": "retrieval_gateway_unavailable",
+        }
+        return PromptContextResolution(instruction=request.instruction_ref or "")
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        disabled_context,
+    )
+    with pytest.raises(OmnigentContractError, match="required initial context"):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=None,
+            durable_row=None,
+            workspace=str(tmp_path),
+        )
 
 
 @pytest.mark.asyncio
