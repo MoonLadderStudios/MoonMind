@@ -567,7 +567,9 @@ class RemediationActionAuthorityService:
         )
         cache_key = (workflow_id, idem, request_shape_hash)
         if workflow_id and idem and cache_key in self._decisions:
-            return self._decisions[cache_key]
+            cached = self._decisions[cache_key]
+            if not (cached.decision == "approval_required" and approval_ref):
+                return cached
 
         if not workflow_id:
             return self._result(
@@ -674,12 +676,14 @@ class RemediationActionAuthorityService:
                     "status": target_state,
                     "checkpointRef": (parameters or {}).get("checkpointRef"),
                     "sessionIdentity": (parameters or {}).get("sessionIdentity"),
+                    "hostIdentity": (parameters or {}).get("hostIdentity"),
                     "credentialGeneration": (parameters or {}).get(
                         "credentialGeneration"
                     ),
                 },
                 "policySnapshot": {
                     "schemaVersion": "v1",
+                    "policyVersion": (parameters or {}).get("policyVersion", 1),
                     "authorityMode": link.authority_mode,
                     "securityProfileRef": result.security_profile_ref,
                     "reason": result.reason,
@@ -855,6 +859,26 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
+        if authority_mode == "approval_gated" and approval_ref:
+            approval = dict(link.approval_state or {})
+            if (
+                approval.get("requestId") != approval_ref
+                or approval.get("decision") != "approved"
+                or approval.get("actionKind") not in {None, action_kind}
+                or approval.get("idempotencyKey") not in {None, idempotency_key}
+            ):
+                return self._linked_result(
+                    link=link,
+                    action_kind=action_kind,
+                    risk=risk,
+                    decision="denied",
+                    reason="approved_request_binding_required",
+                    idempotency_key=idempotency_key,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
         if risk == "high" and not approval_ref:
             return self._linked_result(
                 link=link,

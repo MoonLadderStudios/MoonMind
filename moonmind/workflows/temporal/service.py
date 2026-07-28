@@ -682,6 +682,11 @@ class TemporalExecutionService:
                 "Unsupported workflow.remediation.authorityMode "
                 f"'{authority_mode}'. Supported values: {supported}."
             )
+        if authority_mode == "admin_auto":
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.authorityMode admin_auto is disabled until "
+                "the production-shaped autonomous rollout gate is satisfied."
+            )
 
         target_record = await self._session.get(
             TemporalExecutionCanonicalRecord, target_workflow_id
@@ -818,6 +823,7 @@ class TemporalExecutionService:
         )
         policy_snapshot = {
             "schemaVersion": "v1",
+            "policyVersion": 1,
             "actionPolicyRef": action_policy_ref or None,
             "approvalPolicy": dict(remediation.get("approvalPolicy") or {}),
             "authorityMode": authority_mode,
@@ -832,6 +838,7 @@ class TemporalExecutionService:
                     "workflowId": target_record.workflow_id,
                     "runId": target_record.run_id,
                     "status": target_state,
+                    **self._approval_target_bindings(target_record),
                 },
                 "policySnapshot": policy_snapshot,
                 "expiresAt": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
@@ -896,6 +903,49 @@ class TemporalExecutionService:
         if isinstance(value, list | tuple):
             for item in value:
                 cls._collect_agent_run_ids(item, output)
+
+    @classmethod
+    def _approval_target_bindings(
+        cls, record: TemporalExecutionCanonicalRecord
+    ) -> dict[str, Any]:
+        """Return durable target identities that invalidate an outstanding approval."""
+
+        aliases = {
+            "checkpointRef": ("checkpointRef", "checkpoint_ref"),
+            "hostIdentity": ("hostIdentity", "host_identity", "hostId", "host_id"),
+            "sessionIdentity": (
+                "sessionIdentity",
+                "session_identity",
+                "sessionId",
+                "session_id",
+            ),
+            "credentialGeneration": (
+                "credentialGeneration",
+                "credential_generation",
+            ),
+            "policyVersion": ("policyVersion", "policy_version"),
+        }
+        found: dict[str, Any] = {}
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                for canonical, keys in aliases.items():
+                    if canonical in found:
+                        continue
+                    for key in keys:
+                        candidate = value.get(key)
+                        if candidate is not None and str(candidate).strip():
+                            found[canonical] = candidate
+                            break
+                for item in value.values():
+                    visit(item)
+            elif isinstance(value, list | tuple):
+                for item in value:
+                    visit(item)
+
+        for payload in (record.parameters, record.memo, record.search_attributes):
+            visit(payload)
+        return found
 
     async def _write_dependency_edges(
         self,
@@ -1131,6 +1181,27 @@ class TemporalExecutionService:
         )
         if expected_status not in {None, current_status}:
             stale_fields.append("target_state")
+        current_bindings = self._approval_target_bindings(target)
+        for field, stale_name in (
+            ("checkpointRef", "checkpoint"),
+            ("hostIdentity", "host_identity"),
+            ("sessionIdentity", "session_identity"),
+            ("credentialGeneration", "credential_generation"),
+            ("policyVersion", "policy_version"),
+        ):
+            expected_value = expected_state.get(field)
+            if expected_value is not None and current_bindings.get(field) != expected_value:
+                stale_fields.append(stale_name)
+        policy_snapshot = approval.get("policySnapshot") or {}
+        expected_policy_version = policy_snapshot.get("policyVersion")
+        current_policy_version = current_bindings.get("policyVersion")
+        if (
+            expected_policy_version is not None
+            and current_policy_version is not None
+            and expected_policy_version != current_policy_version
+            and "policy_version" not in stale_fields
+        ):
+            stale_fields.append("policy_version")
         if stale_fields:
             approval.update(
                 {

@@ -6711,6 +6711,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByText('Remediation create preview')).toBeTruthy();
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Admin remediation' })).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Remediation mode'), {
       target: { value: 'snapshot' },

@@ -2729,16 +2729,21 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert link.approval_state["policySnapshot"]["schemaVersion"] == "v1"
         assert link.approval_state["approvalLevel"] == "standard"
 
+        link.approval_state = {
+            **link.approval_state,
+            "decision": "approved",
+        }
+        await session.commit()
         approved = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
-            idempotency_key="gated-approved",
+            idempotency_key="gated-pending",
             requesting_principal="user:operator",
             permissions=_admin_permissions(can_approve_high_risk=True),
             security_profile=_admin_profile(),
-            approval_ref="approval://ops/1",
+            approval_ref=link.approval_state["requestId"],
         )
         assert approved.decision == "allowed"
         assert approved.executable is True

@@ -1445,6 +1445,89 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
                 actor="ops@example.com",
             )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("binding", "stale_name"),
+    [
+        ("checkpointRef", "checkpoint"),
+        ("hostIdentity", "host_identity"),
+        ("sessionIdentity", "session_identity"),
+        ("credentialGeneration", "credential_generation"),
+        ("policyVersion", "policy_version"),
+    ],
+)
+async def test_record_remediation_approval_decision_rejects_every_stale_binding(
+    tmp_path, mock_client_adapter, binding, stale_name
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": "approval_gated",
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        approval = dict(link.approval_state)
+        approval["decision"] = "pending"
+        approval["canDecide"] = True
+        approval["expectedState"] = {
+            **approval["expectedState"],
+            binding: "expected-value",
+        }
+        if binding == "policyVersion":
+            approval["policySnapshot"] = {
+                **approval["policySnapshot"],
+                "policyVersion": "expected-value",
+            }
+        link.approval_state = approval
+        link.status = "awaiting_approval"
+        await session.commit()
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=f"approval request is stale: {stale_name}",
+        ):
+            await service.record_remediation_approval_decision(
+                remediation_workflow_id=remediation.workflow_id,
+                request_id=approval["requestId"],
+                decision="approved",
+                comment=None,
+                actor="ops@example.com",
+            )
+
+        await session.refresh(link)
+        assert link.approval_state["decision"] == "stale"
+        assert stale_name in link.approval_state["staleReason"]
+
 @pytest.mark.asyncio
 async def test_create_execution_persists_supplied_matching_remediation_run_id(
     tmp_path, mock_client_adapter
@@ -1606,6 +1689,49 @@ async def test_create_execution_rejects_missing_remediation_target_workflow_id(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={"workflow": {"remediation": {"target": {}}}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_admin_auto_while_rollout_gate_is_closed(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="admin_auto is disabled",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Autonomous remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        }
+                    }
+                },
                 idempotency_key=None,
             )
 
