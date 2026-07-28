@@ -900,6 +900,7 @@ class BridgeSessionResolution(BaseModel):
     omnigent_host_ref: str | None = None
     omnigent_runner_ref: str | None = None
     first_message_state: str | None = None
+    initial_retrieval: dict[str, Any] | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -1188,6 +1189,10 @@ async def resolve_omnigent_bridge_session_projection(
         omnigent_host_ref=getattr(row, "omnigent_host_id", None),
         omnigent_runner_ref=getattr(row, "omnigent_runner_id", None),
         first_message_state=getattr(row, "first_message_state", None),
+        initial_retrieval=dict(
+            ((getattr(row, "metadata_", None) or {}).get("initialRetrieval") or {})
+        )
+        or None,
         capabilities=_projection_capabilities(row),
     )
 

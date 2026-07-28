@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -21,11 +22,14 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
+    _first_message_text,
     _resolve_agent_id,
+    _resolve_initial_context_message,
     _restore_active_journals,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
+from moonmind.rag.context_injection import PromptContextResolution
 from moonmind.omnigent.bridge_store import OmnigentDigestMismatchError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -38,6 +42,334 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_initial_context_is_persisted_before_first_message_digest(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}}
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    recorded: list[dict[str, Any]] = []
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifact://context/pack.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievalQueryDigest": "sha256:query",
+            "retrievalQueryPreview": "Do work",
+            "retrievedContextTransport": "gateway",
+            "retrievedContextItemCount": 2,
+            "retrievedContextSources": ["docs/a.md", "docs/b.md"],
+            "retrievalCollections": ["canonical"],
+            "retrievalScope": {"repository": "org/repo", "run": "corr-1"},
+            "retrievalBudgets": {"tokens": 500, "latency_ms": 1000},
+            "retrievalUsage": {"tokens": 20, "latency_ms": 12},
+            "retrievalOverlay": {"policy": "include", "freshness": "fresh"},
+            "retrievalEmbeddingConfigRef": "sha256:embedding",
+            "retrievalFailureClass": None,
+            "retrievalMode": "semantic",
+            "retrievalContextTruncated": True,
+            "retrievalDurabilityAuthority": "artifact_ref",
+        }
+        framed = "SYSTEM SAFETY NOTICE:\nBEGIN_RETRIEVED_CONTEXT\nuntrusted\nEND_RETRIEVED_CONTEXT\n\nDo work"
+        request.instruction_ref = framed
+        return PromptContextResolution(instruction=framed, items_count=2)
+
+    class Store:
+        async def record_initial_context(self, key, *, evidence):
+            assert key == "idem-1"
+            recorded.append(dict(evidence))
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    message, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Do work"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=Store(),
+        durable_row=None,
+        workspace=str(tmp_path),
+    )
+
+    assert "SYSTEM SAFETY NOTICE" in _first_message_text(message)
+    assert evidence["contextPackRef"] == "artifact://context/pack.json"
+    assert evidence["state"] == "completed"
+    assert evidence["truncated"] is True
+    assert evidence["contextPackDigest"] == "sha256:pack"
+    assert evidence["queryDigest"] == "sha256:query"
+    assert evidence["collections"] == ["canonical"]
+    assert evidence["scope"] == {"repository": "org/repo", "run": "corr-1"}
+    assert evidence["sources"] == ["docs/a.md", "docs/b.md"]
+    assert evidence["budgets"]["tokens"] == 500
+    assert evidence["embeddingConfigRef"] == "sha256:embedding"
+    assert evidence["firstMessageConsumedContextRef"] is True
+    assert evidence["preparedMessageRef"].startswith("artifact://omnigent/")
+    prepared_payload = json.dumps(
+        message, sort_keys=True, separators=(",", ":")
+    ).encode()
+    assert evidence["preparedMessageDigest"] == hashlib.sha256(
+        prepared_payload
+    ).hexdigest()
+    assert message["metadata"]["moonmindIdempotencyKey"] == "idem-1"
+    assert "MoonMind-Omnigent-Run:" in _first_message_text(message)
+    assert recorded == [evidence]
+
+
+@pytest.mark.asyncio
+async def test_initial_context_pack_is_published_through_artifact_gateway(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}}
+    context_path = tmp_path / "workspace-context.json"
+    context_path.write_text('{"items":[]}\n', encoding="utf-8")
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "published")
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifacts/context/workspace-context.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievedContextItemCount": 0,
+            "retrievalMode": "semantic",
+        }
+        return PromptContextResolution(
+            instruction="Do work", artifact_path=context_path
+        )
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    _, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Do work"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=None,
+        workspace=str(tmp_path),
+    )
+
+    assert evidence["contextPackRef"].startswith("artifact://omnigent/")
+    assert (
+        request.parameters["metadata"]["moonmind"]["retrievalDurabilityAuthority"]
+        == "artifact_gateway"
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_context_artifact_publication_failure_fails_before_commit(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}, "rag": {"required": True}}
+    context_path = tmp_path / "workspace-context.json"
+    context_path.write_text('{"items":[]}\n', encoding="utf-8")
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifacts/context/workspace-context.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievalMode": "semantic",
+        }
+        return PromptContextResolution(
+            instruction="Do work", artifact_path=context_path
+        )
+
+    class FailingGateway(LocalOmnigentArtifactGateway):
+        async def write_text(self, **kwargs):
+            if kwargs.get("link_type") == "input.context-pack":
+                raise OmnigentArtifactError("artifact service unavailable")
+            return await super().write_text(**kwargs)
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    with pytest.raises(
+        OmnigentContractError,
+        match="required initial context artifact publication failed",
+    ):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=FailingGateway(root=tmp_path / "published"),
+            run_store=None,
+            durable_row=None,
+            workspace=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_initial_context_retry_reuses_exact_prepared_message(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    prepared = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "persisted context message"}],
+        },
+    }
+    prepared_ref = await gateway.write_json(
+        request=request,
+        name="input.omnigent.first_message.prepared.json",
+        payload=prepared,
+        link_type="input.omnigent.first_message.prepared",
+    )
+
+    class Row:
+        metadata_ = {
+            "initialRetrieval": {
+                "state": "completed",
+                "contextPackRef": "artifact://context/pack.json",
+                "preparedMessageRef": prepared_ref,
+            }
+        }
+
+    async def unexpected_injection(*args, **kwargs):
+        raise AssertionError("retry must not rerun retrieval")
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        unexpected_injection,
+    )
+    message, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "new message"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=Row(),
+        workspace=str(tmp_path),
+    )
+
+    assert message == prepared
+    assert evidence == Row.metadata_["initialRetrieval"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("artifact_payload", ["[]", "{not-json"])
+async def test_initial_context_retry_rejects_corrupt_prepared_message(
+    tmp_path, artifact_payload: str
+) -> None:
+    request = _request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    prepared_ref = await gateway.write_text(
+        request=request,
+        name="input.omnigent.first_message.prepared.json",
+        payload=artifact_payload,
+        link_type="input.omnigent.first_message.prepared",
+        content_type="application/json",
+    )
+
+    class Row:
+        metadata_ = {"initialRetrieval": {"preparedMessageRef": prepared_ref}}
+
+    with pytest.raises((OmnigentContractError, json.JSONDecodeError)):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=gateway,
+            run_store=None,
+            durable_row=Row(),
+            workspace=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_initial_context_retry_rejects_missing_prepared_message(tmp_path) -> None:
+    class Row:
+        metadata_ = {
+            "initialRetrieval": {
+                "preparedMessageRef": "artifact://omnigent/missing/prepared.json"
+            }
+        }
+
+    with pytest.raises(OmnigentArtifactError):
+        await _resolve_initial_context_message(
+            request=_request(),
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=None,
+            durable_row=Row(),
+            workspace=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_required_initial_context_fails_before_message_commit(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"rag": {"required": True}, "metadata": {}}
+
+    async def disabled_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "retrievalMode": "disabled",
+            "retrievalDisabledReason": "retrieval_gateway_unavailable",
+        }
+        return PromptContextResolution(instruction=request.instruction_ref or "")
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        disabled_context,
+    )
+    with pytest.raises(OmnigentContractError, match="required initial context"):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=None,
+            durable_row=None,
+            workspace=str(tmp_path),
+        )
 
 
 @pytest.mark.asyncio
@@ -149,12 +481,42 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
     )
 
     assert result.failure_class is None
+
+
+def test_build_omnigent_result_exposes_initial_context_pack_ref() -> None:
+    request = _request()
+    request.parameters = {
+        "metadata": {
+            "moonmind": {
+                "latestContextPackRef": "artifact://context/input.context-pack.json"
+            }
+        }
+    }
+
+    result = build_omnigent_result(
+        request=request,
+        terminal_status="completed",
+        session_id="session-1",
+        agent_id="agent-1",
+        final_snapshot={"summary": "done"},
+        event_count=1,
+        capture_bundle=_bundle(
+            output_refs=["artifact://transcript"],
+            diagnostics_ref="artifact://diagnostics",
+        ),
+    )
+
+    assert result.metadata["initialContextPackRef"] == (
+        "artifact://context/input.context-pack.json"
+    )
     assert result.provider_error_code is None
-    assert result.output_refs == ["artifact://transcript", "artifact://snapshot"]
+    assert result.output_refs == ["artifact://transcript"]
     assert result.diagnostics_ref == "artifact://diagnostics"
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["normalizedStatus"] == "completed"
-    assert result.metadata["captureManifestRef"] == "artifact://capture"
+    assert result.metadata["captureManifestRef"] == (
+        "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json"
+    )
 
 
 def test_build_omnigent_result_maps_snake_case_metadata() -> None:

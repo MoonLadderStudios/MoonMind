@@ -5256,6 +5256,10 @@ export interface components {
             omnigentRunnerRef?: string | null;
             /** Firstmessagestate */
             firstMessageState?: string | null;
+            /** Initialretrieval */
+            initialRetrieval?: {
+                [key: string]: unknown;
+            } | null;
             /** Capabilities */
             capabilities?: {
                 [key: string]: boolean;

@@ -2013,6 +2013,31 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
     }
 
 
+def test_run_promotes_omnigent_context_pack_ref_into_manifest_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._step_execution_context_projections[("omnigent-step", 1)] = {
+        "priorEvidenceRefs": []
+    }
+
+    workflow._record_omnigent_initial_context_ref(
+        "omnigent-step",
+        attempt=1,
+        execution_result={
+            "metadata": {
+                "providerName": "omnigent",
+                "initialContextPackRef": "artifact://context/input.context-pack.json",
+            }
+        },
+    )
+
+    assert workflow._step_execution_context_projections[
+        ("omnigent-step", 1)
+    ]["initialContextPackRef"] == "artifact://context/input.context-pack.json"
+
+
 def test_run_records_direct_report_outputs_as_accepted_step_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

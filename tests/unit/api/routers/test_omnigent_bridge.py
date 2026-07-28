@@ -1041,6 +1041,27 @@ def test_resolve_bridge_session_projection_filters_capabilities_to_booleans() ->
     assert resp.json()["capabilities"] == {"sendFollowUp": True, "interruptTurn": False}
 
 
+def test_resolve_bridge_session_projects_bounded_initial_retrieval() -> None:
+    evidence = {
+        "state": "degraded",
+        "contextPackRef": "artifact://context/pack.json",
+        "resultCount": 3,
+        "truncated": True,
+        "reason": "local_fallback_after_retrieval_error",
+        "firstMessageConsumedContextRef": True,
+        "firstMessageDigest": "sha256-safe",
+    }
+    store = _FakeStore(
+        session_overrides={"metadata_": {"initialRetrieval": evidence}}
+    )
+    client, _, _ = _build(store=store)
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/resolve?workflowId=mm%3Aw1"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["initialRetrieval"] == evidence
+
+
 def test_resolve_bridge_session_projection_denies_absent_capabilities() -> None:
     client, _, _ = _build(store=_FakeStore(session_overrides={"metadata_": {}}))
     resp = client.get(
