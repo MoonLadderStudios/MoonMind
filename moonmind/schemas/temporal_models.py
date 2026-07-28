@@ -1105,6 +1105,8 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
+    first_message_digest: str | None = Field(None, alias="firstMessageDigest")
+    event_cursor_ref: str | None = Field(None, alias="eventCursorRef")
     omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
     provider_session_ref: str | None = Field(None, alias="providerSessionRef")
     provider_profile_id: str | None = Field(None, alias="providerProfileId")
@@ -1137,6 +1139,8 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "workspace_artifact_ref",
         "external_state_ref",
         "idempotency_key",
+        "first_message_digest",
+        "event_cursor_ref",
         "omnigent_session_id",
         "provider_session_ref",
         "provider_profile_id",

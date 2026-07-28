@@ -17,6 +17,8 @@ def _workspace() -> dict[str, object]:
             "kind": "external_state_ref",
             "externalStateRef": checkpoint_ref,
             "idempotencyKey": "source-attempt",
+            "firstMessageDigest": "sha256:" + "c" * 64,
+            "eventCursorRef": "artifact://events/1",
             "omnigentSessionId": "session-1",
             "providerProfileId": "codex",
             "credentialGeneration": 3,
@@ -115,6 +117,11 @@ def test_compiler_rejects_mismatched_checkpoint_authority() -> None:
 async def test_service_resolves_live_authority_from_current_owners() -> None:
     service = object.__new__(TemporalExecutionService)
     service._session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                scalar_one_or_none=lambda: SimpleNamespace(expires_at=None)
+            )
+        ),
         get=AsyncMock(
             side_effect=[
                 SimpleNamespace(credential_generation=3),
@@ -134,12 +141,15 @@ async def test_service_resolves_live_authority_from_current_owners() -> None:
                 SimpleNamespace(
                     provider_profile_id="codex",
                     provider_lease_id="provider-lease-1",
+                    credential_generation=3,
                     host_binding_ref="binding-1",
                     host_lease_ref="host-lease-1",
+                    omnigent_endpoint_ref="endpoint-1",
                     omnigent_host_id="host-1",
                     omnigent_session_id="session-1",
                     external_state_ref="artifact://omnigent/state/1",
                     first_message_state="posted",
+                    first_message_digest="sha256:" + "c" * 64,
                     idempotency_key="source-attempt",
                     normalized_events_ref="artifact://events/1",
                     raw_events_ref=None,
@@ -162,3 +172,62 @@ async def test_service_resolves_live_authority_from_current_owners() -> None:
     assert authority["eventCursorValid"] is True
     assert authority["workspaceAuthorityValid"] is True
     assert authority["policyValid"] is True
+    assert authority["authorityRationale"] == ()
+
+
+@pytest.mark.asyncio
+async def test_service_fails_live_authority_closed_on_stale_owner_and_identity() -> None:
+    service = object.__new__(TemporalExecutionService)
+    service._session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
+        ),
+        get=AsyncMock(
+            side_effect=[
+                SimpleNamespace(credential_generation=3),
+                SimpleNamespace(
+                    provider_profile_id="codex",
+                    provider_lease_id="provider-lease-1",
+                    binding_ref="binding-1",
+                    lease_id="host-lease-1",
+                    credential_generation=3,
+                    omnigent_host_id="host-1",
+                    omnigent_session_id="session-1",
+                    bridge_session_id="bridge-1",
+                    disconnected_at=None,
+                    status="assigned",
+                    host_readiness="ready",
+                ),
+                SimpleNamespace(
+                    provider_profile_id="codex",
+                    provider_lease_id="provider-lease-1",
+                    credential_generation=3,
+                    host_binding_ref="binding-1",
+                    host_lease_ref="host-lease-1",
+                    omnigent_endpoint_ref="endpoint-1",
+                    omnigent_host_id="host-1",
+                    omnigent_session_id="session-1",
+                    external_state_ref="artifact://omnigent/state/1",
+                    first_message_state="posted",
+                    first_message_digest="sha256:" + "d" * 64,
+                    idempotency_key="source-attempt",
+                    normalized_events_ref="artifact://events/stale",
+                    raw_events_ref=None,
+                ),
+            ]
+        ),
+    )
+
+    authority = await service._resolve_omnigent_checkpoint_authority(
+        recovery_workspace=_workspace(),
+        admitted_decision=SimpleNamespace(admitted=True),
+    )
+
+    assert authority["providerLease"] is None
+    assert authority["firstMessageConsistent"] is False
+    assert authority["eventCursorValid"] is False
+    assert authority["authorityRationale"] == (
+        "provider_lease_inactive",
+        "first_message_identity_mismatch",
+        "event_cursor_identity_mismatch",
+    )

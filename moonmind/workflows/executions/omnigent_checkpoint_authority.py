@@ -108,6 +108,7 @@ def compile_omnigent_checkpoint_execution(
             policyValid=authority.get("policyValid", False),
             originalInputUnchanged=action == "resume",
             validationRef=validation_ref,
+            authorityRationale=authority.get("authorityRationale", ()),
         )
     except ValidationError as exc:
         raise OmnigentCheckpointAuthorityError(

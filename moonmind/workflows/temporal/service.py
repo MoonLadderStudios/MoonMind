@@ -27,6 +27,7 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     OmnigentBridgeSession,
     OmnigentOAuthHostLeaseRecord,
+    ProviderProfileSlotLease,
     SettingsOverride,
     TemporalArtifact,
     TemporalArtifactLink,
@@ -468,6 +469,24 @@ class TemporalExecutionService:
             if bridge_session_id
             else None
         )
+        provider_lease_ref = str(raw.get("providerLeaseRef") or "").strip()
+        provider_lease = None
+        if provider_lease_ref:
+            provider_lease = (
+                await self._session.execute(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id == provider_lease_ref,
+                        ProviderProfileSlotLease.profile_id == profile_id,
+                    )
+                )
+            ).scalar_one_or_none()
+        provider_lease_active = bool(
+            provider_lease
+            and (
+                provider_lease.expires_at is None
+                or provider_lease.expires_at > datetime.now(UTC)
+            )
+        )
         host_matches = bool(
             host_lease
             and host_lease.provider_profile_id == profile_id
@@ -481,13 +500,65 @@ class TemporalExecutionService:
             bridge_session
             and bridge_session.provider_profile_id == profile_id
             and bridge_session.provider_lease_id == raw.get("providerLeaseRef")
+            and bridge_session.credential_generation
+            == raw.get("credentialGeneration")
             and bridge_session.host_binding_ref == raw.get("hostBindingRef")
             and bridge_session.host_lease_ref == host_lease_ref
+            and bridge_session.omnigent_endpoint_ref == raw.get("endpointRef")
             and bridge_session.omnigent_host_id == raw.get("omnigentHostId")
             and bridge_session.omnigent_session_id == raw.get("omnigentSessionId")
             and bridge_session.external_state_ref == raw.get("externalStateRef")
         )
-        provider_lease_ref = str(raw.get("providerLeaseRef") or "").strip()
+        first_message_consistent = bool(
+            session_matches
+            and raw.get("firstMessageDigest")
+            and bridge_session.first_message_state == "posted"
+            and bridge_session.idempotency_key == raw.get("idempotencyKey")
+            and bridge_session.first_message_digest == raw.get("firstMessageDigest")
+        )
+        event_cursor_valid = bool(
+            session_matches
+            and raw.get("eventCursorRef")
+            and raw.get("eventCursorRef")
+            in {
+                bridge_session.normalized_events_ref,
+                bridge_session.raw_events_ref,
+            }
+        )
+        rationale: list[str] = []
+        for valid, reason in (
+            (
+                bool(
+                    profile
+                    and profile.credential_generation
+                    == raw.get("credentialGeneration")
+                ),
+                "credential_generation_mismatch",
+            ),
+            (provider_lease_active, "provider_lease_inactive"),
+            (host_matches, "host_lease_mismatch"),
+            (
+                bool(host_matches and host_lease.host_readiness == "ready"),
+                "host_not_registered",
+            ),
+            (session_matches, "session_mismatch"),
+            (first_message_consistent, "first_message_identity_mismatch"),
+            (event_cursor_valid, "event_cursor_identity_mismatch"),
+            (
+                bool(
+                    admitted_decision
+                    and admitted_decision.admitted
+                    and recovery_workspace.get("candidateWorkspace")
+                ),
+                "workspace_authority_invalid",
+            ),
+            (
+                bool(admitted_decision and admitted_decision.admitted),
+                "policy_denied",
+            ),
+        ):
+            if not valid:
+                rationale.append(reason)
         return {
             "currentCredentialGeneration": (
                 profile.credential_generation if profile is not None else None
@@ -495,10 +566,13 @@ class TemporalExecutionService:
             "providerLease": (
                 {
                     "active": host_matches
+                    and provider_lease_active
                     and host_lease.status in {"ready", "assigned"},
                     "leaseId": provider_lease_ref,
                 }
-                if provider_lease_ref and host_lease is not None
+                if provider_lease_ref
+                and provider_lease is not None
+                and host_lease is not None
                 and host_lease.provider_lease_id == provider_lease_ref
                 else None
             ),
@@ -514,14 +588,8 @@ class TemporalExecutionService:
             "hostRegistered": host_matches
             and host_lease.host_readiness == "ready",
             "sessionValid": session_matches,
-            "firstMessageConsistent": session_matches
-            and bridge_session.first_message_state == "posted"
-            and bridge_session.idempotency_key == raw.get("idempotencyKey"),
-            "eventCursorValid": session_matches
-            and bool(
-                bridge_session.normalized_events_ref
-                or bridge_session.raw_events_ref
-            ),
+            "firstMessageConsistent": first_message_consistent,
+            "eventCursorValid": event_cursor_valid,
             "workspaceAuthorityValid": bool(
                 admitted_decision
                 and admitted_decision.admitted
@@ -530,6 +598,7 @@ class TemporalExecutionService:
             "policyValid": bool(
                 admitted_decision and admitted_decision.admitted
             ),
+            "authorityRationale": tuple(rationale),
         }
 
     async def check_system_paused(self) -> bool:

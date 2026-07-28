@@ -36,6 +36,9 @@ class OmnigentCheckpointExecutionInput(BaseModel):
     policy_valid: bool = Field(..., alias="policyValid")
     original_input_unchanged: bool = Field(..., alias="originalInputUnchanged")
     validation_ref: str = Field(..., alias="validationRef", min_length=1)
+    authority_rationale: tuple[str, ...] = Field(
+        default_factory=tuple, alias="authorityRationale", max_length=16
+    )
 
     @model_validator(mode="after")
     def _require_branch_or_immutable_resume(self) -> "OmnigentCheckpointExecutionInput":
