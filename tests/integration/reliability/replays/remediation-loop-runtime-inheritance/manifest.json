@@ -34,6 +34,7 @@
             "name": "auto",
             "inputs": {
               "selectedSkill": "auto",
+              "instructions": "Fix the remaining verified gaps.",
               "issue_provider": "github",
               "issue_ref": "MoonLadderStudios/Tactics#2345",
               "verify_artifact_path": "artifacts/github-issue-implement-verify.json"
@@ -44,6 +45,7 @@
             "name": "auto",
             "inputs": {
               "selectedSkill": "moonspec-verify",
+              "instructions": "Verify the remediated candidate.",
               "issue_provider": "github",
               "issue_ref": "MoonLadderStudios/Tactics#2345",
               "verification_target": "issue_brief",

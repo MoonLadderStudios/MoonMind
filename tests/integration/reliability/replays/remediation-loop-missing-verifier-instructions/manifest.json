@@ -1,0 +1,56 @@
+{
+  "incidentWorkflowId": "mm:35d1ad7b-bf47-4d80-8713-71228614e3c5",
+  "failureShapeId": "remediation-loop-missing-verifier-instructions",
+  "boundary": "UserWorkflow remediation-loop controller admission",
+  "escapedFailure": {
+    "activityType": "agent_runtime.prepare_turn_instructions",
+    "message": "request.instructionRef or request.parameters.instructions is required",
+    "attempts": 4
+  },
+  "controllerPlanNode": {
+    "id": "tpl:github-issue-implement:07:replay",
+    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+    "inputs": {
+      "runtime": {
+        "mode": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+        "executionProfileRef": "codex_openai_oauth"
+      },
+      "annotations": {
+        "issueImplementRole": "moonspec-remediation-loop",
+        "remediationLoop": {
+          "kind": "remediation_loop",
+          "loopId": "issue-implementation-remediation",
+          "remediationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "auto",
+              "instructions": "Fix the remaining verified gaps."
+            }
+          },
+          "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "moonspec-verify",
+              "verify_artifact_path": "artifacts/github-issue-implement-verify.json"
+            }
+          },
+          "workspacePolicy": "continue_from_loop_head",
+          "budgets": {"hardMaxAttempts": 6},
+          "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop"
+          },
+          "sideEffectPolicy": "workflow_owned",
+          "publicationPolicy": "evaluate_after_terminal"
+        }
+      }
+    }
+  }
+}

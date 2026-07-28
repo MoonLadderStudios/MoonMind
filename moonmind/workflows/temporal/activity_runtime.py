@@ -9397,6 +9397,18 @@ class TemporalAgentRuntimeActivities:
             )
             if not verify_path:
                 return {}
+            failure_class = str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+            if failure_class:
+                logger.warning(
+                    "Skipping MoonSpec verify artifact publication for failed "
+                    "agent result (%s)",
+                    failure_class,
+                )
+                return {}
             agent_run_id = _metadata_text("agentRunId", "agent_run_id")
             if not agent_run_id or self._run_store is None:
                 return {}

@@ -7,6 +7,13 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
 from moonmind.workflows.skills.approval_policy import StepGateResult
+from moonmind.workflows.temporal.remediation_loop import (
+    ConsumedRemediationBudgets,
+    RemediationContinuationDecision,
+    RemediationLoopPhase,
+    RemediationLoopState,
+    apply_continuation_decision,
+)
 from moonmind.workflows.temporal.workflows.run import (
     GateTransitionDecision,
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
@@ -20,6 +27,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -349,6 +357,67 @@ class _CurrentOmnigentCompilerReplayFixture:
             authored,
             path="workflow.omnigent",
         )
+
+
+def _mm3542_apply_final_verifier_decision(
+    run_workflow: MoonMindRunWorkflow,
+) -> str | None:
+    """Apply the final verifier while retaining the pre-decision block."""
+
+    run_workflow._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+    run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="issue-implementation-remediation",
+        attemptOrdinal=1,
+        phase=RemediationLoopPhase.CONTINUATION_DECIDING,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+        continuationDecisionRef="artifact://decision/previous",
+        latestVerdict="ADDITIONAL_WORK_NEEDED",
+    )
+    blocking_reason = run_workflow._blocking_moonspec_gate_reason()
+    decision = RemediationContinuationDecision(
+        loopId="issue-implementation-remediation",
+        currentAttempt=1,
+        verdict="FULLY_IMPLEMENTED",
+        continueLoop=False,
+        reason="The final verifier approved publication.",
+        nextPhase=RemediationLoopPhase.ACCEPTED,
+        gateResultRef="artifact://verification/final",
+    )
+    run_workflow._remediation_loop_state = apply_continuation_decision(
+        run_workflow._remediation_loop_state,
+        decision=decision,
+        decision_ref="artifact://decision/final",
+    )
+    return blocking_reason
+
+
+@workflow.defn(name="MM3542FinalVerifierGateReplayFixture")
+class _LegacyFinalVerifierGateReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        run_workflow = MoonMindRunWorkflow()
+        blocking_reason = _mm3542_apply_final_verifier_decision(run_workflow)
+        return {
+            "latestVerdict": run_workflow._remediation_loop_state.latest_verdict,
+            "publicationBlocked": bool(blocking_reason),
+        }
+
+
+@workflow.defn(name="MM3542FinalVerifierGateReplayFixture")
+class _CurrentFinalVerifierGateReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        run_workflow = MoonMindRunWorkflow()
+        blocking_reason = _mm3542_apply_final_verifier_decision(run_workflow)
+        if workflow.patched(
+            RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH
+        ):
+            blocking_reason = run_workflow._blocking_moonspec_gate_reason()
+        return {
+            "latestVerdict": run_workflow._remediation_loop_state.latest_verdict,
+            "publicationBlocked": bool(blocking_reason),
+        }
+
 
 @pytest.mark.asyncio
 async def test_workflow_determinism_replay(mock_run_environment):  # noqa: F811
@@ -740,6 +809,53 @@ async def test_github_3453_pre_change_omnigent_history_replays() -> None:
 
     replayer = Replayer(
         workflows=[_CurrentOmnigentCompilerReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_final_verifier_gate_pre_and_post_patch_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3542-final-verifier-legacy",
+            workflows=[_LegacyFinalVerifierGateReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyFinalVerifierGateReplayFixture.run,
+                id="test-mm3542-final-verifier-legacy",
+                task_queue="test-mm3542-final-verifier-legacy",
+            )
+            legacy_result = await legacy_handle.result()
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3542-final-verifier-current",
+            workflows=[_CurrentFinalVerifierGateReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentFinalVerifierGateReplayFixture.run,
+                id="test-mm3542-final-verifier-current",
+                task_queue="test-mm3542-final-verifier-current",
+            )
+            current_result = await current_handle.result()
+            current_history = await current_handle.fetch_history()
+
+    assert legacy_result == {
+        "latestVerdict": "FULLY_IMPLEMENTED",
+        "publicationBlocked": True,
+    }
+    assert current_result == {
+        "latestVerdict": "FULLY_IMPLEMENTED",
+        "publicationBlocked": False,
+    }
+    replayer = Replayer(
+        workflows=[_CurrentFinalVerifierGateReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

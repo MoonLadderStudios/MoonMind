@@ -130,7 +130,7 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
         first = await service.submit(owner=owner, request=submission())
         second = await service.submit(owner=owner, request=submission())
         assert first.job_id == second.job_id and second.replayed
-        assert temporal.start_container_job.await_count == 1
+        assert temporal.start_container_job.await_count == 2
         started = temporal.start_container_job.await_args_list[0].args[0]
         assert started.job_id == first.job_id
         assert started.owner == owner
@@ -139,6 +139,121 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
         assert (await service.status(owner=owner, job_id=first.job_id)).state == "queued"
         with pytest.raises(ContainerJobNotFoundError):
             await service.status(owner=OwnerIdentity(principalId="user-2", principalType="user"), job_id=first.job_id)
+
+
+@pytest.mark.asyncio
+async def test_submit_commits_identity_before_temporal_handoff(
+    session_factory,
+) -> None:
+    owner = OwnerIdentity(principalId="durable-owner", principalType="user")
+    observed_job_ids: list[str] = []
+    temporal = AsyncMock()
+
+    async def start_after_observing_committed_identity(workflow_input):
+        async with session_factory() as observer_session:
+            status = await ContainerJobService(
+                observer_session,
+                temporal=AsyncMock(),
+            ).status(owner=owner, job_id=workflow_input.job_id)
+        observed_job_ids.append(status.job_id)
+
+    temporal.start_container_job.side_effect = (
+        start_after_observing_committed_identity
+    )
+
+    async with session_factory() as session:
+        accepted = await ContainerJobService(
+            session,
+            temporal=temporal,
+        ).submit(owner=owner, request=submission())
+
+    assert observed_job_ids == [accepted.job_id]
+
+    async with session_factory() as status_session:
+        persisted = await ContainerJobService(
+            status_session,
+            temporal=AsyncMock(),
+        ).status(owner=owner, job_id=accepted.job_id)
+    assert persisted.state == "queued"
+
+
+@pytest.mark.asyncio
+async def test_exact_replay_recovers_temporal_start_failure(
+    session_factory,
+) -> None:
+    owner = OwnerIdentity(principalId="retry-owner", principalType="user")
+    temporal = AsyncMock()
+    temporal.start_container_job.side_effect = [
+        RuntimeError("temporal unavailable"),
+        None,
+    ]
+
+    with pytest.raises(RuntimeError, match="temporal unavailable"):
+        async with session_factory() as first_session:
+            await ContainerJobService(
+                first_session,
+                temporal=temporal,
+            ).submit(owner=owner, request=submission())
+
+    async with session_factory() as failed_session:
+        failed_service = ContainerJobService(
+            failed_session,
+            temporal=AsyncMock(),
+        )
+        failed_record = await failed_service.repository.find_exact_replay(
+            owner=owner,
+            request=submission(),
+        )
+        assert failed_record is not None
+        failed = await failed_service.status(owner=owner, job_id=failed_record.job_id)
+    assert failed.state == "failed"
+    assert failed.terminal is not None
+    assert failed.terminal.failure_class == ContainerJobFailureClass.TEMPORAL_START
+
+    async with session_factory() as retry_session:
+        accepted = await ContainerJobService(
+            retry_session,
+            temporal=temporal,
+        ).submit(owner=owner, request=submission())
+
+    assert accepted.replayed is True
+    assert temporal.start_container_job.await_count == 2
+
+    async with session_factory() as status_session:
+        persisted = await ContainerJobService(
+            status_session,
+            temporal=AsyncMock(),
+        ).status(owner=owner, job_id=accepted.job_id)
+    assert persisted.state == "queued"
+    assert persisted.terminal is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_replay_start_error_preserves_terminal_projection(
+    session_factory,
+    temporal,
+) -> None:
+    owner = OwnerIdentity(principalId="terminal-owner", principalType="user")
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+        accepted = await service.submit(owner=owner, request=submission())
+        await service.repository.record_observation(
+            owner=owner,
+            job_id=accepted.job_id,
+            state=ContainerJobState.SUCCEEDED,
+            terminal=TerminalOutcome(exitCode=0),
+        )
+        await session.commit()
+        temporal.start_container_job.side_effect = RuntimeError("temporal unavailable")
+
+        with pytest.raises(RuntimeError, match="temporal unavailable"):
+            await service.submit(owner=owner, request=submission())
+
+        preserved = await service.status(owner=owner, job_id=accepted.job_id)
+
+    assert preserved.state == "succeeded"
+    assert preserved.terminal is not None
+    assert preserved.terminal.exit_code == 0
 
 
 @pytest.mark.asyncio
