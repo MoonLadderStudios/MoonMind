@@ -4580,6 +4580,58 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 
 
 @pytest.mark.asyncio
+async def test_controller_explicit_replacement_bypasses_live_record_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        replaceExisting=True,
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/tmp/codex-home",
+        imageRef="img",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-broken",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-broken",
+            status="ready",
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    runner = AsyncMock(side_effect=AssertionError("live record was inspected"))
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=runner,
+    )
+    replacement = AsyncMock(side_effect=RuntimeError("replacement launch reached"))
+    monkeypatch.setattr(controller, "_ensure_workspace_paths", replacement)
+
+    with pytest.raises(RuntimeError, match="replacement launch reached"):
+        await controller.launch_session(request)
+
+    replacement.assert_awaited_once_with(request)
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_controller_duplicate_launch_recreates_stale_mutable_image(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

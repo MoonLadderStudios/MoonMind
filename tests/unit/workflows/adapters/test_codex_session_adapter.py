@@ -4034,8 +4034,10 @@ async def test_start_retries_existing_session_status_after_locator_mismatch(
         "threadId": "thread-cleared",
     }
 
+@pytest.mark.parametrize("replacement_enabled", [False, True])
 async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     tmp_path: Path,
+    replacement_enabled: bool,
 ) -> None:
     binding = _binding().model_copy(update={"session_epoch": 7})
     stale_snapshot_binding = binding.model_copy(update={"session_epoch": 6})
@@ -4135,6 +4137,7 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
         apply_session_control_action=_apply_control_action,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+        replace_existing_on_resume_mismatch=replacement_enabled,
     )
 
     handle = await adapter.start(_request(binding))
@@ -4150,6 +4153,10 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     launch_request = launch_calls[0]["request"]
     assert launch_request["sessionEpoch"] == 7
     assert launch_request["threadId"] == f"thread:{binding.session_id}:7"
+    if replacement_enabled:
+        assert launch_request["replaceExisting"] is True
+    else:
+        assert "replaceExisting" not in launch_request
     assert send_turn_calls[0].container_id == "container-fresh"
     assert send_turn_calls[0].thread_id == "thread-fresh"
     assert attach_calls == [
