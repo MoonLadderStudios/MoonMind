@@ -4487,6 +4487,10 @@ type BranchCreateDraft = {
   publishMode: string;
   gitWorkBranch: string;
   maxBudgetUsd: string;
+  executionProfileRef: string;
+  launchPolicyRef: string;
+  model: string;
+  effort: string;
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
@@ -4510,6 +4514,10 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
   publishMode: 'none',
   gitWorkBranch: '',
   maxBudgetUsd: '',
+  executionProfileRef: '',
+  launchPolicyRef: '',
+  model: '',
+  effort: '',
 };
 
 function stepCheckpointRef(row: StepLedgerRow): string | null {
@@ -4932,6 +4940,28 @@ function BranchExplorerPanel({
           <label>
             Budget impact
             <input value={draft.maxBudgetUsd} disabled={busy} inputMode="decimal" placeholder="No explicit cap" onChange={(event) => setDraft((current) => ({ ...current, maxBudgetUsd: event.target.value }))} />
+          </label>
+          <label>
+            Provider Profile
+            <input value={draft.executionProfileRef} disabled={busy} placeholder="Use checkpoint profile" onChange={(event) => setDraft((current) => ({ ...current, executionProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Launch policy
+            <input value={draft.launchPolicyRef} disabled={busy} placeholder="Use current admitted policy" onChange={(event) => setDraft((current) => ({ ...current, launchPolicyRef: event.target.value }))} />
+          </label>
+          <label>
+            Model
+            <input value={draft.model} disabled={busy} placeholder="Use profile default" onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} />
+          </label>
+          <label>
+            Effort
+            <select value={draft.effort} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, effort: event.target.value }))}>
+              <option value="">Profile default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
           </label>
           <Card label="Approval requirements">Policy evaluated by checkpoint branch API</Card>
         </div>
@@ -8811,7 +8841,37 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         const text = await response.text();
         throw new Error(text || response.statusText);
       }
-      return { kind: request.kind, body: await response.json() };
+      const responseBody = await response.json();
+      if (request.kind === 'create') {
+        const branch = CheckpointBranchModelSchema.parse(responseBody);
+        const turnsResponse = await fetch(
+          `${branchBase}/${encodeURIComponent(branch.branchId)}/turns`,
+          { credentials: 'include', headers: { Accept: 'application/json' } },
+        );
+        if (!turnsResponse.ok) throw new Error(await turnsResponse.text() || turnsResponse.statusText);
+        const turnList = CheckpointBranchTurnListSchema.parse(await turnsResponse.json());
+        const turn = turnList.items[0];
+        if (!turn) throw new Error('Checkpoint branch was created without a launchable turn.');
+        const launchResponse = await fetch(
+          `${branchBase}/${encodeURIComponent(branch.branchId)}/turns/${encodeURIComponent(turn.branchTurnId)}/launch`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              executionProfileRef: request.draft.executionProfileRef.trim() || null,
+              launchPolicyRef: request.draft.launchPolicyRef.trim() || null,
+              model: request.draft.model.trim() || null,
+              effort: request.draft.effort || null,
+              gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
+              publishMode: request.draft.publishMode,
+            }),
+          },
+        );
+        if (!launchResponse.ok) throw new Error(await launchResponse.text() || launchResponse.statusText);
+        return { kind: request.kind, body: await launchResponse.json() };
+      }
+      return { kind: request.kind, body: responseBody };
     },
     onSuccess: (result) => {
       if (result.kind === 'compare') {

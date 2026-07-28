@@ -4727,6 +4727,8 @@ class MoonMindRunWorkflow:
         node_inputs: Mapping[str, Any],
         runtime_block: Mapping[str, Any],
         metadata_payload: Mapping[str, Any],
+        workflow_parameters: Mapping[str, Any] | None = None,
+        node_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Return explicit checkpoint-branch turn metadata for a runtime node."""
 
@@ -4734,12 +4736,16 @@ class MoonMindRunWorkflow:
             ("node.runtime", runtime_block),
             ("node.inputs", node_inputs),
             ("node.metadata", metadata_payload),
+            ("workflow", workflow_parameters or {}),
         ):
             payload = self._checkpoint_branch_turn_payload_from_source(
                 source,
                 path=path,
             )
             if payload is not None:
+                target_step = str(payload.get("logicalStepId") or "").strip()
+                if target_step and node_id and target_step != node_id:
+                    continue
                 return payload
         return None
 
@@ -18523,6 +18529,8 @@ class MoonMindRunWorkflow:
             node_inputs=node_inputs,
             runtime_block=runtime_block,
             metadata_payload=metadata_payload_for_branch,
+            workflow_parameters=workflow_parameters,
+            node_id=node_id,
         )
         if candidate_branch_turn_payload is not None and self._workflow_patch_enabled(
             RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH

@@ -42,6 +42,30 @@ from api_service.services.checkpoint_branch_service import (
 from moonmind.schemas.checkpoint_branch_models import CheckpointBranchTurnLaunchRequest
 
 
+def test_checkpoint_branch_launch_contract_rejects_caller_authored_authority() -> None:
+    with pytest.raises(ValueError):
+        CheckpointBranchTurnLaunchRequest.model_validate(
+            {"createdStepExecutionId": "caller-step"}
+        )
+    with pytest.raises(ValueError):
+        CheckpointBranchTurnLaunchRequest.model_validate(
+            {"omnigentCheckpointExecution": {"action": "branch"}}
+        )
+
+    request = CheckpointBranchTurnLaunchRequest.model_validate(
+        {
+            "executionProfileRef": "codex-oauth",
+            "launchPolicyRef": "policy/current",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "gitWorkBranch": "feature/checkpoint-branch",
+            "publishMode": "branch",
+        }
+    )
+    assert request.execution_profile_ref == "codex-oauth"
+    assert request.publish_mode == "branch"
+
+
 def _record_like(user: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(
         workflow_id="mm:wf-branch",
@@ -433,7 +457,6 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     )
     branch_turn_id = turns.json()["items"][0]["branchTurnId"]
     payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:3",
         "workspaceBaseline": {
             "kind": "git_patch",
             "baseCommit": "abc123",
@@ -466,7 +489,7 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     assert body["branchTurnId"] == branch_turn_id
     assert body["status"] == "running"
     assert body["createdStepExecutionId"] == (
-        "mm:wf-branch:run-branch:implement:execution:3"
+        f"mm:wf-branch:run-branch:implement:branch:{branch_turn_id}"
     )
     assert "checkpointRef" not in body
     assert body["contextBundleRef"].startswith(
@@ -883,7 +906,6 @@ async def test_checkpoint_branch_api_launch_rejects_unsupported_provider_continu
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
             "providerSessionId": "omnigent-session-1",
             "diagnosticsRef": "artifact://diagnostics/mm-1104",
         },
@@ -921,7 +943,6 @@ async def test_checkpoint_branch_api_launch_rejects_branch_provider_continuation
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:5",
             "providerSessionId": "omnigent-session-branch",
             "diagnosticsRef": "artifact://diagnostics/mm-1104-branch",
         },
@@ -945,7 +966,6 @@ async def test_checkpoint_branch_api_launch_replays_before_provider_continuation
     )
     branch_turn_id = turns.json()["items"][0]["branchTurnId"]
     payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:6",
         "providerSessionId": "omnigent-session-replay",
         "diagnosticsRef": "artifact://diagnostics/mm-1104-replay",
     }
@@ -959,7 +979,9 @@ async def test_checkpoint_branch_api_launch_replays_before_provider_continuation
         branch.runtime_context_policy = "external_provider_continuation"
         turn.runtime_context_policy = "external_provider_continuation"
         turn.status = "running"
-        turn.created_step_execution_id = str(payload["createdStepExecutionId"])
+        turn.created_step_execution_id = (
+            f"mm:wf-branch:run-branch:implement:branch:{branch_turn_id}"
+        )
         turn.provider_session_id = str(payload["providerSessionId"])
         turn.diagnostics_ref = str(payload["diagnosticsRef"])
         launch_request = CheckpointBranchTurnLaunchRequest.model_validate(payload)
@@ -1007,7 +1029,9 @@ async def test_checkpoint_branch_api_launch_replays_before_provider_continuation
     )
 
     assert replayed.status_code == 200
-    assert replayed.json()["createdStepExecutionId"] == payload["createdStepExecutionId"]
+    assert replayed.json()["createdStepExecutionId"] == (
+        f"mm:wf-branch:run-branch:implement:branch:{branch_turn_id}"
+    )
 
 
 @pytest.mark.asyncio
@@ -1032,7 +1056,6 @@ async def test_checkpoint_branch_api_launch_rejects_archived_branch(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:9",
             "diagnosticsRef": "artifact://diagnostics/archived",
         },
     )
@@ -1060,7 +1083,6 @@ async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mu
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
-            "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
             "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
             "boundedSummaries": [{"label": "raw", "rawLogs": "do not persist"}],
             "diagnosticsRef": "artifact://diagnostics/raw",
@@ -1069,7 +1091,6 @@ async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mu
     assert raw_context.status_code == 422
 
     launch_payload = {
-        "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
         "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
         "diagnosticsRef": "artifact://diagnostics/immutable",
     }

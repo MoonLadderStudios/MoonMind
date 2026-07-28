@@ -8,6 +8,7 @@ from moonmind.workflows.executions.omnigent_checkpoint_authority import (
     compile_omnigent_checkpoint_execution,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from api_service.db.models import TemporalExecutionOwnerType, TemporalWorkflowType
 
 
 def _workspace() -> dict[str, object]:
@@ -231,3 +232,56 @@ async def test_service_fails_live_authority_closed_on_stale_owner_and_identity()
         "first_message_identity_mismatch",
         "event_cursor_identity_mismatch",
     )
+
+
+@pytest.mark.asyncio
+async def test_service_schedules_branch_with_controller_checkpoint_authority() -> None:
+    service = object.__new__(TemporalExecutionService)
+    created = SimpleNamespace(workflow_id="mm:branch-run")
+    service.create_execution = AsyncMock(return_value=created)
+    record = SimpleNamespace(
+        workflow_id="mm:source",
+        run_id="run-source",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        owner_id="owner-1",
+        owner_type=TemporalExecutionOwnerType.USER,
+        input_ref="artifact://input",
+        plan_ref="artifact://plan",
+        manifest_ref=None,
+        memo={"repository": "MoonLadderStudios/MoonMind"},
+        parameters={"workflow": {"title": "Source workflow"}},
+    )
+    checkpoint_execution = {
+        "action": "branch",
+        "validationRef": "artifact://validation",
+    }
+
+    result = await service.create_checkpoint_branch_execution(
+        record,
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        logical_step_id="implement",
+        source_execution_ordinal=2,
+        source_checkpoint_ref="artifact://checkpoint",
+        instruction_ref="artifact://instructions",
+        instruction_digest="sha256:" + "a" * 64,
+        checkpoint_execution=checkpoint_execution,
+        execution_profile_ref="codex",
+        launch_policy_ref="policy/current",
+        model="gpt-5.4",
+        effort="high",
+        git_work_branch="feature/branch-1",
+        publish_mode="branch",
+        idempotency_key="checkpoint-branch:key",
+    )
+
+    assert result is created
+    kwargs = service.create_execution.await_args.kwargs
+    workflow = kwargs["initial_parameters"]["workflow"]
+    assert workflow["checkpointBranchTurn"]["omnigentCheckpointExecution"] == (
+        checkpoint_execution
+    )
+    assert workflow["checkpointBranchTurn"]["logicalStepId"] == "implement"
+    assert workflow["resume"]["kind"] == "checkpoint_branch"
+    assert workflow["executionProfileRef"] == "codex"
+    assert workflow["branch"] == "feature/branch-1"

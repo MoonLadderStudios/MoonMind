@@ -8,8 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from moonmind.omnigent.checkpoints import OmnigentCheckpointExecutionInput
-
 from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchStateValue,
     CheckpointBranchTurnStateValue,
@@ -147,9 +145,18 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
 class CheckpointBranchTurnLaunchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    created_step_execution_id: str = Field(
-        ..., alias="createdStepExecutionId", min_length=1, max_length=255
+    execution_profile_ref: str | None = Field(
+        None, alias="executionProfileRef", min_length=1, max_length=255
     )
+    launch_policy_ref: str | None = Field(
+        None, alias="launchPolicyRef", min_length=1, max_length=255
+    )
+    model: str | None = Field(None, min_length=1, max_length=255)
+    effort: str | None = Field(None, min_length=1, max_length=64)
+    git_work_branch: str | None = Field(
+        None, alias="gitWorkBranch", min_length=1, max_length=255
+    )
+    publish_mode: PublishMode = Field("none", alias="publishMode")
     runtime_agent_run_id: str | None = Field(
         None, alias="runtimeAgentRunId", min_length=1, max_length=255
     )
@@ -177,25 +184,12 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", min_length=1, max_length=1024
     )
-    omnigent_checkpoint_execution: OmnigentCheckpointExecutionInput | None = Field(
-        None, alias="omnigentCheckpointExecution"
-    )
-
-    @model_validator(mode="after")
-    def _validate_omnigent_branch_execution(
-        self,
-    ) -> "CheckpointBranchTurnLaunchRequest":
-        if (
-            self.omnigent_checkpoint_execution is not None
-            and self.omnigent_checkpoint_execution.action != "branch"
-        ):
-            raise ValueError(
-                "checkpoint branch launch requires execution action 'branch'"
-            )
-        return self
-
     @field_validator(
-        "created_step_execution_id",
+        "execution_profile_ref",
+        "launch_policy_ref",
+        "model",
+        "effort",
+        "git_work_branch",
         "runtime_agent_run_id",
         "provider_session_id",
         "runtime_request_ref",
@@ -227,11 +221,6 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
                 raise ValueError("boundedSummaries entries must be bounded")
         return value
 
-    @model_validator(mode="after")
-    def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
-        if not self.created_step_execution_id:
-            raise ValueError("launch requires Step Execution evidence")
-        return self
 
 
 class CheckpointBranchPromoteRequest(BaseModel):

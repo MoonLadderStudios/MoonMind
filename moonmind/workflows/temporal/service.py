@@ -601,6 +601,117 @@ class TemporalExecutionService:
             "authorityRationale": tuple(rationale),
         }
 
+    async def compile_omnigent_branch_checkpoint_execution(
+        self,
+        *,
+        checkpoint_payload: Mapping[str, Any],
+        validation_ref: str,
+        admitted_decision: AdmittedCheckpointResumeDecision,
+    ) -> dict[str, Any]:
+        """Compile branch authority exclusively from controller-owned evidence."""
+
+        if not admitted_decision.admitted:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Checkpoint Branch admission is not eligible."
+            )
+        try:
+            checkpoint = RecoveryCheckpointModel.model_validate(checkpoint_payload)
+            recovery_workspace = checkpoint.recovery_workspace or {}
+            current_authority = await self._resolve_omnigent_checkpoint_authority(
+                recovery_workspace=recovery_workspace,
+                admitted_decision=admitted_decision,
+            )
+            from moonmind.workflows.executions.omnigent_checkpoint_authority import (
+                OmnigentCheckpointAuthorityError,
+                compile_omnigent_checkpoint_execution,
+            )
+
+            execution = compile_omnigent_checkpoint_execution(
+                recovery_workspace=recovery_workspace,
+                validation_ref=validation_ref,
+                action="branch",
+                current_authority=current_authority,
+            )
+        except (ValidationError, OmnigentCheckpointAuthorityError) as exc:
+            raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc
+        return execution.model_dump(by_alias=True, mode="json")
+
+    async def create_checkpoint_branch_execution(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        branch_id: str,
+        branch_turn_id: str,
+        logical_step_id: str,
+        source_execution_ordinal: int,
+        source_checkpoint_ref: str,
+        instruction_ref: str,
+        instruction_digest: str,
+        checkpoint_execution: Mapping[str, Any],
+        execution_profile_ref: str | None,
+        launch_policy_ref: str | None,
+        model: str | None,
+        effort: str | None,
+        git_work_branch: str | None,
+        publish_mode: str,
+        idempotency_key: str,
+    ) -> TemporalExecutionRecord:
+        """Schedule one controller-authored Checkpoint Branch Step Execution."""
+
+        params = dict(record.parameters or {})
+        for key in AGENT_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        workflow_params = dict(_workflow_payload(params))
+        branch_turn = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "logicalStepId": logical_step_id,
+            "instructionRef": instruction_ref,
+            "instructionDigest": instruction_digest,
+            "sourceCheckpoint": {
+                "checkpointRef": source_checkpoint_ref,
+                "sourceExecutionOrdinal": source_execution_ordinal,
+            },
+            "omnigentCheckpointExecution": dict(checkpoint_execution),
+        }
+        workflow_params["checkpointBranchTurn"] = branch_turn
+        workflow_params["resume"] = {
+            "kind": "checkpoint_branch",
+            "sourceWorkflowId": record.workflow_id,
+            "sourceRunId": record.run_id,
+            "failedStepId": logical_step_id,
+            "failedStepExecution": source_execution_ordinal,
+            "recoveryCheckpointRef": source_checkpoint_ref,
+        }
+        if execution_profile_ref:
+            workflow_params["executionProfileRef"] = execution_profile_ref
+        if launch_policy_ref:
+            workflow_params["launchPolicyRef"] = launch_policy_ref
+        if model:
+            workflow_params["model"] = model
+        if effort:
+            workflow_params["effort"] = effort
+        if git_work_branch:
+            workflow_params["branch"] = git_work_branch
+            workflow_params["startingBranch"] = git_work_branch
+        workflow_params["publishMode"] = publish_mode
+        params.pop("task", None)
+        params["workflow"] = workflow_params
+        return await self.create_execution(
+            workflow_type=record.workflow_type.value,
+            owner_id=record.owner_id,
+            owner_type=record.owner_type.value,
+            title=f"Checkpoint Branch: {branch_id}",
+            input_artifact_ref=record.input_ref,
+            plan_artifact_ref=record.plan_ref,
+            manifest_artifact_ref=record.manifest_ref,
+            failure_policy=None,
+            initial_parameters=params,
+            idempotency_key=idempotency_key,
+            repository=str(record.memo.get("repository") or "").strip() or None,
+            summary=f"Checkpoint Branch turn {branch_turn_id}.",
+        )
+
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
 

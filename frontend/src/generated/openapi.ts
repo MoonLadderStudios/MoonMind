@@ -5174,6 +5174,24 @@ export interface components {
              */
             graceful: boolean;
         };
+        /**
+         * CandidateWorkspaceAuthority
+         * @description MoonMind-owned repository checkpoint selected for continuation.
+         */
+        CandidateWorkspaceAuthority: {
+            /** Loopid */
+            loopId: string;
+            /** Attemptordinal */
+            attemptOrdinal: number;
+            /** Headref */
+            headRef: string;
+            /** Headdigest */
+            headDigest: string;
+            /** Checkpointref */
+            checkpointRef: string;
+            /** Checkpointdigest */
+            checkpointDigest: string;
+        };
         /** ChatCompletionRequest */
         ChatCompletionRequest: {
             /**
@@ -5513,8 +5531,22 @@ export interface components {
         };
         /** CheckpointBranchTurnLaunchRequest */
         CheckpointBranchTurnLaunchRequest: {
-            /** Createdstepexecutionid */
-            createdStepExecutionId: string;
+            /** Executionprofileref */
+            executionProfileRef?: string | null;
+            /** Launchpolicyref */
+            launchPolicyRef?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /**
+             * Publishmode
+             * @default none
+             * @enum {string}
+             */
+            publishMode: "none" | "branch" | "pull_request";
             /** Runtimeagentrunid */
             runtimeAgentRunId?: string | null;
             /** Providersessionid */
@@ -9032,6 +9064,90 @@ export interface components {
             ready?: boolean | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * OmnigentCheckpointExecutionInput
+         * @description Fail-closed Activity input for resume and Checkpoint Branch execution.
+         */
+        OmnigentCheckpointExecutionInput: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "resume" | "branch";
+            checkpoint: components["schemas"]["OmnigentCheckpointIdentity"];
+            candidateWorkspace: components["schemas"]["CandidateWorkspaceAuthority"];
+            /** Currentcredentialgeneration */
+            currentCredentialGeneration: number;
+            /** Providerlease */
+            providerLease?: {
+                [key: string]: unknown;
+            } | null;
+            /** Hostlease */
+            hostLease?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Hostregistered
+             * @default false
+             */
+            hostRegistered: boolean;
+            /**
+             * Sessionvalid
+             * @default false
+             */
+            sessionValid: boolean;
+            /**
+             * Firstmessageconsistent
+             * @default false
+             */
+            firstMessageConsistent: boolean;
+            /**
+             * Eventcursorvalid
+             * @default false
+             */
+            eventCursorValid: boolean;
+            /** Workspaceauthorityvalid */
+            workspaceAuthorityValid: boolean;
+            /** Policyvalid */
+            policyValid: boolean;
+            /** Originalinputunchanged */
+            originalInputUnchanged: boolean;
+            /** Validationref */
+            validationRef: string;
+            /** Authorityrationale */
+            authorityRationale?: string[];
+        };
+        /** OmnigentCheckpointIdentity */
+        OmnigentCheckpointIdentity: {
+            /** Providerprofileid */
+            providerProfileId: string;
+            /** Credentialgeneration */
+            credentialGeneration: number;
+            /** Providerleaseref */
+            providerLeaseRef?: string | null;
+            /** Hostbindingref */
+            hostBindingRef: string;
+            /** Hostleaseref */
+            hostLeaseRef?: string | null;
+            /** Endpointref */
+            endpointRef: string;
+            /** Omnigenthostid */
+            omnigentHostId?: string | null;
+            /** Omnigentsessionid */
+            omnigentSessionId?: string | null;
+            /** Bridgesessionid */
+            bridgeSessionId: string;
+            /** Externalstateref */
+            externalStateRef: string;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Terminalref */
+            terminalRef?: string | null;
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+            /** Effectivelaunchref */
+            effectiveLaunchRef?: string | null;
         };
         /** OmnigentCodexCatalogReadiness */
         OmnigentCodexCatalogReadiness: {
@@ -12775,6 +12891,7 @@ export interface components {
             /** Sideeffectreconciliationref */
             sideEffectReconciliationRef?: string | null;
             destination: components["schemas"]["RecoveryDestinationModel"];
+            omnigentCheckpointExecution?: components["schemas"]["OmnigentCheckpointExecutionInput"] | null;
         };
         /**
          * WorkflowRunStatus

@@ -1994,6 +1994,41 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.endsWith('/checkpoint-branches/branch-created/turns')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{
+              branchTurnId: 'turn-created',
+              branchId: 'branch-created',
+              instructionRef: 'artifact://instructions/turn-created',
+              instructionDigest: `sha256:${'a'.repeat(64)}`,
+              sourceCheckpointRef: 'artifact://checkpoint-apply',
+              idempotencyKey: 'turn-created',
+              status: 'pending',
+              createdAt: '2026-04-09T00:01:00Z',
+              updatedAt: '2026-04-09T00:01:00Z',
+            }],
+          }),
+        } as Response);
+      }
+      if (url.endsWith('/checkpoint-branches/branch-created/turns/turn-created/launch')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            branchTurnId: 'turn-created',
+            branchId: 'branch-created',
+            instructionRef: 'artifact://instructions/turn-created',
+            instructionDigest: `sha256:${'a'.repeat(64)}`,
+            sourceCheckpointRef: 'artifact://checkpoint-apply',
+            createdStepExecutionId: 'test-123:02-run:apply:branch:turn-created',
+            idempotencyKey: 'turn-created',
+            status: 'running',
+            createdAt: '2026-04-09T00:01:00Z',
+            updatedAt: '2026-04-09T00:01:01Z',
+          }),
+        } as Response);
+      }
       if (url.endsWith('/checkpoint-branches')) {
         return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
       }
@@ -2020,6 +2055,17 @@ describe('Workflow Detail Entrypoint', () => {
       expect(body.publishMode).toBe('none');
       expect(body.instructions.text).toContain('bounded alternative implementation');
       expect(body.idempotencyKey).toMatch(/^dashboard:create:test-123:apply:1:/);
+    });
+    await waitFor(() => {
+      const launchCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url).endsWith('/checkpoint-branches/branch-created/turns/turn-created/launch') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ));
+      expect(launchCall).toBeTruthy();
+      const body = JSON.parse(String((launchCall?.[1] as RequestInit).body));
+      expect(body.publishMode).toBe('none');
+      expect(body).not.toHaveProperty('createdStepExecutionId');
+      expect(body).not.toHaveProperty('omnigentCheckpointExecution');
     });
   });
 

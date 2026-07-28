@@ -1362,6 +1362,7 @@ def _branch_turn_launch_manifest_payload(
     branch: WorkflowCheckpointBranch,
     turn: WorkflowCheckpointBranchTurn,
     payload: CheckpointBranchTurnLaunchRequest,
+    step_execution_id: str,
     context_bundle_ref: str,
 ) -> dict[str, Any]:
     return {
@@ -1369,7 +1370,7 @@ def _branch_turn_launch_manifest_payload(
         "runId": branch.source_run_id,
         "logicalStepId": branch.logical_step_id,
         "executionOrdinal": branch.source_execution_ordinal,
-        "stepExecutionId": payload.created_step_execution_id,
+        "stepExecutionId": step_execution_id,
         "reason": "checkpoint_branch",
         "status": "running",
         "branch": {
@@ -1387,6 +1388,12 @@ def _branch_turn_launch_manifest_payload(
             "instructionRef": turn.instruction_ref,
             "instructionDigest": turn.instruction_digest,
             "contextBundleRef": context_bundle_ref,
+            "executionProfileRef": payload.execution_profile_ref,
+            "launchPolicyRef": payload.launch_policy_ref,
+            "model": payload.model,
+            "effort": payload.effort,
+            "gitWorkBranch": payload.git_work_branch,
+            "publishMode": payload.publish_mode,
         },
     }
 
@@ -13228,6 +13235,12 @@ async def launch_checkpoint_branch_turn(
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchTurnModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "execution_not_found"},
+        )
     branch = await _load_checkpoint_branch(
         session, workflow_id=workflow_id, branch_id=branch_id
     )
@@ -13282,6 +13295,10 @@ async def launch_checkpoint_branch_turn(
         return _turn_to_model(turn)
 
     _validate_branch_turn_launch_policy(branch, turn)
+    step_execution_id = (
+        f"{workflow_id}:{branch.source_run_id}:{branch.logical_step_id}:"
+        f"branch:{turn.branch_turn_id}"
+    )
 
     context_payload = {
         "workflowId": workflow_id,
@@ -13298,6 +13315,11 @@ async def launch_checkpoint_branch_turn(
             "parentBranchId": branch.parent_branch_id,
             "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
             "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
+            "executionProfileRef": payload.execution_profile_ref,
+            "launchPolicyRef": payload.launch_policy_ref,
+            "model": payload.model,
+            "effort": payload.effort,
+            "publishMode": payload.publish_mode,
         },
         "workspacePolicy": turn.workspace_policy,
         "workspaceBaseline": payload.workspace_baseline
@@ -13315,23 +13337,60 @@ async def launch_checkpoint_branch_turn(
             "digest": "sha256:checkpoint-branch-launch-api-v1",
         },
     }
-    if payload.omnigent_checkpoint_execution is not None:
-        checkpoint_execution = payload.omnigent_checkpoint_execution
-        if checkpoint_execution.candidate_workspace.checkpoint_ref != (
-            turn.source_checkpoint_ref
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "checkpoint_branch_source_mismatch",
-                    "reason": (
-                        "Omnigent candidate workspace must use the branch turn "
-                        "source checkpoint"
-                    ),
-                },
+    checkpoint_execution: dict[str, Any] | None = None
+    if hasattr(service, "compile_omnigent_branch_checkpoint_execution"):
+        checkpoint_payload = await _hydrate_recovery_checkpoint_payload(
+            session=session,
+            user=user,
+            checkpoint_ref=turn.source_checkpoint_ref,
+        )
+        admission = _checkpoint_resume_admission_for_request(
+            canonical=canonical,
+            checkpoint_payload=checkpoint_payload,
+            repository=_canonical_execution_repository(canonical),
+        )
+        try:
+            checkpoint_execution = (
+                await service.compile_omnigent_branch_checkpoint_execution(
+                    checkpoint_payload=checkpoint_payload,
+                    validation_ref=turn.source_checkpoint_ref,
+                    admitted_decision=admission,
+                )
             )
-        context_payload["branch"]["omnigentCheckpointExecution"] = (
-            checkpoint_execution.model_dump(by_alias=True, mode="json")
+        except TemporalExecutionRecoveryCheckpointError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "checkpoint_branch_authority_unavailable",
+                    "reason": _recovery_not_available_reason(exc),
+                },
+            ) from exc
+        context_payload["branch"]["omnigentCheckpointExecution"] = checkpoint_execution
+        created = await service.create_checkpoint_branch_execution(
+            canonical,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            logical_step_id=branch.logical_step_id,
+            source_execution_ordinal=branch.source_execution_ordinal,
+            source_checkpoint_ref=turn.source_checkpoint_ref,
+            instruction_ref=turn.instruction_ref,
+            instruction_digest=turn.instruction_digest,
+            checkpoint_execution=checkpoint_execution,
+            execution_profile_ref=payload.execution_profile_ref,
+            launch_policy_ref=payload.launch_policy_ref,
+            model=payload.model,
+            effort=payload.effort,
+            git_work_branch=payload.git_work_branch
+            or branch.git_work_branch
+            or turn.git_work_branch,
+            publish_mode=payload.publish_mode,
+            idempotency_key=(
+                "checkpoint-branch:"
+                + hashlib.sha256(launch_key.encode("utf-8")).hexdigest()
+            ),
+        )
+        step_execution_id = (
+            f"{created.workflow_id}:{branch.logical_step_id}:execution:1"
         )
     try:
         context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
@@ -13351,6 +13410,7 @@ async def launch_checkpoint_branch_turn(
         branch=branch,
         turn=turn,
         payload=payload,
+        step_execution_id=step_execution_id,
         context_bundle_ref=context_bundle_ref,
     )
     manifest_digest = _operation_digest(manifest_payload)
@@ -13384,7 +13444,7 @@ async def launch_checkpoint_branch_turn(
             checkpoint_ref=None,
             diagnostics_ref=diagnostics_ref,
             idempotency_key=launch_key,
-            created_step_execution_id=payload.created_step_execution_id,
+            created_step_execution_id=step_execution_id,
             runtime_agent_run_id=payload.runtime_agent_run_id,
             provider_session_id=payload.provider_session_id,
             agent_request_ref=payload.runtime_request_ref,
