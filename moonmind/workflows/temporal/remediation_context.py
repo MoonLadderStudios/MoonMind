@@ -357,7 +357,11 @@ class RemediationContextBuilder:
     def _target_evidence_payload(
         record: db_models.TemporalExecutionCanonicalRecord,
     ) -> Mapping[str, Any]:
-        for source in (record.memo, record.parameters, record.integration_state):
+        for source in (
+            record.memo,
+            record.parameters,
+            getattr(record, "integration_state", None),
+        ):
             if not isinstance(source, Mapping):
                 continue
             evidence = source.get("remediationEvidence") or source.get(

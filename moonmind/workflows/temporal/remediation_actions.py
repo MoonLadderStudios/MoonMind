@@ -65,11 +65,6 @@ _COMMON_REASON_INPUT = {
     "reason": {"type": "string", "required": False},
     "expectedRunId": {"type": "string", "required": False},
 }
-_MANAGED_SESSION_INPUT = {
-    **_COMMON_REASON_INPUT,
-    "agentRunId": {"type": "string", "required": True},
-    "runtimeId": {"type": "string", "required": True},
-}
 _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "actor": "string",
     "executionPrincipal": "string",
@@ -182,7 +177,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _MANAGED_SESSION_INPUT,
+        "input_metadata": _COMMON_REASON_INPUT,
         "preconditions": ("target_visible", "active_managed_turn"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": (
@@ -193,7 +188,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _MANAGED_SESSION_INPUT,
+        "input_metadata": _COMMON_REASON_INPUT,
         "preconditions": ("target_visible", "session_clear_supported"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify session clear boundary and continuity artifact are produced",
@@ -202,7 +197,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _MANAGED_SESSION_INPUT,
+        "input_metadata": _COMMON_REASON_INPUT,
         "preconditions": ("target_visible", "session_cancelable"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify session cancellation state and target run status",
@@ -211,7 +206,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "high",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _MANAGED_SESSION_INPUT,
+        "input_metadata": _COMMON_REASON_INPUT,
         "preconditions": ("target_visible", "session_termination_approved"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify session termination state and target run status",
@@ -220,7 +215,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "high",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _MANAGED_SESSION_INPUT,
+        "input_metadata": _COMMON_REASON_INPUT,
         "preconditions": ("target_visible", "restart_approved", "owning_session_plane"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify new session identity and continuity boundary artifact",

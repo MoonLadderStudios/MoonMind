@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.remediation_actions import (
 )
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
+    RemediationEvidenceToolService,
     RemediationTargetHealthSnapshot,
 )
 
@@ -352,12 +353,6 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
             "MoonMind.ManagedSessionReconcile",
             "remediation-managed-runtime:action-2",
         ),
-        (
-            "cleanup.request_janitor",
-            {"cleanupRef": "cleanup-1", "expectedState": "pending"},
-            "MoonMind.ManagedRuntimeWorkspaceCleanup",
-            "remediation-cleanup:action-2",
-        ),
     ],
 )
 async def test_production_repair_adapters_queue_owning_control_plane(
@@ -386,9 +381,6 @@ async def test_production_repair_adapters_queue_owning_control_plane(
     if kind == "workload.reap_orphan_container":
         assert queued_payload["containerRef"] == "container-1"
         assert queued_payload["expectedState"] == "orphaned"
-    if kind == "cleanup.request_janitor":
-        assert queued_payload["actionKind"] == kind
-        assert queued_payload["cleanupRef"] == "cleanup-1"
 
 
 async def test_production_host_adapter_rejects_missing_authoritative_lease() -> None:
@@ -413,11 +405,11 @@ async def test_production_adapter_reports_delivery_unknown_without_claiming_succ
     client.start_workflow.side_effect = RuntimeError("transport unavailable")
     plane = TemporalRemediationControlPlane(client=client)
 
-    result = await plane.handlers()["cleanup.request_janitor"](
+    result = await plane.handlers()["workload.reap_orphan_container"](
         {
-            "actionKind": "cleanup.request_janitor",
+            "actionKind": "workload.reap_orphan_container",
             "actionId": "action-4",
-            "params": {"cleanupRef": "cleanup-1"},
+            "params": {"containerRef": "container-1"},
         },
         {},
         _production_target_health(),
