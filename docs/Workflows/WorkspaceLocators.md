@@ -1,5 +1,8 @@
 # Workspace locators
 
+Omnigent locator and mount classes are constrained by
+[Omnigent Policy Authority](../Omnigent/PolicyAuthority.md).
+
 ## Hybrid session and workspace authority
 
 Workspace authority comes from the workspace plane of the frozen capability,

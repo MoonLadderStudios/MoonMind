@@ -1,5 +1,8 @@
 # Provider Profiles
 
+Omnigent compatibility and capacity are governed by an
+[immutable policy version](../Omnigent/PolicyAuthority.md).
+
 **Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
 
 Status: **Desired-State Design**

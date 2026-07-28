@@ -27,11 +27,15 @@ class _Result:
     def scalars(self):
         return _Scalars(self._rows)
 
+    def all(self):
+        return self._rows
+
 
 class _Session:
-    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=()):
+    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=(), policies=()):
         self._results = iter((
-            _Result(profiles), _Result(slots), _Result(bindings), _Result(host_leases)
+            _Result(profiles), _Result(slots), _Result(bindings),
+            _Result(host_leases), _Result(policies),
         ))
 
     async def execute(self, _statement):

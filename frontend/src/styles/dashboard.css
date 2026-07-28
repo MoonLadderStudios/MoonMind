@@ -9891,6 +9891,7 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory td strong,
 .omnigent-inventory td small { display: block; }
 .omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-policy-editor textarea { display: block; font-family: monospace; margin-top: .35rem; max-width: 70rem; width: 100%; }
 .omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,

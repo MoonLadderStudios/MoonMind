@@ -3299,6 +3299,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Policies */
+        get: operations["list_policies_api_omnigent_policies_get"];
+        put?: never;
+        /** Create Policy */
+        post: operations["create_policy_api_omnigent_policies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Versions */
+        get: operations["list_versions_api_omnigent_policies__policy_id__versions_get"];
+        put?: never;
+        /** Create Version */
+        post: operations["create_version_api_omnigent_policies__policy_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/versions/{version}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Version */
+        post: operations["validate_version_api_omnigent_policies__policy_id__versions__version__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Policy Audit */
+        get: operations["policy_audit_api_omnigent_policies__policy_id__audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/versions/{version}/transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Transition */
+        post: operations["transition_api_omnigent_policies__policy_id__versions__version__transition_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/versions/{version}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Snapshot */
+        get: operations["get_snapshot_api_omnigent_policies__policy_id__versions__version__snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/policies/{policy_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diff Versions */
+        get: operations["diff_versions_api_omnigent_policies__policy_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -4420,6 +4541,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ApprovalPolicy */
+        ApprovalPolicy: {
+            /** Actions */
+            actions: {
+                [key: string]: components["schemas"]["ApprovalRule"];
+            };
+        };
+        /** ApprovalRule */
+        ApprovalRule: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "allow" | "approval_required" | "deny";
+            /** Approvalclass */
+            approvalClass?: string | null;
+            /** Reviewerrule */
+            reviewerRule?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
         /**
          * ArtifactCollectionResponse
          * @description Paged compact rows for one independently gated evidence surface.
@@ -5092,6 +5234,18 @@ export interface components {
             executionProfileRef?: string | null;
             /** Launchpolicyref */
             launchPolicyRef?: string | null;
+            /** Policyid */
+            policyId?: string | null;
+            /** Policyversion */
+            policyVersion?: number | null;
+            /** Policydigest */
+            policyDigest?: string | null;
+            /** Policyvalidation */
+            policyValidation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Policysnapshotref */
+            policySnapshotRef?: string | null;
             /** Effectivelaunchsnapshotref */
             effectiveLaunchSnapshotRef?: string | null;
             /** Providersessionref */
@@ -5173,6 +5327,26 @@ export interface components {
              * @default true
              */
             graceful: boolean;
+        };
+        /** CapturePolicy */
+        CapturePolicy: {
+            /** Required */
+            required: boolean;
+            /** Artifactclasses */
+            artifactClasses: string[];
+            /** Maxlogbytes */
+            maxLogBytes: number;
+            /**
+             * Redaction
+             * @enum {string}
+             */
+            redaction: "required" | "best_effort";
+            /**
+             * Evidencecompleteness
+             * @default required
+             * @enum {string}
+             */
+            evidenceCompleteness: "required" | "best_effort";
         };
         /** ChatCompletionRequest */
         ChatCompletionRequest: {
@@ -5594,6 +5768,25 @@ export interface components {
         CheckpointListResponse: {
             /** Items */
             items?: components["schemas"]["CheckpointSummaryModel"][];
+        };
+        /** CheckpointPolicy */
+        CheckpointPolicy: {
+            /** Capture */
+            capture: boolean;
+            /** Resume */
+            resume: boolean;
+            /** Branch */
+            branch: boolean;
+            /**
+             * Publication
+             * @enum {string}
+             */
+            publication: "deny" | "approval" | "allow";
+            /**
+             * Promotion
+             * @enum {string}
+             */
+            promotion: "deny" | "verified" | "approval";
         };
         /** CheckpointSummaryModel */
         CheckpointSummaryModel: {
@@ -6203,6 +6396,22 @@ export interface components {
             cooldown_after_429_seconds: number;
             /** @default backoff */
             rate_limit_policy: components["schemas"]["ManagedAgentRateLimitPolicy"];
+        };
+        /** CreatePolicy */
+        CreatePolicy: {
+            /** Policyid */
+            policyId: string;
+            /** Name */
+            name: string;
+            /**
+             * Visibility
+             * @default private
+             * @enum {string}
+             */
+            visibility: "private" | "deployment";
+            document: components["schemas"]["PolicyDocument"];
+            /** Clonesourceref */
+            cloneSourceRef?: string | null;
         };
         /**
          * CreateRecurringWorkflowRequest
@@ -6830,6 +7039,13 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /** EndpointPolicy */
+        EndpointPolicy: {
+            /** Ref */
+            ref: string;
+            /** Bridgemodes */
+            bridgeModes: ("embedded" | "proxy")[];
         };
         /**
          * EnvironmentDiagnosticReferenceModel
@@ -7735,6 +7951,15 @@ export interface components {
             /** Evidenceref */
             evidenceRef?: string | null;
         };
+        /** ExecutionPolicy */
+        ExecutionPolicy: {
+            /** Profileref */
+            profileRef: string;
+            /** Harness */
+            harness: string;
+            /** Agentidentities */
+            agentIdentities: string[];
+        };
         /** ExecutionProfileReadiness */
         ExecutionProfileReadiness: {
             /** Ref */
@@ -8223,6 +8448,22 @@ export interface components {
              * @default 900
              */
             overlapSeconds: number;
+        };
+        /** HostPolicy */
+        HostPolicy: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "static_compose" | "on_demand_docker";
+            /** Backendref */
+            backendRef: string;
+            /** Architectures */
+            architectures: ("amd64" | "arm64")[];
+            /** Serverimageref */
+            serverImageRef: string;
+            /** Hostimageref */
+            hostImageRef: string;
         };
         /** ImageObservation */
         ImageObservation: {
@@ -8978,6 +9219,31 @@ export interface components {
              */
             content: string;
         };
+        /** MountRule */
+        MountRule: {
+            /** Sourceref */
+            sourceRef: string;
+            /** Targetref */
+            targetRef: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "read_only" | "read_write";
+        };
+        /** NetworkPolicy */
+        NetworkPolicy: {
+            /** Attachmentref */
+            attachmentRef: string;
+            /** Egressprofileref */
+            egressProfileRef: string;
+        };
+        /** NewVersion */
+        NewVersion: {
+            /** Expectedparentref */
+            expectedParentRef: string;
+            document: components["schemas"]["PolicyDocument"];
+        };
         /** OAuthSessionResponse */
         OAuthSessionResponse: {
             /** Session Id */
@@ -9190,6 +9456,38 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /**
+         * PolicyDocument
+         * @description Complete authority consumed at all Omnigent enforcement boundaries.
+         */
+        PolicyDocument: {
+            /**
+             * Schemaversion
+             * @default 1
+             * @constant
+             */
+            schemaVersion: 1;
+            endpoint: components["schemas"]["EndpointPolicy"];
+            execution: components["schemas"]["ExecutionPolicy"];
+            host: components["schemas"]["HostPolicy"];
+            resources: components["schemas"]["ResourcePolicy"];
+            network: components["schemas"]["NetworkPolicy"];
+            workspace: components["schemas"]["WorkspacePolicy"];
+            providerProfile: components["schemas"]["ProviderProfilePolicy"];
+            session: components["schemas"]["SessionPolicy"];
+            capture: components["schemas"]["CapturePolicy"];
+            checkpoint: components["schemas"]["CheckpointPolicy"];
+            remediation: components["schemas"]["RemediationPolicy"];
+            rag: components["schemas"]["RagPolicy"];
+            approvals: components["schemas"]["ApprovalPolicy"];
+            retention: components["schemas"]["RetentionPolicy"];
+            rollout: components["schemas"]["RolloutPolicy"];
+        };
+        /**
+         * PolicyState
+         * @enum {string}
+         */
+        PolicyState: "draft" | "active" | "disabled" | "deprecated" | "superseded";
         /**
          * PollIntegrationRequest
          * @description Request payload for polling updates while awaiting external completion.
@@ -9850,6 +10148,13 @@ export interface components {
             /** Last Auth Method */
             last_auth_method?: string | null;
         };
+        /** ProviderProfilePolicy */
+        ProviderProfilePolicy: {
+            /** Compatibleproviders */
+            compatibleProviders: string[];
+            /** Queuewhenbusy */
+            queueWhenBusy: boolean;
+        };
         /** ProviderProfileReadiness */
         ProviderProfileReadiness: {
             /** Status */
@@ -10141,6 +10446,29 @@ export interface components {
             requestedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+        };
+        /** RagPolicy */
+        RagPolicy: {
+            /** Initialscope */
+            initialScope: string;
+            /** Followupscope */
+            followupScope: string;
+            /** Collectionrefs */
+            collectionRefs: string[];
+            /** Tokenbudget */
+            tokenBudget: number;
+            /**
+             * Latencybudgetms
+             * @default 3000
+             */
+            latencyBudgetMs: number;
+            /**
+             * Fallback
+             * @enum {string}
+             */
+            fallback: "deny" | "empty";
+            /** Credentialref */
+            credentialRef: string;
         };
         /**
          * RecoverExecutionResponse
@@ -10880,6 +11208,21 @@ export interface components {
             /** Headversion */
             headVersion: number;
         };
+        /** RemediationPolicy */
+        RemediationPolicy: {
+            /** Actions */
+            actions: string[];
+            /** Risktiers */
+            riskTiers: {
+                [key: string]: "low" | "medium" | "high" | "critical";
+            };
+            /** Locks */
+            locks: boolean;
+            /** Maxactions */
+            maxActions: number;
+            /** Autonomous */
+            autonomous: boolean;
+        };
         /** RepositorySummarizationRequest */
         RepositorySummarizationRequest: {
             /**
@@ -10962,6 +11305,21 @@ export interface components {
             /** Mimetype */
             mimeType?: string | null;
         };
+        /** ResourcePolicy */
+        ResourcePolicy: {
+            /** Cpumillis */
+            cpuMillis: number;
+            /** Memorymib */
+            memoryMiB: number;
+            /** Processes */
+            processes: number;
+            /** Timeoutseconds */
+            timeoutSeconds: number;
+            /** Temporarystoragemib */
+            temporaryStorageMiB: number;
+            /** Concurrency */
+            concurrency: number;
+        };
         /**
          * ResponseCreateRequest
          * @description Supported subset of OpenAI's Responses API create request.
@@ -11034,6 +11392,16 @@ export interface components {
             /** Detailhref */
             detailHref?: string | null;
         };
+        /** RetentionPolicy */
+        RetentionPolicy: {
+            /** Days */
+            days: number;
+            /**
+             * Deletion
+             * @enum {string}
+             */
+            deletion: "after-expiry" | "manual";
+        };
         /** RetrievalQuery */
         RetrievalQuery: {
             /** Query */
@@ -11076,6 +11444,19 @@ export interface components {
             repository: string;
             /** Reference */
             reference: string;
+        };
+        /** RolloutPolicy */
+        RolloutPolicy: {
+            /** Cohort */
+            cohort: string;
+            /** Gate */
+            gate: string;
+            /** Diagnostics */
+            diagnostics: boolean;
+            /** Diagnosticref */
+            diagnosticRef?: string | null;
+            /** Deprecationref */
+            deprecationRef?: string | null;
         };
         /** SandboxWorkspaceLocator */
         SandboxWorkspaceLocator: {
@@ -11235,6 +11616,27 @@ export interface components {
             usages?: components["schemas"]["SecretUsageItemResponse"][];
             /** Diagnostics */
             diagnostics?: components["schemas"]["SecretUsageDiagnosticResponse"][];
+        };
+        /** SessionPolicy */
+        SessionPolicy: {
+            /** Create */
+            create: boolean;
+            /**
+             * Firstmessage
+             * @enum {string}
+             */
+            firstMessage: "required" | "optional" | "forbidden";
+            /** Continuation */
+            continuation: boolean;
+            /** Interruption */
+            interruption: boolean;
+            /** Cancellation */
+            cancellation: boolean;
+            /**
+             * Cleanup
+             * @enum {string}
+             */
+            cleanup: "drain" | "remove";
         };
         /**
          * SessionResourceListResponse
@@ -12063,6 +12465,15 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Transition */
+        Transition: {
+            state: components["schemas"]["PolicyState"];
+            /**
+             * Makedefault
+             * @default false
+             */
+            makeDefault: boolean;
+        };
         /**
          * UpdateExecutionRequest
          * @description Request payload for workflow updates.
@@ -12782,6 +13193,31 @@ export interface components {
          * @enum {string}
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
+        /** WorkspacePolicy */
+        WorkspacePolicy: {
+            /** Allowedclasses */
+            allowedClasses: string[];
+            /** Repositorymutation */
+            repositoryMutation: boolean;
+            /** Mountclasses */
+            mountClasses: ("workspace" | "oauth_home" | "omnigent_state" | "skills_tools" | "artifacts" | "cache")[];
+            /** Runtimeuid */
+            runtimeUid: number;
+            /** Runtimegid */
+            runtimeGid: number;
+            /** Mountrules */
+            mountRules?: components["schemas"]["MountRule"][];
+            /** Artifactboundaryref */
+            artifactBoundaryRef?: string | null;
+            /** Skillboundaryref */
+            skillBoundaryRef?: string | null;
+            /** Toolboundaryref */
+            toolBoundaryRef?: string | null;
+            /** Oauthboundaryref */
+            oauthBoundaryRef?: string | null;
+            /** Stateboundaryref */
+            stateBoundaryRef?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -20131,6 +20567,308 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OmnigentCodexCatalogReadiness"];
+                };
+            };
+        };
+    };
+    list_policies_api_omnigent_policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    create_policy_api_omnigent_policies_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePolicy"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_versions_api_omnigent_policies__policy_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_version_api_omnigent_policies__policy_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewVersion"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_version_api_omnigent_policies__policy_id__versions__version__validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    policy_audit_api_omnigent_policies__policy_id__audit_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transition_api_omnigent_policies__policy_id__versions__version__transition_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Transition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_snapshot_api_omnigent_policies__policy_id__versions__version__snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_versions_api_omnigent_policies__policy_id__diff_get: {
+        parameters: {
+            query: {
+                from_version: number;
+                to_version: number;
+            };
+            header?: never;
+            path: {
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
