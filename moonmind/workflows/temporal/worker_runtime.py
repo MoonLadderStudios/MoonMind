@@ -2761,15 +2761,25 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
                 from moonmind.omnigent.execution_profiles import POLICIES
+                from moonmind.security.egress import (
+                    DEFAULT_EGRESS_PROFILE,
+                    attest_docker_egress,
+                )
 
                 enforced_network_refs = []
+                egress_attestation = await attest_docker_egress(
+                    runner=container_job_backend.command_runner,
+                    profile=DEFAULT_EGRESS_PROFILE,
+                    backend_ref=container_backend_settings.default_backend_ref,
+                )
                 for policy in POLICIES.values():
                     if (
                         policy.enabled
                         and policy.enforced_egress
-                        and await container_job_backend.network_ready(policy.network_ref)
+                        and policy.network_ref == egress_attestation.network_ref
                     ):
                         enforced_network_refs.append(policy.network_ref)
+                resources.egress_attestation = egress_attestation  # type: ignore[attr-defined]
             else:
                 container_job_backend = None
                 enforced_network_refs = []
@@ -3003,6 +3013,13 @@ async def main_async() -> None:
                 "ready": container_job_backend is not None,
                 "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
             }
+            egress_attestation = getattr(
+                runtime_resources, "egress_attestation", None
+            )
+            if egress_attestation is not None:
+                health_state.readiness_metadata["containerBackend"][
+                    "egressAttestation"
+                ] = egress_attestation.model_dump(by_alias=True, mode="json")
 
         logger.info(
             "Temporal executable worker specification: %s",

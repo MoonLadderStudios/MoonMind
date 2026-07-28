@@ -21,6 +21,11 @@ from moonmind.schemas.workload_models import (
     WorkloadResult,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    restricted_proxy_env,
+)
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
@@ -223,6 +228,22 @@ def _workload_command_args(
             return [workload_command[0]]
         return [shlex.join(workload_command)]
     return list(workload_command)
+
+
+def _profile_network_args(network_policy: str) -> tuple[str, list[str]]:
+    if network_policy == "none":
+        return "none", []
+    if network_policy != "bridge":
+        raise DockerWorkloadLauncherError("unsupported workload network policy")
+    args = [
+        "--label",
+        f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}",
+        "--label",
+        f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}",
+    ]
+    for value in restricted_proxy_env():
+        args.extend(("--env", value))
+    return EGRESS_NETWORK_REF, args
 
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
     normalized = posixpath.normpath(path)
@@ -785,6 +806,7 @@ class DockerWorkloadLauncher:
                 docker_binary=self._docker_binary,
                 request=request,
             )
+        network_ref, egress_args = _profile_network_args(profile.network_policy)
         args = [
             self._docker_binary,
             "run",
@@ -793,8 +815,9 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network_ref,
             *structured_container_security_args(),
+            *egress_args,
         ]
 
         for key, value in _operational_labels(request).items():
@@ -838,6 +861,7 @@ class DockerWorkloadLauncher:
                 "start_helper requires a bounded_service runner profile"
             )
         _ensure_paths_are_mounted(request)
+        network_ref, egress_args = _profile_network_args(profile.network_policy)
         args = [
             self._docker_binary,
             "run",
@@ -847,8 +871,9 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network_ref,
             *structured_container_security_args(),
+            *egress_args,
         ]
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])

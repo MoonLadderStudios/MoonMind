@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from moonmind.security.egress import EGRESS_NETWORK_REF
 
 from api_service.api.routers import omnigent_catalog as catalog
 from api_service.auth_providers import get_current_user
@@ -98,7 +99,7 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
         lambda: SimpleNamespace(enabled=True),
     )
     async def live_readiness():
-        return True, {"local-network"}
+        return True, {EGRESS_NETWORK_REF}
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
@@ -273,7 +274,7 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
 @pytest.mark.parametrize(
     ("live_readiness", "expected"),
     [
-        ((False, {"local-network"}), "bridge_endpoint_unavailable"),
+        ((False, {EGRESS_NETWORK_REF}), "bridge_endpoint_unavailable"),
         ((True, set()), "network_policy_unavailable"),
     ],
 )
@@ -301,7 +302,7 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
             "taskQueues": ["mm.activity.agent_runtime"],
             "containerBackend": {
                 "ready": True,
-                "enforcedNetworkRefs": ["local-network"],
+                "enforcedNetworkRefs": [EGRESS_NETWORK_REF],
             },
         }),
     ])
@@ -324,7 +325,7 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
 
     assert await catalog._live_deployment_readiness() == (
         True,
-        {"local-network"},
+        {EGRESS_NETWORK_REF},
     )
 
 
