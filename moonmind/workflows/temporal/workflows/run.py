@@ -4877,6 +4877,11 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             "resume_unavailable:omnigent_checkpoint_evidence_missing"
                         )
+            elif isinstance(
+                workflow_parameters.get("omnigentCheckpointExecution"), Mapping
+            ):
+                raw = workflow_parameters.get("omnigentCheckpointExecution")
+                expected_action = "resume"
         if raw is None:
             return None
         if not isinstance(raw, Mapping):

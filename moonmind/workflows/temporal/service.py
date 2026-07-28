@@ -3952,6 +3952,22 @@ class TemporalExecutionService:
         if checkpoint.plan_digest:
             recover_ref["planDigest"] = checkpoint.plan_digest
         workflow_params["resume"] = recover_ref
+        if eligibility.target_runtime_id == "omnigent":
+            from moonmind.workflows.executions.omnigent_checkpoint_authority import (
+                OmnigentCheckpointAuthorityError,
+                compile_omnigent_checkpoint_execution,
+            )
+
+            try:
+                omnigent_execution = compile_omnigent_checkpoint_execution(
+                    recovery_workspace=checkpoint.recovery_workspace,
+                    validation_ref=manifest_ref,
+                )
+            except OmnigentCheckpointAuthorityError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc
+            workflow_params["omnigentCheckpointExecution"] = (
+                omnigent_execution.model_dump(by_alias=True, mode="json")
+            )
         params.pop("task", None)
         params["workflow"] = workflow_params
         title = (
