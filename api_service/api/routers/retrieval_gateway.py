@@ -8,6 +8,7 @@ import secrets
 import hashlib
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -118,7 +119,10 @@ def get_bridge_session_store() -> OmnigentBridgeSessionStore:
 
 
 def _bridge_authoritative_issue(
-    row: Any, payload: BridgeRetrievalCapabilityIssue
+    row: Any,
+    payload: BridgeRetrievalCapabilityIssue,
+    *,
+    now: float | None = None,
 ) -> RetrievalCapabilityIssue:
     """Compile an issue request solely from the durable bridge launch snapshot."""
     if row.status not in {"creating", "active"}:
@@ -159,6 +163,29 @@ def _bridge_authoritative_issue(
         ceiling = int(policy.get(name, default))
         return ceiling if requested is None else min(requested, ceiling)
 
+    lifetime_seconds = min(
+        payload.lifetime_seconds, int(policy.get("maxLifetimeSeconds", 900))
+    )
+    authority_expires_at = policy.get("authorityExpiresAt")
+    if authority_expires_at is not None:
+        try:
+            if isinstance(authority_expires_at, (int, float)):
+                authority_expiry = float(authority_expires_at)
+            else:
+                authority_expiry = datetime.fromisoformat(
+                    str(authority_expires_at).replace("Z", "+00:00")
+                ).timestamp()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise HTTPException(
+                409, detail="Compiled follow-up retrieval authority expiry is invalid."
+            ) from exc
+        remaining_seconds = int(authority_expiry - (time.time() if now is None else now))
+        if remaining_seconds < 1:
+            raise HTTPException(
+                409, detail="Compiled follow-up retrieval authority has expired."
+            )
+        lifetime_seconds = min(lifetime_seconds, remaining_seconds)
+
     return RetrievalCapabilityIssue(
         tenant_id=tenant_id,
         repository=repository,
@@ -170,9 +197,7 @@ def _bridge_authoritative_issue(
         policy_version=policy_version,
         collections=list(requested_collections),
         filters=authored_filters,
-        lifetime_seconds=min(
-            payload.lifetime_seconds, int(policy.get("maxLifetimeSeconds", 900))
-        ),
+        lifetime_seconds=lifetime_seconds,
         top_k=narrowed("topK", payload.top_k, 8),
         max_sources=int(policy.get("maxSources", 8)),
         max_query_bytes=int(policy.get("maxQueryBytes", 4096)),
@@ -641,25 +666,6 @@ def health(
         return {"status": "degraded", "collections": []}
 
 
-@router.post("/capabilities")
-def issue_retrieval_capability(
-    payload: RetrievalCapabilityIssue,
-    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
-    _user: User = Depends(get_current_user()),
-) -> Dict[str, object]:
-    """Exchange control-plane authority for one bounded session capability."""
-    snapshot = _server_policy_snapshot(payload)
-    token, capability = registry.issue(
-        snapshot, lifetime_seconds=payload.lifetime_seconds
-    )
-    return {
-        "capabilityId": capability.capability_id,
-        "capability": token,
-        "expiresAt": capability.expires_at,
-        "budgetSnapshot": asdict(snapshot),
-    }
-
-
 @router.post("/bridge-sessions/{bridge_session_id}/capability")
 async def issue_bridge_retrieval_capability(
     bridge_session_id: str,
@@ -704,6 +710,49 @@ async def issue_bridge_retrieval_capability(
         "expiresAt": capability.expires_at,
         "budgetSnapshot": asdict(snapshot),
         "bridgeSessionId": bridge_session_id,
+    }
+
+
+@router.delete("/bridge-sessions/{bridge_session_id}/capabilities")
+async def revoke_bridge_retrieval_capabilities(
+    bridge_session_id: str,
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    _user: User = Depends(get_current_user()),
+) -> Dict[str, object]:
+    """Revoke authority at cancellation, drain, replacement, or cleanup boundaries."""
+    row = await store.get_bridge_session(bridge_session_id)
+    if row is None:
+        raise HTTPException(404, detail="Omnigent bridge session was not found.")
+    if not row.moonmind_run_id:
+        raise HTTPException(409, detail="Bridge execution scope is incomplete.")
+    revoked = registry.revoke_scope(
+        run_id=str(row.moonmind_run_id),
+        host_id=str(row.omnigent_host_id) if row.omnigent_host_id else None,
+        session_id=str(row.omnigent_session_id) if row.omnigent_session_id else None,
+        step_id=str(row.step_execution_id) if row.step_execution_id else None,
+    )
+    await store.append_events(
+        bridge_session_id,
+        [
+            {
+                "eventType": "retrieval.capabilities.revoked",
+                "direction": "moonmind_to_host",
+                "deduplicationKey": (
+                    f"retrieval-capabilities-revoked:{bridge_session_id}:"
+                    + hashlib.sha256(",".join(sorted(revoked)).encode()).hexdigest()[:16]
+                ),
+                "metadata": {
+                    "revokedCount": len(revoked),
+                    "reason": "lifecycle_boundary",
+                },
+            }
+        ],
+    )
+    return {
+        "bridgeSessionId": bridge_session_id,
+        "state": "revoked",
+        "revokedCapabilityIds": revoked,
     }
 
 

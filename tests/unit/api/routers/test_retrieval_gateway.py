@@ -14,7 +14,13 @@ from api_service.api.routers.retrieval_gateway import (
     _server_policy_snapshot,
     authorize_retrieval_request,
     get_retrieval_service,
+    revoke_bridge_retrieval_capabilities,
     router,
+)
+from api_service.retrieval_capabilities import (
+    RetrievalBudgetSnapshot,
+    RetrievalCapabilityError,
+    RetrievalCapabilityRegistry,
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 from moonmind.rag.qdrant_client import IndexCollectionHealth, IndexHealthSummary
@@ -84,6 +90,97 @@ def test_bridge_capability_rejects_caller_scope_broadening() -> None:
             BridgeRetrievalCapabilityIssue(),
         )
     assert inactive.value.status_code == 409
+
+
+def test_bridge_capability_lifetime_is_clamped_to_authority_expiry() -> None:
+    row = _bridge_row()
+    row.effective_launch_snapshot_json["followUpRetrieval"][
+        "authorityExpiresAt"
+    ] = 1_000_045
+
+    issue = _bridge_authoritative_issue(
+        row,
+        BridgeRetrievalCapabilityIssue(lifetime_seconds=120),
+        now=1_000_000,
+    )
+
+    assert issue.lifetime_seconds == 45
+
+
+def test_bridge_capability_rejects_expired_or_invalid_authority() -> None:
+    expired = _bridge_row()
+    expired.effective_launch_snapshot_json["followUpRetrieval"][
+        "authorityExpiresAt"
+    ] = "1970-01-01T00:00:01Z"
+    with pytest.raises(HTTPException) as expired_error:
+        _bridge_authoritative_issue(
+            expired, BridgeRetrievalCapabilityIssue(), now=2
+        )
+    assert expired_error.value.status_code == 409
+
+    invalid = _bridge_row()
+    invalid.effective_launch_snapshot_json["followUpRetrieval"][
+        "authorityExpiresAt"
+    ] = "not-a-timestamp"
+    with pytest.raises(HTTPException) as invalid_error:
+        _bridge_authoritative_issue(
+            invalid, BridgeRetrievalCapabilityIssue(), now=1
+        )
+    assert invalid_error.value.status_code == 409
+
+
+def test_unscoped_capability_issuance_route_is_not_exposed() -> None:
+    app = _build_app()
+    paths = {
+        (route.path, method)
+        for route in app.routes
+        for method in (route.methods or ())
+    }
+
+    assert ("/retrieval/capabilities", "POST") not in paths
+
+
+@pytest.mark.asyncio
+async def test_bridge_lifecycle_revokes_scoped_capabilities_and_emits_event(
+    tmp_path,
+) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    budget = RetrievalBudgetSnapshot(
+        tenant_id="tenant-1",
+        repository="MoonMind",
+        run_id="run-1",
+        workspace_id="workspace-1",
+        host_id="host-1",
+        session_id="session-1",
+        step_id="step-1",
+        policy_version="policy-7",
+        collections=("repo",),
+        filters=(),
+    )
+    token, capability = registry.issue(budget, lifetime_seconds=60)
+
+    class Store:
+        events = []
+
+        async def get_bridge_session(self, bridge_session_id):
+            assert bridge_session_id == "bridge-1"
+            return _bridge_row()
+
+        async def append_events(self, bridge_session_id, events):
+            assert bridge_session_id == "bridge-1"
+            self.events.extend(events)
+
+    store = Store()
+    result = await revoke_bridge_retrieval_capabilities(
+        "bridge-1", registry=registry, store=store, _user=SimpleNamespace(id="user-1")
+    )
+
+    assert result["revokedCapabilityIds"] == [capability.capability_id]
+    assert store.events[0]["eventType"] == "retrieval.capabilities.revoked"
+    with pytest.raises(RetrievalCapabilityError, match="revoked"):
+        registry.resolve(
+            token, host_id="host-1", session_id="session-1", run_id="run-1"
+        )
 
 
 class StubSettings:
