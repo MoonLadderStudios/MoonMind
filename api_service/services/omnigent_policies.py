@@ -34,6 +34,19 @@ class PolicyNotFound(LookupError):
     pass
 
 
+def _split_policy_ref(policy_ref: str) -> tuple[str, int]:
+    policy_id, separator, version_text = policy_ref.rpartition("@")
+    if not separator or not policy_id:
+        raise PolicyConflict(f"invalid policy version reference: {policy_ref!r}")
+    try:
+        version = int(version_text)
+    except ValueError as exc:
+        raise PolicyConflict(f"invalid policy version reference: {policy_ref!r}") from exc
+    if version < 1:
+        raise PolicyConflict(f"invalid policy version reference: {policy_ref!r}")
+    return policy_id, version
+
+
 def validate_policy(
     document: PolicyDocument,
     *,
@@ -138,6 +151,14 @@ class OmnigentPolicyService:
                      document: PolicyDocument, actor: str, clone_source_ref: str | None = None) -> OmnigentPolicyVersion:
         if await self.session.get(OmnigentPolicy, policy_id):
             raise PolicyConflict("policy identity already exists")
+        if clone_source_ref is not None:
+            source_policy_id, source_version = _split_policy_ref(clone_source_ref)
+            try:
+                await self.get_version(source_policy_id, source_version)
+            except PolicyNotFound as exc:
+                raise PolicyConflict(
+                    f"clone source does not exist: {clone_source_ref}"
+                ) from exc
         policy = OmnigentPolicy(policy_id=policy_id, name=name, owner_user_id=owner_user_id, visibility=visibility)
         self.session.add(policy)
         row = self._version(policy_id, 1, document, actor, clone_source_ref=clone_source_ref)
@@ -192,6 +213,13 @@ class OmnigentPolicyService:
             raise PolicyConflict(f"invalid policy transition: {current.value} -> {state.value}")
         if state == PolicyState.ACTIVE and not row.validation_json.get("valid"):
             raise PolicyConflict("invalid policy cannot be activated")
+        if (
+            state in {PolicyState.DISABLED, PolicyState.DEPRECATED, PolicyState.SUPERSEDED}
+            and policy.default_version == version
+        ):
+            raise PolicyConflict(
+                "default policy version cannot be made unavailable; switch the default first"
+            )
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
