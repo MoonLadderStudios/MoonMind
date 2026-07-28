@@ -41,7 +41,7 @@ from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
-    _apply_policy_snapshot,
+    _compile_persisted_effective_launch,
     _bind_candidate_workspace,
     _failure_evidence,
 )
@@ -93,14 +93,7 @@ def persisted_policy_authority(monkeypatch):
     )
 
 
-def test_persisted_policy_snapshot_replaces_legacy_launch_authority():
-    legacy = {
-        "schemaVersion": 2,
-        "launchPolicyRef": "codex-static@1",
-        "hostMode": "on_demand_docker",
-        "serverImageRef": "legacy.invalid",
-        "snapshotRef": "legacy-ref",
-    }
+def test_persisted_policy_snapshot_is_complete_launch_authority():
     snapshot = compile_policy_snapshot(
         policy_id="codex-static",
         version=1,
@@ -108,10 +101,16 @@ def test_persisted_policy_snapshot_replaces_legacy_launch_authority():
         validation={"valid": True, "diagnostics": []},
     )
 
-    realized = _apply_policy_snapshot(legacy, snapshot)
+    realized = _compile_persisted_effective_launch(
+        snapshot, provider_profile_id="profile-1"
+    )
 
     assert realized["hostMode"] == snapshot["boundaries"]["host"]["mode"]
     assert realized["serverImageRef"] == snapshot["boundaries"]["host"]["serverImageRef"]
+    assert realized["limits"]["memoryMiB"] == snapshot["boundaries"]["resources"]["memoryMiB"]
+    assert realized["networkRef"] == snapshot["boundaries"]["network"]["attachmentRef"]
+    assert realized["mountClasses"] == snapshot["boundaries"]["workspace"]["mountClasses"]
+    assert realized["boundaries"] == snapshot["boundaries"]
     assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
     assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
 

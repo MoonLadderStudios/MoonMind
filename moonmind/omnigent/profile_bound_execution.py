@@ -34,10 +34,7 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceOwner,
     SandboxRemediationWorkspaceOwner,
 )
-from moonmind.omnigent.execution_profiles import (
-    compile_effective_launch,
-    selection_from_request,
-)
+from moonmind.omnigent.execution_profiles import selection_from_request
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
@@ -203,30 +200,66 @@ def _bind_candidate_workspace(
     )
 
 
-def _apply_policy_snapshot(
-    effective_launch: Mapping[str, Any],
+def _compile_persisted_effective_launch(
     policy_snapshot: Mapping[str, Any],
+    *,
+    provider_profile_id: str,
 ) -> dict[str, Any]:
-    """Project persisted policy authority into the existing launch evidence carrier."""
+    """Compile the sole launch carrier from persisted immutable authority."""
 
     boundaries = policy_snapshot["boundaries"]
     host = boundaries["host"]
     execution = boundaries["execution"]
     endpoint = boundaries["endpoint"]
+    resources = boundaries["resources"]
+    network = boundaries["network"]
+    workspace = boundaries["workspace"]
+    session = boundaries["session"]
+    retention = boundaries["retention"]
     payload = {
-        **dict(effective_launch),
+        "schemaVersion": 3,
+        "executionProfileRef": execution["profileRef"],
         "launchPolicyRef": policy_snapshot["policyRef"],
+        "providerProfileId": provider_profile_id,
         "endpointRef": endpoint["ref"],
+        "agentName": execution["agentIdentities"][0],
         "harness": execution["harness"],
         "hostMode": host["mode"],
         "backendRef": host["backendRef"],
         "architectures": list(host["architectures"]),
         "serverImageRef": host["serverImageRef"],
         "hostImageRef": host["hostImageRef"],
-        "capture": dict(boundaries["capture"]),
+        "networkRef": network["attachmentRef"],
+        "egressProfileRef": network["egressProfileRef"],
+        "enforcedEgress": bool(network["egressProfileRef"]),
+        "limits": {
+            "cpuMillis": resources["cpuMillis"],
+            "memoryMiB": resources["memoryMiB"],
+            "processes": resources["processes"],
+            "timeoutSeconds": resources["timeoutSeconds"],
+            "temporaryStorageMiB": resources["temporaryStorageMiB"],
+        },
+        "mountClasses": list(workspace["mountClasses"]),
+        "runtimeUid": workspace["runtimeUid"],
+        "runtimeGid": workspace["runtimeGid"],
+        # The Codex host substrate is intentionally stricter than selectable
+        # policy: it never permits a writable root filesystem.
+        "readOnlyRoot": True,
+        "capture": {
+            **dict(boundaries["capture"]),
+            "retentionDays": retention["days"],
+        },
+        "cleanup": {"mode": session["cleanup"], "janitor": True},
+        "controlCapabilities": [
+            "interrupt",
+            "terminate",
+            "clear_context",
+        ],
+        # Every policy section remains available to downstream enforcement
+        # consumers without reconstructing authority from environment or code.
+        "boundaries": dict(boundaries),
         "policyAuthority": dict(policy_snapshot),
     }
-    payload.pop("snapshotRef", None)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
         canonical.encode()
@@ -350,86 +383,69 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             await emit(current_stage, "ready")
             # Resolve product-owned launch authority before acquiring a Provider
-            # Profile lease or mutating host state.  A previously persisted
-            # binding is retry authority; environment input is bootstrap-only.
+            # Profile lease or mutating host state. A persisted binding chooses
+            # an immutable ref; environment input selects only the one-time
+            # bootstrap default when no durable or authored selection exists.
             requested_target, requested_policy = selection_from_request(
                 request.parameters
             )
             current_stage = "host_binding_resolution"
             await emit(current_stage, "started")
             binding = await self._hosts.get_binding_for_profile(profile_id)
-            if binding is not None and binding.effective_launch_snapshot is not None:
-                effective_launch = dict(binding.effective_launch_snapshot)
+            if binding is not None:
+                selected_profile_ref = str(
+                    binding.execution_profile_ref or "omnigent-codex@1"
+                )
+                selected_policy_ref = str(
+                    binding.launch_policy_ref
+                    or (
+                        "codex-on-demand@1"
+                        if binding.host_launch_profile_ref
+                        else "codex-static@1"
+                    )
+                )
                 if requested_target and (
-                    effective_launch.get("executionProfileRef") != requested_target
-                    or effective_launch.get("launchPolicyRef") != requested_policy
+                    selected_profile_ref != requested_target
+                    or (requested_policy and selected_policy_ref != requested_policy)
                 ):
                     raise OmnigentOAuthHostError(
                         "explicit launch selection conflicts with the durable host binding",
                         code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                     )
-                if effective_launch.get("schemaVersion") != 2:
-                    effective_launch = compile_effective_launch(
-                        profile_ref=str(
-                            binding.execution_profile_ref or "omnigent-codex@1"
-                        ),
-                        policy_ref=str(
-                            binding.launch_policy_ref
-                            or (
-                                "codex-on-demand@1"
-                                if binding.host_launch_profile_ref
-                                else "codex-static@1"
-                            )
-                        ),
-                        provider_profile_id=profile_id,
-                    )
-                    binding = binding.model_copy(
-                        update={"effective_launch_snapshot": effective_launch}
-                    )
             elif requested_target:
-                effective_launch = compile_effective_launch(
-                    profile_ref=requested_target,
-                    policy_ref=requested_policy,
-                    provider_profile_id=profile_id,
-                )
-                if binding is not None:
-                    bound_mode = (
-                        "on_demand_docker"
-                        if binding.host_launch_profile_ref
-                        else "static_compose"
-                    )
-                    if effective_launch["hostMode"] != bound_mode:
-                        raise OmnigentOAuthHostError(
-                            "explicit launch policy conflicts with the durable host binding",
-                            code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
-                        )
+                selected_profile_ref = requested_target
+                selected_policy_ref = requested_policy or "codex-static@1"
             else:
                 bootstrap_on_demand = (
-                    bool(binding.host_launch_profile_ref)
-                    if binding is not None
-                    else bool(os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"))
+                    bool(os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"))
                 )
-                effective_launch = compile_effective_launch(
-                    profile_ref="omnigent-codex@1",
-                    policy_ref=(
-                        "codex-on-demand@1"
-                        if bootstrap_on_demand
-                        else "codex-static@1"
-                    ),
-                    provider_profile_id=profile_id,
+                selected_profile_ref = "omnigent-codex@1"
+                selected_policy_ref = (
+                    "codex-on-demand@1"
+                    if bootstrap_on_demand
+                    else "codex-static@1"
                 )
             current_stage = "policy_authority_resolution"
             await emit(current_stage, "started")
             try:
                 policy_snapshot = await self._resolve_policy_snapshot(
-                    str(effective_launch["launchPolicyRef"])
+                    selected_policy_ref
                 )
             except PolicyConflict as exc:
                 raise OmnigentOAuthHostError(
                     str(exc), code="OMNIGENT_POLICY_AUTHORITY_UNAVAILABLE"
                 ) from exc
-            effective_launch = _apply_policy_snapshot(
-                effective_launch, policy_snapshot
+            if (
+                policy_snapshot["boundaries"]["execution"]["profileRef"]
+                != selected_profile_ref
+            ):
+                raise OmnigentOAuthHostError(
+                    "persisted policy execution profile conflicts with launch selection",
+                    code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                )
+            effective_launch = _compile_persisted_effective_launch(
+                policy_snapshot,
+                provider_profile_id=profile_id,
             )
             await emit(
                 current_stage,
