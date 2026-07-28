@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.conformance import (
+    BROWSER_AUTHORITY_FIELDS,
     PROFILE_VERSION,
     CaseResult,
     ConformanceContractError,
@@ -91,8 +92,13 @@ def _acceptance_manifest(now: datetime, root: Path) -> dict[str, object]:
     )
     row = {
         "status": "passed",
-        "assertions": {"browser_originated": True, "no_fallback": True},
-        "authorityChain": {"providerProfileRef": "profile-safe", "hostId": "host-1"},
+        "assertions": {
+            "browser_originated": True,
+            "normal_create_request": True,
+            "workflow_detail_terminal_replay": True,
+            "no_fallback": True,
+        },
+        "authorityChain": {field: f"{field}-safe" for field in BROWSER_AUTHORITY_FIELDS},
         "evidenceRefs": ["row-evidence.json"],
     }
     browser = {
@@ -150,6 +156,30 @@ def test_acceptance_manifest_gate_fails_closed(mutation: str, tmp_path: Path) ->
     else:
         manifest["images"]["hostDigest"] = "latest"  # type: ignore[index]
     with pytest.raises(ConformanceContractError):
+        validate_acceptance_manifest(manifest, now=now, evidence_root=tmp_path)
+
+
+def test_acceptance_manifest_rejects_future_generation_time(tmp_path: Path) -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    manifest = _acceptance_manifest(now, tmp_path)
+    manifest["generatedAt"] = (now + timedelta(seconds=1)).isoformat()
+    with pytest.raises(ConformanceContractError, match="future-dated"):
+        validate_acceptance_manifest(manifest, now=now, evidence_root=tmp_path)
+
+
+@pytest.mark.parametrize("missing", ["normal_create_request", "hostBindingRef"])
+def test_acceptance_manifest_requires_complete_browser_row_contract(
+    missing: str, tmp_path: Path
+) -> None:
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    manifest = _acceptance_manifest(now, tmp_path)
+    row = manifest["browserRows"]["static_profile_bound"]  # type: ignore[index]
+    target = row["assertions"] if missing == "normal_create_request" else row["authorityChain"]
+    target.pop(missing)
+    browser = json.loads((tmp_path / "browser-evidence.json").read_text())
+    browser["rows"] = manifest["browserRows"]
+    (tmp_path / "browser-evidence.json").write_text(json.dumps(browser))
+    with pytest.raises(ConformanceContractError, match="controlling evidence"):
         validate_acceptance_manifest(manifest, now=now, evidence_root=tmp_path)
 
 

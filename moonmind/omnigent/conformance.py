@@ -38,6 +38,32 @@ REQUIRED_EVIDENCE_CHANNELS = (
     "screenshots",
     "archives",
 )
+ADMISSION_BROWSER_ROWS = {
+    "failed_credential_readiness_admission",
+    "failed_host_registration_readiness",
+}
+BASE_BROWSER_ASSERTIONS = {
+    "browser_originated",
+    "normal_create_request",
+    "workflow_detail_terminal_replay",
+    "no_fallback",
+}
+ADMISSION_BROWSER_ASSERTIONS = {
+    "browser_originated",
+    "normal_create_request_rejected",
+    "distinct_admission_reason",
+    "no_fallback",
+}
+BROWSER_AUTHORITY_FIELDS = {
+    "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
+    "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",
+    "providerProfileRef", "providerLeaseId", "hostBindingRef", "hostLeaseId",
+    "hostId", "hostCapability", "bridgeSessionId", "omnigentSessionId",
+    "firstMessageId", "eventCursor", "workspaceLocator", "sourceCommit",
+    "resourceRefs", "artifactRefs", "terminalState", "cleanupState",
+    "janitorState", "providerProfileRelease", "networkPolicyRef", "runtime",
+    "hostMode",
+}
 
 
 class ConformanceContractError(ValueError):
@@ -161,6 +187,8 @@ def validate_acceptance_manifest(
     if generated_at.tzinfo is None or expires_at.tzinfo is None:
         raise ConformanceContractError("acceptance manifest validity period needs timezone")
     observed_at = now or datetime.now(timezone.utc)
+    if generated_at > observed_at:
+        raise ConformanceContractError("acceptance manifest is future-dated")
     if expires_at <= generated_at or expires_at <= observed_at:
         raise ConformanceContractError("acceptance manifest is expired")
     images = manifest.get("images")
@@ -220,12 +248,21 @@ def validate_acceptance_manifest(
         assertions = row.get("assertions") if isinstance(row, Mapping) else None
         authority = row.get("authorityChain") if isinstance(row, Mapping) else None
         evidence_refs = row.get("evidenceRefs") if isinstance(row, Mapping) else None
+        required_assertions = (
+            ADMISSION_BROWSER_ASSERTIONS
+            if name in ADMISSION_BROWSER_ROWS
+            else BASE_BROWSER_ASSERTIONS
+        )
+        required_authority = (
+            {"providerProfileRef"}
+            if name in ADMISSION_BROWSER_ROWS
+            else BROWSER_AUTHORITY_FIELDS
+        )
         if (
             not isinstance(assertions, Mapping)
-            or not assertions
-            or any(value is not True for value in assertions.values())
+            or any(assertions.get(key) is not True for key in required_assertions)
             or not isinstance(authority, Mapping)
-            or any(not value for value in authority.values())
+            or any(not authority.get(key) for key in required_authority)
             or not isinstance(evidence_refs, list)
             or not evidence_refs
         ):

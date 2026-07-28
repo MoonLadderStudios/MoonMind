@@ -225,6 +225,21 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
             "noFallback": True,
             "authorityChain": row_authority,
             "admissionAuthority": {"providerProfileRef": "oauth-1"},
+            "repositoryMutationPublished": name == "repository_mutation_publication",
+            "repositoryCommitSha": (
+                "a" * 40 if name == "repository_mutation_publication" else None
+            ),
+            "publicationRef": (
+                "https://github.example/pull/1"
+                if name == "repository_mutation_publication" else None
+            ),
+            "staticHostRestarted": name == "static_restart_replay",
+            "hostIdentityBeforeRestart": (
+                "static-before" if name == "static_restart_replay" else None
+            ),
+            "hostIdentityAfterRestart": (
+                "static-after" if name == "static_restart_replay" else None
+            ),
             "_sourceRecords": [
                 {"type": record_type, "_resolved": authority}
                 for record_type in module.BROWSER_RECORD_ORDER

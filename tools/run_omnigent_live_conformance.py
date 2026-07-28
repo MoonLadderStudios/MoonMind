@@ -117,6 +117,7 @@ BROWSER_RECORD_ORDER = (
     "sideEffectAudit",
 )
 BROWSER_RECORD_TYPES = set(BROWSER_RECORD_ORDER)
+ADMISSION_RECORD_TYPES = {"browserTrace", "sideEffectAudit"}
 BROWSER_FIELD_RECORD_TYPE = {
     "authoredWorkflowRef": "authoredWorkflow",
     "taskInputSnapshotRef": "taskInputSnapshot",
@@ -321,7 +322,14 @@ class LiveRunner:
                 if isinstance(record, dict)
             ]
             required_types = (
-                BROWSER_RECORD_TYPES
+                (
+                    ADMISSION_RECORD_TYPES
+                    if action in {
+                        "failed_credential_readiness_admission",
+                        "failed_host_registration_readiness",
+                    }
+                    else BROWSER_RECORD_TYPES
+                )
                 if scenario == "browser"
                 else PRODUCT_RECORD_TYPES[action]
                 if scenario == "product"
@@ -690,9 +698,20 @@ class LiveRunner:
                     and authority.get("janitorState") in {"reconciled", "completed"}
                 )
             if row in {"repository_read_analysis", "repository_mutation_publication"}:
-                assertions["repository_outcome"] = observation.get("repositoryOutcome") == (
-                    "read_analysis" if row == "repository_read_analysis"
-                    else "mutation_publication"
+                assertions["repository_outcome"] = (
+                    observation.get("repositoryOutcome") == "read_analysis"
+                    if row == "repository_read_analysis"
+                    else result.get("repositoryMutationPublished") is True
+                    and bool(result.get("repositoryCommitSha"))
+                    and bool(result.get("publicationRef"))
+                )
+            if row == "static_restart_replay":
+                assertions["static_restart"] = (
+                    result.get("staticHostRestarted") is True
+                    and bool(result.get("hostIdentityBeforeRestart"))
+                    and bool(result.get("hostIdentityAfterRestart"))
+                    and result.get("hostIdentityBeforeRestart")
+                    != result.get("hostIdentityAfterRestart")
                 )
             if not all(assertions.values()):
                 raise ConformanceContractError(
@@ -923,10 +942,13 @@ class LiveRunner:
             paths = [Path(item) for item in raw.split(os.pathsep) if item]
             if channel == "logs":
                 paths.extend(self.logs)
+            if channel == "screenshots":
+                paths.extend(sorted(self.output_dir.glob("*-terminal.png")))
+                paths.extend(sorted(self.output_dir.glob("*-replay.png")))
             if not paths or any(not path.is_file() for path in paths):
                 raise ConformanceContractError(f"{channel} evidence was not collected")
             for evidence in paths:
-                assert_secret_free(evidence.read_text(encoding="utf-8", errors="replace"))
+                assert_secret_free(evidence.read_bytes().decode("utf-8", errors="replace"))
             scan_path = self.output_dir / f"secret-scan-{channel}.json"
             scan_path.write_text(json.dumps({"status": "passed", "files": [str(p) for p in paths]}) + "\n")
             scans[channel] = {"status": "passed", "evidenceRef": str(scan_path)}

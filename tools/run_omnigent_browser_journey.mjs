@@ -45,15 +45,23 @@ try {
   });
 
   await page.goto(`${baseUrl}/workflows/new`, { waitUntil: "networkidle", timeout });
-  await page.getByLabel("Runtime").selectOption("omnigent");
-  await page.getByLabel("Provider profile").selectOption(profileId);
+  const runtime = page.getByLabel("Runtime");
+  const providerProfile = page.getByLabel("Provider profile");
+  if (!admissionFailureRows.has(row)) {
+    await runtime.selectOption("omnigent");
+    await providerProfile.selectOption(profileId);
+  }
   const executionTarget = page.getByLabel("Execution target");
   const launchPolicy = page.getByLabel("Host policy");
-  const selectedTarget = await executionTarget.inputValue();
-  if (staticRows.has(row)) await launchPolicy.selectOption({ label: "Static Compose" });
-  else await launchPolicy.selectOption({ label: "On-demand Docker" });
-  const selectedPolicy = await launchPolicy.inputValue();
-  if (!selectedTarget || !selectedPolicy) throw new Error("readiness did not expose the required target and policy");
+  let selectedTarget = "";
+  let selectedPolicy = "";
+  if (!admissionFailureRows.has(row)) {
+    selectedTarget = await executionTarget.inputValue();
+    if (staticRows.has(row)) await launchPolicy.selectOption({ label: "Static Compose" });
+    else await launchPolicy.selectOption({ label: "On-demand Docker" });
+    selectedPolicy = await launchPolicy.inputValue();
+    if (!selectedTarget || !selectedPolicy) throw new Error("readiness did not expose the required target and policy");
+  }
 
   const repositoryInput = page.getByLabel("GitHub Repo");
   if (await repositoryInput.count()) await repositoryInput.fill(repository);
@@ -77,7 +85,7 @@ try {
       schemaVersion: "moonmind.omnigent.browser-observation/v1",
       row,
       admissionRejected: true,
-      selected: { profileId, executionTargetRef: selectedTarget, launchPolicyRef: selectedPolicy },
+      selected: { profileId, executionTargetRef: selectedTarget || null, launchPolicyRef: selectedPolicy || null },
       createRequestCount: requests.length,
       startPath: new URL(page.url()).pathname,
       admissionReason: row === "failed_credential_readiness_admission"
@@ -86,7 +94,10 @@ try {
     process.exit(0);
   }
   await submit.click();
-  await page.waitForURL(/\/workflows\/[^/?]+/, { timeout });
+  await page.waitForURL((url) => {
+    const match = url.pathname.match(/\/workflows\/([^/?]+)$/);
+    return Boolean(match && match[1] !== "new");
+  }, { timeout });
   if (requests.length !== 1) throw new Error(`expected exactly one Workflow Create request, observed ${requests.length}`);
 
   const createRequest = requests[0].body;
@@ -117,9 +128,6 @@ try {
   }
   if (row === "repository_read_analysis" && !/(analysis|summary|findings)/i.test(terminalText)) {
     throw new Error("repository read row lacks a visible analysis outcome");
-  }
-  if (row === "repository_mutation_publication" && !/(commit|pull request|published|changed files)/i.test(terminalText)) {
-    throw new Error("repository mutation row lacks a visible publication outcome");
   }
   if (row === "partial_start_cleanup_janitor" && !/(janitor).*(reconciled|complete|released)/is.test(terminalText)) {
     throw new Error("partial-start row lacks visible janitor reconciliation");
@@ -162,8 +170,7 @@ try {
     controlAction,
     hostRemovedBeforeReplay: true,
     janitorReconciled: row === "partial_start_cleanup_janitor" ? true : null,
-    repositoryOutcome: row === "repository_read_analysis" ? "read_analysis"
-      : row === "repository_mutation_publication" ? "mutation_publication" : null,
+    repositoryOutcome: row === "repository_read_analysis" ? "read_analysis" : null,
     durableProjection,
     replayComplete: true,
     screenshots: [`${row}-terminal.png`, `${row}-replay.png`],

@@ -180,6 +180,31 @@ jobs:
           rows = browser.get("rows", {})
           if set(rows) != required_rows:
               raise SystemExit("browser evidence lacks the complete release row inventory")
+          def published_ref(ref):
+              if not isinstance(ref, str):
+                  raise SystemExit("browser evidence ref must be a string")
+              value = ref[5:] if ref.startswith("file:") else ref
+              path = Path(value)
+              if not path.is_absolute():
+                  return ref
+              candidates = [
+                  item for item in root.rglob(path.name)
+                  if item.is_file()
+              ]
+              if len(candidates) != 1:
+                  raise SystemExit(
+                      f"cannot rewrite file evidence ref into artifact: {path.name}"
+                  )
+              return str(candidates[0].relative_to(root))
+          for row in rows.values():
+              refs = row.get("evidenceRefs")
+              if not isinstance(refs, list):
+                  raise SystemExit("browser row evidence refs must be a list")
+              row["evidenceRefs"] = [published_ref(ref) for ref in refs]
+          browser["rows"] = rows
+          browser_paths[0].write_text(
+              json.dumps(browser, indent=2) + "\n", encoding="utf-8"
+          )
           authority_fields = {
               "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
               "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",

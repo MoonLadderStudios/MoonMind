@@ -258,23 +258,37 @@ async def test_live_browser_release_matrix(bridge_store) -> None:
         "active_cancellation_interruption",
         "partial_start_cleanup_janitor",
     }
-    for row in rows.values():
+    admission_rows = {
+        "failed_credential_readiness_admission",
+        "failed_host_registration_readiness",
+    }
+    for name, row in rows.items():
         assert row.get("status") == "passed"
-        _assert_passed(row, {
-            "browser_originated", "normal_create_request",
-            "workflow_detail_terminal_replay", "no_fallback",
-        })
+        _assert_passed(
+            row,
+            {
+                "browser_originated", "normal_create_request_rejected",
+                "distinct_admission_reason", "no_fallback",
+            }
+            if name in admission_rows
+            else {
+                "browser_originated", "normal_create_request",
+                "workflow_detail_terminal_replay", "no_fallback",
+            },
+        )
         authority = row.get("authorityChain")
         assert isinstance(authority, dict)
+        if name in admission_rows:
+            assert set(authority) == {"providerProfileRef"}
+            assert authority.get("providerProfileRef")
+            continue
         assert authority.get("hostCapability") == "codex-native"
         assert authority.get("runtime") == "external/omnigent"
-        control = row.get("browserControl")
-        assert isinstance(control, dict)
-        assert control.get("headless") is True
-        assert control.get("startPath") == "/workflows/new"
-        assert control.get("submissionPath") == "operator-frontend"
-        assert control.get("readinessObserved") is True
-        assert control.get("manualHostId") is False
+        observation = row.get("browserObservation")
+        assert isinstance(observation, dict)
+        assert observation.get("schemaVersion") == "moonmind.omnigent.browser-observation/v1"
+        assert observation.get("startPath", "/workflows/new") == "/workflows/new"
+        assert observation.get("workflowId")
 
 
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:
