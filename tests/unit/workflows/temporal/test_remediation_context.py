@@ -90,7 +90,7 @@ def test_context_aggregate_is_degraded_when_omnigent_classes_are_missing():
     target_record = SimpleNamespace(
         workflow_id="target",
         run_id="target-run",
-        state=MoonMindWorkflowState.RUNNING,
+        state=MoonMindWorkflowState.EXECUTING,
         close_status=None,
         memo={},
         parameters={},
@@ -99,7 +99,7 @@ def test_context_aggregate_is_degraded_when_omnigent_classes_are_missing():
     remediation_record = SimpleNamespace(
         workflow_id="remediation",
         run_id="remediation-run",
-        state=MoonMindWorkflowState.RUNNING,
+        state=MoonMindWorkflowState.EXECUTING,
         close_status=None,
         memo={},
         parameters={

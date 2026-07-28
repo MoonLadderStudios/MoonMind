@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from moonmind.mcp.remediation_tool_registry import (
     RemediationToolExecutionContext,
     RemediationToolRegistry,
 )
+
+pytestmark = pytest.mark.asyncio
 
 
 @dataclass

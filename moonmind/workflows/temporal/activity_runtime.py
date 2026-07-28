@@ -11988,11 +11988,7 @@ class TemporalAgentRuntimeActivities:
                 getattr(reap_result, "reaped_session_ids", ()) or ()
             )[:session_id_limit]
 
-        return {
-            "actionKind": action_kind or None,
-            "requestId": action_payload.get("requestId"),
-            "containerRef": action_payload.get("containerRef"),
-            "expectedState": action_payload.get("expectedState"),
+        summary = {
             "managedSessionRecordsReconciled": reconciled_count,
             "degradedSessionRecords": degraded_count,
             "sessionIds": session_ids,
@@ -12006,6 +12002,16 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+        if action_kind:
+            summary.update(
+                {
+                    "actionKind": action_kind,
+                    "requestId": action_payload.get("requestId"),
+                    "containerRef": action_payload.get("containerRef"),
+                    "expectedState": action_payload.get("expectedState"),
+                }
+            )
+        return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(
         self,

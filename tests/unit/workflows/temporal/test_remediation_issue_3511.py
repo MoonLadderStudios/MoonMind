@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytestmark = pytest.mark.asyncio
+
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
