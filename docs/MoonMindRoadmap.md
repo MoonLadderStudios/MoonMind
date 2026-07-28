@@ -208,8 +208,8 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 
 ### Remaining work
 
-- [ ] **6.0 Compatibility and cutover design reconciliation** — classify every direct-Codex surface as historical read, Temporal compatibility, temporary event producer, bounded fallback, fixture, or removable launch path.
-- [ ] **6.1 Versioned support matrix** — publish exact support/evidence status for host modes, bridge modes, repository work, controls, recovery, remediation, RAG, policy/profile UI, egress, architectures, and compatibility in #3518.
+- [x] **6.0 Compatibility and cutover design reconciliation** — `docs/Omnigent/CodexSupportAndCutover.md` classifies every direct-Codex surface as historical read, Temporal compatibility, temporary event producer, bounded fallback, fixture, or removable launch path.
+- [x] **6.1 Versioned support matrix** — the same canonical contract publishes exact support/evidence status without advertising implemented-but-unverified combinations as supported.
 - [ ] **6.2 Staged default and telemetry rollout** — move cohorts, Create defaults, schedules, and presets only when readiness, live evidence, and objective rollback thresholds pass.
 - [ ] **6.3 Historical and Temporal compatibility** — preserve truthful direct provenance, Workflow Detail reads, schema decoders, recorded histories, and mixed-version worker replay.
 - [ ] **6.4 Controlled retirement** — disable direct scheduling before removing launch/UI/configuration code; retain the compatibility event/read model until its explicit history and rollback gates pass.

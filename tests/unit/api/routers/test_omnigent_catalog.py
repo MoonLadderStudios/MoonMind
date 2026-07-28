@@ -171,6 +171,25 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
     body = response.json()
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
     assert body["available"] is False
+    assert body["cutover"] == {
+        "policyVersion": "moonmind.codex-omnigent-cutover/v1",
+        "configuredPhase": "opt_in",
+        "deployedPhase": "opt_in",
+        "phase": "opt_in",
+        "promotionAllowed": True,
+        "evidenceRef": None,
+        "evidenceSha256": None,
+        "generatedAt": None,
+        "expiresAt": None,
+        "profileVersion": None,
+        "profileSha256": None,
+        "images": {},
+        "architectures": [],
+        "thresholds": {},
+        "evidenceRefs": [],
+        "blockers": [],
+        "directLaunchAllowed": True,
+    }
     assert body["hostModes"] == ["on_demand_docker"]
     assert body["eligibleProviderProfiles"] == [{
         "profileId": "codex-oauth",

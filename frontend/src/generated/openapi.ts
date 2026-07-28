@@ -9653,6 +9653,10 @@ export interface components {
             hostModes: string[];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+            /** Cutover */
+            cutover: {
+                [key: string]: unknown;
+            };
         };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {

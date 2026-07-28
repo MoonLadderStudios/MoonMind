@@ -5949,6 +5949,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => readDashboardPreferences().createExpertMode,
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
+  const [runtimeAuthored, setRuntimeAuthored] = useState(false);
   const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
   const omnigentProfiles = omnigentCatalog?.profiles || [];
   const omnigentPolicies = omnigentCatalog?.policies || [];
@@ -6524,6 +6525,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime) {
       prevRuntimeRef.current = draft.runtime;
       setRuntime(draft.runtime);
+      setRuntimeAuthored(true);
     }
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
@@ -6630,6 +6632,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
       setRuntime(draft.runtime.mode);
+      setRuntimeAuthored(true);
     }
     if (draft.runtime?.profileId) {
       prevProviderProfileRef.current = draft.runtime.profileId;
@@ -10922,6 +10925,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
+        authored: runtimeAuthored,
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
         ...(selectedProfileSupportsModelControls &&
         (hasSubmittedModelTier || tierFallback === "strict")
@@ -13298,7 +13302,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <select
               name="runtime"
               value={runtime}
-              onChange={(event) => setRuntime(event.target.value)}
+              onChange={(event) => {
+                setRuntime(event.target.value);
+                setRuntimeAuthored(true);
+              }}
             >
               {runtimeOptions.map((runtimeOption) => (
                 <option

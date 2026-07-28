@@ -52,6 +52,7 @@ from moonmind.omnigent.conformance import (
     validate_acceptance_manifest,
 )
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
+from moonmind.omnigent.cutover import effective_phase
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -132,6 +133,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     )
     host_modes: list[str] = Field(alias="hostModes")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
+    cutover: dict[str, Any]
 
 
 _REASONS: dict[str, tuple[str, str]] = {
@@ -520,6 +522,7 @@ async def get_omnigent_codex_catalog_readiness(
 
     available = any(item.available for item in profile_views)
     top_reasons = [] if available else (profile_views[0].gate_reasons if profile_views else [_reason("execution_profile_unavailable")])
+    cutover_status = effective_phase()
     return OmnigentCodexCatalogReadiness(
         available=available,
         defaultExecutionProfileRef=next(iter(PROFILES)),
@@ -528,4 +531,5 @@ async def get_omnigent_codex_catalog_readiness(
         ineligibleProviderProfiles=ineligible,
         hostModes=sorted(set(available_modes)),
         gateReasons=top_reasons,
+        cutover=cutover_status.as_dict(),
     )
