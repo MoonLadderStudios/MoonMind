@@ -55,6 +55,7 @@ def _artifacts(tmp_path):
                     "schemaVersion": ARTIFACT_SCHEMA_VERSION,
                     "kind": kind,
                     "passed": True,
+                    "observations": {"commandCompleted": True},
                     "matrixRows": owned_rows,
                 },
                 sort_keys=True,
@@ -113,4 +114,16 @@ def test_builder_rejects_failed_or_duplicate_evidence(tmp_path) -> None:
             release=_release(),
             artifact_paths=[*paths, paths[0]],
             generated_at=NOW,
+        )
+
+
+def test_builder_rejects_self_asserted_pass_without_observed_results(tmp_path) -> None:
+    paths = _artifacts(tmp_path)
+    payload = json.loads(paths[0].read_text(encoding="utf-8"))
+    payload.pop("observations")
+    paths[0].write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CutoverEvidenceBuildError, match="observed results"):
+        build_cutover_evidence(
+            release=_release(), artifact_paths=paths, generated_at=NOW
         )

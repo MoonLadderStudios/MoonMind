@@ -61,6 +61,11 @@ local path or `file://` URI in
 references are evidence links, not launch authority. The mounted document must
 authorize the exact desired phase and current deployed phase and pass the
 complete gate; otherwise the effective phase remains the deployed phase.
+The canonical Compose deployment mounts
+`MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR` (default `./var/cutover`) read-only at
+`/workspace/cutover`; the evidence builder stages digest-bound artifacts beside
+the promotion document so its relative manifest refs remain readable in the
+container.
 Phase 6 additionally requires explicit code, UI, configuration, and duplicate
 capacity-owner removal assertions plus independently resolvable retirement
 evidence refs. It also remains compile-time blocked by

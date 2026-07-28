@@ -188,6 +188,23 @@ def test_explicit_selection_is_preserved_and_direct_launch_eventually_rejected()
             phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
         )
 
+    with pytest.raises(ValueError, match="codex_direct_launch_disabled"):
+        select_runtime(
+            authored_runtime="codex",
+            configured_default="codex_cli",
+            phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        )
+
+
+def test_broad_default_only_applies_to_non_create_and_non_schedule_surfaces() -> None:
+    selected = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.BROAD_DEFAULT,
+        submission_kind="workflow_proposal",
+    )
+    assert selected.runtime_id == "omnigent"
+
 
 def test_effective_phase_cannot_be_promoted_by_environment_alone() -> None:
     status = effective_phase(

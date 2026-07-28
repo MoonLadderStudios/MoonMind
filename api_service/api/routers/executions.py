@@ -10324,7 +10324,12 @@ async def _create_execution_from_workflow_request(
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    authored_runtime = payload.get("targetRuntime") or runtime_payload.get("mode")
+    runtime_was_authored = runtime_payload.get("authored") is not False
+    authored_runtime = (
+        (payload.get("targetRuntime") or runtime_payload.get("mode"))
+        if runtime_was_authored
+        else None
+    )
     try:
         cutover_status = effective_phase()
         cutover_selection = select_runtime(
@@ -10332,7 +10337,9 @@ async def _create_execution_from_workflow_request(
             configured_default=settings.workflow.default_runtime,
             phase=cutover_status.phase,
             submission_kind=(
-                "schedule" if task_payload.get("presetSchedule") else "create"
+                "schedule"
+                if task_payload.get("presetSchedule") or scheduled_for_dt is not None
+                else "create"
             ),
             release_status=cutover_status,
         )

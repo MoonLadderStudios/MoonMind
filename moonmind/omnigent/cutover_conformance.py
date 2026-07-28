@@ -16,6 +16,14 @@ from moonmind.omnigent.cutover import (
 )
 
 ARTIFACT_SCHEMA_VERSION = "moonmind.codex-omnigent-cutover-artifact/v1"
+EVIDENCE_KIND_PROMOTION_FIELD = {
+    "submissionMatrix": "allRequiredCasesPassed",
+    "historicalReads": "historicalReadsPassed",
+    "temporalReplay": "temporalReplayPassed",
+    "capacityOwnership": "capacitySingleOwnerPassed",
+    "secretScan": "secretScansPassed",
+    "releaseMetadata": "profilePolicyReady",
+}
 
 # Stable row IDs are the machine-readable form of the canonical v1 matrix.
 REQUIRED_MATRIX_ROWS = (
@@ -59,6 +67,15 @@ def _artifact(path: Path) -> tuple[dict[str, Any], bytes]:
         raise CutoverEvidenceBuildError(f"unsupported cutover artifact: {path}")
     if payload.get("passed") is not True:
         raise CutoverEvidenceBuildError(f"cutover artifact did not pass: {path}")
+    observations = payload.get("observations")
+    if (
+        not isinstance(observations, Mapping)
+        or not observations
+        or any(result is not True for result in observations.values())
+    ):
+        raise CutoverEvidenceBuildError(
+            f"cutover artifact lacks passing observed results: {path}"
+        )
     return payload, content
 
 
@@ -75,6 +92,7 @@ def build_cutover_evidence(
     """
 
     manifest: list[dict[str, str]] = []
+    promotion_results: dict[str, bool] = {}
     kinds: set[str] = set()
     rows: set[str] = set()
     for supplied_path in artifact_paths:
@@ -97,6 +115,7 @@ def build_cutover_evidence(
                 f"matrix rows have multiple owners: {sorted(duplicate_rows)}"
             )
         kinds.add(kind)
+        promotion_results[EVIDENCE_KIND_PROMOTION_FIELD[kind]] = True
         rows.update(artifact_rows)
         manifest.append(
             {
@@ -138,12 +157,7 @@ def build_cutover_evidence(
             "generatedAt": (generated_at or datetime.now(timezone.utc)).isoformat(),
             "profileVersion": PROFILE_VERSION,
             "profileSha256": PROFILE_SHA256,
-            "profilePolicyReady": True,
-            "allRequiredCasesPassed": True,
-            "secretScansPassed": True,
-            "temporalReplayPassed": True,
-            "historicalReadsPassed": True,
-            "capacitySingleOwnerPassed": True,
+            **promotion_results,
             "matrixVersion": "codex-omnigent-support-matrix/v1",
             "matrixRows": list(REQUIRED_MATRIX_ROWS),
             "evidenceRefs": [item["ref"] for item in manifest],

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,10 +26,22 @@ def main() -> int:
     release = json.loads(args.release.read_text(encoding="utf-8"))
     if not isinstance(release, dict):
         raise ValueError("release configuration must be an object")
+    evidence_dir = args.output.parent / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    staged_artifacts = []
+    for index, artifact in enumerate(args.artifact):
+        staged = evidence_dir / f"{index:02d}-{artifact.name}"
+        shutil.copy2(artifact, staged)
+        staged_artifacts.append(staged)
     document = build_cutover_evidence(
         release=release,
-        artifact_paths=args.artifact,
+        artifact_paths=staged_artifacts,
     )
+    for item in document["evidenceManifest"]:
+        item["ref"] = f"evidence/{Path(item['ref']).name}"
+    document["evidenceRefs"] = [
+        item["ref"] for item in document["evidenceManifest"]
+    ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n",

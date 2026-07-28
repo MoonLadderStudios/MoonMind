@@ -25,6 +25,7 @@ from moonmind.omnigent.conformance import (
     ConformanceContractError,
     require_pinned_images,
 )
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 CUTOVER_POLICY_VERSION = "moonmind.codex-omnigent-cutover/v1"
 # Phase 6 is a build property, not a live-artifact assertion. The retirement
@@ -144,6 +145,8 @@ class EffectivePhase:
                     tz=timezone.utc,
                 ).isoformat()
             except ValueError:
+                # Malformed generation timestamps are represented by the
+                # promotion blockers and intentionally have no expiry value.
                 pass
         return {
             "policyVersion": self.policy_version,
@@ -215,6 +218,7 @@ def select_runtime(
 
     explicit = str(authored_runtime or "").strip().lower()
     if explicit:
+        explicit = normalize_runtime_id(explicit)
         if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
             raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
         return RuntimeSelection(
@@ -222,24 +226,40 @@ def select_runtime(
             True,
             None,
             phase,
-            release_status.evidence_ref if release_status else None,
-            release_status.as_dict()["evidenceSha256"] if release_status else None,
+            (
+                release_status.evidence_ref
+                if release_status and not release_status.blockers
+                else None
+            ),
+            (
+                release_status.as_dict()["evidenceSha256"]
+                if release_status and not release_status.blockers
+                else None
+            ),
         )
 
     default = str(configured_default or "codex_cli").strip().lower()
-    threshold = (
-        CutoverPhase.SCHEDULE_DEFAULT
-        if submission_kind in {"schedule", "preset"}
-        else CutoverPhase.CREATE_DEFAULT
-    )
+    threshold = {
+        "create": CutoverPhase.CREATE_DEFAULT,
+        "schedule": CutoverPhase.SCHEDULE_DEFAULT,
+        "preset": CutoverPhase.SCHEDULE_DEFAULT,
+    }.get(submission_kind, CutoverPhase.BROAD_DEFAULT)
     selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     return RuntimeSelection(
         selected,
         False,
         None,
         phase,
-        release_status.evidence_ref if release_status else None,
-        release_status.as_dict()["evidenceSha256"] if release_status else None,
+        (
+            release_status.evidence_ref
+            if release_status and not release_status.blockers
+            else None
+        ),
+        (
+            release_status.as_dict()["evidenceSha256"]
+            if release_status and not release_status.blockers
+            else None
+        ),
     )
 
 
@@ -257,6 +277,16 @@ def evaluate_promotion(
     """
 
     if requested_phase <= current_phase:
+        if (
+            requested_phase is CutoverPhase.DIRECT_LAUNCH_REMOVED
+            and DIRECT_LAUNCH_REMOVAL_VERSION is None
+        ):
+            return PromotionDecision(
+                False,
+                current_phase,
+                requested_phase,
+                ("direct_launch_retirement_not_built",),
+            )
         return PromotionDecision(True, current_phase, requested_phase, ())
 
     blockers: list[str] = []
@@ -459,6 +489,18 @@ def effective_phase(
         values.get("MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF", "")
     ).strip()
     ref = raw_ref or None
+    if (
+        requested is CutoverPhase.DIRECT_LAUNCH_REMOVED
+        and DIRECT_LAUNCH_REMOVAL_VERSION is None
+    ):
+        return EffectivePhase(
+            requested,
+            current,
+            current,
+            None,
+            None,
+            ("direct_launch_retirement_not_built",),
+        )
     if requested <= current:
         return EffectivePhase(requested, current, requested, ref, None, ())
 
