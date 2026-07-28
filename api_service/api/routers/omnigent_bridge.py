@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from datetime import timedelta
 from typing import Any, Literal
@@ -34,6 +35,10 @@ from api_service.api.routers.executions import _get_service as _get_execution_se
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker
 from api_service.db.models import User
+from api_service.services.omnigent_agent_profile_service import (
+    record_upstream_sync_failure,
+    synchronize_upstream_inventory,
+)
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -89,6 +94,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+
+logger = logging.getLogger(__name__)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
@@ -1002,11 +1009,17 @@ class BridgeSessionResolution(BaseModel):
     host_mode: str | None = None
     execution_profile_ref: str | None = None
     launch_policy_ref: str | None = None
+    policy_id: str | None = None
+    policy_version: int | None = None
+    policy_digest: str | None = None
+    policy_validation: dict[str, Any] | None = None
+    policy_snapshot_ref: str | None = None
     effective_launch_snapshot_ref: str | None = None
     provider_session_ref: str | None = None
     omnigent_host_ref: str | None = None
     omnigent_runner_ref: str | None = None
     first_message_state: str | None = None
+    initial_retrieval: dict[str, Any] | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
     compatibility_diagnostics: dict[str, Any] = Field(default_factory=dict)
 
@@ -1262,6 +1275,11 @@ async def resolve_omnigent_bridge_session_projection(
     compatibility_evidence_ref = (
         str(launch.get("compatibilityEvidenceRef") or "") or None
     )
+    authority = (
+        launch.get("policyAuthority")
+        if isinstance(launch.get("policyAuthority"), dict)
+        else {}
+    )
     return BridgeSessionResolution(
         bridge_session_id=row.bridge_session_id,
         workflow_id=row.moonmind_workflow_id,
@@ -1282,6 +1300,19 @@ async def resolve_omnigent_bridge_session_projection(
         host_mode=str(launch.get("hostMode") or "") or None,
         execution_profile_ref=str(launch.get("executionProfileRef") or "") or None,
         launch_policy_ref=str(launch.get("launchPolicyRef") or "") or None,
+        policy_id=str(authority.get("policyId") or "") or None,
+        policy_version=(
+            int(authority["policyVersion"])
+            if authority.get("policyVersion") is not None
+            else None
+        ),
+        policy_digest=str(authority.get("policyDigest") or "") or None,
+        policy_validation=(
+            dict(authority["validation"])
+            if isinstance(authority.get("validation"), dict)
+            else None
+        ),
+        policy_snapshot_ref=str(authority.get("snapshotRef") or "") or None,
         effective_launch_snapshot_ref=str(launch.get("snapshotRef") or "") or None,
         provider_session_ref=row.omnigent_session_id,
         omnigent_host_ref=getattr(row, "omnigent_host_id", None),
@@ -1331,6 +1362,10 @@ async def resolve_omnigent_bridge_session_projection(
                 )
             ),
         },
+        initial_retrieval=dict(
+            ((getattr(row, "metadata_", None) or {}).get("initialRetrieval") or {})
+        )
+        or None,
     )
 
 
@@ -1679,8 +1714,31 @@ async def list_omnigent_agents(
         )
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
-        return await facade.list_agents()
+        agents = await facade.list_agents()
+        try:
+            async with async_session_maker() as session:
+                await synchronize_upstream_inventory(
+                    session,
+                    endpoint_ref="default",
+                    bridge_mode=str(config.host_protocol_mode),
+                    inventory=agents,
+                )
+        except Exception:
+            # Projection evidence is auxiliary to the authenticated inventory
+            # response and must not overwrite primary bridge success.
+            logger.exception("Failed to persist Omnigent agent inventory projection")
+        return agents
     except OmnigentBridgeError as exc:
+        try:
+            async with async_session_maker() as session:
+                await record_upstream_sync_failure(
+                    session,
+                    endpoint_ref="default",
+                    bridge_mode=str(config.host_protocol_mode),
+                    error=str(exc),
+                )
+        except Exception:
+            logger.exception("Failed to record Omnigent inventory sync failure")
         raise _http_error_from_bridge(exc) from exc
 
 

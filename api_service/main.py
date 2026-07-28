@@ -25,13 +25,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
 )
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
+from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
 from api_service.api.routers.chat import responses_router, router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.deployment_operations import (
@@ -66,6 +67,7 @@ from api_service.api.routers.omnigent_bridge import (
     router as omnigent_bridge_router,
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
+from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
 from api_service.api.routers.presets import (
     router as presets_router,
@@ -462,6 +464,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
+app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")
@@ -479,6 +482,7 @@ app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
 app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
+app.include_router(omnigent_policies_router)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
@@ -1643,6 +1647,12 @@ async def startup_event():
             exc,
         )
     await _sync_preset_seed_catalog()
+    try:
+        from api_service.services.omnigent_policies import seed_bootstrap_policies
+        async with get_async_session_context() as session:
+            await seed_bootstrap_policies(session)
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning("Omnigent policy bootstrap skipped until schema is ready: %s", exc)
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence
     # refs cannot make it ready when its pinned verifier or SecretRef fails.
@@ -1663,7 +1673,6 @@ async def startup_event():
             get_or_create_default_user,
             get_user_manager_context,
         )
-        from api_service.db.base import get_async_session_context
         from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:

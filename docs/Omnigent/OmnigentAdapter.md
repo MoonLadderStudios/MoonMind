@@ -1,5 +1,8 @@
 # Omnigent Adapter Design
 
+Adapter enforcement consumes the deterministic snapshot defined by
+[Omnigent Policy Authority](PolicyAuthority.md).
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
@@ -206,7 +209,13 @@ For one logical idempotency key, the coordinator follows this order:
 9. Resolve exactly one online host advertising `codex-native`.
 10. Persist the exact host id and readiness evidence.
 11. Create or reattach the Omnigent session on that host.
-12. Persist session identity before posting the first message.
+12. Persist session identity.
+13. Resolve the immutable, policy-scoped initial `ContextPack` through the
+    MoonMind gateway (or an explicitly authorized degraded mode), persist it
+    behind a ref, and compose the single bounded safety-framed first message.
+14. Persist the exact composed-message ref and compact retrieval evidence, then
+    calculate the first-message digest and post through the existing
+    idempotency boundary.
 13. Stream and normalize events, then harvest terminal resources and artifacts.
 14. Interrupt or stop the session as required.
 15. Drain the static host or remove the on-demand host and lease-owned state.
@@ -214,6 +223,9 @@ For one logical idempotency key, the coordinator follows this order:
 17. Release the Provider Profile lease last.
 
 Retries reuse durable bridge, binding, host-lease, session, and first-message evidence. They do not create a second host or post a duplicate first message while the original authority may still be valid.
+They also reuse the persisted ContextPack and composed-message artifact. Initial
+retrieval is never repeated after first-message preparation, because doing so
+could change both model input and the idempotency digest.
 
 ---
 
@@ -292,6 +304,12 @@ terminal
 ```
 
 Every stage has a bounded status, timestamp, safe identifiers, and an actionable failure classification. Workflow Detail consumes the bridge projection, including failures before a normal Omnigent stream exists and runs with zero provider events.
+
+The bridge `initialRetrieval` projection exposes requested, disabled, completed,
+degraded, or failed state; bounded scope and counts; the ContextPack link;
+budgets and truncation; fallback or denial reason; whether the first message
+consumed the ref; and first-message digest linkage. Retrieved bodies remain
+artifact-backed and are not inlined into the chat timeline.
 
 Safe evidence includes profile, binding, provider-lease, host-lease, credential-generation, container, host, bridge-session, Omnigent-session, policy, workspace-locator, and artifact refs. Credential bodies, raw environment dumps, unredacted command output, and token-shaped values are forbidden.
 

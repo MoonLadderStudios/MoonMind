@@ -570,6 +570,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     ineligibleProviderProfiles: [],
     hostModes: ["on_demand_docker"],
     gateReasons: [],
+    cutover: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
 
   it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
@@ -18740,6 +18741,18 @@ describe("Task Create runtime command previews", () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    const remediationMode = screen.getByLabelText("Remediation mode");
+    const remediationAuthority = screen.getByLabelText("Authority");
+    const actionPolicy = screen.getByLabelText("Action policy");
+    fireEvent.change(remediationMode, { target: { value: "live_follow" } });
+    fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
+    fireEvent.change(actionPolicy, { target: { value: "operator_review_only" } });
+    fireEvent.click(screen.getByLabelText("Diagnostics"));
+
+    expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
+    expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
+    expect((actionPolicy as HTMLInputElement).value).toBe("operator_review_only");
+    expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(
         "Target workflow changed after this remediation draft was created. Open Remediate again before submitting.",

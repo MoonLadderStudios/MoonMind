@@ -1,5 +1,11 @@
 # Combined Stack Validation and Rollback
 
+Release support and default promotion are separate from successful local stack
+startup. The authoritative phase, evidence requirements, support statuses, and
+direct-runtime retirement gates are defined in
+[`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md). Local validation must
+not promote a rollout phase without the protected-live artifact required there.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Updated:** 2026-07-18  
@@ -432,4 +438,15 @@ Requirements:
 
 The runner uses the isolated `moonmind-test-omnigent-live` Compose project. It always attempts cleanup and evidence scanning, including after failed startup or failed journeys. Cleanup removes that project's containers and networks only and intentionally never passes `--volumes`, so enrolled OAuth and unrelated volumes survive.
 
-`--mode static` covers restart and durable Workflow Detail replay. Published stock-image proxy compatibility, on-demand lifecycle, and failure-path scenarios can be gated independently in provider environments. A passed release matrix records exact images, architecture, advertised capabilities, workflow/session/lease identities, lifecycle ordering, evidence refs, and cleanup results.
+`--mode browser` is the controlling #3508 release journey. It opens
+`/workflows/new` in a headless browser, submits through the normal frontend
+request path, and follows Workflow Detail through terminal harvest, cleanup,
+and replay for every required release row. `--mode static` covers restart and
+durable Workflow Detail replay. Published stock-image proxy compatibility,
+on-demand lifecycle, and failure-path scenarios can be gated independently in
+provider environments. A passed release matrix records exact images,
+architecture, advertised capabilities, workflow/session/lease identities,
+lifecycle ordering, evidence refs, and cleanup results. The rollout gate accepts
+only a schema-valid #3508 manifest for the deployed commit with immutable image
+digests, all rows and authority fields present, and an unexpired `expiresAt`;
+missing, expired, malformed, or mutable-image evidence fails closed.

@@ -8221,6 +8221,19 @@ describe('Workflow Detail Entrypoint', () => {
             bridgeSessionId: 'brs-1',
             workflowId: 'test-123',
             status: 'completed',
+            initialRetrieval: {
+              state: 'degraded',
+              contextPackRef: 'artifact://context/pack.json',
+              resultCount: 2,
+              truncated: true,
+              reason: 'gateway unavailable',
+              collections: ['canonical', 'workspace-overlay'],
+              scope: { repository: 'org/repo', run: 'run-1' },
+              budgets: { tokens: 500, latency_ms: 1000 },
+              contextPackDigest: 'sha256:pack',
+              firstMessageDigest: 'sha256:message',
+              firstMessageConsumedContextRef: true,
+            },
           }),
         } as Response);
       }
@@ -8266,6 +8279,15 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'Initial context: degraded · 2 sources · truncated · gateway unavailable',
+    );
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Collections: canonical, workspace-overlay');
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Context consumed: yes');
+    expect(screen.queryByRole('link', { name: 'Open ContextPack artifact' })).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'ContextPack artifact: artifact://context/pack.json',
+    );
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);

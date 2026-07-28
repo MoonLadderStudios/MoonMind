@@ -17,7 +17,7 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 class MoonMindManagedSessionReconcileWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        del payload
+        payload = dict(payload or {})
         workflow.set_current_details("Reconciling managed runtime sessions")
         workflow.upsert_search_attributes(
             {
@@ -31,7 +31,7 @@ class MoonMindManagedSessionReconcileWorkflow:
         try:
             result = await workflow.execute_activity(
                 "agent_runtime.reconcile_managed_sessions",
-                {},
+                payload,
                 task_queue=route.task_queue,
                 start_to_close_timeout=timedelta(
                     seconds=route.timeouts.start_to_close_seconds

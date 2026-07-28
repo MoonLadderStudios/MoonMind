@@ -321,6 +321,18 @@ _DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
     "retrievalDisabledReason",
     "retrievalInitiationMode",
     "retrievalContextTruncated",
+    "retrievedContextDigest",
+    "retrievalQueryDigest",
+    "retrievalQueryPreview",
+    "retrievedContextSources",
+    "retrievalCollections",
+    "retrievalScope",
+    "retrievalBudgets",
+    "retrievalUsage",
+    "retrievalOverlay",
+    "retrievalEmbeddingConfigRef",
+    "retrievalDurationMs",
+    "retrievalFailureClass",
     "sessionContinuityCacheStatus",
 )
 _BOOLEAN_DURABLE_RETRIEVAL_METADATA_KEYS: frozenset[str] = frozenset({
@@ -391,6 +403,24 @@ def extract_durable_retrieval_metadata(
             continue
         if isinstance(value, int):
             compact[key] = value
+            continue
+        if isinstance(value, float) and key == "retrievalDurationMs":
+            compact[key] = max(0.0, value)
+            continue
+        if isinstance(value, list) and key in {"retrievedContextSources", "retrievalCollections"}:
+            compact[key] = [str(item)[:256] for item in value[:20]]
+            continue
+        if isinstance(value, Mapping) and key in {
+            "retrievalScope",
+            "retrievalBudgets",
+            "retrievalUsage",
+            "retrievalOverlay",
+        }:
+            compact[key] = {
+                str(nested_key)[:40]: nested_value
+                for nested_key, nested_value in list(value.items())[:12]
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None
+            }
     return compact
 
 def validate_codex_oauth_profile_refs(

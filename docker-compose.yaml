@@ -48,6 +48,9 @@ services:
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
@@ -84,6 +87,7 @@ services:
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
+      - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs:ro
