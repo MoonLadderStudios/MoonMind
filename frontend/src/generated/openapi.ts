@@ -9085,6 +9085,10 @@ export interface components {
             hostModes: string[];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+            /** Compatibilitydiagnostics */
+            compatibilityDiagnostics: {
+                [key: string]: unknown;
+            };
         };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -254,20 +255,72 @@ async def get_omnigent_bridge_readiness(
 ) -> dict[str, Any]:
     """Expose selected protocol and conformance gates without secret material."""
 
+    auth: dict[str, Any] | None = None
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
-        return config.readiness()
-    readiness = config.readiness(
-        evidence_validation=await _resolve_embedded_evidence(config)
+        readiness = config.readiness()
+    else:
+        readiness = config.readiness(
+            evidence_validation=await _resolve_embedded_evidence(config)
+        )
+        try:
+            profile = await _active_host_auth_profile()
+            auth = await host_auth_readiness(profile=profile)
+        except HostAuthProfileError as exc:
+            auth = {"ready": False, "code": exc.code}
+        readiness["hostAuthentication"] = auth
+        if not auth["ready"]:
+            readiness["conformanceState"] = "gated"
+            readiness.setdefault("gateReason", auth.get("code"))
+    readiness["compatibilityDiagnostics"] = _compatibility_diagnostics(
+        config=config, readiness=readiness, auth=auth
     )
-    try:
-        profile = await _active_host_auth_profile()
-        auth = await host_auth_readiness(profile=profile)
-    except HostAuthProfileError as exc:
-        auth = {"ready": False, "code": exc.code}
-    readiness["hostAuthentication"] = auth
-    if not auth["ready"]:
-        readiness["conformanceState"] = "gated"
     return readiness
+
+
+_PROXY_ROLLBACK_RECOMMENDATION = (
+    "Select upstream_omnigent_server_proxy for new sessions; "
+    "existing sessions retain their recorded bridge mode."
+)
+
+
+def _compatibility_diagnostics(
+    *,
+    config: OmnigentBridgeConfig,
+    readiness: dict[str, Any],
+    auth: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one bounded support projection shared by readiness surfaces."""
+
+    validation = readiness.get("evidenceValidation") or {}
+    selected_embedded = config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+    evidence_fresh = not selected_embedded or (
+        bool(validation)
+        and all(item.get("status") == "passed" for item in validation.values())
+    )
+    failure_reason = (
+        None
+        if readiness.get("conformanceState") == "ready"
+        else readiness.get("gateReason") or "bridge_not_ready"
+    )
+    return {
+        "bridgeMode": config.host_protocol_mode,
+        "compatibilityProfile": readiness.get("protocolProfile"),
+        "upstreamComponentVersion": readiness.get("upstreamComponentVersion"),
+        "serverImage": os.getenv("OMNIGENT_IMAGE_REF") or None,
+        "hostImage": os.getenv("OMNIGENT_HOST_IMAGE_REF") or None,
+        "hostArchitecture": os.getenv("OMNIGENT_HOST_ARCHITECTURE") or None,
+        "auth": auth,
+        "evidence": {
+            "fresh": evidence_fresh,
+            "validation": validation,
+        },
+        "failureReason": failure_reason,
+        "rollbackRecommendation": (
+            _PROXY_ROLLBACK_RECOMMENDATION
+            if selected_embedded and failure_reason
+            else None
+        ),
+    }
 
 
 _EMBEDDED_EVIDENCE_SLOTS = {

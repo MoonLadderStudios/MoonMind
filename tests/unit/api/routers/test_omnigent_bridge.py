@@ -86,6 +86,10 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
     assert response.json()["protocolProfile"] == "omnigent.server.v1"
     assert response.json()["conformanceState"] == "ready"
+    diagnostics = response.json()["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
+    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["rollbackRecommendation"] is None
 
 
 @pytest.mark.asyncio
@@ -166,6 +170,16 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
     assert response.status_code == 200
     assert response.json()["conformanceState"] == "gated"
     assert response.json()["gateReason"] == "validated_embedded_evidence_required"
+    diagnostics = response.json()["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["auth"]["code"] == "host_auth_secret_unavailable"
+    assert diagnostics["evidence"]["fresh"] is False
+    assert diagnostics["failureReason"] == "validated_embedded_evidence_required"
+    assert diagnostics["rollbackRecommendation"] == (
+        "Select upstream_omnigent_server_proxy for new sessions; "
+        "existing sessions retain their recorded bridge mode."
+    )
 
 
 def _mock_user():

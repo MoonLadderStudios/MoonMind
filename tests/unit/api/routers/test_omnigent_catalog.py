@@ -73,8 +73,10 @@ def _config(*, enabled=True):
     return SimpleNamespace(
         enabled=enabled,
         host_protocol_mode="upstream_omnigent_server_proxy",
+        compatibility=SimpleNamespace(profile="omnigent.server.v1"),
         readiness=lambda **_kwargs: {
-            "conformanceState": "ready" if enabled else "disabled"
+            "conformanceState": "ready" if enabled else "disabled",
+            "protocolProfile": "omnigent.server.v1",
         },
     )
 
@@ -136,6 +138,13 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
         "queueWhenBusy": True,
     }]
     assert body["ineligibleProviderProfiles"] == []
+    diagnostics = body["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
+    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["evidence"]["fresh"] is True
+    assert diagnostics["failureReason"] is None
+    assert diagnostics["rollbackRecommendation"] is None
+    assert diagnostics["capabilitySummary"] == []
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):

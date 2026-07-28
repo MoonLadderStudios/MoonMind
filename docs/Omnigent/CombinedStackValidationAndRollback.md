@@ -404,6 +404,13 @@ Rollback never requires deleting the OAuth volume, PostgreSQL, `omnigent-data`, 
 
 ## DOC-REQ-016 Credentialed Live Conformance
 
+Embedded validation and rollback use the versioned contract in
+[Embedded host authentication compatibility](EmbeddedHostAuthCompatibility.md).
+Do not enable an embedded static or on-demand row unless its own current,
+digest-pinned evidence passes readiness. Rollback selects proxy mode for new
+runs, drains embedded leases through their owning lifecycle, and preserves the
+recorded mode and evidence of active and historical sessions.
+
 The repository-owned entrypoint is:
 
 ```bash
