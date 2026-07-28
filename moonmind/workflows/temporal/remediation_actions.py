@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 _GUARD_STATE_RETENTION_SECONDS = 24 * 60 * 60
@@ -568,7 +569,10 @@ class RemediationActionAuthorityService:
         cache_key = (workflow_id, idem, request_shape_hash)
         if workflow_id and idem and cache_key in self._decisions:
             cached = self._decisions[cache_key]
-            if not (cached.decision == "approval_required" and approval_ref):
+            # Approval-bound decisions are never returned from the process-local
+            # cache. The durable approval and target bindings must be re-read at
+            # every authority handoff so a decision cannot outlive its evidence.
+            if approval_ref is None and cached.decision != "approval_required":
                 return cached
 
         if not workflow_id:
@@ -642,6 +646,30 @@ class RemediationActionAuthorityService:
             self._decisions[cache_key] = result
             return result
 
+        if approval_ref:
+            stale_reason = await self._approval_staleness_reason(
+                link=link,
+                approval_ref=approval_ref,
+                action_kind=normalized_action,
+                idempotency_key=idem,
+                parameters=parameters,
+                security_profile=security_profile,
+            )
+            if stale_reason is not None:
+                result = self._linked_result(
+                    link=link,
+                    action_kind=normalized_action,
+                    risk=None,
+                    decision="denied",
+                    reason=stale_reason,
+                    idempotency_key=idem,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
+                return result
+
         result = self._evaluate_with_link(
             link=link,
             action_kind=normalized_action,
@@ -663,6 +691,7 @@ class RemediationActionAuthorityService:
                 target_state = str(
                     target.state.value if hasattr(target.state, "value") else target.state
                 )
+            target_bindings = _approval_target_bindings(target)
             request_id = f"{workflow_id}:approval:{idem}"
             link.approval_state = {
                 "requestId": request_id,
@@ -674,16 +703,17 @@ class RemediationActionAuthorityService:
                     "workflowId": link.target_workflow_id,
                     "runId": link.target_run_id,
                     "status": target_state,
-                    "checkpointRef": (parameters or {}).get("checkpointRef"),
-                    "sessionIdentity": (parameters or {}).get("sessionIdentity"),
-                    "hostIdentity": (parameters or {}).get("hostIdentity"),
-                    "credentialGeneration": (parameters or {}).get(
+                    "checkpointRef": target_bindings.get("checkpointRef"),
+                    "sessionIdentity": target_bindings.get("sessionIdentity"),
+                    "hostIdentity": target_bindings.get("hostIdentity"),
+                    "credentialGeneration": target_bindings.get(
                         "credentialGeneration"
                     ),
                 },
                 "policySnapshot": {
                     "schemaVersion": "v1",
                     "policyVersion": (parameters or {}).get("policyVersion", 1),
+                    "actionPolicyRef": link.action_policy_ref,
                     "authorityMode": link.authority_mode,
                     "securityProfileRef": result.security_profile_ref,
                     "reason": result.reason,
@@ -699,6 +729,68 @@ class RemediationActionAuthorityService:
         self._request_shapes.setdefault(shape_key, request_shape_hash)
         self._decisions[cache_key] = result
         return result
+
+    async def _approval_staleness_reason(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        approval_ref: str,
+        action_kind: str,
+        idempotency_key: str,
+        parameters: Mapping[str, Any] | None,
+        security_profile: RemediationSecurityProfile | None,
+    ) -> str | None:
+        await self._session.refresh(link)
+        approval = dict(link.approval_state or {})
+        if (
+            approval.get("requestId") != approval_ref
+            or approval.get("decision") != "approved"
+            or approval.get("actionKind") not in {None, action_kind}
+            or approval.get("idempotencyKey") not in {None, idempotency_key}
+        ):
+            return "approved_request_binding_required"
+        expires_at = _parse_approval_datetime(approval.get("expiresAt"))
+        if expires_at is None or expires_at <= datetime.now(timezone.utc):
+            return "approval_expired"
+        expected = approval.get("expectedState")
+        expected_state = expected if isinstance(expected, Mapping) else {}
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
+        )
+        if target is None:
+            return "approval_target_unavailable"
+        await self._session.refresh(target)
+        actual_state = (
+            target.state.value if hasattr(target.state, "value") else target.state
+        )
+        if (
+            expected_state.get("workflowId") != link.target_workflow_id
+            or expected_state.get("runId") != target.run_id
+            or expected_state.get("status") != str(actual_state)
+        ):
+            return "approval_target_state_changed"
+        supplied = parameters or {}
+        current_bindings = _approval_target_bindings(target)
+        for field in (
+            "checkpointRef",
+            "sessionIdentity",
+            "hostIdentity",
+            "credentialGeneration",
+        ):
+            expected_value = expected_state.get(field)
+            if expected_value is not None and expected_value != current_bindings.get(field):
+                return "approval_target_binding_changed"
+        snapshot = approval.get("policySnapshot")
+        policy = snapshot if isinstance(snapshot, Mapping) else {}
+        if (
+            policy.get("policyVersion") != supplied.get("policyVersion", 1)
+            or policy.get("authorityMode") != link.authority_mode
+            or policy.get("actionPolicyRef") != link.action_policy_ref
+            or policy.get("securityProfileRef")
+            != (security_profile.profile_ref if security_profile else None)
+        ):
+            return "approval_policy_changed"
+        return None
 
     def _evaluate_with_link(
         self,
@@ -952,7 +1044,7 @@ class RemediationActionAuthorityService:
         approval_ref: str | None,
         parameters: Mapping[str, Any] | None,
     ) -> RemediationActionAuthorityResult:
-        return self._result(
+        result = self._result(
             remediation_workflow_id=link.remediation_workflow_id,
             target_workflow_id=link.target_workflow_id,
             authority_mode=link.authority_mode,
@@ -966,6 +1058,13 @@ class RemediationActionAuthorityService:
             approval_ref=approval_ref,
             parameters=parameters,
         )
+        if decision in {"denied", "approval_required"}:
+            _emit_remediation_metric(
+                "approval.denied" if decision == "denied" else "approval.required",
+                reason=reason,
+                action_kind=action_kind,
+            )
+        return result
 
     @staticmethod
     def _result(
@@ -1546,6 +1645,14 @@ class RemediationMutationGuardService:
             shape_hash=shape_hash,
             result=result,
         )
+        if result.reason == "mutation_lock_conflict":
+            _emit_remediation_metric(
+                "lock.conflict", action_kind=result.action_kind
+            )
+        if result.decision == "escalate":
+            _emit_remediation_metric(
+                "escalation", reason=result.reason, action_kind=result.action_kind
+            )
         self._trim_state()
         return result
 
@@ -1758,6 +1865,68 @@ def _normalize_guard_policy(
         if policy.target_change_policy in {"no_op", "rediagnose", "escalate"}
         else "escalate",
     )
+
+
+def _parse_approval_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _approval_target_bindings(
+    target: db_models.TemporalExecutionCanonicalRecord | None,
+) -> dict[str, Any]:
+    if target is None:
+        return {}
+    aliases = {
+        "checkpointRef": ("checkpointRef", "checkpoint_ref"),
+        "hostIdentity": ("hostIdentity", "host_identity", "hostId", "host_id"),
+        "sessionIdentity": (
+            "sessionIdentity",
+            "session_identity",
+            "sessionId",
+            "session_id",
+        ),
+        "credentialGeneration": (
+            "credentialGeneration",
+            "credential_generation",
+        ),
+    }
+    found: dict[str, Any] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for canonical, keys in aliases.items():
+                if canonical in found:
+                    continue
+                for key in keys:
+                    candidate = value.get(key)
+                    if candidate is not None and str(candidate).strip():
+                        found[canonical] = candidate
+                        break
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for item in value:
+                visit(item)
+
+    for payload in (target.parameters, target.memo, target.search_attributes):
+        visit(payload)
+    return found
+
+
+def _emit_remediation_metric(metric: str, **tags: Any) -> None:
+    """Emit bounded, non-sensitive remediation rollout telemetry."""
+
+    get_metrics_emitter().increment(f"remediation.{metric}", tags=tags)
 
 def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:

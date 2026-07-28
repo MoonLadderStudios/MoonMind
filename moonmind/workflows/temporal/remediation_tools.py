@@ -7,6 +7,7 @@ that the context explicitly names.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -27,6 +28,7 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_target_annotation,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.metrics import get_metrics_emitter
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
@@ -102,6 +104,7 @@ class RemediationTargetHealthSnapshot:
     title: str | None
     summary: str | None
     target_run_changed: bool
+    identity_bindings: Mapping[str, Any]
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
@@ -371,6 +374,7 @@ class RemediationEvidenceToolService:
                     else None
                 ),
                 target_run_changed=target.run_id != link.target_run_id,
+                identity_bindings=_target_identity_bindings(target),
             ),
             context_target=context_target_mapping,
         )
@@ -413,11 +417,18 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         link = await self._load_link(remediation_workflow_id)
+        await self._session.refresh(link)
         self._validate_execution_context(
             link=link,
             remediation_workflow_id=remediation_workflow_id,
             authority_result=authority_result,
             guard_result=guard_result,
+            action_request=action_request,
+        )
+        self._validate_final_approval_binding(
+            link=link,
+            preparation=preparation,
+            authority_result=authority_result,
             action_request=action_request,
         )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -444,6 +455,10 @@ class RemediationEvidenceToolService:
         if not isinstance(raw_result, Mapping):
             raise RemediationEvidenceToolError("action executor returned invalid result.")
         status = _normalize_action_result_status(raw_result.get("status"))
+        get_metrics_emitter().increment(
+            "remediation.action",
+            tags={"action_kind": action_kind, "status": status},
+        )
         verification_required = _bool_or_default(
             raw_result.get("verificationRequired"),
             default=status == "applied",
@@ -492,14 +507,15 @@ class RemediationEvidenceToolService:
         )
 
         immediate_target = await self._fresh_target_state(link)
-        # A second authoritative read is intentional: owners that need a bounded
-        # stabilization delay perform it inside execute_action before returning.
-        # The service still records a distinct durable observation rather than
-        # inferring stabilization from successful action delivery.
-        stabilized_target = await self._fresh_target_state(link)
-        verification = raw_result.get("verification")
+        # This service owns the stabilization observation. The second read is a
+        # distinct durable boundary and never trusts executor-supplied verdicts.
+        stabilized_target = await asyncio.wait_for(
+            self._fresh_target_state(link),
+            timeout=5.0,
+        )
         verification_payload = self._verification_payload(
-            verification=verification if isinstance(verification, Mapping) else {},
+            action_status=status,
+            verification_required=verification_required,
             action_kind=action_kind,
             action_id=str(action_request["actionId"]),
             link=link,
@@ -507,6 +523,30 @@ class RemediationEvidenceToolService:
             immediate_after=immediate_target,
             stabilized_after=stabilized_target,
         )
+        get_metrics_emitter().increment(
+            "remediation.verification",
+            tags={
+                "action_kind": action_kind,
+                "status": verification_payload["status"],
+                "unverified_mutation": (
+                    status == "applied"
+                    and verification_payload["status"] != "verified_resolved"
+                ),
+            },
+        )
+        if verification_payload["status"] in {
+            "still_failed",
+            "verified_no_change",
+            "regressed",
+            "verification_failed",
+        }:
+            get_metrics_emitter().increment(
+                "remediation.repeated_failure",
+                tags={
+                    "action_kind": action_kind,
+                    "status": verification_payload["status"],
+                },
+            )
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -750,7 +790,8 @@ class RemediationEvidenceToolService:
     @staticmethod
     def _verification_payload(
         *,
-        verification: Mapping[str, Any],
+        action_status: str,
+        verification_required: bool,
         action_kind: str,
         action_id: str,
         link: db_models.TemporalExecutionRemediationLink,
@@ -758,11 +799,20 @@ class RemediationEvidenceToolService:
         immediate_after: Mapping[str, Any],
         stabilized_after: Mapping[str, Any],
     ) -> dict[str, Any]:
-        status = str(verification.get("status") or "").strip()
-        if status not in _REMEDIATION_VERIFICATION_STATUSES:
-            status = "verification_failed"
+        status = _derive_verification_status(
+            action_kind=action_kind,
+            action_status=action_status,
+            verification_required=verification_required,
+            before={
+                "runId": before.current_run_id,
+                "state": before.state,
+                "closeStatus": before.close_status,
+                "evidenceAvailable": True,
+            },
+            immediate_after=immediate_after,
+            stabilized_after=stabilized_after,
+        )
         return {
-            **_redact_payload_value(dict(verification)),
             "schemaVersion": "v1",
             "status": status,
             "actionKind": action_kind,
@@ -781,6 +831,62 @@ class RemediationEvidenceToolService:
             "immediateAfter": dict(immediate_after),
             "stabilizedAfter": dict(stabilized_after),
         }
+
+    def _validate_final_approval_binding(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        preparation: RemediationActionRequestPreparation,
+        authority_result: Mapping[str, Any],
+        action_request: Mapping[str, Any],
+    ) -> None:
+        approval_ref = _string_or_none(authority_result.get("approvalRef"))
+        if approval_ref is None:
+            return
+        approval = dict(link.approval_state or {})
+        expires_at = _parse_datetime(approval.get("expiresAt"))
+        if expires_at is None or expires_at <= datetime.now(timezone.utc):
+            raise RemediationEvidenceToolError("Approved action request has expired.")
+        expected = approval.get("expectedState")
+        expected_state = expected if isinstance(expected, Mapping) else {}
+        params = action_request.get("params")
+        parameters = params if isinstance(params, Mapping) else {}
+        if (
+            approval.get("requestId") != approval_ref
+            or approval.get("decision") != "approved"
+            or expected_state.get("workflowId") != preparation.target.workflow_id
+            or expected_state.get("runId") != preparation.target.current_run_id
+            or expected_state.get("status") != preparation.target.state
+        ):
+            raise RemediationEvidenceToolError(
+                "Approved action request no longer matches target state."
+            )
+        for field in (
+            "checkpointRef",
+            "sessionIdentity",
+            "hostIdentity",
+            "credentialGeneration",
+        ):
+            expected_value = expected_state.get(field)
+            if (
+                expected_value is not None
+                and expected_value != preparation.target.identity_bindings.get(field)
+            ):
+                raise RemediationEvidenceToolError(
+                    f"Approved action request has stale {field} binding."
+                )
+        snapshot = approval.get("policySnapshot")
+        policy = snapshot if isinstance(snapshot, Mapping) else {}
+        if (
+            policy.get("policyVersion") != parameters.get("policyVersion", 1)
+            or policy.get("authorityMode") != link.authority_mode
+            or policy.get("actionPolicyRef") != link.action_policy_ref
+            or policy.get("securityProfileRef")
+            != authority_result.get("securityProfileRef")
+        ):
+            raise RemediationEvidenceToolError(
+                "Approved action request has stale policy binding."
+            )
 
     async def _load_link(
         self, remediation_workflow_id: str
@@ -929,6 +1035,115 @@ def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
 
     collect(evidence_mapping)
     return artifact_ids
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _target_identity_bindings(
+    target: db_models.TemporalExecutionCanonicalRecord,
+) -> dict[str, Any]:
+    aliases = {
+        "checkpointRef": ("checkpointRef", "checkpoint_ref"),
+        "hostIdentity": ("hostIdentity", "host_identity", "hostId", "host_id"),
+        "sessionIdentity": (
+            "sessionIdentity",
+            "session_identity",
+            "sessionId",
+            "session_id",
+        ),
+        "credentialGeneration": (
+            "credentialGeneration",
+            "credential_generation",
+        ),
+    }
+    found: dict[str, Any] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for canonical, keys in aliases.items():
+                if canonical in found:
+                    continue
+                for key in keys:
+                    candidate = value.get(key)
+                    if candidate is not None and str(candidate).strip():
+                        found[canonical] = candidate
+                        break
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for item in value:
+                visit(item)
+
+    for payload in (target.parameters, target.memo, target.search_attributes):
+        visit(payload)
+    return found
+
+
+def _derive_verification_status(
+    *,
+    action_kind: str,
+    action_status: str,
+    verification_required: bool,
+    before: Mapping[str, Any],
+    immediate_after: Mapping[str, Any],
+    stabilized_after: Mapping[str, Any],
+) -> str:
+    """Derive the canonical verdict from action delivery and fresh evidence."""
+
+    if action_status == "approval_required":
+        return "approval_required"
+    if not stabilized_after.get("evidenceAvailable"):
+        return "evidence_unavailable"
+    if action_status != "applied":
+        return "verification_failed"
+    if not verification_required:
+        return "verified_no_change"
+    resolved_states = {"completed", "succeeded", "success"}
+    failed_states = {"failed", "terminated", "timed_out", "canceled", "cancelled"}
+    before_state = str(before.get("state") or before.get("closeStatus") or "").lower()
+    after_state = str(
+        stabilized_after.get("state")
+        or stabilized_after.get("closeStatus")
+        or ""
+    ).lower()
+    action_expected_states = {
+        "execution.pause": {"paused"},
+        "execution.resume": {"running", "executing"},
+        "execution.cancel": {"canceled", "cancelled"},
+        "execution.force_terminate": {"terminated"},
+        "session.cancel": {"canceled", "cancelled"},
+        "session.terminate": {"terminated"},
+    }
+    if after_state in action_expected_states.get(action_kind, set()):
+        return "verified_resolved"
+    if action_kind in {
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "session.restart_container",
+    } and stabilized_after.get("runId") != before.get("runId"):
+        return "verified_resolved"
+    if after_state in resolved_states:
+        return "verified_resolved"
+    if before_state in resolved_states and after_state in failed_states:
+        return "regressed"
+    observed_fields = ("runId", "state", "closeStatus", "evidenceAvailable")
+    if all(before.get(field) == stabilized_after.get(field) for field in observed_fields):
+        return "verified_no_change"
+    if immediate_after != stabilized_after and after_state in failed_states:
+        return "still_failed"
+    return "still_failed"
 
 def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")

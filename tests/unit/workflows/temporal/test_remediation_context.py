@@ -4,7 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -61,6 +61,7 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLiveFollowEvent,
     RemediationLiveFollowResult,
     RemediationLogReadResult,
+    _derive_verification_status,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -2749,6 +2750,153 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert approved.executable is True
         assert approved.audit["requestingPrincipal"] == "user:operator"
         assert approved.audit["executionPrincipal"] == "service:admin-healer"
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_rejects_target_changed_after_approval(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="approval_gated",
+        )
+        service = RemediationActionAuthorityService(session=session)
+        pending = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="workload.restart_helper_container",
+            parameters={},
+            dry_run=False,
+            idempotency_key="stale-after-approval",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert pending.decision == "approval_required"
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        approval_ref = link.approval_state["requestId"]
+        link.approval_state = {**link.approval_state, "decision": "approved"}
+        target.run_id = "replacement-target-run"
+        await session.commit()
+
+        result = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="workload.restart_helper_container",
+            parameters={},
+            dry_run=False,
+            idempotency_key="stale-after-approval",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+            approval_ref=approval_ref,
+        )
+
+        assert result.decision == "denied"
+        assert result.reason == "approval_target_state_changed"
+        assert result.executable is False
+
+
+@pytest.mark.parametrize(
+    ("action_status", "required", "before", "immediate", "stabilized", "expected"),
+    [
+        (
+            "applied",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "running", "evidenceAvailable": True},
+            {"runId": "r1", "state": "completed", "evidenceAvailable": True},
+            "verified_resolved",
+        ),
+        (
+            "applied",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            "verified_no_change",
+        ),
+        (
+            "applied",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "running", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            "still_failed",
+        ),
+        (
+            "applied",
+            True,
+            {"runId": "r1", "state": "completed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            "regressed",
+        ),
+        (
+            "applied",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "running", "evidenceAvailable": True},
+            {"runId": "r1", "state": "running", "evidenceAvailable": False},
+            "evidence_unavailable",
+        ),
+        (
+            "approval_required",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            "approval_required",
+        ),
+        (
+            "failed",
+            True,
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            {"runId": "r1", "state": "failed", "evidenceAvailable": True},
+            "verification_failed",
+        ),
+    ],
+)
+def test_remediation_verification_taxonomy_is_derived_from_fresh_evidence(
+    action_status, required, before, immediate, stabilized, expected
+):
+    assert (
+        _derive_verification_status(
+            action_kind="workload.restart_helper_container",
+            action_status=action_status,
+            verification_required=required,
+            before=before,
+            immediate_after=immediate,
+            stabilized_after=stabilized,
+        )
+        == expected
+    )
+
+
+def test_remediation_rollout_metrics_cover_required_operator_signals():
+    emitter = MagicMock()
+    with patch(
+        "moonmind.workflows.temporal.remediation_actions.get_metrics_emitter",
+        return_value=emitter,
+    ):
+        remediation_actions._emit_remediation_metric(
+            "lock.conflict",
+            action_kind="session.interrupt",
+        )
+        remediation_actions._emit_remediation_metric(
+            "escalation",
+            reason="action_budget_exhausted",
+        )
+
+    metrics = [call.args[0] for call in emitter.increment.call_args_list]
+    assert metrics == [
+        "remediation.lock.conflict",
+        "remediation.escalation",
+    ]
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_profile_permissions_and_risk(
