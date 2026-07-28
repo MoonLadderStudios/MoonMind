@@ -131,3 +131,71 @@ def test_session_request_can_only_narrow_immutable_budget(tmp_path) -> None:
     with pytest.raises(HTTPException) as denied:
         _effective_session_request(payload, capability)
     assert denied.value.status_code == 403
+
+
+def test_capability_accounting_and_revocation_survive_registry_restart(tmp_path) -> None:
+    first = RetrievalCapabilityRegistry(tmp_path)
+    token, capability = first.issue(_budget(max_queries=2), lifetime_seconds=60)
+    first.begin(capability, "tool-1")
+    first.finish(capability, "tool-1", {"deliveryState": "delivery_unknown"})
+
+    restarted = RetrievalCapabilityRegistry(tmp_path)
+    restored = restarted.resolve(
+        token, host_id="host-1", session_id="session-1", run_id="run-1"
+    )
+    assert restored.query_count == 1
+    assert restarted.begin(restored, "tool-1") == {
+        "deliveryState": "delivery_unknown"
+    }
+
+    restarted.revoke(restored.capability_id)
+    after_revoke = RetrievalCapabilityRegistry(tmp_path)
+    with pytest.raises(RetrievalCapabilityError) as revoked:
+        after_revoke.resolve(
+            token, host_id="host-1", session_id="session-1", run_id="run-1"
+        )
+    assert revoked.value.reason == "revoked"
+
+
+def test_evidence_index_and_artifact_backed_result_survive_restart(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    result_ref = registry.store_result(
+        capability, "tool-1", {"items": [{"text": "large result"}]}
+    )
+    evidence_ref = registry.record(
+        capability,
+        {
+            "state": "succeeded",
+            "contextPackRef": result_ref,
+            "delivery": {"state": "delivery_unknown"},
+        },
+    )
+
+    restarted = RetrievalCapabilityRegistry(tmp_path)
+    status = restarted.status(capability.capability_id)
+    assert status["requests"][0]["evidenceRef"] == evidence_ref
+    assert status["requests"][0]["delivery"]["state"] == "delivery_unknown"
+    assert next((tmp_path / "run-1" / "results").glob("*.json")).exists()
+
+
+def test_delivery_requires_explicit_bridge_acknowledgement(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    registry.begin(capability, "tool-1")
+    registry.finish(
+        capability,
+        "tool-1",
+        {
+            "deliveryState": "delivery_unknown",
+            "deliveryBoundary": "typed_continuation",
+        },
+    )
+
+    acknowledged = registry.acknowledge_delivery(
+        capability.capability_id, "tool-1", state="delivered"
+    )
+    assert acknowledged["deliveryState"] == "delivered"
+
+    restarted = RetrievalCapabilityRegistry(tmp_path)
+    assert restarted.begin(capability, "tool-1")["deliveryState"] == "delivered"

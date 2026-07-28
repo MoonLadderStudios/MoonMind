@@ -7,7 +7,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.retrieval_gateway import (
+    RetrievalCapabilityIssue,
     RetrievalAuthContext,
+    _server_policy_snapshot,
     authorize_retrieval_request,
     get_retrieval_service,
     router,
@@ -119,6 +121,52 @@ def test_context_requires_authentication() -> None:
         response = client.post("/retrieval/context", json={"query": "q"})
 
     assert response.status_code == 401
+
+
+def test_capability_budget_is_compiled_against_server_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_QUERIES", "3")
+    snapshot = _server_policy_snapshot(
+        RetrievalCapabilityIssue(
+            tenant_id="tenant-1",
+            repository="MoonMind",
+            run_id="run-1",
+            workspace_id="workspace-1",
+            host_id="host-1",
+            session_id="session-1",
+            step_id="step-1",
+            policy_version="policy-1",
+            collections=["docs"],
+            max_queries=99,
+            fallback_allowed=True,
+        )
+    )
+    assert snapshot.collections == ("docs",)
+    assert snapshot.max_queries == 3
+    assert snapshot.fallback_allowed is False
+
+
+def test_capability_budget_rejects_collection_outside_server_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "docs")
+    with pytest.raises(HTTPException) as denied:
+        _server_policy_snapshot(
+            RetrievalCapabilityIssue(
+                tenant_id="tenant-1",
+                repository="MoonMind",
+                run_id="run-1",
+                workspace_id="workspace-1",
+                host_id="host-1",
+                session_id="session-1",
+                step_id="step-1",
+                policy_version="policy-1",
+                collections=["private"],
+            )
+        )
+    assert denied.value.status_code == 403
 
 
 def test_index_health_returns_collection_counts_and_freshness() -> None:
