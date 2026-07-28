@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
@@ -1649,7 +1649,7 @@ async def startup_event():
         from api_service.services.omnigent_policies import seed_bootstrap_policies
         async with get_async_session_context() as session:
             await seed_bootstrap_policies(session)
-    except (OperationalError, ProgrammingError) as exc:
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
         logger.warning("Omnigent policy bootstrap skipped until schema is ready: %s", exc)
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence

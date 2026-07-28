@@ -214,7 +214,11 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
             binding_ref="binding", provider_profile_id="profile",
             endpoint_ref="default", harness="codex-native",
             credential_mount_template_json={
-                "kind": "managed_secret_volume", "sourceRef": "profile",
+                "authVolumeRef": {
+                    "providerProfileId": "profile", "runtimeId": "codex_cli",
+                    "providerId": "openai", "volumeRef": "codex_auth_volume",
+                    "credentialGeneration": 1, "ownerUserId": "user-1",
+                },
                 "targetPath": "/home/app/.codex", "accessMode": "read_write",
                 "runtimeUid": 1000, "runtimeGid": 1000,
             },
