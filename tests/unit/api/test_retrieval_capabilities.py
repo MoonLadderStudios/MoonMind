@@ -9,12 +9,14 @@ from api_service.api.routers.retrieval_gateway import (
     RetrievalCorrelation,
     RetrievalQuery,
     _effective_session_request,
+    _enforce_session_result_budget,
 )
 from api_service.retrieval_capabilities import (
     RetrievalBudgetSnapshot,
     RetrievalCapabilityError,
     RetrievalCapabilityRegistry,
 )
+from moonmind.rag.context_pack import ContextItem, build_context_pack
 
 
 def _budget(**overrides):
@@ -259,3 +261,61 @@ def test_revoke_scope_drains_all_matching_session_authority(tmp_path) -> None:
                 token, host_id="host-1", session_id=session_id, run_id="run-1"
             )
         assert drained.value.reason == "revoked"
+
+
+@pytest.mark.parametrize(
+    ("budget_overrides", "items", "usage", "elapsed_ms", "reason"),
+    [
+        (
+            {"max_sources": 1},
+            [
+                ContextItem(score=1, source="a", text="a"),
+                ContextItem(score=1, source="b", text="b"),
+            ],
+            {"tokens": 2},
+            1,
+            "source_budget_exhausted",
+        ),
+        (
+            {"max_context_bytes": 8},
+            [ContextItem(score=1, source="a", text="long context")],
+            {"tokens": 2},
+            1,
+            "byte_budget_exhausted",
+        ),
+        (
+            {"max_context_tokens": 1},
+            [ContextItem(score=1, source="a", text="a")],
+            {"tokens": 2},
+            1,
+            "token_budget_exhausted",
+        ),
+        (
+            {"latency_ms": 1},
+            [ContextItem(score=1, source="a", text="a")],
+            {"tokens": 1},
+            2,
+            "latency_budget_exhausted",
+        ),
+    ],
+)
+def test_provider_result_cannot_broaden_capability_budget(
+    tmp_path, budget_overrides, items, usage, elapsed_ms, reason
+) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(
+        _budget(**budget_overrides), lifetime_seconds=60
+    )
+    pack = build_context_pack(
+        items=items,
+        filters={},
+        budgets={},
+        usage=usage,
+        transport="direct",
+        telemetry_id="test",
+        max_chars=1200,
+    )
+
+    with pytest.raises(RetrievalCapabilityError) as denied:
+        _enforce_session_result_budget(pack, capability, elapsed_ms=elapsed_ms)
+    assert denied.value.reason == reason

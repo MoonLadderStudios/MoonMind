@@ -495,6 +495,40 @@ def _enforce_retrieval_available(service: ContextRetrievalService) -> None:
         ),
     )
 
+
+def _enforce_session_result_budget(
+    pack: Any,
+    capability: RetrievalCapability,
+    *,
+    elapsed_ms: int,
+) -> tuple[int, int]:
+    """Reject provider output that broadens an immutable session budget."""
+    budget = capability.budget
+    if len(pack.items) > budget.max_sources:
+        raise RetrievalCapabilityError(
+            "source_budget_exhausted",
+            "Retrieved source count exceeds the capability ceiling.",
+        )
+    context_bytes = len(pack.context_text.encode("utf-8"))
+    if context_bytes > budget.max_context_bytes:
+        raise RetrievalCapabilityError(
+            "byte_budget_exhausted",
+            "Retrieved context exceeds the capability byte ceiling.",
+        )
+    context_tokens = int(pack.usage.get("tokens") or 0)
+    if context_tokens > budget.max_context_tokens:
+        raise RetrievalCapabilityError(
+            "token_budget_exhausted",
+            "Retrieved context exceeds the capability token ceiling.",
+        )
+    if elapsed_ms > budget.latency_ms:
+        raise RetrievalCapabilityError(
+            "latency_budget_exhausted",
+            "Retrieval exceeded the capability latency ceiling.",
+        )
+    return context_bytes, context_tokens
+
+
 @router.get("/health")
 def health(
     service: ContextRetrievalService = Depends(get_retrieval_service),
@@ -686,11 +720,10 @@ async def retrieve_context_pack(
         pack.transport = "gateway"
         result = pack.to_dict()
         if capability is not None:
-            context_bytes = len(pack.context_text.encode("utf-8"))
-            if context_bytes > capability.budget.max_context_bytes:
-                raise RetrievalCapabilityError(
-                    "budget_exhausted", "Retrieved context exceeds byte ceiling."
-                )
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            context_bytes, context_tokens = _enforce_session_result_budget(
+                pack, capability, elapsed_ms=elapsed_ms
+            )
             context_pack_ref = registry.store_result(capability, tool_call_id, result)
             evidence_ref = registry.record(
                 capability,
@@ -706,7 +739,7 @@ async def retrieve_context_pack(
                     "sources": [item.source for item in pack.items[: capability.budget.max_sources]],
                     "contextBytes": context_bytes,
                     "truncated": pack.truncated,
-                    "latencyMs": int((time.monotonic() - started_at) * 1000),
+                    "latencyMs": elapsed_ms,
                     "contextPackRef": context_pack_ref,
                     "delivery": {
                         "state": "delivery_unknown",
@@ -731,6 +764,7 @@ async def retrieve_context_pack(
                     "queries": capability.query_count,
                     "maxQueries": capability.budget.max_queries,
                     "contextBytes": context_bytes,
+                    "contextTokens": context_tokens,
                 },
             }
             registry.finish(capability, tool_call_id, result)
@@ -744,7 +778,16 @@ async def retrieve_context_pack(
         raise HTTPException(
             status_code=429
             if exc.reason
-            in {"budget_exhausted", "concurrency_exceeded", "rate_exceeded"}
+            in {
+                "budget_exhausted",
+                "byte_budget_exhausted",
+                "concurrency_exceeded",
+                "rate_exceeded",
+                "source_budget_exhausted",
+                "token_budget_exhausted",
+            }
+            else status.HTTP_408_REQUEST_TIMEOUT
+            if exc.reason == "latency_budget_exhausted"
             else 403,
             detail={"classification": exc.reason, "message": str(exc)},
         ) from exc
