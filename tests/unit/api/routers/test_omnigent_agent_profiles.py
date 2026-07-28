@@ -36,3 +36,16 @@ def test_profile_rejects_runtime_authority(field):
     value["workspace"][field] = "unsafe"
     with pytest.raises(ValidationError, match="runtime authority"):
         AgentProfileDocument.model_validate(value)
+
+@pytest.mark.parametrize("field", ["apiToken", "access_token", "clientSecret", "passwordHash"])
+def test_profile_rejects_nested_credential_like_authority(field):
+    value = document(upstreamId="agent-123").model_dump(by_alias=True)
+    value["model"]["nested"] = {field: "unsafe"}
+    with pytest.raises(ValidationError, match="runtime authority"):
+        AgentProfileDocument.model_validate(value)
+
+def test_profile_contracts_are_typed_and_reject_unknown_execution_authority():
+    value = document(upstreamId="agent-123").model_dump(by_alias=True)
+    value["execution"]["hostId"] = "caller-host"
+    with pytest.raises(ValidationError):
+        AgentProfileDocument.model_validate(value)

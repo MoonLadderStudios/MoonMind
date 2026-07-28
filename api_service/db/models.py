@@ -2725,6 +2725,52 @@ class OmnigentAgentProfileVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class OmnigentAgentProfileAuditEvent(Base):
+    """Immutable lifecycle evidence for a MoonMind-owned agent profile."""
+    __tablename__ = "omnigent_agent_profile_audit_events"
+    __table_args__ = (
+        Index("ix_omnigent_agent_profile_audit_profile", "profile_id", "created_at"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    actor_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id"), nullable=True
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentAgentProfileUsage(Base):
+    """Exact immutable profile selection retained by an authoring surface."""
+    __tablename__ = "omnigent_agent_profile_usage"
+    __table_args__ = (
+        UniqueConstraint("consumer_type", "consumer_id", name="uq_omnigent_profile_consumer"),
+        Index("ix_omnigent_profile_usage_profile", "profile_id", "version"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    consumer_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    consumer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    effective_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 
 class OmnigentUpstreamAgentProjection(Base):
     """Last-known bounded projection of one stable upstream identity."""
