@@ -1759,7 +1759,7 @@ class RecordingActionExecutor:
             "afterStateRef": "artifact://after-state",
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
             "verification": {
-                "status": "verified",
+                "status": "verified_resolved",
                 "targetWorkflowId": target_health.workflow_id,
             },
         }
@@ -1786,7 +1786,7 @@ class SensitiveHintActionExecutor:
                 "with token=raw-secret-token"
             ),
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {"status": "verified"},
+            "verification": {"status": "verified_resolved"},
         }
 
 
@@ -1807,7 +1807,7 @@ class StatusOnlyActionExecutor:
             "status": self.status,
             "message": f"returned {self.status}",
             "sideEffects": [],
-            "verification": {"status": "not_verified"},
+            "verification": {"status": "verification_failed"},
         }
 
 async def _read_artifact_json(artifact_service, artifact_id: str):

@@ -7418,6 +7418,43 @@ function RemediationOperatorSummary({ item }: { item: z.infer<typeof Remediation
         <Card label="Lease release">{String(cleanupState.leaseRelease || '—')}</Card>
         <Card label="Janitor">{String(cleanupState.janitor || '—')}</Card>
       </div>
+      {(state.actionResults || []).map((action, index) => (
+        <details className="card" key={`action-${String(action.actionId || action.idempotencyKey || index)}`}>
+          <summary>Action {index + 1}: {String(action.actionKind || 'unknown')}</summary>
+          <div className="grid-2">
+            <Card label="Status">{String(action.status || '—')}</Card>
+            <Card label="Risk">{String(action.riskTier || '—')}</Card>
+            <Card label="Policy decision">{String(action.policyDecision || '—')}</Card>
+            <Card label="Actor">{String(action.actor || '—')}</Card>
+            <Card label="Idempotency key"><code className="text-xs break-all">{String(action.idempotencyKey || action.actionId || '—')}</code></Card>
+            <Card label="Before state"><code className="text-xs break-all">{String(action.beforeStateRef || '—')}</code></Card>
+            <Card label="After state"><code className="text-xs break-all">{String(action.afterStateRef || '—')}</code></Card>
+            <Card label="Verification required">{String(action.verificationRequired ?? '—')}</Card>
+            <Card label="Artifact refs"><code className="text-xs break-all">{action.artifactRefs ? JSON.stringify(action.artifactRefs) : '—'}</code></Card>
+          </div>
+        </details>
+      ))}
+      {(state.verificationResults || []).map((verification, index) => (
+        <details className="card" key={`verification-${String(verification.actionId || index)}`}>
+          <summary>Verification {index + 1}: {String(verification.status || 'unknown')}</summary>
+          <div className="grid-2">
+            <Card label="Action"><code className="text-xs break-all">{String(verification.actionId || verification.actionKind || '—')}</code></Card>
+            <Card label="Target"><code className="text-xs break-all">{verification.target ? JSON.stringify(verification.target) : '—'}</code></Card>
+            <Card label="Before"><code className="text-xs break-all">{verification.before ? JSON.stringify(verification.before) : '—'}</code></Card>
+            <Card label="Immediately after"><code className="text-xs break-all">{verification.immediateAfter ? JSON.stringify(verification.immediateAfter) : '—'}</code></Card>
+            <Card label="After stabilization"><code className="text-xs break-all">{verification.stabilizedAfter ? JSON.stringify(verification.stabilizedAfter) : '—'}</code></Card>
+            <Card label="Verification artifact"><code className="text-xs break-all">{String(verification.artifactRef || '—')}</code></Card>
+          </div>
+        </details>
+      ))}
+      <details className="card">
+        <summary>Immediate repair and prevention audit</summary>
+        <div className="grid-2">
+          <Card label="Immediate repair detail"><code className="text-xs break-all">{JSON.stringify(immediate)}</code></Card>
+          <Card label="Prevention detail"><code className="text-xs break-all">{JSON.stringify(prevention)}</code></Card>
+          <Card label="Cleanup detail"><code className="text-xs break-all">{JSON.stringify(cleanupState)}</code></Card>
+        </div>
+      </details>
       {state.operatorTakeoverAvailable ? <p className="small">Operator takeover and cancellation are available.</p> : null}
     </div>
   );

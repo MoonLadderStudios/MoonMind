@@ -418,6 +418,38 @@ describe('Workflow Detail Entrypoint', () => {
         canDecide: true,
         auditRef: 'audit-rich',
       },
+      operatorState: {
+        phase: 'resolved',
+        actionResults: [{
+          actionKind: 'session.interrupt_turn',
+          actionId: 'action-rich',
+          status: 'applied',
+          riskTier: 'medium',
+          policyDecision: 'allowed',
+          actor: 'user:operator',
+          idempotencyKey: 'idem-rich',
+          beforeStateRef: 'artifact://state/before',
+          afterStateRef: 'artifact://state/after',
+          verificationRequired: true,
+          artifactRefs: { result: 'artifact-action-result-rich' },
+        }],
+        verificationResults: [{
+          actionKind: 'session.interrupt_turn',
+          actionId: 'action-rich',
+          status: 'verified_resolved',
+          target: { workflowId: 'mm:target-rich', runId: 'run-target-rich' },
+          before: { state: 'failed' },
+          immediateAfter: { state: 'executing' },
+          stabilizedAfter: { state: 'completed' },
+          artifactRef: 'artifact-verification-rich',
+        }],
+        immediateRepair: { attempted: true, outcome: 'repaired' },
+        prevention: { status: 'findings_reported', verification: 'passed' },
+        cleanup: { state: 'completed', leaseRelease: 'released', janitor: 'not_required' },
+        autonomousOrigin: false,
+        rolloutGate: 'disabled',
+        operatorTakeoverAvailable: true,
+      },
       createdAt: '2026-04-22T00:00:02Z',
       updatedAt: '2026-04-22T00:00:03Z',
       ...overrides,
@@ -7007,6 +7039,14 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('run-target-rich:2')).toBeTruthy();
     expect(screen.getByText('conflict')).toBeTruthy();
     expect(screen.getAllByText('test-remediation-rich').length).toBeGreaterThan(0);
+    expect(screen.getByText('Action 1: session.interrupt_turn')).toBeTruthy();
+    expect(screen.getByText('Verification 1: verified_resolved')).toBeTruthy();
+    expect(screen.getByText('idem-rich')).toBeTruthy();
+    expect(screen.getByText('artifact://state/before')).toBeTruthy();
+    expect(screen.getByText('artifact://state/after')).toBeTruthy();
+    expect(screen.getByText(/"state":"executing"/)).toBeTruthy();
+    expect(screen.getAllByText(/"state":"completed"/).length).toBeGreaterThan(0);
+    expect(screen.getByText('artifact-verification-rich')).toBeTruthy();
     expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
   });
 

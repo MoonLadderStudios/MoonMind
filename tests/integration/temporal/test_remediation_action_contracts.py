@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
-from api_service.db.models import TemporalArtifactLink
+from api_service.db.models import (
+    TemporalArtifactLink,
+    TemporalExecutionRemediationLink,
+)
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -123,6 +126,10 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         assert result_payload["verificationHint"]
         assert verification_payload["actionKind"] == action_kind
         assert verification_payload["actionId"] == action_id
+        assert verification_payload["status"] == "verified_resolved"
+        assert verification_payload["before"]["runId"] == target.run_id
+        assert verification_payload["immediateAfter"]["runId"] == target.run_id
+        assert verification_payload["stabilizedAfter"]["runId"] == target.run_id
         assert audit_payload["eventType"] == "remediation.action"
         assert audit_payload["remediationWorkflowId"] == remediation.workflow_id
         assert audit_payload["targetWorkflowId"] == target.workflow_id
@@ -153,6 +160,17 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         ).scalars().all()
         assert len(audit_links) == 1
         assert len(target_annotation_links) == 1
+        remediation_link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        operator_state = remediation_link.operator_state
+        assert operator_state["phase"] == "resolved"
+        assert operator_state["actionResults"][0]["idempotencyKey"] == action_id
+        assert (
+            operator_state["verificationResults"][0]["status"]
+            == "verified_resolved"
+        )
+        assert operator_state["immediateRepair"]["outcome"] == "repaired"
 
 
 async def test_remediation_raw_action_rejection_does_not_publish_side_effect_artifacts(
@@ -323,6 +341,15 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             summary_payload["decisionLogRef"]
             == summary_result["artifactRefs"]["decisionLog"]
         )
+        remediation_link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        await session.refresh(remediation_link)
+        operator_state = remediation_link.operator_state
+        assert operator_state["phase"] == "resolved"
+        assert operator_state["immediateRepair"]["repairOutcome"] == "repaired"
+        assert operator_state["prevention"]["status"] == "findings_reported"
+        assert operator_state["cleanup"]["leaseRelease"] == "released"
 
 
 async def test_remediation_lifecycle_cancellation_and_continuity_summary_artifacts(

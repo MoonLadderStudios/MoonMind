@@ -41,6 +41,17 @@ _ALLOWED_ACTION_RESULT_STATUSES = frozenset(
         "failed",
     }
 )
+_REMEDIATION_VERIFICATION_STATUSES = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+        "evidence_unavailable",
+        "approval_required",
+        "verification_failed",
+    }
+)
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])/(?:[^\s\"']+/)*[^\s\"']+")
 _PRESIGNED_URL_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId|Signature|sig=|token=)[^\s\"']*",
@@ -480,14 +491,22 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
+        immediate_target = await self._fresh_target_state(link)
+        # A second authoritative read is intentional: owners that need a bounded
+        # stabilization delay perform it inside execute_action before returning.
+        # The service still records a distinct durable observation rather than
+        # inferring stabilization from successful action delivery.
+        stabilized_target = await self._fresh_target_state(link)
         verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        verification_payload = self._verification_payload(
+            verification=verification if isinstance(verification, Mapping) else {},
+            action_kind=action_kind,
+            action_id=str(action_request["actionId"]),
+            link=link,
+            before=preparation.target,
+            immediate_after=immediate_target,
+            stabilized_after=stabilized_target,
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -564,6 +583,59 @@ class RemediationEvidenceToolService:
 
         link.latest_action_summary = action_kind
         link.outcome = status
+        operator_state = dict(link.operator_state or {})
+        action_results = list(operator_state.get("actionResults") or ())
+        action_results.append(
+            {
+                **result_payload,
+                "riskTier": action_request.get("riskTier")
+                or authority_result.get("risk"),
+                "policyDecision": authority_result.get("decision"),
+                "actor": action_request.get("requester"),
+                "idempotencyKey": action_request["actionId"],
+                "artifactRefs": {
+                    "request": request_artifact.artifact_id,
+                    "result": result_artifact.artifact_id,
+                    "audit": audit_artifact.artifact_id,
+                    "targetAnnotation": annotation_artifact.artifact_id,
+                },
+            }
+        )
+        verification_results = list(operator_state.get("verificationResults") or ())
+        verification_results.append(
+            {
+                **verification_payload,
+                "artifactRef": verification_artifact.artifact_id,
+            }
+        )
+        operator_state.update(
+            {
+                "phase": (
+                    "resolved"
+                    if verification_payload["status"] == "verified_resolved"
+                    else "verifying"
+                ),
+                "actionResults": action_results[-100:],
+                "verificationResults": verification_results[-100:],
+                "immediateRepair": {
+                    "attempted": True,
+                    "outcome": (
+                        "repaired"
+                        if verification_payload["status"] == "verified_resolved"
+                        else "still_failed"
+                    ),
+                    "actionId": action_request["actionId"],
+                    "actionKind": action_kind,
+                    "verificationStatus": verification_payload["status"],
+                    "artifactRefs": {
+                        "actionRequest": request_artifact.artifact_id,
+                        "actionResult": result_artifact.artifact_id,
+                        "verification": verification_artifact.artifact_id,
+                    },
+                },
+            }
+        )
+        link.operator_state = operator_state
         await self._session.commit()
         return {
             "schemaVersion": "v1",
@@ -622,6 +694,20 @@ class RemediationEvidenceToolService:
         )
 
         link.outcome = str(final_summary.get("resolution") or link.outcome or "")
+        operator_state = dict(link.operator_state or {})
+        cleanup = dict(operator_state.get("cleanup") or {})
+        cleanup["leaseRelease"] = final_summary.get("lockRelease")
+        operator_state.update(
+            {
+                "phase": final_summary.get("phase") or operator_state.get("phase"),
+                "immediateRepair": dict(repair),
+                "prevention": dict(prevention),
+                "cleanup": cleanup,
+                "summaryArtifactRef": summary_artifact.artifact_id,
+                "decisionLogRef": decision_artifact.artifact_id,
+            }
+        )
+        link.operator_state = operator_state
         await self._session.commit()
         return {
             "schemaVersion": "v1",
@@ -636,6 +722,64 @@ class RemediationEvidenceToolService:
             if isinstance(final_summary.get("prevention"), Mapping)
             else None,
             "lockRelease": final_summary.get("lockRelease"),
+        }
+
+    async def _fresh_target_state(
+        self,
+        link: db_models.TemporalExecutionRemediationLink,
+    ) -> dict[str, Any]:
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord,
+            link.target_workflow_id,
+        )
+        if target is None:
+            return {
+                "workflowId": link.target_workflow_id,
+                "runId": link.target_run_id,
+                "evidenceAvailable": False,
+            }
+        await self._session.refresh(target)
+        return {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+            "state": _enum_value(target.state),
+            "closeStatus": _enum_value(target.close_status),
+            "evidenceAvailable": True,
+        }
+
+    @staticmethod
+    def _verification_payload(
+        *,
+        verification: Mapping[str, Any],
+        action_kind: str,
+        action_id: str,
+        link: db_models.TemporalExecutionRemediationLink,
+        before: RemediationTargetHealthSnapshot,
+        immediate_after: Mapping[str, Any],
+        stabilized_after: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = str(verification.get("status") or "").strip()
+        if status not in _REMEDIATION_VERIFICATION_STATUSES:
+            status = "verification_failed"
+        return {
+            **_redact_payload_value(dict(verification)),
+            "schemaVersion": "v1",
+            "status": status,
+            "actionKind": action_kind,
+            "actionId": action_id,
+            "target": {
+                "workflowId": link.target_workflow_id,
+                "runId": link.target_run_id,
+            },
+            "before": {
+                "workflowId": before.workflow_id,
+                "runId": before.current_run_id,
+                "state": before.state,
+                "closeStatus": before.close_status,
+                "evidenceAvailable": True,
+            },
+            "immediateAfter": dict(immediate_after),
+            "stabilizedAfter": dict(stabilized_after),
         }
 
     async def _load_link(
