@@ -7,6 +7,11 @@ from typing import Any
 
 import pytest
 
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    PROXY_URL,
+)
 from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
@@ -1835,3 +1840,18 @@ async def test_container_janitor_sweeps_expired_bounded_helpers(
         "--format",
         '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
     ]
+def test_bridge_profile_resolves_to_restricted_attested_network(tmp_path: Path) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="bridge")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == EGRESS_NETWORK_REF
+    assert f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}" in args
+    assert f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}" in args
+    assert f"HTTPS_PROXY={PROXY_URL}" in args
+    assert "NO_PROXY=" in args
+    assert "--privileged=false" in args
+    assert args[args.index("--cap-drop") + 1] == "ALL"

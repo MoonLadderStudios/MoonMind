@@ -78,6 +78,11 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
     resolve_registry_pull_credentials,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    attest_docker_egress,
+    restricted_proxy_env,
+)
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
     ManagedWorkspaceLocator,
@@ -535,6 +540,12 @@ class DockerContainerJobBackend:
 
         code, _, _ = await self._runner(("network", "inspect", network_ref))
         return code == 0
+
+    @property
+    def command_runner(self) -> CommandRunner:
+        """Expose only the normalized trusted runner for backend attestation."""
+
+        return self._runner
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
@@ -1387,6 +1398,15 @@ class DockerContainerJobBackend:
         await self._reject_ownership_collision(request, name)
         if spec.network_mode not in {"none", "bridge"}:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
+        egress_attestation = None
+        network_mode = spec.network_mode
+        if spec.network_mode == "bridge":
+            egress_attestation = await attest_docker_egress(
+                runner=self._runner,
+                profile=DEFAULT_EGRESS_PROFILE,
+                backend_ref=self._backend_ref,
+            )
+            network_mode = egress_attestation.network_ref
         volume_name = request.resolved_workspace_volume_name
         volume_subpath = request.resolved_workspace_volume_subpath
         if (
@@ -1450,7 +1470,7 @@ class DockerContainerJobBackend:
             "--label",
             f"{LABEL_OWNERSHIP_SCHEMA}={OWNERSHIP_SCHEMA_VERSION}",
             "--network",
-            spec.network_mode,
+            network_mode,
             *structured_container_security_args(),
             "--cpus",
             str(spec.resources.cpu_millis / 1000),
@@ -1471,6 +1491,21 @@ class DockerContainerJobBackend:
                 "resolve it to an approved volume"
             )
         args.extend(await self._materialized_env(request))
+        if egress_attestation is not None:
+            args.extend(
+                (
+                    "--label",
+                    f"moonmind.egress.profile={egress_attestation.profile_ref}",
+                    "--label",
+                    "moonmind.egress.profile_digest="
+                    f"{egress_attestation.profile_digest}",
+                    "--label",
+                    "moonmind.egress.applied_rule_digest="
+                    f"{egress_attestation.applied_rule_digest}",
+                )
+            )
+            for proxy_env in restricted_proxy_env():
+                args.extend(("--env", proxy_env))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
         self._reject_forbidden_launch_args(args)

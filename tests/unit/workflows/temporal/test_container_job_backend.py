@@ -7,6 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    ENFORCER_IMPLEMENTATION,
+    PROXY_URL,
+)
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
@@ -151,6 +157,66 @@ async def test_create_applies_hardening_shm_pids_and_labels(tmp_path) -> None:
     assert f"{LABEL_OBJECT_KIND}=container" in joined
     assert f"{LABEL_BACKEND_REF}=system" in joined
     assert f"{LABEL_OWNERSHIP_SCHEMA}={OWNERSHIP_SCHEMA_VERSION}" in joined
+
+
+@pytest.mark.asyncio
+async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
+    tmp_path,
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:2] == ("network", "inspect"):
+            return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                    "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {},
+                    "moonmind_sandbox-egress-network": {},
+                    "local-network": {},
+                },
+            }
+            return 0, json.dumps(payload).encode(), b""
+        return await _recording_runner(commands)(args)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    await backend.create_container(_request(tmp_path, networkMode="bridge"))
+
+    create = next(command for command in commands if command[0] == "create")
+    assert create[create.index("--network") + 1] == EGRESS_NETWORK_REF
+    assert f"HTTPS_PROXY={PROXY_URL}" in create
+    assert "NO_PROXY=" in create
+    assert f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}" in create
+
+
+@pytest.mark.asyncio
+async def test_bridge_launch_fails_before_create_when_network_is_not_internal(
+    tmp_path,
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        commands.append(tuple(args))
+        if args[:2] == ("network", "inspect"):
+            return 0, b'{"Internal":false,"EnableIPv6":false}', b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    with pytest.raises(RuntimeError, match="not internal"):
+        await backend.create_container(_request(tmp_path, networkMode="bridge"))
+    assert not any(command[0] == "create" for command in commands)
 
 
 @pytest.mark.asyncio

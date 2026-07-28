@@ -210,6 +210,9 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         "sandbox-egress-network must be an internal Docker network so sandbox "
         "workers do not have default outbound internet egress"
     )
+    restricted_network = networks.get("restricted-egress-network")
+    assert isinstance(restricted_network, dict)
+    assert restricted_network.get("internal") is True
 
     sandbox_worker = services.get("temporal-worker-sandbox")
     assert isinstance(
@@ -243,8 +246,16 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert _network_names(proxy_service) == {
         "local-network",
         "sandbox-egress-network",
+        "restricted-egress-network",
     }
     assert proxy_service.get("expose") == ["3128"]
+    assert proxy_service["container_name"] == "moonmind-sandbox-egress-proxy"
+    assert proxy_service["labels"]["moonmind.egress.profile"] == (
+        "moonmind-provider-egress@1"
+    )
+    assert proxy_service["labels"]["moonmind.egress.enforcer"] == (
+        "docker-internal-proxy/v1"
+    )
 
     sandbox_env = _env_map(sandbox_worker.get("environment"))
     assert sandbox_env["HTTPS_PROXY"] == (
@@ -266,7 +277,17 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
+    assert "169.254.0.0/16" in squid_config
+    assert "http_access deny forbidden_destination" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
+
+    codex_host = services["omnigent-host-codex"]
+    assert _network_names(codex_host) == {"restricted-egress-network"}
+    assert codex_host["cap_drop"] == ["ALL"]
+    assert codex_host["security_opt"] == ["no-new-privileges:true"]
+    codex_env = _env_map(codex_host["environment"])
+    assert codex_env["HTTPS_PROXY"] == "http://sandbox-egress-proxy:3128"
+    assert codex_env["NO_PROXY"] == ""
 
 
 def test_api_service_runs_with_container_init():
