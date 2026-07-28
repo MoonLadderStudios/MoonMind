@@ -28,6 +28,7 @@ from moonmind.workflows.temporal.remediation_context import (
 )
 from moonmind.workflows.temporal.remediation_actions import (
     REMEDIATION_BRANCH_SENSITIVE_FIELDS,
+    remediation_changes_require_checkpoint_branch,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
@@ -217,15 +218,25 @@ class MoonMindControlPlaneRemediationActionExecutor:
         action_kind = _required_string(action_request.get("actionKind"), "actionKind")
         parameters = action_request.get("parameters")
         parameters_mapping = parameters if isinstance(parameters, Mapping) else {}
-        input_changes = parameters_mapping.get("inputChanges")
-        changed_fields = (
-            set(input_changes)
-            if isinstance(input_changes, Mapping)
-            else set()
-        )
-        branch_sensitive_changes = sorted(
-            changed_fields & REMEDIATION_BRANCH_SENSITIVE_FIELDS
-        )
+        original_inputs = guard_result.get("originalInputs")
+        proposed_inputs = guard_result.get("proposedInputs")
+        if isinstance(original_inputs, Mapping) and isinstance(
+            proposed_inputs, Mapping
+        ):
+            branch_sensitive_changes = list(
+                remediation_changes_require_checkpoint_branch(
+                    original=original_inputs,
+                    proposed=proposed_inputs,
+                )
+            )
+        else:
+            input_changes = parameters_mapping.get("inputChanges")
+            changed_fields = (
+                set(input_changes) if isinstance(input_changes, Mapping) else set()
+            )
+            branch_sensitive_changes = sorted(
+                changed_fields & REMEDIATION_BRANCH_SENSITIVE_FIELDS
+            )
         if (
             branch_sensitive_changes
             and action_kind != "checkpoint_branch.create_from_remediation_context"

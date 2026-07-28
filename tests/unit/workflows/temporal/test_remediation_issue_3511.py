@@ -146,6 +146,53 @@ async def test_control_plane_executor_requires_branch_for_corrected_input() -> N
     assert result["changedFields"] == ["model"]
 
 
+async def test_control_plane_executor_compares_authoritative_input_snapshots() -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    executor = MoonMindControlPlaneRemediationActionExecutor(
+        {"execution.resume": adapter}
+    )
+    result = await executor.execute_action(
+        action_request={
+            "actionKind": "execution.resume",
+            # A caller cannot hide an authoritative change with an empty hint.
+            "parameters": {"inputChanges": {}},
+        },
+        guard_result={
+            "executable": True,
+            "originalInputs": {
+                "runtime": "omnigent",
+                "providerProfile": "profile-a",
+                "publishMode": "pr",
+            },
+            "proposedInputs": {
+                "runtime": "omnigent",
+                "providerProfile": "profile-b",
+                "publishMode": "none",
+            },
+        },
+        target_health=RemediationTargetHealthSnapshot(
+            workflow_id="target",
+            pinned_run_id="run",
+            current_run_id="run",
+            state="running",
+            close_status=None,
+            title=None,
+            summary=None,
+            target_run_changed=False,
+        ),
+    )
+
+    assert called is False
+    assert result["status"] == "denied"
+    assert result["changedFields"] == ["providerProfile", "publishMode"]
+
+
 async def test_typed_evidence_operations_delegate_to_their_bounded_classes() -> None:
     service = object.__new__(RemediationEvidenceToolService)
     seen: list[str] = []
