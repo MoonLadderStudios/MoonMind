@@ -167,8 +167,15 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
     body = response.json()
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
     assert body["available"] is False
-    assert body["hostModes"] == []
-    assert body["eligibleProviderProfiles"] == []
+    assert body["hostModes"] == ["on_demand_docker"]
+    assert body["eligibleProviderProfiles"] == [{
+        "profileId": "codex-oauth",
+        "label": "OpenAI subscription",
+        "providerId": "openai",
+        "busy": False,
+        "queueWhenBusy": True,
+    }]
+    assert body["ineligibleProviderProfiles"] == []
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
