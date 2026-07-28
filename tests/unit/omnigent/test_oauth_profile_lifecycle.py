@@ -1302,6 +1302,13 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
 
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
+
         async def create_or_get_host_lease(self, **_kwargs):
             actions.append("host_lease_created")
             return self.lease
@@ -1459,6 +1466,13 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
 
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
@@ -1685,6 +1699,14 @@ async def _run_coordinator_failure_case(
                     update={"static_host_id": None, "host_launch_profile_ref": "codex"}
                 )
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            binding = await self.get_binding_for_profile(kwargs["profile_id"])
+            return binding.model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             if fail_at == "host_lease":
