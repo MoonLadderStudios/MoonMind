@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [product, cumulative, stock, static, ondemand, failures]
+        mode: [browser, product, cumulative, stock, static, ondemand, failures]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -42,6 +42,17 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install -e .[tests]
+      - name: Install controlling browser
+        if: ${{ matrix.mode == 'browser' }}
+        run: |
+          npm ci --no-fund --no-audit
+          npx playwright install --with-deps chromium
+      - name: Materialize browser authentication state
+        if: ${{ matrix.mode == 'browser' }}
+        env:
+          BROWSER_STORAGE_STATE: ${{ secrets.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE }}
+        run: |
+          python -c 'import os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"moonmind-browser-state.json"; p.write_text(os.environ["BROWSER_STORAGE_STATE"], encoding="utf-8"); p.chmod(0o600)'
       - name: Resolve pinned image inputs
         id: images
         shell: bash
@@ -75,6 +86,12 @@ jobs:
           MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE }}
           MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE }}
           MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE }}
+          MOONMIND_OMNIGENT_DASHBOARD_URL: ${{ vars.MOONMIND_OMNIGENT_DASHBOARD_URL }}
+          MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID: ${{ vars.MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID }}
+          MOONMIND_OMNIGENT_TEST_REPOSITORY: ${{ vars.MOONMIND_OMNIGENT_TEST_REPOSITORY }}
+          MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
+          MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
+          MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN: ${{ secrets.MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN }}
         run: |
           python tools/run_omnigent_live_conformance.py \
             --mode "${{ matrix.mode }}" \
@@ -125,11 +142,12 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from datetime import datetime, timedelta, timezone
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 6:
-              raise SystemExit(f"expected six passing reports, found {len(reports)}")
+          if len(reports) != 7:
+              raise SystemExit(f"expected seven passing reports, found {len(reports)}")
           report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
           for path, report in zip(reports, report_payloads):
               if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
@@ -142,6 +160,92 @@ jobs:
           if len(product_paths) != 1:
               raise SystemExit(f"expected one product evidence document, found {len(product_paths)}")
           product = json.loads(product_paths[0].read_text(encoding="utf-8"))
+          browser_paths = list(root.glob("*/browser-evidence.json"))
+          if len(browser_paths) != 1:
+              raise SystemExit(
+                  f"expected one browser evidence document, found {len(browser_paths)}"
+              )
+          browser = json.loads(browser_paths[0].read_text(encoding="utf-8"))
+          if browser.get("issue") != "MoonLadderStudios/MoonMind#3508":
+              raise SystemExit("browser evidence is not bound to issue #3508")
+          required_rows = {
+              "static_profile_bound", "static_restart_replay",
+              "on_demand_policy_selected", "repository_read_analysis",
+              "repository_mutation_publication",
+              "failed_credential_readiness_admission",
+              "failed_host_registration_readiness",
+              "active_cancellation_interruption",
+              "partial_start_cleanup_janitor",
+          }
+          rows = browser.get("rows", {})
+          if set(rows) != required_rows:
+              raise SystemExit("browser evidence lacks the complete release row inventory")
+          def published_ref(ref):
+              if not isinstance(ref, str):
+                  raise SystemExit("browser evidence ref must be a string")
+              value = ref[5:] if ref.startswith("file:") else ref
+              path = Path(value)
+              if not path.is_absolute():
+                  return ref
+              candidates = [
+                  item for item in root.rglob(path.name)
+                  if item.is_file()
+              ]
+              if len(candidates) != 1:
+                  raise SystemExit(
+                      f"cannot rewrite file evidence ref into artifact: {path.name}"
+                  )
+              return str(candidates[0].relative_to(root))
+          for row in rows.values():
+              refs = row.get("evidenceRefs")
+              if not isinstance(refs, list):
+                  raise SystemExit("browser row evidence refs must be a list")
+              row["evidenceRefs"] = [published_ref(ref) for ref in refs]
+          browser["rows"] = rows
+          browser_paths[0].write_text(
+              json.dumps(browser, indent=2) + "\n", encoding="utf-8"
+          )
+          authority_fields = {
+              "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
+              "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",
+              "providerProfileRef", "providerLeaseId", "hostBindingRef", "hostLeaseId",
+              "hostId", "hostCapability", "bridgeSessionId", "omnigentSessionId",
+              "firstMessageId", "eventCursor", "workspaceLocator", "sourceCommit",
+              "resourceRefs", "artifactRefs", "terminalState", "cleanupState",
+              "janitorState", "providerProfileRelease", "networkPolicyRef", "runtime",
+              "hostMode",
+          }
+          admission_rows = {
+              "failed_credential_readiness_admission",
+              "failed_host_registration_readiness",
+          }
+          for name, row in rows.items():
+              if row.get("status") != "passed":
+                  raise SystemExit(f"browser row did not pass: {name}")
+              assertions = row.get("assertions", {})
+              required_assertions = (
+                  "browser_originated", "normal_create_request_rejected",
+                  "distinct_admission_reason", "no_fallback",
+              ) if name in admission_rows else (
+                  "browser_originated", "normal_create_request",
+                  "workflow_detail_terminal_replay", "no_fallback",
+              )
+              if any(assertions.get(key) is not True for key in required_assertions):
+                  raise SystemExit(f"browser row lacks a controlling assertion: {name}")
+              authority = row.get("authorityChain", {})
+              if name in admission_rows:
+                  if (
+                      not isinstance(authority, dict)
+                      or set(authority) != {"providerProfileRef"}
+                      or not authority.get("providerProfileRef")
+                  ):
+                      raise SystemExit("admission evidence lacks bounded authority")
+                  continue
+              if any(not authority.get(key) for key in authority_fields):
+                  raise SystemExit("browser evidence lacks a complete authority chain")
+              if (authority.get("hostCapability") != "codex-native"
+                      or authority.get("runtime") != "external/omnigent"):
+                  raise SystemExit("browser evidence contains a runtime fallback")
           cumulative_paths = list(root.glob("*/cumulative-evidence.json"))
           if len(cumulative_paths) != 1:
               raise SystemExit(
@@ -238,13 +342,14 @@ jobs:
               raise SystemExit("product evidence lacks required evidence references")
           manifest = {
               "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
-              "issue": "MoonLadderStudios/MoonMind#3456",
+              "issue": "MoonLadderStudios/MoonMind#3508",
               "parentIssue": "MoonLadderStudios/MoonMind#3448",
+              "acceptanceIssue": "MoonLadderStudios/MoonMind#3456",
               "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
               "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "commit": os.environ["GITHUB_SHA"],
+              "sourceCommit": os.environ["GITHUB_SHA"],
               "runUrl": (
                   f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
                   f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
@@ -253,9 +358,11 @@ jobs:
                   f"omnigent-live-published-matrix-{os.environ['GITHUB_RUN_ID']}-"
                   f"{os.environ['GITHUB_RUN_ATTEMPT']}"
               ),
-              "reports": [str(path) for path in reports],
-              "productEvidence": str(product_paths[0]),
-              "cumulativeRemediationEvidence": str(cumulative_paths[0]),
+              "reports": [str(path.relative_to(root)) for path in reports],
+              "productEvidence": str(product_paths[0].relative_to(root)),
+              "browserEvidence": str(browser_paths[0].relative_to(root)),
+              "browserRows": rows,
+              "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],
@@ -276,9 +383,10 @@ jobs:
               "cleanupAndRelease": acceptance["cleanupAndRelease"],
               "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
               "noFallback": product["assertions"]["no_fallback"],
-              "modes": ["product", "cumulative", "stock", "static", "ondemand", "failures"],
+              "modes": ["browser", "product", "cumulative", "stock", "static", "ondemand", "failures"],
               "status": "passed",
-              "generatedAt": os.environ.get("GITHUB_RUN_STARTED_AT"),
+              "generatedAt": datetime.now(timezone.utc).isoformat(),
+              "expiresAt": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
               "producer": {"workflow": os.environ["GITHUB_WORKFLOW"], "runId": os.environ["GITHUB_RUN_ID"]},
               "supersessionPolicy": "newest passing report for the same commit and immutable image digests",
           }
@@ -299,11 +407,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issues: \`MoonLadderStudios/MoonMind#3456\`, cumulative remediation \`#3480\` (parent \`#3471\`)"
-            echo "- Result: product-create, cumulative remediation, stock, static, on-demand, and failure cases passed"
+            echo "- Issues: \`MoonLadderStudios/MoonMind#3508\` (parent \`#3448\`)"
+            echo "- Result: browser, product-create, cumulative remediation, stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing acceptance report from issues 3480, 3471, 3456, and 3448
+      - name: Link passing acceptance report from issues 3508 and 3448
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -316,11 +424,9 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
             echo "- Durable artifact: \`${artifact}\`"
             echo "- Evidence refs and immutable image digests: the six \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
-          gh issue comment 3480 --repo "${{ github.repository }}" --body-file "$comment_file"
-          gh issue comment 3471 --repo "${{ github.repository }}" --body-file "$comment_file"
-          gh issue comment 3456 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3508 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"
