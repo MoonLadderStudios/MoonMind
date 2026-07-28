@@ -570,6 +570,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     ineligibleProviderProfiles: [],
     hostModes: ["on_demand_docker"],
     gateReasons: [],
+    compatibilityDiagnostics: {},
     cutover: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
 
