@@ -286,6 +286,45 @@ async def test_production_rerun_adapter_uses_execution_service_idempotently() ->
     )
 
 
+async def test_checkpoint_branch_adapter_persists_graph_through_service() -> None:
+    checkpoint_service = AsyncMock()
+    checkpoint_service.create_branch_graph.return_value = SimpleNamespace(
+        branch=SimpleNamespace(branch_id="remediation-action-branch")
+    )
+    plane = TemporalRemediationControlPlane(
+        client=AsyncMock(), checkpoint_branch_service=checkpoint_service
+    )
+
+    result = await plane.handlers()[
+        "checkpoint_branch.create_from_remediation_context"
+    ](
+        {
+            "actionKind": "checkpoint_branch.create_from_remediation_context",
+            "actionId": "action-branch",
+            "params": {
+                "expectedRunId": "target-run",
+                "remediationWorkflowId": "remediation",
+                "remediationContextRef": "artifact://context",
+                "checkpointRef": "artifact://checkpoint",
+                "instructionRef": "artifact://instructions",
+                "instructionDigest": "sha256:" + ("a" * 64),
+            },
+        },
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "applied"
+    payload = checkpoint_service.create_branch_graph.await_args.args[0]
+    assert payload["source"]["workflowId"] == "target"
+    assert payload["source"]["runId"] == "target-run"
+    assert payload["source"]["checkpointRef"] == "artifact://checkpoint"
+    assert payload["runtimeContextPolicy"] == "fresh_agent_run"
+    assert payload["instructionRef"] == "artifact://instructions"
+    assert payload["instructionDigest"] == "sha256:" + ("a" * 64)
+    assert payload["idempotencyKey"] == "action-branch"
+
+
 @pytest.mark.parametrize(
     ("kind", "params", "workflow_type", "workflow_id"),
     [
@@ -301,7 +340,7 @@ async def test_production_rerun_adapter_uses_execution_service_idempotently() ->
         ),
         (
             "provider_profile.evict_stale_lease",
-            {"providerProfileId": "profile-1"},
+            {"providerProfileId": "profile-1", "hostLeaseRef": "lease-1"},
             "MoonMind.OmnigentOAuthHostJanitor",
             "remediation-omnigent:action-2",
         ),
@@ -340,6 +379,14 @@ async def test_production_repair_adapters_queue_owning_control_plane(
     ]
     assert client.start_workflow.await_args.kwargs["workflow_type"] == workflow_type
     assert client.start_workflow.await_args.kwargs["workflow_id"] == workflow_id
+    queued_payload = client.start_workflow.await_args.kwargs["input_args"]
+    assert queued_payload["requestId"] == "action-2"
+    if kind == "workload.reap_orphan_container":
+        assert queued_payload["containerRef"] == "container-1"
+        assert queued_payload["expectedState"] == "orphaned"
+    if kind == "cleanup.request_janitor":
+        assert queued_payload["actionKind"] == kind
+        assert queued_payload["cleanupRef"] == "cleanup-1"
 
 
 async def test_production_host_adapter_rejects_missing_authoritative_lease() -> None:

@@ -11886,7 +11886,20 @@ class TemporalAgentRuntimeActivities:
         controller = self._require_session_controller(
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
-        del payload
+        action_payload = dict(payload or {})
+        action_kind = str(action_payload.get("actionKind") or "").strip()
+        if action_kind:
+            if action_kind not in {
+                "workload.restart_helper_container",
+                "workload.reap_orphan_container",
+            }:
+                raise TemporalActivityRuntimeError(
+                    f"unsupported managed-runtime remediation action: {action_kind}"
+                )
+            if not str(action_payload.get("containerRef") or "").strip():
+                raise TemporalActivityRuntimeError(
+                    "containerRef is required for managed-runtime remediation"
+                )
         records = await _await_with_activity_heartbeats(
             controller.reconcile(),
             heartbeat_payload={
@@ -11954,6 +11967,10 @@ class TemporalAgentRuntimeActivities:
             )[:session_id_limit]
 
         return {
+            "actionKind": action_kind or None,
+            "requestId": action_payload.get("requestId"),
+            "containerRef": action_payload.get("containerRef"),
+            "expectedState": action_payload.get("expectedState"),
             "managedSessionRecordsReconciled": reconciled_count,
             "degradedSessionRecords": degraded_count,
             "sessionIds": session_ids,
@@ -11987,6 +12004,16 @@ class TemporalAgentRuntimeActivities:
                 "run_store is required for agent_runtime.cleanup_managed_runtime_files"
             )
         config = ManagedRuntimeCleanupConfig.from_env()
+        action_payload = dict(payload or {})
+        action_kind = str(action_payload.get("actionKind") or "").strip()
+        if action_kind and action_kind != "cleanup.request_janitor":
+            raise TemporalActivityRuntimeError(
+                f"unsupported managed-runtime cleanup action: {action_kind}"
+            )
+        if action_kind and not str(action_payload.get("cleanupRef") or "").strip():
+            raise TemporalActivityRuntimeError(
+                "cleanupRef is required for remediation cleanup"
+            )
         if isinstance(payload, Mapping) and isinstance(payload.get("config"), Mapping):
             config_payload = payload["config"]
             config = ManagedRuntimeCleanupConfig(
@@ -12061,6 +12088,16 @@ class TemporalAgentRuntimeActivities:
             progress_callback=_throttled_cleanup_heartbeat(),
         )
         result_payload = result.to_dict()
+        if action_kind:
+            result_payload.update(
+                {
+                    "actionKind": action_kind,
+                    "requestId": action_payload.get("requestId"),
+                    "cleanupRef": action_payload.get("cleanupRef"),
+                    "targetWorkflowId": action_payload.get("targetWorkflowId"),
+                    "expectedState": action_payload.get("expectedState"),
+                }
+            )
         logger.info(
             "Managed runtime cleanup pass completed: enabled=%s dry_run=%s "
             "scanned_run_records=%s scanned_session_records=%s "

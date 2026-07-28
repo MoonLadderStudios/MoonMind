@@ -28,6 +28,64 @@ class OmnigentOAuthHostJanitor:
             seconds=max(30, heartbeat_timeout_seconds)
         )
 
+    async def run_action(
+        self,
+        *,
+        action_kind: str,
+        profile_id: str,
+        host_lease_ref: str,
+        expected_host_state: str | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Apply one lease-scoped remediation operation with before/after evidence."""
+
+        supported = {
+            "provider_profile.evict_stale_lease",
+            "host.drain",
+            "host.stop",
+            "host.restart",
+            "host.remove",
+            "host_lease.reconcile_stale",
+        }
+        if action_kind not in supported:
+            raise ValueError(f"unsupported Omnigent remediation action: {action_kind}")
+        lease = await self._repository.get_host_lease(host_lease_ref)
+        if lease is None:
+            raise ValueError("host lease does not exist")
+        if lease.provider_profile_id != profile_id:
+            raise ValueError("host lease is not owned by the Provider Profile")
+        before_state = lease.status
+        if expected_host_state and expected_host_state != before_state:
+            raise ValueError("expectedHostState does not match the current host lease")
+        binding = await self._repository.validate_binding(lease.binding_ref)
+
+        if action_kind == "host.drain":
+            lease = await self._repository.transition_host_lease(
+                lease.lease_id, expected_status=before_state, new_status="draining"
+            )
+        elif action_kind == "host.restart":
+            lease = await self._repository.restart_host_lease(lease.lease_id)
+        else:
+            if before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+
+        return {
+            "status": "applied" if lease.status != before_state else "no_op",
+            "actionKind": action_kind,
+            "requestId": request_id,
+            "hostLeaseRef": lease.lease_id,
+            "providerProfileId": profile_id,
+            "before": {"status": before_state, "bindingRef": lease.binding_ref},
+            "after": {"status": lease.status, "bindingRef": lease.binding_ref},
+            "beforeEvidenceRefs": [
+                f"omnigent-host-lease:{lease.lease_id}:state:{before_state}"
+            ],
+            "afterEvidenceRefs": [
+                f"omnigent-host-lease:{lease.lease_id}:state:{lease.status}"
+            ],
+        }
+
     async def run(
         self, *, profile_id: str | None = None, force: bool = False
     ) -> dict[str, Any]:

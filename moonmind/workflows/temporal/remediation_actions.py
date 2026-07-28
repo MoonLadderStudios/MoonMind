@@ -133,6 +133,8 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
             "remediationWorkflowId": {"type": "string", "required": True},
             "remediationContextRef": {"type": "string", "required": True},
             "checkpointRef": {"type": "string", "required": True},
+            "instructionRef": {"type": "string", "required": True},
+            "instructionDigest": {"type": "string", "required": True},
             "runtimeContextPolicy": {
                 "type": "string",
                 "required": False,
@@ -225,6 +227,8 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "input_metadata": {
             **_COMMON_REASON_INPUT,
             "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": False},
         },
         "preconditions": ("target_visible", "lease_stale_or_orphaned"),
         "idempotency": "same target/action/profile key returns the prior decision",

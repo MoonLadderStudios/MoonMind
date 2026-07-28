@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
@@ -29,9 +30,11 @@ class TemporalRemediationControlPlane:
         *,
         client: TemporalClientAdapter | None = None,
         execution_service: TemporalExecutionService | None = None,
+        checkpoint_branch_service: CheckpointBranchService | None = None,
     ) -> None:
         self._client = client or TemporalClientAdapter()
         self._execution_service = execution_service
+        self._checkpoint_branch_service = checkpoint_branch_service
 
     @staticmethod
     def _parts(
@@ -153,23 +156,55 @@ class TemporalRemediationControlPlane:
         context_ref = self._required(params, "remediationContextRef")
         checkpoint_ref = self._required(params, "checkpointRef")
         remediation_workflow_id = self._required(params, "remediationWorkflowId")
-        await self._client.update_workflow(
-            remediation_workflow_id,
-            "CreateCheckpointBranch",
+        instruction_ref = self._required(params, "instructionRef")
+        instruction_digest = self._required(params, "instructionDigest")
+        if not instruction_digest.startswith("sha256:"):
+            raise ValueError("instructionDigest must be a sha256 digest")
+        if self._checkpoint_branch_service is None:
+            raise RuntimeError("checkpoint branch service is unavailable")
+        branch_id = f"remediation-{action_id}"
+        turn_id = f"{branch_id}-turn-1"
+        graph = await self._checkpoint_branch_service.create_branch_graph(
             {
-                "requestId": action_id,
-                "targetWorkflowId": target.workflow_id,
-                "targetRunId": target.current_run_id,
-                "remediationContextRef": context_ref,
-                "checkpointRef": checkpoint_ref,
+                "branchId": branch_id,
+                "branchTurnId": turn_id,
+                "source": {
+                    "workflowId": target.workflow_id,
+                    "rootWorkflowId": target.workflow_id,
+                    "runId": target.current_run_id,
+                    "checkpointBoundary": str(
+                        params.get("checkpointBoundary") or "after_execution"
+                    ),
+                    "checkpointRef": checkpoint_ref,
+                    "checkpointDigest": params.get("checkpointDigest"),
+                },
+                "label": str(
+                    params.get("label") or "Remediation checkpoint branch"
+                ),
+                "branchKind": "root",
+                "workspacePolicy": str(
+                    params.get("workspacePolicy")
+                    or "apply_previous_execution_diff_to_clean_baseline"
+                ),
                 "runtimeContextPolicy": "fresh_agent_run",
-            },
+                "createdBy": f"remediation:{remediation_workflow_id}",
+                "instructionRef": instruction_ref,
+                "instructionDigest": instruction_digest,
+                "contextBundleRef": context_ref,
+                "idempotencyKey": action_id,
+            }
         )
-        return self._accepted(
-            before,
-            after=[f"checkpoint-branch-request:{action_id}"],
-            message="Checkpoint Branch creation was delivered to its durable owner.",
-        )
+        return {
+            "status": "applied",
+            "message": "Checkpoint Branch was persisted by its durable owner.",
+            "beforeEvidenceRefs": before,
+            "afterEvidenceRefs": [
+                f"checkpoint-branch:{graph.branch.branch_id}",
+                f"checkpoint-branch-turn:{turn_id}",
+                context_ref,
+            ],
+            "verification": {"status": "verified"},
+        }
 
     async def session_control(
         self,
@@ -209,7 +244,11 @@ class TemporalRemediationControlPlane:
         kind = str(action_request["actionKind"])
         profile_id = self._required(params, "providerProfileId")
         host_lease_ref = str(params.get("hostLeaseRef") or "").strip() or None
-        if kind.startswith("host.") or kind == "host_lease.reconcile_stale":
+        if (
+            kind.startswith("host.")
+            or kind == "host_lease.reconcile_stale"
+            or kind == "provider_profile.evict_stale_lease"
+        ):
             if host_lease_ref is None:
                 raise ValueError("hostLeaseRef is required")
         result = await self._client.start_workflow(
@@ -267,6 +306,7 @@ class TemporalRemediationControlPlane:
             workflow_type="MoonMind.ManagedRuntimeWorkspaceCleanup",
             workflow_id=f"remediation-cleanup:{action_id}",
             input_args={
+                "actionKind": "cleanup.request_janitor",
                 "cleanupRef": cleanup_ref,
                 "targetWorkflowId": target.workflow_id,
                 "expectedState": params.get("expectedState"),
@@ -374,6 +414,9 @@ def build_remediation_action_executor(
     plane = TemporalRemediationControlPlane(
         client=client,
         execution_service=execution_service,
+        checkpoint_branch_service=(
+            CheckpointBranchService(session) if session is not None else None
+        ),
     )
     return MoonMindControlPlaneRemediationActionExecutor(plane.handlers())
 
