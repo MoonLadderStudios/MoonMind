@@ -161,7 +161,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             <td>{ready ? 'Ready' : 'Validation required'}</td>
             <td>
               <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
-              {ready && profile.state !== 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
+              {ready && (profile.state !== 'active' || latest.version !== profile.activeVersion) ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
               {profile.state === 'active' && !profile.defaultForRuntime ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'default' })}>Make {profile.displayName} default</button> : null}
               {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
               {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}

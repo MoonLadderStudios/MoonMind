@@ -51,6 +51,9 @@ def test_bundle_records_bounded_manifest_provenance():
     [
         ({"../escape": b"x", "manifest.json": manifest()}, "unsafe bundle path"),
         ({"Dockerfile": b"FROM bad", "manifest.json": manifest()}, "host launch file"),
+        ({"Dockerfile.prod": b"FROM bad", "manifest.json": manifest()}, "host launch file"),
+        ({"Containerfile": b"FROM bad", "manifest.json": manifest()}, "host launch file"),
+        ({"compose.yaml": b"services: {}", "manifest.json": manifest()}, "host launch file"),
         ({"run.sh": b"echo ok", "manifest.json": manifest()}, "executable files"),
         ({"token.txt": b"token=abcdefghijk", "manifest.json": manifest()}, "secret-like"),
         ({"manifest.json": manifest(privileged=True)}, "runtime authority"),

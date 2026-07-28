@@ -17,7 +17,7 @@ def upgrade() -> None:
     op.create_table("omnigent_agent_profiles",
         sa.Column("profile_id", sa.String(128), primary_key=True),
         sa.Column("display_name", sa.String(255), nullable=False),
-        sa.Column("description", sa.Text()), sa.Column("owner_id", sa.Uuid(), sa.ForeignKey("user.id")),
+        sa.Column("description", sa.Text()), sa.Column("owner_id", sa.Uuid(), sa.ForeignKey("user.id", ondelete="SET NULL")),
         sa.Column("visibility", sa.String(32), nullable=False), sa.Column("state", sa.String(32), nullable=False),
         sa.Column("active_version", sa.Integer()), sa.Column("default_for_runtime", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("version", sa.Integer(), nullable=False), sa.Column("digest", sa.String(71), nullable=False), sa.Column("document", sa.JSON(), nullable=False),
         sa.Column("parent_version", sa.Integer()), sa.Column("cloned_from_profile_id", sa.String(128)), sa.Column("cloned_from_version", sa.Integer()),
         sa.Column("upstream_snapshot", sa.JSON()), sa.Column("validation_result", sa.JSON()), sa.Column("rollout_metadata", sa.JSON()),
-        sa.Column("created_by", sa.Uuid(), sa.ForeignKey("user.id")), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("created_by", sa.Uuid(), sa.ForeignKey("user.id", ondelete="SET NULL")), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint("profile_id", "version", name="uq_omnigent_agent_profile_version"), sa.UniqueConstraint("profile_id", "digest", name="uq_omnigent_agent_profile_digest"))
     op.create_table("omnigent_upstream_agent_projections",
         sa.Column("projection_id", sa.String(255), primary_key=True), sa.Column("endpoint_ref", sa.String(128), nullable=False),

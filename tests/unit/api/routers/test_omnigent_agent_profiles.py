@@ -9,6 +9,7 @@ from api_service.api.routers.omnigent_agent_profiles import (
     _digest,
     _normalized,
     _response,
+    router,
 )
 
 def document(**source):
@@ -28,6 +29,24 @@ def test_normalization_and_digest_are_stable():
     second = dict(reversed(list(first.items())))
     assert _digest(first) == _digest(second)
     assert _digest(first).startswith("sha256:")
+
+
+def test_defaulted_rag_max_tokens_is_not_mistaken_for_runtime_authority():
+    parsed = document(upstreamId="agent-123")
+
+    assert parsed.rag.max_tokens is None
+
+
+def test_fixed_post_routes_precede_lifecycle_catch_all():
+    post_paths = [
+        route.path
+        for route in router.routes
+        if "POST" in getattr(route, "methods", set())
+    ]
+    catch_all = post_paths.index("/api/omnigent/agent-profiles/{profile_id}/{action}")
+
+    assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/default") < catch_all
+    assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/snapshot") < catch_all
 
 
 def test_list_response_contract_includes_ordered_versions_and_default_state():

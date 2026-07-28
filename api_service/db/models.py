@@ -2696,7 +2696,7 @@ class OmnigentAgentProfile(Base):
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    owner_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id"), nullable=True)
+    owner_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     active_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -2721,7 +2721,7 @@ class OmnigentAgentProfileVersion(Base):
     upstream_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     validation_result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     rollout_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id"), nullable=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -2740,7 +2740,7 @@ class OmnigentAgentProfileAuditEvent(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     actor_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id"), nullable=True
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

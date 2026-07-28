@@ -12,7 +12,10 @@ MAX_BUNDLE_BYTES = 50 * 1024 * 1024
 MAX_MEMBERS = 512
 MAX_EXPANDED_BYTES = 100 * 1024 * 1024
 _MANIFEST_NAMES = {"omnigent-agent.json", "manifest.json"}
-_FORBIDDEN_NAMES = {"dockerfile", "docker-compose.yml", "docker-compose.yaml"}
+_FORBIDDEN_NAMES = {
+    "compose.yml", "compose.yaml", "containerfile",
+    "docker-compose.yml", "docker-compose.yaml",
+}
 _SECRET_PATTERN = re.compile(
     rb"(?:ghp_|github_pat_|AKIA|AIza|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     rb"(?:token|password|client_secret)\s*[:=]\s*[\"']?[^\s\"']{8,})",
@@ -31,7 +34,8 @@ def _safe_name(name: str) -> str:
     parts = normalized.split("/")
     if not normalized or normalized.startswith("/") or ".." in parts:
         raise BundleValidationError(f"unsafe bundle path: {name}")
-    if parts[-1].lower() in _FORBIDDEN_NAMES:
+    basename = parts[-1].lower()
+    if basename in _FORBIDDEN_NAMES or basename.startswith("dockerfile"):
         raise BundleValidationError(f"host launch file is forbidden: {name}")
     return normalized
 

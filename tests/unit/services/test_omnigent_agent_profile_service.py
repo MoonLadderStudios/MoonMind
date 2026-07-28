@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from api_service.services.omnigent_agent_profile_service import (
+    _bounded_metadata,
     projection_identity,
     projection_readiness,
 )
@@ -28,6 +29,11 @@ def _projection(now: datetime, **overrides):
         "last_successful_sync_at": now - timedelta(minutes=1),
         "last_attempt_at": now,
         "error": None,
+        "bridge_mode": "proxy",
+        "metadata_snapshot": {
+            "harness": "codex-native",
+            "capabilities": ["session.start"],
+        },
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -65,3 +71,40 @@ def test_projection_readiness_explains_missing_unavailable_and_incompatible():
     assert missing["freshness"] == "missing"
     assert unavailable["reason"] == "stable upstream identity is unavailable"
     assert incompatible["reason"] == "stable upstream identity is incompatible"
+
+
+def test_projection_readiness_enforces_requested_contract():
+    now = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    projection = _projection(now)
+    projection.bridge_mode = "proxy"
+    projection.metadata_snapshot = {
+        "harness": "codex-native",
+        "capabilities": ["session.start"],
+    }
+
+    mismatch = projection_readiness(
+        projection,
+        now=now,
+        bridge_mode="embedded",
+        harness="other",
+        required_capabilities=["tools"],
+    )
+
+    assert mismatch["ready"] is False
+    assert mismatch["reason"] == "upstream metadata does not satisfy the requested profile contract"
+
+
+def test_upstream_metadata_is_allowlisted_and_bounded():
+    result = _bounded_metadata({
+        "id": "agent-1",
+        "name": "n" * 1000,
+        "capabilities": ["tools", "session.start"],
+        "apiToken": "must-not-persist",
+        "nested": {"arbitrary": "payload"},
+    })
+
+    assert result["id"] == "agent-1"
+    assert len(result["name"]) == 512
+    assert result["capabilities"] == ["session.start", "tools"]
+    assert "apiToken" not in result
+    assert "nested" not in result

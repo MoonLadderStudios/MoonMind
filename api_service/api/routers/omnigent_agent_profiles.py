@@ -13,9 +13,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.provider_profiles import _require_provider_profile_permission
+from api_service.api.routers.omnigent_bridge import (
+    _get_bridge_proxy,
+    _get_create_embedded_facade,
+    _require_bridge_enabled,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
+    RecurringWorkflowDefinition,
+    TemporalExecutionCanonicalRecord,
+    WorkflowCheckpointBranch,
     OmnigentAgentProfile,
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileUsage,
@@ -28,6 +36,7 @@ from api_service.db.models import (
 from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
+    synchronize_upstream_inventory,
 )
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.services.omnigent_agent_bundle_service import (
@@ -35,6 +44,15 @@ from api_service.services.omnigent_agent_bundle_service import (
     validate_agent_bundle,
 )
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
+    OmnigentBridgeConfig,
+)
+from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
+from moonmind.omnigent.bridge_proxy import (
+    OmnigentBridgeError,
+    OmnigentBridgeSessionProxy,
+)
 
 router = APIRouter(prefix="/api/omnigent/agent-profiles", tags=["Omnigent Agent Profiles"])
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{1,127}$")
@@ -44,6 +62,7 @@ _FORBIDDEN_PARTS = {
 }
 _SAFE_REFERENCE_KEYS = {
     "credentialsource", "credentialsources",
+    "maxtokens",
 }
 _CONSUMER_TYPES = Literal["workflow", "schedule", "checkpoint", "remediation", "smoke"]
 
@@ -145,7 +164,7 @@ class AgentProfileDocument(BaseModel):
                     walk(child)
             elif isinstance(value, list):
                 for child in value: walk(child)
-        walk(self.model_dump(by_alias=True))
+        walk(self.model_dump(by_alias=True, exclude_none=True))
         return self
 
 class ProfileCreate(BaseModel):
@@ -216,6 +235,31 @@ async def _load(session: AsyncSession, profile_id: str) -> tuple[OmnigentAgentPr
     versions = list((await session.execute(select(OmnigentAgentProfileVersion).where(OmnigentAgentProfileVersion.profile_id == profile_id).order_by(OmnigentAgentProfileVersion.version.desc()))).scalars())
     return profile, versions
 
+async def _refresh_upstream_projection(
+    session: AsyncSession,
+    *,
+    config: OmnigentBridgeConfig,
+    proxy: OmnigentBridgeSessionProxy | None,
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
+) -> None:
+    facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if facade is None:
+        raise HTTPException(503, "Omnigent inventory bridge is unavailable")
+    try:
+        inventory = await facade.list_agents()
+    except OmnigentBridgeError as exc:
+        raise HTTPException(409, f"could not refresh upstream inventory: {exc}") from exc
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref="default",
+        bridge_mode=str(config.host_protocol_mode),
+        inventory=inventory,
+    )
+
 @router.get("")
 async def list_profiles(session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
@@ -253,7 +297,12 @@ async def create_profile(body: ProfileCreate, session: AsyncSession = Depends(ge
     profile = OmnigentAgentProfile(profile_id=body.profile_id, display_name=body.display_name, description=body.description, owner_id=current_user.id, visibility=body.visibility)
     version = OmnigentAgentProfileVersion(profile_id=body.profile_id, version=1, digest=_digest(document), document=document, created_by=current_user.id)
     session.add_all([profile, version, _audit(body.profile_id, "created", current_user, version=1)])
-    await session.commit(); await session.refresh(version)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(409, "agent profile already exists") from exc
+    await session.refresh(version)
     return _response(profile, [version])
 
 @router.get("/{profile_id}")
@@ -275,12 +324,13 @@ async def create_version(profile_id: str, body: VersionCreate, session: AsyncSes
         .where(OmnigentAgentProfile.profile_id == profile_id)
         .with_for_update()
     )
-    number = int((await session.scalar(
+    latest_number = int((await session.scalar(
         select(func.max(OmnigentAgentProfileVersion.version)).where(
             OmnigentAgentProfileVersion.profile_id == profile_id
         )
-    )) or 0) + 1
-    version = OmnigentAgentProfileVersion(profile_id=profile_id, version=number, digest=digest, document=document, parent_version=versions[0].version if versions else None, created_by=current_user.id)
+    )) or 0)
+    number = latest_number + 1
+    version = OmnigentAgentProfileVersion(profile_id=profile_id, version=number, digest=digest, document=document, parent_version=latest_number or None, created_by=current_user.id)
     session.add_all([version, _audit(profile_id, "version_created", current_user, version=number)])
     try:
         await session.commit()
@@ -342,6 +392,11 @@ async def validate_profile(
     session: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Perform bounded, credential-free readiness validation before activation."""
     _require_provider_profile_permission(current_user, "provider_profiles.write")
@@ -355,6 +410,12 @@ async def validate_profile(
     checks: list[dict[str, Any]] = []
     source = document["source"]
     if source.get("upstreamId"):
+        await _refresh_upstream_projection(
+            session,
+            config=bridge_config,
+            proxy=bridge_proxy,
+            embedded_facade=embedded_facade,
+        )
         projection = await session.get(
             OmnigentUpstreamAgentProjection,
             projection_identity(
@@ -362,7 +423,12 @@ async def validate_profile(
                 source.get("upstreamVersion"),
             ),
         )
-        upstream_readiness = projection_readiness(projection)
+        upstream_readiness = projection_readiness(
+            projection,
+            bridge_mode=document["bridgeMode"],
+            harness=document["harness"],
+            required_capabilities=document.get("requiredCapabilities", []),
+        )
         checks.append({
             "name": "upstream_identity",
             **upstream_readiness,
@@ -452,15 +518,6 @@ async def validate_profile(
     await session.commit()
     return target.validation_result
 
-@router.post("/{profile_id}/{action}")
-async def lifecycle(profile_id: str, action: Literal["disable", "deprecate"], session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
-    profile, versions = await _load(session, profile_id)
-    _assert_owner(profile, current_user)
-    profile.state = "disabled" if action == "disable" else "deprecated"
-    session.add(_audit(profile_id, action + "d", current_user, version=profile.active_version))
-    await session.commit(); return _response(profile, versions)
-
 @router.post("/{profile_id}/default")
 async def make_default(profile_id: str, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
@@ -502,12 +559,56 @@ async def profile_usage(profile_id: str, session: AsyncSession = Depends(get_asy
             for row in rows]
 
 @router.post("/{profile_id}/snapshot", status_code=status.HTTP_201_CREATED)
-async def resolve_snapshot(profile_id: str, body: SnapshotCreate, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:
+async def resolve_snapshot(
+    profile_id: str,
+    body: SnapshotCreate,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
+) -> dict[str, Any]:
     """Resolve and persist the exact immutable selection at an authoring boundary."""
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     if profile.visibility == "private" and profile.owner_id != current_user.id:
         raise HTTPException(404, "agent profile not found")
+    if not current_user.is_superuser:
+        authorized = False
+        if body.consumer_type in {"workflow", "remediation"}:
+            consumer = await session.get(
+                TemporalExecutionCanonicalRecord, body.consumer_id
+            )
+            authorized = consumer is not None and consumer.owner_id == str(current_user.id)
+        elif body.consumer_type == "schedule":
+            try:
+                consumer = await session.get(RecurringWorkflowDefinition, body.consumer_id)
+            except (TypeError, ValueError):
+                consumer = None
+            authorized = consumer is not None and consumer.owner_user_id == current_user.id
+        elif body.consumer_type == "checkpoint":
+            consumer = await session.get(WorkflowCheckpointBranch, body.consumer_id)
+            if consumer is not None:
+                workflow = await session.get(
+                    TemporalExecutionCanonicalRecord, consumer.workflow_id
+                )
+                authorized = (
+                    workflow is not None and workflow.owner_id == str(current_user.id)
+                )
+        elif body.consumer_type == "smoke":
+            authorized = profile.owner_id == current_user.id and body.consumer_id == profile_id
+        if not authorized:
+            raise HTTPException(403, "consumer ownership could not be verified")
+    existing = await session.scalar(select(OmnigentAgentProfileUsage).where(
+        OmnigentAgentProfileUsage.consumer_type == body.consumer_type,
+        OmnigentAgentProfileUsage.consumer_id == body.consumer_id,
+    ))
+    if existing is not None:
+        if existing.profile_id != profile_id:
+            raise HTTPException(409, "consumer already has an immutable profile snapshot")
+        return existing.effective_snapshot
     if profile.state != "active":
         raise HTTPException(409, "agent profile is not active")
     target_number = body.version or profile.active_version
@@ -517,13 +618,24 @@ async def resolve_snapshot(profile_id: str, body: SnapshotCreate, session: Async
     source = target.document["source"]
     projection = None
     if source.get("upstreamId"):
+        await _refresh_upstream_projection(
+            session,
+            config=bridge_config,
+            proxy=bridge_proxy,
+            embedded_facade=embedded_facade,
+        )
         projection_id = projection_identity(
             target.document["endpointRef"],
             source["upstreamId"],
             source.get("upstreamVersion"),
         )
         projection = await session.get(OmnigentUpstreamAgentProjection, projection_id)
-        upstream_readiness = projection_readiness(projection)
+        upstream_readiness = projection_readiness(
+            projection,
+            bridge_mode=target.document["bridgeMode"],
+            harness=target.document["harness"],
+            required_capabilities=target.document.get("requiredCapabilities", []),
+        )
         if not upstream_readiness["ready"]:
             raise HTTPException(409, upstream_readiness["reason"])
     allowed_overrides = {"model", "capture", "rag", "publish"}
@@ -535,6 +647,22 @@ async def resolve_snapshot(profile_id: str, body: SnapshotCreate, session: Async
         if not isinstance(value, dict):
             raise HTTPException(422, f"{key} override must be an object")
         effective[key] = {**effective.get(key, {}), **value}
+    try:
+        effective = _normalized(AgentProfileDocument.model_validate(effective))
+    except ValueError as exc:
+        raise HTTPException(422, f"invalid profile overrides: {exc}") from exc
+    requirements = effective["providerRequirements"]
+    providers = list((await session.execute(select(ManagedAgentProviderProfile))).scalars())
+    compatible_provider = any(
+        row.enabled
+        and row.runtime_id == requirements["runtimeId"]
+        and row.credential_source.value == requirements["credentialSource"]
+        and row.runtime_materialization_mode.value == requirements["materializationMode"]
+        and (not requirements.get("providerIds") or row.provider_id in requirements["providerIds"])
+        for row in providers
+    )
+    if not compatible_provider:
+        raise HTTPException(409, "no enabled compatible Provider Profile")
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": profile_id, "version": target.version, "digest": target.digest,
@@ -557,7 +685,7 @@ async def resolve_snapshot(profile_id: str, body: SnapshotCreate, session: Async
             OmnigentAgentProfileUsage.consumer_type == body.consumer_type,
             OmnigentAgentProfileUsage.consumer_id == body.consumer_id,
         ))
-        if existing and existing.effective_snapshot == snapshot:
+        if existing:
             return existing.effective_snapshot
         raise HTTPException(409, "consumer already has an immutable profile snapshot") from exc
     return snapshot
@@ -570,8 +698,8 @@ async def delete_profile(profile_id: str, session: AsyncSession = Depends(get_as
     usage_count = int(await session.scalar(select(func.count()).select_from(
         OmnigentAgentProfileUsage
     ).where(OmnigentAgentProfileUsage.profile_id == profile_id)) or 0)
-    if usage_count or profile.state == "active":
-        raise HTTPException(409, "used or active profiles cannot be deleted; deprecate them")
+    if usage_count or profile.state != "draft":
+        raise HTTPException(409, "only unused draft profiles can be deleted")
     await session.execute(delete(OmnigentAgentProfileAuditEvent).where(
         OmnigentAgentProfileAuditEvent.profile_id == profile_id
     ))
@@ -580,3 +708,13 @@ async def delete_profile(profile_id: str, session: AsyncSession = Depends(get_as
     ))
     await session.delete(profile)
     await session.commit()
+
+@router.post("/{profile_id}/{action}")
+async def lifecycle(profile_id: str, action: Literal["disable", "deprecate"], session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile, versions = await _load(session, profile_id)
+    _assert_owner(profile, current_user)
+    profile.state = "disabled" if action == "disable" else "deprecated"
+    profile.default_for_runtime = False
+    session.add(_audit(profile_id, action + "d", current_user, version=profile.active_version))
+    await session.commit(); return _response(profile, versions)

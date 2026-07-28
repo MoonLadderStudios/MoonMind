@@ -15,6 +15,8 @@ from api_service.db.models import OmnigentUpstreamAgentProjection
 _SUPPORTED_HARNESSES = {"codex-native"}
 _MAX_INVENTORY = 500
 _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
+_METADATA_TEXT_LIMIT = 512
+_METADATA_LIST_LIMIT = 64
 
 
 def projection_identity(endpoint_ref: str, upstream_id: str, version: str | None) -> str:
@@ -31,6 +33,9 @@ def projection_readiness(
     projection: OmnigentUpstreamAgentProjection | None,
     *,
     now: datetime | None = None,
+    bridge_mode: str | None = None,
+    harness: str | None = None,
+    required_capabilities: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Return one explicit, server-owned launch readiness classification."""
     if projection is None:
@@ -49,10 +54,25 @@ def projection_readiness(
         or observed_at - last_success > _INVENTORY_FRESHNESS_TTL
         or projection.error is not None
     )
+    metadata = projection.metadata_snapshot
+    projected_harness = _text(metadata, "harness", "harnessId", "harness_id")
+    projected_capabilities = metadata.get("capabilities", [])
+    capability_values = (
+        {str(value) for value in projected_capabilities}
+        if isinstance(projected_capabilities, list)
+        else set()
+    )
+    contract_mismatch = (
+        (bridge_mode is not None and projection.bridge_mode != bridge_mode)
+        or (harness is not None and projected_harness != harness)
+        or not set(required_capabilities).issubset(capability_values)
+    )
     if not projection.available:
         reason = "stable upstream identity is unavailable"
     elif not projection.compatible:
         reason = "stable upstream identity is incompatible"
+    elif contract_mismatch:
+        reason = "upstream metadata does not satisfy the requested profile contract"
     elif stale:
         reason = "upstream inventory is stale"
     else:
@@ -76,6 +96,30 @@ def _text(row: Mapping[str, Any], *keys: str) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _bounded_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain only compact, non-authoritative compatibility evidence."""
+    result: dict[str, Any] = {}
+    for target, keys in {
+        "id": ("id", "agentId", "agent_id"),
+        "version": ("version", "agentVersion", "agent_version"),
+        "harness": ("harness", "harnessId", "harness_id"),
+        "name": ("name", "displayName"),
+        "provenance": ("provenance",),
+        "health": ("health", "status"),
+    }.items():
+        value = _text(item, *keys)
+        if value:
+            result[target] = value[:_METADATA_TEXT_LIMIT]
+    capabilities = item.get("capabilities")
+    if isinstance(capabilities, list):
+        result["capabilities"] = sorted({
+            str(value)[:_METADATA_TEXT_LIMIT]
+            for value in capabilities[:_METADATA_LIST_LIMIT]
+            if isinstance(value, str) and value
+        })
+    return result
 
 
 async def synchronize_upstream_inventory(
@@ -115,7 +159,7 @@ async def synchronize_upstream_inventory(
                 bridge_mode=bridge_mode,
                 upstream_id=upstream_id,
                 upstream_version=version,
-                metadata_snapshot=dict(item),
+                metadata_snapshot=_bounded_metadata(item),
                 available=True,
                 compatible=compatible,
                 last_successful_sync_at=observed_at,
@@ -123,7 +167,7 @@ async def synchronize_upstream_inventory(
             )
             session.add(projection)
         else:
-            projection.metadata_snapshot = dict(item)
+            projection.metadata_snapshot = _bounded_metadata(item)
             projection.available = True
             projection.compatible = compatible
             projection.last_successful_sync_at = observed_at
@@ -137,7 +181,7 @@ async def synchronize_upstream_inventory(
         )
     )).scalars())
     for projection in existing:
-        if projection.projection_id not in seen:
+        if len(inventory) <= _MAX_INVENTORY and projection.projection_id not in seen:
             projection.available = False
             projection.last_attempt_at = observed_at
             projection.error = "upstream identity absent from latest successful sync"

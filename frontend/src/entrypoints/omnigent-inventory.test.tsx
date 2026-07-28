@@ -105,6 +105,29 @@ describe('OmnigentInventoryPage', () => {
     ));
   });
 
+  it('offers activation when a newer validated version is ready', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return {
+          ok: true,
+          json: async () => [{
+            ...listResponse[0],
+            activeVersion: 1,
+          }],
+        } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory',
+      apiBase: '/api',
+      features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+
+    expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
+  });
+
   it('does not fetch or render future policy actions without a capability contract', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     renderPage({ page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: false } });
