@@ -280,12 +280,20 @@ class RemediationContextBuilder:
             live_follow=live_follow,
         )
         omnigent_evidence_index = self._omnigent_evidence_index(target_evidence)
-        unavailable_classes = [
-            item["class"]
-            for item in availability
-            if item.get("status")
-            in {"missing", "partial", "denied", "unavailable", "unsupported"}
-        ]
+        degraded_statuses = {
+            "missing",
+            "partial",
+            "denied",
+            "unavailable",
+            "unsupported",
+        }
+        unavailable_classes = list(
+            dict.fromkeys(
+                item["class"]
+                for item in (*availability, *omnigent_evidence_index)
+                if item.get("status") in degraded_statuses
+            )
+        )
 
         return {
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,

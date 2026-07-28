@@ -63,6 +63,7 @@ _RAW_ACCESS_ACTION_KINDS = frozenset(
 )
 _COMMON_REASON_INPUT = {
     "reason": {"type": "string", "required": False},
+    "expectedRunId": {"type": "string", "required": False},
 }
 _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "actor": "string",
@@ -129,6 +130,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "target_type": "checkpoint_branch",
         "input_metadata": {
             **_COMMON_REASON_INPUT,
+            "remediationWorkflowId": {"type": "string", "required": True},
             "remediationContextRef": {"type": "string", "required": True},
             "checkpointRef": {"type": "string", "required": True},
             "runtimeContextPolicy": {
@@ -222,7 +224,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "target_type": "provider_profile_lease",
         "input_metadata": {
             **_COMMON_REASON_INPUT,
-            "profileRef": {"type": "string", "required": False},
+            "providerProfileId": {"type": "string", "required": True},
         },
         "preconditions": ("target_visible", "lease_stale_or_orphaned"),
         "idempotency": "same target/action/profile key returns the prior decision",
@@ -232,7 +234,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "workload_container",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "containerRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "helper_container_owned_by_moonmind"),
         "idempotency": "same target/action/container key returns the prior decision",
         "verification_hint": "verify helper container health and target state",
@@ -241,7 +247,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "workload_container",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "containerRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "container_orphaned_by_policy"),
         "idempotency": "same target/action/container key returns the prior decision",
         "verification_hint": "verify orphan container is gone or no-op reason is recorded",
@@ -250,7 +260,12 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "omnigent_host",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
         "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify the lease-owned host rejects new sessions",
@@ -259,7 +274,12 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "high",
         "enabled": True,
         "target_type": "omnigent_host",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
         "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify the lease-owned host reaches stopped state",
@@ -268,7 +288,12 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "high",
         "enabled": True,
         "target_type": "omnigent_host",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
         "preconditions": ("target_visible", "host_lease_owned", "expected_host_state"),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify a new host generation becomes healthy",
@@ -277,7 +302,12 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "high",
         "enabled": True,
         "target_type": "omnigent_host",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": True},
+        },
         "preconditions": ("target_visible", "host_lease_owned", "host_removal_approved"),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify the lease-owned host and binding are absent",
@@ -286,7 +316,12 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "host_lease",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "providerProfileId": {"type": "string", "required": True},
+            "hostLeaseRef": {"type": "string", "required": True},
+            "expectedHostState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "host_lease_stale_or_orphaned"),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify host ownership and lease state are consistent",
@@ -295,7 +330,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "cleanup",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "cleanupRef": {"type": "string", "required": True},
+            "expectedState": {"type": "string", "required": False},
+        },
         "preconditions": ("target_visible", "cleanup_owned_by_moonmind"),
         "idempotency": "same target/action/cleanup key returns the prior decision",
         "verification_hint": "verify a cleanup manifest reaches a terminal state",

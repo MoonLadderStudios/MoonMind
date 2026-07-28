@@ -313,7 +313,7 @@ async def _dispatch_tool_call(
                 artifact_service=get_temporal_artifact_service(session),
                 log_reader=log_adapter,
                 live_follower=log_adapter,
-                action_executor=build_remediation_action_executor(),
+                action_executor=build_remediation_action_executor(session=session),
             ),
             principal=str(user.id),
         )

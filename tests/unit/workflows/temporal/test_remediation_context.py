@@ -84,6 +84,55 @@ def test_omnigent_evidence_index_is_complete_bounded_and_explicitly_degraded():
     assert by_class["prior_remediation"]["degradedReason"] == (
         "historical evidence was not recorded"
     )
+
+
+def test_context_aggregate_is_degraded_when_omnigent_classes_are_missing():
+    target_record = SimpleNamespace(
+        workflow_id="target",
+        run_id="target-run",
+        state=MoonMindWorkflowState.RUNNING,
+        close_status=None,
+        memo={},
+        parameters={},
+        artifact_refs=[],
+    )
+    remediation_record = SimpleNamespace(
+        workflow_id="remediation",
+        run_id="remediation-run",
+        state=MoonMindWorkflowState.RUNNING,
+        close_status=None,
+        memo={},
+        parameters={
+            "workflow": {
+                "remediation": {
+                    "target": {"agentRunIds": ["agent-run"]},
+                    "evidencePolicy": {"liveFollow": "disabled"},
+                }
+            }
+        },
+        artifact_refs=[],
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="remediation",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target",
+        target_run_id="target-run",
+        authority_mode="observe_only",
+        mode="snapshot",
+    )
+
+    payload = RemediationContextBuilder(
+        session=object(), artifact_service=object()
+    )._build_payload(
+        link=link,
+        remediation_record=remediation_record,
+        target_record=target_record,
+    )
+
+    evidence = payload["evidence"]
+    assert evidence["evidenceDegraded"] is True
+    assert "execution_and_steps" in evidence["unavailableEvidenceClasses"]
+    assert "prior_remediation" in evidence["unavailableEvidenceClasses"]
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,

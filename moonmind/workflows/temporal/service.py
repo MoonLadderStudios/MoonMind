@@ -2047,6 +2047,33 @@ class TemporalExecutionService:
         await self._sync_projection_best_effort(record)
         return response
 
+    async def create_fresh_rerun_execution(
+        self,
+        *,
+        workflow_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create a distinct rerun execution through the canonical service boundary."""
+
+        record = await self._require_source_execution(workflow_id)
+        if (
+            idempotency_key == record.last_update_idempotency_key
+            and isinstance(record.last_update_response, dict)
+        ):
+            return dict(record.last_update_response)
+        response = await self._create_fresh_rerun_execution(
+            record,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            idempotency_key=idempotency_key,
+        )
+        record.last_update_idempotency_key = idempotency_key
+        record.last_update_response = dict(response)
+        await self._session.commit()
+        await self._session.refresh(record)
+        return response
+
     @staticmethod
     def _is_terminal_update_error(exc: Exception) -> bool:
         message = str(exc).strip().lower()

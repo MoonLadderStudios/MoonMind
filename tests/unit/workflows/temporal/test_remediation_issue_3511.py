@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from api_service.services.remediation_actions import TemporalRemediationControlPlane
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationPermissionSet,
@@ -233,3 +239,141 @@ async def test_typed_evidence_operations_delegate_to_their_bounded_classes() -> 
         "checkpoint_branches",
         "policy",
     ]
+
+
+def _production_target_health() -> RemediationTargetHealthSnapshot:
+    return RemediationTargetHealthSnapshot(
+        workflow_id="target",
+        pinned_run_id="target-run",
+        current_run_id="target-run",
+        state="failed",
+        close_status="failed",
+        title=None,
+        summary=None,
+        target_run_changed=False,
+    )
+
+
+async def test_production_rerun_adapter_uses_execution_service_idempotently() -> None:
+    client = AsyncMock()
+    execution_service = AsyncMock()
+    execution_service.create_fresh_rerun_execution.return_value = {
+        "accepted": True,
+        "message": "Fresh rerun created.",
+        "workflow_id": "fresh-target",
+    }
+    plane = TemporalRemediationControlPlane(
+        client=client, execution_service=execution_service
+    )
+
+    result = await plane.rerun(
+        {
+            "actionKind": "execution.start_fresh_rerun",
+            "actionId": "action-1",
+            "params": {"expectedRunId": "target-run"},
+        },
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "accepted"
+    assert result["afterEvidenceRefs"] == [
+        "execution:fresh-target:rerun-request:action-1"
+    ]
+    execution_service.create_fresh_rerun_execution.assert_awaited_once_with(
+        workflow_id="target",
+        idempotency_key="action-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "params", "workflow_type", "workflow_id"),
+    [
+        (
+            "host.restart",
+            {
+                "providerProfileId": "profile-1",
+                "hostLeaseRef": "lease-1",
+                "expectedHostState": "stopped",
+            },
+            "MoonMind.OmnigentOAuthHostJanitor",
+            "remediation-omnigent:action-2",
+        ),
+        (
+            "provider_profile.evict_stale_lease",
+            {"providerProfileId": "profile-1"},
+            "MoonMind.OmnigentOAuthHostJanitor",
+            "remediation-omnigent:action-2",
+        ),
+        (
+            "workload.reap_orphan_container",
+            {"containerRef": "container-1", "expectedState": "orphaned"},
+            "MoonMind.ManagedSessionReconcile",
+            "remediation-managed-runtime:action-2",
+        ),
+        (
+            "cleanup.request_janitor",
+            {"cleanupRef": "cleanup-1", "expectedState": "pending"},
+            "MoonMind.ManagedRuntimeWorkspaceCleanup",
+            "remediation-cleanup:action-2",
+        ),
+    ],
+)
+async def test_production_repair_adapters_queue_owning_control_plane(
+    kind, params, workflow_type, workflow_id
+) -> None:
+    client = AsyncMock()
+    client.start_workflow.return_value = SimpleNamespace(
+        workflow_id=workflow_id, run_id="control-run"
+    )
+    plane = TemporalRemediationControlPlane(client=client)
+
+    result = await plane.handlers()[kind](
+        {"actionKind": kind, "actionId": "action-2", "params": params},
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "accepted"
+    assert result["afterEvidenceRefs"] == [
+        f"workflow:{workflow_id}:run:control-run"
+    ]
+    assert client.start_workflow.await_args.kwargs["workflow_type"] == workflow_type
+    assert client.start_workflow.await_args.kwargs["workflow_id"] == workflow_id
+
+
+async def test_production_host_adapter_rejects_missing_authoritative_lease() -> None:
+    plane = TemporalRemediationControlPlane(client=AsyncMock())
+
+    result = await plane.handlers()["host.stop"](
+        {
+            "actionKind": "host.stop",
+            "actionId": "action-3",
+            "params": {"providerProfileId": "profile-1"},
+        },
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "precondition_failed"
+    assert result["reason"] == "hostLeaseRef is required"
+
+
+async def test_production_adapter_reports_delivery_unknown_without_claiming_success() -> None:
+    client = AsyncMock()
+    client.start_workflow.side_effect = RuntimeError("transport unavailable")
+    plane = TemporalRemediationControlPlane(client=client)
+
+    result = await plane.handlers()["cleanup.request_janitor"](
+        {
+            "actionKind": "cleanup.request_janitor",
+            "actionId": "action-4",
+            "params": {"cleanupRef": "cleanup-1"},
+        },
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "delivery_unknown"
+    assert result["afterEvidenceRefs"] == []
+    assert "RuntimeError" in result["reason"]
