@@ -20,12 +20,13 @@ from moonmind.schemas.workload_models import (
     WorkloadResourceOverrides,
     WorkloadResult,
 )
-from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
+    attest_docker_egress,
     restricted_proxy_env,
 )
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
@@ -797,6 +798,29 @@ class DockerWorkloadLauncher:
         )
         self._helper_leases: dict[str, _ConcurrencyLease] = {}
 
+    async def _attest_egress_before_launch(
+        self, request: ValidatedWorkloadRequest
+    ) -> None:
+        """Fail closed at the shared process-creation boundary.
+
+        Argument construction is deliberately side-effect free, but a bridge
+        profile must not become a Docker process based on declared network
+        metadata alone. Both one-shot and helper launches pass this boundary.
+        """
+
+        if request.profile is None or request.profile.network_policy != "bridge":
+            return
+
+        async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:
+            stdout, stderr, code = await self._janitor._run_control(args)
+            return code, stdout, stderr
+
+        await attest_docker_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref="docker-workload-launcher",
+        )
+
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
         _ensure_paths_are_mounted(request)
         profile = request.profile
@@ -921,6 +945,7 @@ class DockerWorkloadLauncher:
         lease = await self._concurrency_limiter.acquire(request)
 
         try:
+            await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -1071,6 +1096,7 @@ class DockerWorkloadLauncher:
         started_at = datetime.now(UTC)
         lease = await self._concurrency_limiter.acquire(request)
         try:
+            await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_helper_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
