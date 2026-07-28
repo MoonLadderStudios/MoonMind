@@ -1257,9 +1257,9 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                     credential_source=ProviderCredentialSource.OAUTH_VOLUME,
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="oauth-volume://claude",
-                    volume_mount_path="/mnt/auth",
+                    volume_mount_path="/home/app/.claude",
                     account_label="primary",
-                    max_parallel_runs=2,
+                    max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
@@ -1303,7 +1303,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["credential_source"] == "oauth_volume"
         assert profiles[0]["enabled"] is True
         assert profiles[0]["auth_state"] == "connected"
-        assert profiles[0]["max_parallel_runs"] == 2
+        assert profiles[0]["max_parallel_runs"] == 1
 
 async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:

@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -36,6 +37,7 @@ from moonmind.omnigent.bridge_security import (
     redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_NOT_PREPARED,
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
@@ -177,15 +179,235 @@ def _first_message_text(first_message: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _first_message_marker(*, request: AgentExecutionRequest, digest: str) -> str:
+def _first_message_marker(*, request: AgentExecutionRequest) -> str:
     return "\n".join(
         [
             "MoonMind-Omnigent-Run:",
             f"  correlationId: {request.correlation_id}",
             f"  idempotencyKey: {request.idempotency_key}",
-            f"  firstMessageDigest: {digest}",
         ]
     )
+
+
+def _retrieval_evidence(request: AgentExecutionRequest) -> dict[str, Any]:
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+    if not isinstance(moonmind, dict):
+        moonmind = {}
+    ref = str(moonmind.get("latestContextPackRef") or "").strip() or None
+    mode = str(moonmind.get("retrievalMode") or "disabled").strip()
+    failure_class = str(moonmind.get("retrievalFailureClass") or "").strip()
+    if mode.startswith("degraded"):
+        state = "degraded"
+    elif ref:
+        state = "completed"
+    elif failure_class == "denied":
+        state = "denied"
+    elif failure_class == "unavailable":
+        state = "unavailable"
+    elif failure_class or mode not in {"disabled", ""}:
+        state = "failed"
+    else:
+        state = "disabled"
+    return {
+        "state": state,
+        "contextPackRef": ref,
+        "contextPackDigest": moonmind.get("retrievedContextDigest"),
+        "queryDigest": moonmind.get("retrievalQueryDigest"),
+        "queryPreview": moonmind.get("retrievalQueryPreview"),
+        "transport": moonmind.get("retrievedContextTransport"),
+        "resultCount": int(moonmind.get("retrievedContextItemCount") or 0),
+        "sources": list(moonmind.get("retrievedContextSources") or [])[:20],
+        "collections": list(moonmind.get("retrievalCollections") or [])[:10],
+        "scope": dict(moonmind.get("retrievalScope") or {}),
+        "budgets": dict(moonmind.get("retrievalBudgets") or {}),
+        "usage": dict(moonmind.get("retrievalUsage") or {}),
+        "overlay": dict(moonmind.get("retrievalOverlay") or {}),
+        "embeddingConfigRef": moonmind.get("retrievalEmbeddingConfigRef"),
+        "durationMs": moonmind.get("retrievalDurationMs"),
+        "failureClass": failure_class or None,
+        "truncated": bool(moonmind.get("retrievalContextTruncated", False)),
+        "mode": mode,
+        "reason": (
+            moonmind.get("retrievalDegradedReason")
+            or moonmind.get("retrievalDisabledReason")
+        ),
+        "initiationMode": moonmind.get("retrievalInitiationMode", "automatic"),
+        "durabilityAuthority": moonmind.get("retrievalDurabilityAuthority"),
+    }
+
+
+async def _resolve_initial_context_message(
+    *,
+    request: AgentExecutionRequest,
+    first_message: dict[str, Any],
+    artifact_gateway: OmnigentArtifactGateway,
+    run_store: OmnigentBridgeSessionStore | None,
+    durable_row: Any,
+    workspace: str | None,
+    include_idempotency_marker: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve or restore the exact context-bearing first message."""
+
+    existing = dict(
+        ((getattr(durable_row, "metadata_", None) or {}).get("initialRetrieval") or {})
+    )
+    prepared_ref = str(existing.get("preparedMessageRef") or "").strip()
+    if prepared_ref:
+        restored = json.loads(await artifact_gateway.read_text(prepared_ref))
+        if not isinstance(restored, dict) or not _first_message_text(restored):
+            raise OmnigentContractError("persisted first-message artifact is invalid")
+        restored_digest = hashlib.sha256(
+            json.dumps(restored, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        expected_digest = str(existing.get("preparedMessageDigest") or "").removeprefix(
+            "sha256:"
+        )
+        if expected_digest and restored_digest != expected_digest:
+            raise OmnigentContractError("persisted first-message artifact digest mismatch")
+        context_ref = str(existing.get("contextPackRef") or "").strip()
+        if context_ref:
+            moonmind = (
+                request.parameters.setdefault("metadata", {}).setdefault("moonmind", {})
+            )
+            moonmind["latestContextPackRef"] = context_ref
+        return restored, existing
+
+    # Cut over rows prepared by the pre-retrieval bridge without attempting a
+    # new retrieval. Reconstruct and verify the already committed message, then
+    # add the portable artifact ref used by subsequent retries. The durable row
+    # remains the authority for the original digest.
+    durable_state = str(getattr(durable_row, "first_message_state", "") or "")
+    if durable_state and durable_state != FIRST_MESSAGE_NOT_PREPARED:
+        first_message.setdefault("metadata", {})[
+            "moonmindIdempotencyKey"
+        ] = request.idempotency_key
+        if include_idempotency_marker:
+            original_text = _first_message_text(first_message)
+            first_message["data"]["content"][0]["text"] = (
+                f"{original_text}\n\n{_first_message_marker(request=request)}".strip()
+            )
+        message_bytes = json.dumps(
+            first_message, sort_keys=True, separators=(",", ":")
+        ).encode()
+        reconstructed_digest = hashlib.sha256(message_bytes).hexdigest()
+        return first_message, {
+            "state": "disabled",
+            "mode": "legacy_prepared_message",
+            "reason": "pre_context_retrieval_cutover",
+            # mark_prepared remains the durable digest authority and classifies
+            # any reconstruction mismatch through the established user-error
+            # path. Do not attempt fresh retrieval for this cutover row.
+            "preparedMessageDigest": reconstructed_digest,
+            "preparedMessageRef": await artifact_gateway.write_json(
+                request=request,
+                name="input.omnigent.first_message.prepared.json",
+                payload=first_message,
+                link_type="input.omnigent.first_message.prepared",
+            ),
+            "firstMessageConsumedContextRef": False,
+        }
+
+    text = _first_message_text(first_message)
+    if text:
+        from moonmind.rag.context_injection import ContextInjectionService
+
+        retrieval_request = request.model_copy(deep=True)
+        retrieval_request.instruction_ref = text
+        resolution = await ContextInjectionService().inject_context(
+            request=retrieval_request,
+            # The provider session workspace may be a URL or a path visible only
+            # inside the Omnigent host. Retrieval and staging run on this worker.
+            workspace_path=Path.cwd().resolve(),
+        )
+        first_message["data"]["content"][0]["text"] = resolution.instruction
+        # Copy only the compact RAG metadata back to the canonical request so it
+        # is projected into terminal Step Execution evidence.
+        request.parameters = retrieval_request.parameters
+        moonmind = (
+            request.parameters.get("metadata", {}).get("moonmind", {})
+            if isinstance(request.parameters, dict)
+            else {}
+        )
+        if resolution.artifact_path is not None:
+            try:
+                context_ref = await artifact_gateway.write_text(
+                    request=request,
+                    name="input.context-pack.json",
+                    payload=resolution.artifact_path.read_text(encoding="utf-8"),
+                    link_type="input.context-pack",
+                    content_type="application/json",
+                )
+            except Exception as exc:
+                authored_rag = request.parameters.get("rag")
+                required = bool(
+                    isinstance(authored_rag, dict) and authored_rag.get("required")
+                )
+                if required:
+                    raise OmnigentContractError(
+                        "required initial context artifact publication failed"
+                    ) from exc
+                first_message["data"]["content"][0]["text"] = text
+                if isinstance(moonmind, dict):
+                    moonmind.pop("latestContextPackRef", None)
+                    moonmind.pop("retrievedContextArtifactPath", None)
+                    moonmind["retrievalMode"] = "degraded_without_context"
+                    moonmind["retrievalFailureClass"] = "artifact_publication_failed"
+                    moonmind["retrievalDegradedReason"] = (
+                        "context_artifact_publication_failed"
+                    )
+            else:
+                if isinstance(moonmind, dict):
+                    moonmind["latestContextPackRef"] = context_ref
+                    moonmind["retrievedContextArtifactPath"] = context_ref
+                    moonmind["retrievalDurabilityAuthority"] = "artifact_gateway"
+
+    evidence = _retrieval_evidence(request)
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    authored_rag = parameters.get("rag")
+    retrieval_required = bool(
+        isinstance(authored_rag, dict) and authored_rag.get("required")
+    )
+    evidence["required"] = retrieval_required
+    if retrieval_required and evidence["state"] not in {"completed", "degraded"}:
+        record_context = getattr(run_store, "record_initial_context", None)
+        if callable(record_context):
+            await record_context(
+                request.idempotency_key,
+                evidence=evidence,
+            )
+        raise OmnigentContractError(
+            "required initial context retrieval is unavailable: "
+            f"{evidence.get('reason') or 'retrieval_disabled'}"
+        )
+    first_message.setdefault("metadata", {})[
+        "moonmindIdempotencyKey"
+    ] = request.idempotency_key
+    marker = _first_message_marker(request=request)
+    if include_idempotency_marker:
+        first_message_text = _first_message_text(first_message)
+        first_message["data"]["content"][0]["text"] = (
+            f"{first_message_text}\n\n{marker}".strip()
+        )
+    message_bytes = json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
+    evidence["preparedMessageDigest"] = hashlib.sha256(message_bytes).hexdigest()
+    evidence["preparedMessageRef"] = await artifact_gateway.write_json(
+        request=request,
+        name="input.omnigent.first_message.prepared.json",
+        payload=first_message,
+        link_type="input.omnigent.first_message.prepared",
+    )
+    evidence["firstMessageConsumedContextRef"] = bool(
+        evidence.get("contextPackRef") and resolution.items_count > 0
+    ) if text else False
+    record_context = getattr(run_store, "record_initial_context", None)
+    if callable(record_context):
+        durable_row = await record_context(
+            request.idempotency_key,
+            evidence=evidence,
+        )
+    return first_message, evidence
 
 
 def _new_external_state_evidence(
@@ -707,19 +929,19 @@ async def run_omnigent_execution(
                 prompt=selection.prompt,
                 artifact_gateway=artifact_gateway,
             )
-            digest = hashlib.sha256(
-                json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            marker = _first_message_marker(request=request, digest=digest)
-            first_message.setdefault("metadata", {})[
-                "moonmindFirstMessageDigest"
-            ] = digest
-            first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
-            if selection.prompt.get("includeIdempotencyMarker", True):
-                first_message_text = _first_message_text(first_message)
-                first_message["data"]["content"][0]["text"] = (
-                    f"{first_message_text}\n\n{marker}".strip()
-                )
+            first_message, retrieval_evidence = await _resolve_initial_context_message(
+                request=request,
+                first_message=first_message,
+                artifact_gateway=artifact_gateway,
+                run_store=run_store,
+                durable_row=durable_row,
+                workspace=selection.session.workspace,
+                include_idempotency_marker=selection.prompt.get(
+                    "includeIdempotencyMarker", True
+                ),
+            )
+            digest = str(retrieval_evidence["preparedMessageDigest"])
+            marker = _first_message_marker(request=request)
             external_state["firstMessage"].update(
                 {
                     "digest": digest,
@@ -731,6 +953,8 @@ async def run_omnigent_execution(
                     "state": "posted" if first_message_posted else "prepared",
                 }
             )
+            retrieval_evidence["firstMessageDigest"] = digest
+            external_state["initialRetrieval"] = retrieval_evidence
             if run_store is not None:
                 try:
                     durable_row = await run_store.mark_prepared(

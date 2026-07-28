@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,7 @@ class ContextInjectionService:
             return PromptContextResolution(instruction="")
 
         retrieval_skip_reason: str | None = None
+        started = time.perf_counter()
         try:
             retrieval_result = await asyncio.to_thread(
                 self._retrieve_context_pack,
@@ -116,6 +118,16 @@ class ContextInjectionService:
         except Exception as exc:
             retrieval_skip_reason = self._normalize_retrieval_failure_reason(exc)
             logger.info("[rag] retrieval skipped: %s", exc)
+            if not self._local_fallback_authorized(request):
+                self._record_disabled_context_metadata(
+                    request=request,
+                    reason=retrieval_skip_reason,
+                    initiation_mode="automatic",
+                    failure_class=self._failure_class(
+                        request, retrieval_skip_reason
+                    ),
+                )
+                return PromptContextResolution(instruction=instruction_ref)
             fallback_pack = self._build_local_fallback_pack(
                 instruction=instruction_ref,
                 workspace_path=workspace_path,
@@ -133,11 +145,17 @@ class ContextInjectionService:
         if pack is None:
             if retrieval_skip_reason:
                 logger.info("[rag] retrieval skipped: %s", retrieval_skip_reason)
-            if not self._should_use_local_fallback(retrieval_skip_reason):
+            if (
+                not self._should_use_local_fallback(retrieval_skip_reason)
+                or not self._local_fallback_authorized(request)
+            ):
                 self._record_disabled_context_metadata(
                     request=request,
                     reason=retrieval_skip_reason or "retrieval_disabled",
                     initiation_mode="automatic",
+                    failure_class=self._failure_class(
+                        request, retrieval_skip_reason
+                    ),
                 )
                 return PromptContextResolution(instruction=instruction_ref)
             fallback_pack = self._build_local_fallback_pack(
@@ -153,6 +171,19 @@ class ContextInjectionService:
                 return PromptContextResolution(instruction=instruction_ref)
             pack = fallback_pack
 
+        freshness_values = {
+            str(item.payload.get("freshness") or "").strip().lower()
+            for item in pack.items
+        }
+        if "stale" in freshness_values and not bool(self._authored_rag(request).get("allowStale")):
+            self._record_disabled_context_metadata(
+                request=request,
+                reason="stale_context_denied",
+                initiation_mode="automatic",
+                failure_class="denied",
+            )
+            return PromptContextResolution(instruction=instruction_ref)
+
         artifact_path = self._persist_context_pack(
             request=request,
             pack=pack,
@@ -163,6 +194,12 @@ class ContextInjectionService:
             workspace_path=workspace_path,
         )
         items_count = len(pack.items)
+        authored_rag = self._authored_rag(request)
+        effective_query = str(
+            authored_rag.get("queryOverride")
+            or authored_rag.get("query")
+            or instruction_ref
+        )
         self._record_context_metadata(
             request=request,
             artifact_ref=artifact_ref,
@@ -170,6 +207,10 @@ class ContextInjectionService:
             items_count=items_count,
             degraded_reason=retrieval_skip_reason,
             pack=pack,
+            query=effective_query,
+            overlay_policy=self._resolve_rag_overlay_policy(),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            settings=RagRuntimeSettings.from_env(self._env),
         )
         logger.info("[rag] retrieval completed via %s; items=%d", pack.transport, items_count)
 
@@ -199,6 +240,8 @@ class ContextInjectionService:
         request: AgentExecutionRequest,
     ) -> tuple[ContextPack | None, str | None]:
         settings = RagRuntimeSettings.from_env(self._env)
+        authored_rag = self._authored_rag(request)
+        authorized_collections = self._authorized_collections(authored_rag, settings)
         executable, reason = settings.retrieval_execution_reason(self._env)
         if not executable:
             return None, reason
@@ -218,6 +261,23 @@ class ContextInjectionService:
         if repo_filter:
             filters.setdefault("repo", repo_filter)
             filters.setdefault("repository", repo_filter)
+        tenant_scope = str(
+            parameters.get("tenant") or parameters.get("tenantId") or ""
+        ).strip()
+        workspace_scope = str(
+            (request.workspace_spec or {}).get("workspaceId") or ""
+        ).strip()
+        for scope_name, authoritative_value in (
+            ("tenant", tenant_scope),
+            ("workspace", workspace_scope),
+        ):
+            authored_value = str(authored_rag.get(scope_name) or "").strip()
+            if authored_value and authored_value != authoritative_value:
+                raise PermissionError(
+                    f"authored RAG {scope_name} is outside the launch scope"
+                )
+            if authoritative_value:
+                filters[scope_name] = authoritative_value
 
         service = ContextRetrievalService(settings=settings, env=self._env)
         planning_ref = (
@@ -228,12 +288,18 @@ class ContextInjectionService:
         )
         return (
             service.retrieve(
-                query=request.instruction_ref or "",
+                query=str(
+                    authored_rag.get("queryOverride")
+                    or authored_rag.get("query")
+                    or request.instruction_ref
+                    or ""
+                ),
                 filters=filters,
                 top_k=settings.similarity_top_k,
                 overlay_policy=self._resolve_rag_overlay_policy(),
                 budgets=self._resolve_rag_budgets(),
                 transport=transport,
+                collections=authorized_collections,
                 initiation_mode="automatic",
                 planning_ref=str(planning_ref) if planning_ref else None,
             ),
@@ -291,6 +357,8 @@ class ContextInjectionService:
 
     @staticmethod
     def _normalize_retrieval_failure_reason(exc: Exception) -> str:
+        if isinstance(exc, PermissionError):
+            return "retrieval_scope_denied"
         message = str(exc).strip().lower()
         if "gateway" in message or "moonmind_retrieval_url" in message:
             return "retrieval_gateway_unavailable"
@@ -299,6 +367,16 @@ class ContextInjectionService:
         if "collection" in message:
             return "collection_unavailable"
         return "retrieval_unavailable"
+
+    @classmethod
+    def _failure_class(
+        cls, request: AgentExecutionRequest, reason: str | None
+    ) -> str:
+        if str(reason or "").endswith("_denied") or cls._local_fallback_requested(
+            request
+        ):
+            return "denied"
+        return "unavailable"
 
     @staticmethod
     def _record_context_metadata(
@@ -309,6 +387,10 @@ class ContextInjectionService:
         items_count: int,
         degraded_reason: str | None = None,
         pack: ContextPack | None = None,
+        query: str = "",
+        duration_ms: float = 0.0,
+        settings: RagRuntimeSettings | None = None,
+        overlay_policy: str = "skip",
     ) -> None:
         moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
         normalized_transport = str(transport or "").strip()
@@ -317,6 +399,9 @@ class ContextInjectionService:
         if pack is not None:
             initiation_mode = str(pack.initiation_mode or "automatic").strip() or "automatic"
             truncated = bool(pack.truncated)
+        pack_json = pack.to_json() if pack is not None else ""
+        query_value = str(query or "").strip()
+        settings = settings or RagRuntimeSettings.from_env()
         moonmind_meta["retrievedContextArtifactPath"] = artifact_ref
         moonmind_meta["latestContextPackRef"] = artifact_ref
         moonmind_meta["retrievedContextTransport"] = normalized_transport
@@ -325,6 +410,67 @@ class ContextInjectionService:
         moonmind_meta["sessionContinuityCacheStatus"] = "advisory_only"
         moonmind_meta["retrievalInitiationMode"] = initiation_mode
         moonmind_meta["retrievalContextTruncated"] = truncated
+        moonmind_meta["retrievedContextDigest"] = "sha256:" + hashlib.sha256(
+            (pack_json + "\n").encode()
+        ).hexdigest()
+        moonmind_meta["retrievalQueryDigest"] = "sha256:" + hashlib.sha256(
+            query_value.encode()
+        ).hexdigest()
+        moonmind_meta["retrievedContextSources"] = list(
+            dict.fromkeys(str(item.source)[:160] for item in (pack.items if pack else []))
+        )[:20]
+        authored_collections = ContextInjectionService._authored_rag(request).get("collections")
+        selected_collections = (
+            authored_collections
+            if isinstance(authored_collections, list)
+            else settings.resolve_collections(None)
+        )
+        moonmind_meta["retrievalCollections"] = [
+            str(value)[:160] for value in selected_collections
+        ][:10]
+        filters = dict(pack.filters) if pack is not None else {}
+        allowed_scope = {"repo", "repository", "tenant", "run", "run_id", "workspace", "overlay"}
+        scope = {
+            str(key)[:40]: str(value)[:160]
+            for key, value in filters.items()
+            if key in allowed_scope
+        }
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        for key, value in {
+            "tenant": parameters.get("tenant") or parameters.get("tenantId"),
+            "run": getattr(request, "run_id", None) or request.correlation_id,
+            "workspace": (request.workspace_spec or {}).get("workspaceId"),
+        }.items():
+            if value:
+                scope.setdefault(key, str(value)[:160])
+        moonmind_meta["retrievalScope"] = scope
+        moonmind_meta["retrievalBudgets"] = {
+            str(key): value
+            for key, value in (pack.budgets if pack else {}).items()
+            if key in {"tokens", "latency_ms"}
+        }
+        moonmind_meta["retrievalUsage"] = {
+            str(key): value
+            for key, value in (pack.usage if pack else {}).items()
+            if key in {"tokens", "latency_ms"}
+        }
+        freshness_values = {
+            str(item.payload.get("freshness") or "").lower()
+            for item in (pack.items if pack else [])
+        }
+        moonmind_meta["retrievalOverlay"] = {
+            "policy": str(overlay_policy or "skip"),
+            "freshness": "stale" if "stale" in freshness_values else "fresh",
+        }
+        embedding_identity = (
+            f"{settings.embedding_provider}:{settings.embedding_model}:"
+            f"{settings.embedding_dimensions or 'default'}"
+        )
+        moonmind_meta["retrievalEmbeddingConfigRef"] = "sha256:" + hashlib.sha256(
+            embedding_identity.encode()
+        ).hexdigest()
+        moonmind_meta["retrievalDurationMs"] = max(0.0, float(duration_ms))
+        moonmind_meta["retrievalFailureClass"] = None
         moonmind_meta.pop("retrievalDisabledReason", None)
         if normalized_transport == "local_fallback":
             moonmind_meta["retrievalMode"] = "degraded_local_fallback"
@@ -343,6 +489,7 @@ class ContextInjectionService:
         request: AgentExecutionRequest,
         reason: str,
         initiation_mode: str,
+        failure_class: str | None = None,
     ) -> None:
         moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
         for key in (
@@ -356,9 +503,44 @@ class ContextInjectionService:
         ):
             moonmind_meta.pop(key, None)
         moonmind_meta["retrievalMode"] = "disabled"
-        moonmind_meta["retrievalDisabledReason"] = str(reason or "retrieval_disabled").strip() or "retrieval_disabled"
-        moonmind_meta["retrievalInitiationMode"] = str(initiation_mode or "automatic").strip() or "automatic"
+        moonmind_meta["retrievalDisabledReason"] = (
+            str(reason or "retrieval_disabled").strip() or "retrieval_disabled"
+        )
+        moonmind_meta["retrievalInitiationMode"] = (
+            str(initiation_mode or "automatic").strip() or "automatic"
+        )
         moonmind_meta["retrievalContextTruncated"] = False
+        moonmind_meta["retrievalFailureClass"] = failure_class or None
+
+    @staticmethod
+    def _authored_rag(request: AgentExecutionRequest) -> dict[str, object]:
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        rag = parameters.get("rag")
+        return rag if isinstance(rag, dict) else {}
+
+    @classmethod
+    def _local_fallback_requested(cls, request: AgentExecutionRequest) -> bool:
+        return bool(cls._authored_rag(request).get("localFallback"))
+
+    @classmethod
+    def _local_fallback_authorized(cls, request: AgentExecutionRequest) -> bool:
+        rag = cls._authored_rag(request)
+        if not rag:
+            return True
+        return bool(rag.get("localFallback") and rag.get("localFallbackAuthorized"))
+
+    @staticmethod
+    def _authorized_collections(
+        authored_rag: dict[str, object], settings: RagRuntimeSettings
+    ) -> tuple[str, ...] | None:
+        requested = authored_rag.get("collections")
+        if not isinstance(requested, list):
+            return None
+        allowed = set(settings.vector_collections)
+        normalized = tuple(str(value).strip() for value in requested if str(value).strip())
+        if not normalized or any(value not in allowed for value in normalized):
+            raise PermissionError("requested retrieval collection is outside the configured scope")
+        return normalized
 
     @staticmethod
     def _repository_filter_value(repository: str) -> str:

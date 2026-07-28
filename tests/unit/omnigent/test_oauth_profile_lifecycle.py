@@ -36,14 +36,19 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
-from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.execution_profiles import (
+    compile_effective_launch,
+    validate_effective_launch_snapshot,
+)
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _compile_persisted_effective_launch,
     _bind_candidate_workspace,
     _failure_evidence,
 )
+from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -64,6 +69,54 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.unit.omnigent.test_policy_authority import policy_document
+
+
+@pytest.fixture(autouse=True)
+def persisted_policy_authority(monkeypatch):
+    """Keep coordinator tests focused while requiring the production authority seam."""
+
+    async def resolve(_self, policy_ref):
+        document = policy_document()
+        if policy_ref.startswith("codex-on-demand@"):
+            document["host"]["mode"] = "on_demand_docker"
+            document["host"]["backendRef"] = "container-backend"
+            document["session"]["cleanup"] = "remove"
+        return compile_policy_snapshot(
+            policy_id=policy_ref.rsplit("@", 1)[0],
+            version=int(policy_ref.rsplit("@", 1)[1]),
+            document=document,
+            validation={"valid": True, "diagnostics": []},
+        )
+
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_resolve_policy_snapshot",
+        resolve,
+    )
+
+
+def test_persisted_policy_snapshot_is_complete_launch_authority():
+    snapshot = compile_policy_snapshot(
+        policy_id="codex-static",
+        version=1,
+        document=policy_document(),
+        validation={"valid": True, "diagnostics": []},
+    )
+
+    realized = _compile_persisted_effective_launch(
+        snapshot, provider_profile_id="profile-1"
+    )
+
+    assert realized["hostMode"] == snapshot["boundaries"]["host"]["mode"]
+    assert realized["serverImageRef"] == snapshot["boundaries"]["host"]["serverImageRef"]
+    assert realized["limits"]["memoryMiB"] == snapshot["boundaries"]["resources"]["memoryMiB"]
+    assert realized["networkRef"] == snapshot["boundaries"]["network"]["attachmentRef"]
+    assert realized["mountClasses"] == snapshot["boundaries"]["workspace"]["mountClasses"]
+    assert realized["boundaries"] == snapshot["boundaries"]
+    assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
+    assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
+    validate_effective_launch_snapshot(realized)
 
 
 @pytest.mark.parametrize(
@@ -271,6 +324,90 @@ def _host_lease() -> OmnigentHostLease:
         lastHeartbeatAt=now,
         expiresAt=now + timedelta(hours=1),
     )
+
+
+def test_claude_profile_materializes_exact_oauth_home_without_secret_data() -> None:
+    profile = SimpleNamespace(
+        profile_id="claude-oauth",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        credential_generation=4,
+        owner_user_id="user-1",
+    )
+
+    mount = OmnigentOAuthHostRepository._mount_from_profile(profile)
+
+    assert mount.target_path == "/home/app/.claude"
+    assert mount.auth_volume_ref.runtime_id == "claude_code"
+    assert mount.auth_volume_ref.provider_id == "anthropic"
+    assert (
+        OmnigentOAuthHostRepository._harness_for_mount(mount)
+        == "claude-native"
+    )
+    assert "token" not in str(mount.model_dump()).lower()
+
+
+def test_claude_preflight_requires_exact_profile_generation_and_harness() -> None:
+    now = datetime(2026, 7, 12, tzinfo=UTC)
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:claude",
+        providerProfileId="claude",
+        endpointRef="default",
+        harness="claude-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="claude",
+                runtimeId="claude_code",
+                providerId="anthropic",
+                volumeRef="claude_auth_volume",
+                credentialGeneration=4,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.claude",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        staticHostId="claude-host-1",
+    )
+    lease = OmnigentHostLease(
+        leaseId="host-lease-claude",
+        providerProfileId="claude",
+        providerLeaseId="provider-lease-claude",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=4,
+        omnigentHostId="claude-host-1",
+        status="ready",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(hours=1),
+    )
+    result = {
+        "providerProfileId": "claude",
+        "runtimeId": "claude_code",
+        "providerId": "anthropic",
+        "credentialGeneration": 4,
+        "mountPath": "/home/app/.claude",
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "harness": "claude-native",
+        "competingCredentialsPresent": False,
+        "loginStatus": "authenticated",
+        "hostId": "claude-host-1",
+    }
+
+    assert validate_preflight_result(
+        result=result, binding=binding, host_lease=lease
+    )["status"] == "ready"
+    with pytest.raises(OmnigentOAuthHostError):
+        validate_preflight_result(
+            result={**result, "harness": "codex-native"},
+            binding=binding,
+            host_lease=lease,
+        )
 
 
 def _checkpoint() -> OmnigentCheckpointIdentity:
@@ -500,7 +637,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:3] == ("docker", "inspect", "--format")
-    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
+    assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
     assert commands[1][-1] == snapshot_image
@@ -532,6 +669,85 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(
+        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
+    )
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:claude",
+        providerProfileId="claude",
+        endpointRef="default",
+        harness="claude-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="claude",
+                runtimeId="claude_code",
+                providerId="anthropic",
+                volumeRef="claude_auth_volume",
+                credentialGeneration=4,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.claude",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        hostLaunchProfileRef="claude-oauth-v1",
+    )
+    lease = _host_lease().model_copy(
+        update={
+            "provider_profile_id": "claude",
+            "credential_generation": 4,
+            "container_name": "mm-host-lease-claude",
+        }
+    )
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-claude@1",
+        policy_ref="claude-on-demand@1",
+        provider_profile_id="claude",
+    )
+
+    await runtime._launch_on_demand(
+        binding=binding,
+        host_lease=lease,
+        container_name="mm-host-lease-claude",
+        workspace_source=tmp_path,
+        skill_projection=tmp_path / "skills",
+        effective_launch=effective_launch,
+    )
+
+    init_command, launch_command = [
+        call.args for call in runtime._run.await_args_list
+    ][1:]
+    assert (
+        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
+        in init_command
+    )
+    assert "/opt/moonmind/init-oauth-host.sh" in init_command
+    assert "OAUTH_HOME=/home/app/.claude" in init_command
+    assert (
+        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
+        in launch_command
+    )
+    assert "CLAUDE_CONFIG_DIR=/home/app/.claude" in launch_command
+    assert "CLAUDE_HOME=/home/app/.claude" in launch_command
+    assert "CLAUDE_CREDENTIAL_GENERATION=4" in launch_command
+    assert launch_command[-1] == "/opt/moonmind/start-claude-oauth-host.sh"
+    configured_env = [
+        launch_command[index + 1]
+        for index, value in enumerate(launch_command[:-1])
+        if value == "--env"
+    ]
+    assert not any(value.startswith("CODEX_") for value in configured_env)
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1230,7 @@ def test_host_launchers_wait_for_projection_and_clear_stale_state_before_startin
 
     for script_name in (
         "start-codex-oauth-host.sh",
+        "start-claude-oauth-host.sh",
         "start-host-with-projections.sh",
     ):
         source = (scripts / script_name).read_text(encoding="utf-8")
@@ -1086,6 +1303,86 @@ def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> No
             new_host_lease_ref="host-lease-1",
             new_session_id="session-2",
         )
+
+
+@pytest.mark.asyncio
+async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness() -> None:
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "provider_profile_id": "claude",
+            "credential_generation": 4,
+            "provider_lease_ref": "provider-lease-claude",
+            "host_binding_ref": "omnigent-oauth:claude",
+            "host_lease_ref": "host-lease-claude",
+            "omnigent_host_id": "claude-host-1",
+            "omnigent_session_id": "claude-session-1",
+            "bridge_session_id": "claude-bridge-1",
+        }
+    )
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:claude-recovery",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/claude-2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/claude-2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=runner,
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(runtime_id="claude_code")
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="claude",
+        correlationId="workflow-claude",
+        idempotencyKey="recovery-attempt",
+        inputRefs=["artifact://context-pack/claude"],
+    )
+
+    result = await coordinator.recover_from_checkpoint(
+        request=request,
+        checkpoint=checkpoint,
+        provider_lease={"active": True, "leaseId": "provider-lease-claude"},
+        host_lease={
+            "status": "assigned",
+            "leaseId": "host-lease-claude",
+            "credentialGeneration": 4,
+        },
+        host_registered=True,
+        session_valid=True,
+        first_message_consistent=True,
+        current_credential_generation=4,
+        candidate_workspace=candidate,
+    )
+
+    assert result.summary == "reattached"
+    bound = runner.await_args.args[0]
+    assert bound.idempotency_key == checkpoint.idempotency_key
+    assert bound.parameters["omnigent"]["agent"]["harnessOverride"] == "claude-native"
+    assert bound.parameters["omnigent"]["session"] == {
+        "hostType": "external",
+        "hostId": "claude-host-1",
+        "workspace": "/workspaces/run",
+    }
+    assert bound.parameters["candidateWorkspace"]["checkpointRef"] == (
+        "artifact://workspace-checkpoint/claude-2"
+    )
+    assert bound.input_refs == [
+        "artifact://context-pack/claude",
+        "artifact://candidate-head/claude-2",
+        "artifact://workspace-checkpoint/claude-2",
+        "artifact-external-state",
+    ]
 
 
 def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> None:
@@ -1253,6 +1550,13 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
 
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
+
         async def create_or_get_host_lease(self, **_kwargs):
             actions.append("host_lease_created")
             return self.lease
@@ -1410,6 +1714,13 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
 
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
@@ -1636,6 +1947,14 @@ async def _run_coordinator_failure_case(
                     update={"static_host_id": None, "host_launch_profile_ref": "codex"}
                 )
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            binding = await self.get_binding_for_profile(kwargs["profile_id"])
+            return binding.model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             if fail_at == "host_lease":

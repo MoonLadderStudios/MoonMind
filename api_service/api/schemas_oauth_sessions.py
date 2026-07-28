@@ -32,8 +32,18 @@ class CreateOAuthSessionRequest(BaseModel):
     rate_limit_policy: ManagedAgentRateLimitPolicy = ManagedAgentRateLimitPolicy.BACKOFF
 
     @model_validator(mode="after")
-    def _enforce_codex_oauth_exclusivity(self) -> "CreateOAuthSessionRequest":
+    def _enforce_oauth_exclusivity(self) -> "CreateOAuthSessionRequest":
         validate_codex_oauth_capacity(
+            runtime_id=self.runtime_id,
+            credential_source="oauth_volume",
+            materialization_mode="oauth_home",
+            max_parallel_runs=self.max_parallel_runs,
+        )
+        from moonmind.provider_profiles.oauth_policy import (
+            validate_claude_oauth_capacity,
+        )
+
+        validate_claude_oauth_capacity(
             runtime_id=self.runtime_id,
             credential_source="oauth_volume",
             materialization_mode="oauth_home",

@@ -334,7 +334,9 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["features"]["workflowLiveUpdates"] is True
     assert payload["features"]["remediationCollection"] is True
     assert isinstance(payload["features"]["omnigentAgents"], bool)
-    assert payload["features"]["omnigentPolicies"] is False
+    assert payload["features"]["omnigentPolicies"] is (
+        "settings.catalog.read" in payload["settingsPermissions"]
+    )
     assert payload["features"]["manifests"] is True
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS

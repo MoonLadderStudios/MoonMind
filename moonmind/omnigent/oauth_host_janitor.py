@@ -28,6 +28,120 @@ class OmnigentOAuthHostJanitor:
             seconds=max(30, heartbeat_timeout_seconds)
         )
 
+    async def run_action(
+        self,
+        *,
+        action_kind: str,
+        profile_id: str,
+        host_lease_ref: str,
+        expected_host_state: str | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Apply one lease-scoped remediation operation with before/after evidence."""
+
+        supported = {
+            "provider_profile.evict_stale_lease",
+            "host.drain",
+            "host.stop",
+            "host.restart",
+            "host.remove",
+            "host_lease.reconcile_stale",
+        }
+        if action_kind not in supported:
+            raise ValueError(f"unsupported Omnigent remediation action: {action_kind}")
+        lease = await self._repository.get_host_lease(host_lease_ref)
+        if lease is None:
+            raise ValueError("host lease does not exist")
+        if lease.provider_profile_id != profile_id:
+            raise ValueError("host lease is not owned by the Provider Profile")
+        before_state = lease.status
+        if expected_host_state and expected_host_state != before_state:
+            raise ValueError("expectedHostState does not match the current host lease")
+        binding = await self._repository.validate_binding(lease.binding_ref)
+        now = datetime.now(UTC)
+        stale = (
+            lease.expires_at <= now
+            or lease.last_heartbeat_at <= now - self._heartbeat_timeout
+        )
+
+        if action_kind == "host.drain":
+            if before_state in {"draining", "stopped", "failed"}:
+                return self._action_result(
+                    action_kind, request_id, profile_id, lease, before_state
+                )
+            lease = await self._repository.transition_host_lease(
+                lease.lease_id, expected_status=before_state, new_status="draining"
+            )
+        elif action_kind == "host.restart":
+            raise ValueError(
+                "host.restart is unsupported until the owning launch path can "
+                "return terminal generation evidence"
+            )
+        elif action_kind == "host.stop":
+            if before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "host.remove":
+            removed = bool(lease.container_name)
+            if lease.container_name:
+                await self._runtime.remove_container(lease.container_name)
+            if before_state != "stopped":
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "provider_profile.evict_stale_lease":
+            if not stale:
+                raise ValueError("Provider Profile host lease is not stale")
+            if before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "host_lease.reconcile_stale":
+            if not stale:
+                return self._action_result(
+                    action_kind, request_id, profile_id, lease, before_state
+                )
+            missing = bool(
+                lease.container_name
+                and not await self._runtime.container_exists(lease.container_name)
+            )
+            if missing:
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+            elif before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+
+        result = self._action_result(
+            action_kind, request_id, profile_id, lease, before_state
+        )
+        if action_kind == "host.remove" and removed:
+            result["status"] = "applied"
+            result["afterEvidenceRefs"].append(
+                f"omnigent-host-container:{host_lease_ref}:removed"
+            )
+        return result
+
+    @staticmethod
+    def _action_result(
+        action_kind: str,
+        request_id: str,
+        profile_id: str,
+        lease: Any,
+        before_state: str,
+    ) -> dict[str, Any]:
+        return {
+            "status": "applied" if lease.status != before_state else "no_op",
+            "actionKind": action_kind,
+            "requestId": request_id,
+            "hostLeaseRef": lease.lease_id,
+            "providerProfileId": profile_id,
+            "before": {"status": before_state, "bindingRef": lease.binding_ref},
+            "after": {"status": lease.status, "bindingRef": lease.binding_ref},
+            "beforeEvidenceRefs": [
+                f"omnigent-host-lease:{lease.lease_id}:state:{before_state}"
+            ],
+            "afterEvidenceRefs": [
+                f"omnigent-host-lease:{lease.lease_id}:state:{lease.status}"
+            ],
+        }
+
     async def run(
         self, *, profile_id: str | None = None, force: bool = False
     ) -> dict[str, Any]:
@@ -35,7 +149,7 @@ class OmnigentOAuthHostJanitor:
         if force and profile_id:
             binding = await self._repository.get_binding_for_profile(profile_id)
             if binding is not None and not binding.host_launch_profile_ref:
-                await self._runtime.stop_static_host()
+                await self._runtime.stop_static_host(binding=binding)
                 actions.append(
                     {
                         "hostBindingRef": binding.binding_ref,
