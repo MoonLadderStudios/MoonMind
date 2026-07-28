@@ -135,9 +135,9 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          body: action === 'validate'
-            ? JSON.stringify({ version: profile.versions[0]?.version ?? null })
-            : undefined,
+          ...(action === 'validate'
+            ? { body: JSON.stringify({ version: profile.versions[0]?.version ?? null }) }
+            : {}),
         },
       );
       if (!response.ok) throw new Error(`${action} failed (${response.status})`);

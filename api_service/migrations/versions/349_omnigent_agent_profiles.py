@@ -2,14 +2,14 @@
 
 MoonLadderStudios/MoonMind#3517
 
-Revision ID: 348_omnigent_agent_profiles
-Revises: 347_control_stop_continuations
+Revision ID: 349_omnigent_agent_profiles
+Revises: 348_omnigent_policy_authority
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "348_omnigent_agent_profiles"
-down_revision = "347_control_stop_continuations"
+revision = "349_omnigent_agent_profiles"
+down_revision = "348_omnigent_policy_authority"
 branch_labels = None
 depends_on = None
 

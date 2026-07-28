@@ -1,13 +1,13 @@
 """Add immutable Omnigent profile lifecycle and usage evidence.
 
-Revision ID: 349_omnigent_agent_profile_lifecycle
-Revises: 348_omnigent_agent_profiles
+Revision ID: 350_omnigent_agent_profile_lifecycle
+Revises: 349_omnigent_agent_profiles
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "349_omnigent_agent_profile_lifecycle"
-down_revision = "348_omnigent_agent_profiles"
+revision = "350_omnigent_agent_profile_lifecycle"
+down_revision = "349_omnigent_agent_profiles"
 branch_labels = None
 depends_on = None
 
@@ -24,7 +24,11 @@ def upgrade() -> None:
         ),
         sa.Column("action", sa.String(64), nullable=False),
         sa.Column("version", sa.Integer()),
-        sa.Column("actor_id", sa.Uuid(), sa.ForeignKey("user.id")),
+        sa.Column(
+            "actor_id",
+            sa.Uuid(),
+            sa.ForeignKey("user.id", ondelete="SET NULL"),
+        ),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
         sa.Column(
             "created_at",
