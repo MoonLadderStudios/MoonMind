@@ -1149,6 +1149,75 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         "metadata": {"safe": "value"},
     }
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verification", "expected_status", "expected_reason"),
+    (
+        (
+            {"verdict": "PASS", "headSha": "immutable-head"},
+            "verified_resolved",
+            "independent_verification_passed",
+        ),
+        (
+            {"verdict": "FAIL", "headSha": "immutable-head"},
+            "verification_failed",
+            "independent_verification_did_not_pass",
+        ),
+        (
+            None,
+            "evidence_unavailable",
+            "verification_evidence_unavailable",
+        ),
+        (
+            {"verdict": "PASS", "headSha": "newer-head"},
+            "verification_failed",
+            "stale_prevention_head",
+        ),
+    ),
+)
+async def test_prevention_verification_consumes_independent_head_bound_evidence(
+    verification, expected_status, expected_reason
+):
+    artifact_service = SimpleNamespace(read=AsyncMock())
+    if verification is None:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactNotFoundError,
+        )
+
+        artifact_service.read.side_effect = TemporalArtifactNotFoundError(
+            "not found"
+        )
+    else:
+        artifact_service.read.return_value = (
+            SimpleNamespace(artifact_id="art_prevention_verify"),
+            json.dumps(verification).encode("utf-8"),
+        )
+    tools = RemediationEvidenceToolService(
+        session=AsyncMock(),
+        artifact_service=artifact_service,
+    )
+
+    result = await tools._prevention_verification(
+        prevention={
+            "status": "reviewable_change_created",
+            "commit": "immutable-head",
+            "pullRequestUrl": "https://github.com/org/repo/pull/123",
+            "verificationRef": "art_prevention_verify",
+        },
+        principal="service:test",
+    )
+
+    assert result["status"] == expected_status
+    assert result["reason"] == expected_reason
+    assert result["expectedHeadSha"] == "immutable-head"
+    if verification is not None:
+        assert result["verifiedHeadSha"] == verification["headSha"]
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art_prevention_verify",
+        principal="service:test",
+    )
+
     decision_log = build_remediation_decision_log(
         entries=(
             {

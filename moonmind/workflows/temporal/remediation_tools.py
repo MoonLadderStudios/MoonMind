@@ -19,7 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
-from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactError,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
     RemediationLifecyclePublisher,
@@ -778,30 +781,19 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         prevention_payload = dict(prevention)
-        prevention_refs = prevention_payload.get("artifactRefs")
         prevention_state = str(prevention_payload.get("status") or "").lower()
-        has_prevention_evidence = isinstance(prevention_refs, Mapping) and bool(
-            prevention_refs
+        prevention_verification_payload = await self._prevention_verification(
+            prevention=prevention_payload,
+            principal=principal,
         )
-        prevention_verification_payload = {
-            "schemaVersion": "v1",
-            "scope": "prevention",
-            "status": (
-                "verified_resolved"
-                if prevention_state in {"completed", "merged", "applied"}
-                and has_prevention_evidence
-                else (
-                    "evidence_unavailable"
-                    if prevention_state
-                    in {"completed", "merged", "applied", "proposed", "open"}
-                    else "verified_no_change"
-                )
-            ),
-            "preventionKind": prevention_payload.get("kind"),
-            "artifactRefs": dict(prevention_refs)
-            if isinstance(prevention_refs, Mapping)
-            else {},
-        }
+        if prevention_state not in {
+            "reviewable_change_created",
+            "completed",
+            "merged",
+            "applied",
+        }:
+            prevention_verification_payload["status"] = "verified_no_change"
+            prevention_verification_payload["reason"] = "no_prevention_change"
         prevention_verification_artifact = (
             await self._lifecycle_publisher.publish_json_artifact(
                 remediation_workflow_id=link.remediation_workflow_id,
@@ -866,6 +858,79 @@ class RemediationEvidenceToolService:
             else None,
             "lockRelease": final_summary.get("lockRelease"),
         }
+
+    async def _prevention_verification(
+        self,
+        *,
+        prevention: Mapping[str, Any],
+        principal: str,
+    ) -> dict[str, Any]:
+        """Consume independent verification bound to the prevention change head."""
+
+        verification_ref = str(prevention.get("verificationRef") or "").strip()
+        expected_head = str(
+            prevention.get("commit") or prevention.get("headSha") or ""
+        ).strip()
+        payload: dict[str, Any] = {
+            "schemaVersion": "v1",
+            "scope": "prevention",
+            "status": "evidence_unavailable",
+            "reason": "independent_verification_required",
+            "preventionKind": prevention.get("kind"),
+            "change": {
+                key: prevention[key]
+                for key in ("pullRequestUrl", "branch")
+                if prevention.get(key)
+            },
+            "expectedHeadSha": expected_head or None,
+            "verificationRef": verification_ref or None,
+        }
+        if not verification_ref or not expected_head:
+            return payload
+
+        try:
+            _artifact, verification_bytes = await self._artifact_service.read(
+                artifact_id=verification_ref,
+                principal=principal,
+            )
+            independent = json.loads(verification_bytes.decode("utf-8"))
+        except (TemporalArtifactError, OSError, UnicodeError, ValueError):
+            payload["reason"] = "verification_evidence_unavailable"
+            return payload
+        if not isinstance(independent, Mapping):
+            payload["reason"] = "verification_evidence_invalid"
+            return payload
+
+        verdict = str(
+            independent.get("verdict") or independent.get("status") or ""
+        ).strip()
+        baseline = independent.get("baseline")
+        verified_head = str(
+            independent.get("verifiedHeadSha")
+            or independent.get("headSha")
+            or (
+                baseline.get("head")
+                if isinstance(baseline, Mapping)
+                else ""
+            )
+            or ""
+        ).strip()
+        payload["verdict"] = verdict or None
+        payload["verifiedHeadSha"] = verified_head or None
+        if not verified_head:
+            payload["reason"] = "verified_head_unavailable"
+        elif verified_head != expected_head:
+            payload["status"] = "verification_failed"
+            payload["reason"] = "stale_prevention_head"
+        elif verdict.upper() in {"PASS", "FULLY_IMPLEMENTED", "VERIFIED_RESOLVED"}:
+            payload["status"] = "verified_resolved"
+            payload["reason"] = "independent_verification_passed"
+        elif verdict:
+            payload["status"] = "verification_failed"
+            payload["reason"] = "independent_verification_did_not_pass"
+        else:
+            payload["reason"] = "verification_verdict_unavailable"
+        return payload
 
     async def _fresh_target_state(
         self,

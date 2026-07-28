@@ -36,6 +36,7 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.audit_event",
         "remediation.target_annotation",
         "remediation.verification",
+        "remediation.prevention_verification",
         "remediation.summary",
     }
 )
@@ -1147,6 +1148,7 @@ def build_remediation_prevention_outcome(
     commit: str | None = None,
     pull_request_url: str | None = None,
     findings_ref: str | None = None,
+    verification_ref: str | None = None,
     blocked_reason: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1157,6 +1159,9 @@ def build_remediation_prevention_outcome(
     )
     safe_pr_url = _safe_public_url(pull_request_url)
     safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
+    safe_verification_ref = _artifact_ref_string(
+        verification_ref, "verification_ref"
+    )
     safe_blocked_reason = _redacted_optional_text(blocked_reason)
     if normalized_status == "reviewable_change_created" and not safe_pr_url:
         raise ValueError("pullRequestUrl is required for reviewable_change_created")
@@ -1187,6 +1192,8 @@ def build_remediation_prevention_outcome(
         payload["pullRequestUrl"] = safe_pr_url
     if safe_findings_ref:
         payload["findingsRef"] = safe_findings_ref
+    if safe_verification_ref:
+        payload["verificationRef"] = safe_verification_ref
     if safe_blocked_reason:
         payload["blockedReason"] = safe_blocked_reason
     if safe_metadata := _safe_policy_mapping(metadata):
