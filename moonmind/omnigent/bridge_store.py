@@ -17,6 +17,7 @@ stream is preserved per event on ``omnigent_bridge_session_events``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -1556,6 +1557,24 @@ class OmnigentBridgeSessionStore:
         evidence: dict[str, Any],
     ) -> OmnigentBridgeSession:
         """Persist bounded initial-retrieval evidence before message commitment."""
+
+        allowed_keys = {
+            "state", "contextPackRef", "contextPackDigest", "queryDigest",
+            "queryPreview", "transport", "resultCount", "sources", "collections",
+            "scope", "budgets", "usage", "overlay", "embeddingConfigRef",
+            "durationMs", "failureClass", "truncated", "mode", "reason",
+            "initiationMode", "durabilityAuthority", "required",
+            "preparedMessageDigest", "preparedMessageRef",
+            "firstMessageConsumedContextRef", "firstMessageDigest",
+        }
+        unknown = set(evidence) - allowed_keys
+        if unknown:
+            raise ValueError(
+                "initial retrieval evidence contains unsupported fields: "
+                f"{sorted(unknown)}"
+            )
+        if len(json.dumps(evidence, default=str).encode("utf-8")) > 16_384:
+            raise ValueError("initial retrieval evidence exceeds the 16 KiB durable limit")
 
         async with self._session_factory() as session:
             row = await self._require(session, idempotency_key)

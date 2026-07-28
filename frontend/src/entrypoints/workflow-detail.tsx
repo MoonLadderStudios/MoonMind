@@ -6229,15 +6229,28 @@ function BridgeSessionLogsPanel({
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
       {projection.initialRetrieval ? (
-        <p className="small" data-testid="omnigent-initial-retrieval">
-          Initial context: {String(projection.initialRetrieval.state ?? 'unknown')}
-          {' · '}{Number(projection.initialRetrieval.resultCount ?? 0)} sources
-          {projection.initialRetrieval.truncated ? ' · truncated' : ''}
-          {projection.initialRetrieval.reason ? ` · ${String(projection.initialRetrieval.reason)}` : ''}
-          {projection.initialRetrieval.contextPackRef
-            ? <> · <code className="text-xs">{String(projection.initialRetrieval.contextPackRef)}</code></>
-            : null}
-        </p>
+        <div className="small stack" data-testid="omnigent-initial-retrieval">
+          <p>
+            Initial context: {String(projection.initialRetrieval.state ?? 'unknown')}
+            {' · '}{Number(projection.initialRetrieval.resultCount ?? 0)} sources
+            {projection.initialRetrieval.truncated ? ' · truncated' : ''}
+            {projection.initialRetrieval.reason ? ` · ${String(projection.initialRetrieval.reason)}` : ''}
+          </p>
+          {Array.isArray(projection.initialRetrieval.collections) && projection.initialRetrieval.collections.length
+            ? <p>Collections: {projection.initialRetrieval.collections.map(String).join(', ')}</p> : null}
+          {projection.initialRetrieval.scope && typeof projection.initialRetrieval.scope === 'object'
+            ? <p>Scope: {Object.entries(projection.initialRetrieval.scope as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          {projection.initialRetrieval.budgets && typeof projection.initialRetrieval.budgets === 'object'
+            ? <p>Budgets: {Object.entries(projection.initialRetrieval.budgets as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          <p>
+            Context consumed: {projection.initialRetrieval.firstMessageConsumedContextRef ? 'yes' : 'no'}
+            {projection.initialRetrieval.firstMessageDigest ? <> · first message <code className="text-xs">{String(projection.initialRetrieval.firstMessageDigest)}</code></> : null}
+            {projection.initialRetrieval.contextPackDigest ? <> · pack <code className="text-xs">{String(projection.initialRetrieval.contextPackDigest)}</code></> : null}
+          </p>
+          {projection.initialRetrieval.contextPackRef ? (
+            <p><a href={buildArtifactDownloadHref(apiBase, String(projection.initialRetrieval.contextPackRef))}>Open ContextPack artifact</a></p>
+          ) : null}
+        </div>
       ) : null}
       <section className="card stack" aria-label="Omnigent runtime identity">
         <h3>Codex via Omnigent</h3>

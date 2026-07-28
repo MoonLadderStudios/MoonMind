@@ -226,6 +226,23 @@ def test_retrieve_context_pack_handles_non_dict_parameters(
     assert call_kwargs["filters"]["repo"] == "workspace-repo"
     assert call_kwargs["planning_ref"] is None
 
+
+def test_retrieve_context_pack_rejects_collection_scope_widening(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {"collections": ["other-tenant"]}
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "GOOGLE_API_KEY": "test",
+            "VECTOR_STORE_COLLECTION_NAME": "canonical",
+        }
+    )
+
+    with pytest.raises(PermissionError, match="outside the configured scope"):
+        service._retrieve_context_pack(mock_request)
+
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
@@ -401,3 +418,44 @@ async def test_inject_context_records_retrieval_failure_reason_when_fallback_una
     moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
     assert moonmind_meta["retrievalMode"] == "disabled"
     assert moonmind_meta["retrievalDisabledReason"] == "retrieval_gateway_unavailable"
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_authored_local_fallback_requires_explicit_authorization(
+    mock_retrieve, mock_build_fallback, mock_request: AgentExecutionRequest, tmp_path
+) -> None:
+    mock_request.parameters["rag"] = {"localFallback": True}
+    mock_retrieve.side_effect = RuntimeError("qdrant unavailable")
+
+    result = await ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"}).inject_context(
+        request=mock_request, workspace_path=tmp_path
+    )
+
+    mock_build_fallback.assert_not_called()
+    assert result.instruction == "Original instruction"
+    evidence = mock_request.parameters["metadata"]["moonmind"]
+    assert evidence["retrievalFailureClass"] == "denied"
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_stale_context_requires_authored_freshness_permission(
+    mock_retrieve, mock_request: AgentExecutionRequest, tmp_path
+) -> None:
+    mock_request.parameters["rag"] = {"allowStale": False}
+    mock_retrieve.return_value = (ContextPack(
+        items=[ContextItem(score=1.0, source="docs/old.md", text="old", payload={"freshness": "stale"})],
+        filters={"repository": "test-repo"}, budgets={}, usage={}, transport="gateway",
+        context_text="old", retrieved_at="2026-01-01T00:00:00Z", telemetry_id="stale",
+    ), None)
+
+    result = await ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"}).inject_context(
+        request=mock_request, workspace_path=tmp_path
+    )
+
+    assert result.artifact_path is None
+    evidence = mock_request.parameters["metadata"]["moonmind"]
+    assert evidence["retrievalDisabledReason"] == "stale_context_denied"
+    assert evidence["retrievalFailureClass"] == "denied"

@@ -87,6 +87,21 @@ def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
     )
 
 
+@pytest.mark.asyncio
+async def test_initial_retrieval_store_rejects_unbounded_or_unknown_evidence(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="endpoint", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        await store.record_initial_context("idem-1", evidence={"state": "completed", "body": "not bounded"})
+    with pytest.raises(ValueError, match="16 KiB"):
+        await store.record_initial_context(
+            "idem-1", evidence={"state": "completed", "queryPreview": "x" * 17_000}
+        )
+
+
 # --- coalescence (§7.1) -----------------------------------------------------
 
 

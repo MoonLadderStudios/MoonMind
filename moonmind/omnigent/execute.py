@@ -197,18 +197,35 @@ def _retrieval_evidence(request: AgentExecutionRequest) -> dict[str, Any]:
         moonmind = {}
     ref = str(moonmind.get("latestContextPackRef") or "").strip() or None
     mode = str(moonmind.get("retrievalMode") or "disabled").strip()
+    failure_class = str(moonmind.get("retrievalFailureClass") or "").strip()
     state = (
         "degraded"
         if mode.startswith("degraded")
         else "completed"
         if ref
+        else "failed"
+        if failure_class == "denied"
+        else "skipped"
+        if failure_class == "unavailable"
         else "disabled"
     )
     return {
         "state": state,
         "contextPackRef": ref,
+        "contextPackDigest": moonmind.get("retrievedContextDigest"),
+        "queryDigest": moonmind.get("retrievalQueryDigest"),
+        "queryPreview": moonmind.get("retrievalQueryPreview"),
         "transport": moonmind.get("retrievedContextTransport"),
         "resultCount": int(moonmind.get("retrievedContextItemCount") or 0),
+        "sources": list(moonmind.get("retrievedContextSources") or [])[:20],
+        "collections": list(moonmind.get("retrievalCollections") or [])[:10],
+        "scope": dict(moonmind.get("retrievalScope") or {}),
+        "budgets": dict(moonmind.get("retrievalBudgets") or {}),
+        "usage": dict(moonmind.get("retrievalUsage") or {}),
+        "overlay": dict(moonmind.get("retrievalOverlay") or {}),
+        "embeddingConfigRef": moonmind.get("retrievalEmbeddingConfigRef"),
+        "durationMs": moonmind.get("retrievalDurationMs"),
+        "failureClass": failure_class or None,
         "truncated": bool(moonmind.get("retrievalContextTruncated", False)),
         "mode": mode,
         "reason": (
@@ -263,7 +280,7 @@ async def _resolve_initial_context_message(
         isinstance(authored_rag, dict) and authored_rag.get("required")
     )
     evidence["required"] = retrieval_required
-    if retrieval_required and evidence["state"] == "disabled":
+    if retrieval_required and evidence["state"] not in {"completed", "degraded"}:
         raise OmnigentContractError(
             "required initial context retrieval is unavailable: "
             f"{evidence.get('reason') or 'retrieval_disabled'}"

@@ -55,8 +55,19 @@ async def test_initial_context_is_persisted_before_first_message_digest(
     async def inject_context(self, *, request, workspace_path):
         request.parameters["metadata"]["moonmind"] = {
             "latestContextPackRef": "artifact://context/pack.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievalQueryDigest": "sha256:query",
+            "retrievalQueryPreview": "Do work",
             "retrievedContextTransport": "gateway",
             "retrievedContextItemCount": 2,
+            "retrievedContextSources": ["docs/a.md", "docs/b.md"],
+            "retrievalCollections": ["canonical"],
+            "retrievalScope": {"repository": "org/repo", "run": "corr-1"},
+            "retrievalBudgets": {"tokens": 500, "latency_ms": 1000},
+            "retrievalUsage": {"tokens": 20, "latency_ms": 12},
+            "retrievalOverlay": {"policy": "include", "freshness": "fresh"},
+            "retrievalEmbeddingConfigRef": "sha256:embedding",
+            "retrievalFailureClass": None,
             "retrievalMode": "semantic",
             "retrievalContextTruncated": True,
             "retrievalDurabilityAuthority": "artifact_ref",
@@ -93,6 +104,13 @@ async def test_initial_context_is_persisted_before_first_message_digest(
     assert evidence["contextPackRef"] == "artifact://context/pack.json"
     assert evidence["state"] == "completed"
     assert evidence["truncated"] is True
+    assert evidence["contextPackDigest"] == "sha256:pack"
+    assert evidence["queryDigest"] == "sha256:query"
+    assert evidence["collections"] == ["canonical"]
+    assert evidence["scope"] == {"repository": "org/repo", "run": "corr-1"}
+    assert evidence["sources"] == ["docs/a.md", "docs/b.md"]
+    assert evidence["budgets"]["tokens"] == 500
+    assert evidence["embeddingConfigRef"] == "sha256:embedding"
     assert evidence["firstMessageConsumedContextRef"] is True
     assert evidence["preparedMessageRef"].startswith("artifact://omnigent/")
     assert recorded == [evidence]
