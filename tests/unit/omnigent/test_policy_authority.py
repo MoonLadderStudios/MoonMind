@@ -5,9 +5,11 @@ from pydantic import ValidationError
 
 from moonmind.omnigent.policies import (
     PolicyDocument,
+    bind_approval_request,
     compile_policy_snapshot,
     document_digest,
     resolve_action,
+    validate_approval_binding,
 )
 from api_service.services.omnigent_policies import validate_policy
 
@@ -125,3 +127,42 @@ def test_approval_required_rule_must_be_complete_at_document_validation():
     del document["approvals"]["actions"]["publish"]["reviewerRule"]
     with pytest.raises(ValidationError, match="approval_required needs"):
         PolicyDocument.model_validate(document)
+
+
+def test_approval_binding_carries_exact_policy_authority_and_expected_state():
+    snapshot = compile_policy_snapshot(
+        policy_id="p", version=3, document=policy_document(), validation={"valid": True}
+    )
+    binding = bind_approval_request(
+        snapshot, "publish", target_expected_state="ready"
+    )
+    assert binding == {
+        "policyRef": "p@3",
+        "policyDigest": snapshot["policyDigest"],
+        "snapshotRef": snapshot["snapshotRef"],
+        "targetExpectedState": "ready",
+        "approvalClass": "release",
+        "reviewerRule": "owner",
+    }
+    validate_approval_binding(binding, snapshot, target_current_state="ready")
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("policyRef", "p@4"),
+        ("policyDigest", "sha256:stale"),
+        ("snapshotRef", "omnigent-policy:sha256:stale"),
+        ("targetExpectedState", "changed"),
+    ),
+)
+def test_approval_binding_rejects_stale_policy_or_target_state(field, replacement):
+    snapshot = compile_policy_snapshot(
+        policy_id="p", version=3, document=policy_document(), validation={"valid": True}
+    )
+    binding = bind_approval_request(
+        snapshot, "publish", target_expected_state="ready"
+    )
+    binding[field] = replacement
+    with pytest.raises(ValueError, match="stale approval binding"):
+        validate_approval_binding(binding, snapshot, target_current_state="ready")

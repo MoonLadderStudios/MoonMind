@@ -70,6 +70,18 @@ class WorkspacePolicy(PolicySection):
     mount_classes: list[Literal["workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"]] = Field(alias="mountClasses")
     runtime_uid: NonNegativeInt = Field(alias="runtimeUid")
     runtime_gid: NonNegativeInt = Field(alias="runtimeGid")
+    mount_rules: list["MountRule"] = Field(default_factory=list, alias="mountRules")
+    artifact_boundary_ref: Ref | None = Field(None, alias="artifactBoundaryRef")
+    skill_boundary_ref: Ref | None = Field(None, alias="skillBoundaryRef")
+    tool_boundary_ref: Ref | None = Field(None, alias="toolBoundaryRef")
+    oauth_boundary_ref: Ref | None = Field(None, alias="oauthBoundaryRef")
+    state_boundary_ref: Ref | None = Field(None, alias="stateBoundaryRef")
+
+
+class MountRule(PolicySection):
+    source_ref: Ref = Field(alias="sourceRef")
+    target_ref: Ref = Field(alias="targetRef")
+    mode: Literal["read_only", "read_write"]
 
 
 class ProviderProfilePolicy(PolicySection):
@@ -91,6 +103,9 @@ class CapturePolicy(PolicySection):
     artifact_classes: list[Ref] = Field(alias="artifactClasses", min_length=1)
     max_log_bytes: PositiveInt = Field(alias="maxLogBytes")
     redaction: Literal["required", "best_effort"]
+    evidence_completeness: Literal["required", "best_effort"] = Field(
+        "required", alias="evidenceCompleteness"
+    )
 
 
 class CheckpointPolicy(PolicySection):
@@ -114,6 +129,7 @@ class RagPolicy(PolicySection):
     followup_scope: Ref = Field(alias="followupScope")
     collection_refs: list[Ref] = Field(alias="collectionRefs")
     token_budget: PositiveInt = Field(alias="tokenBudget")
+    latency_budget_ms: PositiveInt = Field(3000, alias="latencyBudgetMs")
     fallback: Literal["deny", "empty"]
     credential_ref: Ref = Field(alias="credentialRef")
 
@@ -146,6 +162,8 @@ class RolloutPolicy(PolicySection):
     cohort: Ref
     gate: Ref
     diagnostics: bool
+    diagnostic_ref: Ref | None = Field(None, alias="diagnosticRef")
+    deprecation_ref: Ref | None = Field(None, alias="deprecationRef")
 
 
 class PolicyDocument(BaseModel):
@@ -253,3 +271,50 @@ def resolve_action(snapshot: Mapping[str, Any], action: str) -> dict[str, str]:
             return {"decision": "deny", "reason": "approval rule is incomplete"}
         result.update(approvalClass=str(approval_class), reviewerRule=str(reviewer_rule))
     return result
+
+
+def bind_approval_request(
+    snapshot: Mapping[str, Any], action: str, *, target_expected_state: str
+) -> dict[str, str]:
+    """Create a complete immutable approval binding or fail closed."""
+
+    authority = resolve_action(snapshot, action)
+    if authority["decision"] != "approval_required":
+        raise ValueError(f"{action} does not resolve to approval_required")
+    required = ("policyRef", "policyDigest", "snapshotRef")
+    missing = [field for field in required if not str(snapshot.get(field) or "").strip()]
+    if missing:
+        raise ValueError(f"policy snapshot lacks approval authority: {', '.join(missing)}")
+    if not target_expected_state.strip():
+        raise ValueError("target expected state is required")
+    return {
+        "policyRef": str(snapshot["policyRef"]),
+        "policyDigest": str(snapshot["policyDigest"]),
+        "snapshotRef": str(snapshot["snapshotRef"]),
+        "targetExpectedState": target_expected_state,
+        "approvalClass": authority["approvalClass"],
+        "reviewerRule": authority["reviewerRule"],
+    }
+
+
+def validate_approval_binding(
+    binding: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    *,
+    target_current_state: str,
+) -> None:
+    """Reject approval work when authority or optimistic target state is stale."""
+
+    comparisons = {
+        "policyRef": snapshot.get("policyRef"),
+        "policyDigest": snapshot.get("policyDigest"),
+        "snapshotRef": snapshot.get("snapshotRef"),
+        "targetExpectedState": target_current_state,
+    }
+    stale = [
+        field
+        for field, current in comparisons.items()
+        if not current or binding.get(field) != current
+    ]
+    if stale:
+        raise ValueError(f"stale approval binding: {', '.join(stale)}")
