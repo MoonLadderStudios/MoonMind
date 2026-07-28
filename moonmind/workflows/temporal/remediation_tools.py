@@ -413,6 +413,50 @@ class RemediationEvidenceToolService:
             degraded_reason=_string_or_none(selected.get("degradedReason")),
         )
 
+    async def read_execution_and_step_details(self, **kwargs: Any) -> RemediationEvidencePage:
+        """Read bounded execution/Step Execution evidence."""
+        return await self.read_evidence_page(
+            evidence_class="execution_and_steps", **kwargs
+        )
+
+    async def read_checkpoint_and_recovery_manifests(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded checkpoint and recovery manifests."""
+        return await self.read_evidence_page(
+            evidence_class="checkpoint_and_recovery", **kwargs
+        )
+
+    async def read_bridge_event_pages(self, **kwargs: Any) -> RemediationEvidencePage:
+        """Read bounded bridge event pages; live cursors use follow_target_logs."""
+        return await self.read_evidence_page(evidence_class="bridge_events", **kwargs)
+
+    async def read_capture_and_resource_manifests(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded capture and resource manifests."""
+        return await self.read_evidence_page(evidence_class="capture", **kwargs)
+
+    async def read_cleanup_and_janitor_evidence(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded cleanup, janitor, incident, and publication evidence."""
+        return await self.read_evidence_page(evidence_class="lifecycle", **kwargs)
+
+    async def read_branch_and_publication_evidence(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded branch, comparison, promotion, and publication evidence."""
+        return await self.read_evidence_page(
+            evidence_class="checkpoint_branches", **kwargs
+        )
+
+    async def read_policy_and_approval_snapshots(
+        self, **kwargs: Any
+    ) -> RemediationEvidencePage:
+        """Read bounded policy, approval, lock, retention, and redaction snapshots."""
+        return await self.read_evidence_page(evidence_class="policy", **kwargs)
+
     async def read_target_logs(
         self,
         *,

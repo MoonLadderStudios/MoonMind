@@ -11740,11 +11740,37 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 />
               </label>
               <label>
-                Checkpoint refs
-                <input
-                  value={String(remediationDraft.target.stepSelectors?.length || 0)}
-                  readOnly
-                />
+                Checkpoint
+                <select
+                  value={String(
+                    remediationDraft.remediation.target.stepSelectors?.[0]?.checkpointRef || "",
+                  )}
+                  onChange={(event) => {
+                    const selected = remediationDraft.target.stepSelectors?.find(
+                      (item) => String(item.checkpointRef || "") === event.target.value,
+                    );
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: {
+                        ...current.remediation,
+                        target: {
+                          ...current.remediation.target,
+                          stepSelectors: selected ? [selected] : [],
+                        },
+                      },
+                    } : current);
+                  }}
+                >
+                  <option value="">No checkpoint selected</option>
+                  {(remediationDraft.target.stepSelectors || []).map((selector, index) => (
+                    <option
+                      key={`${String(selector.checkpointRef || "")}:${index}`}
+                      value={String(selector.checkpointRef || "")}
+                    >
+                      {String(selector.logicalStepId || selector.source || `Checkpoint ${index + 1}`)}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <p className="small">
@@ -11780,6 +11806,77 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   {label}
                 </label>
               ))}
+            </div>
+            <div className="grid-2" aria-label="Remediation action controls">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.approvalPolicy?.requiredForHighRisk !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      approvalPolicy: {
+                        ...current.remediation.approvalPolicy,
+                        requiredForHighRisk: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Require approval for high-risk actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.lockPolicy?.targetMutationLock !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      lockPolicy: {
+                        ...current.remediation.lockPolicy,
+                        targetMutationLock: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Hold target mutation lock
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.verificationPolicy?.verifyAppliedActions !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      verificationPolicy: {
+                        ...current.remediation.verificationPolicy,
+                        verifyAppliedActions: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Verify applied actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.checkpointBranchPolicy?.runtimeContextPolicy === "fresh_agent_run"}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      checkpointBranchPolicy: event.target.checked ? {
+                        ...current.remediation.checkpointBranchPolicy,
+                        actionKind: "checkpoint_branch.create_from_remediation_context",
+                        runtimeContextPolicy: "fresh_agent_run",
+                      } : {},
+                    },
+                  } : current)}
+                />
+                Create branch for corrected inputs
+              </label>
             </div>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">

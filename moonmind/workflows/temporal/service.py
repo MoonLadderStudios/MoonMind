@@ -770,6 +770,30 @@ class TemporalExecutionService:
 
         evidence_policy = remediation.get("evidencePolicy")
         self._validate_remediation_evidence_policy(evidence_policy)
+        for policy_name, boolean_fields in (
+            ("approvalPolicy", ("requiredForHighRisk",)),
+            ("lockPolicy", ("targetMutationLock",)),
+            ("verificationPolicy", ("verifyAppliedActions",)),
+        ):
+            policy = remediation.get(policy_name)
+            if policy is None:
+                continue
+            if not isinstance(policy, Mapping):
+                raise TemporalExecutionValidationError(
+                    f"workflow.remediation.{policy_name} must be an object."
+                )
+            unsupported = set(policy) - set(boolean_fields)
+            if unsupported:
+                raise TemporalExecutionValidationError(
+                    f"workflow.remediation.{policy_name} contains unsupported fields."
+                )
+            if any(
+                field in policy and not isinstance(policy[field], bool)
+                for field in boolean_fields
+            ):
+                raise TemporalExecutionValidationError(
+                    f"workflow.remediation.{policy_name} fields must be booleans."
+                )
         checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
         if checkpoint_branch_policy is not None:
             if not isinstance(checkpoint_branch_policy, Mapping):

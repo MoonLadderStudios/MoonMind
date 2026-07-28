@@ -106,6 +106,7 @@ TARGET_EVIDENCE_CLASSES = (
     ("continuity", "continuityRefs"),
 )
 OMNIGENT_EVIDENCE_INDEX_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("execution_and_steps", ("executionDetailRef", "stepExecutionDetailRefs", "failureTaxonomyRef")),
     ("bridge_events", ("bridgeEventPageRefs", "normalizedEventJournalRef", "rawEventJournalRef")),
     ("capture", ("initialSnapshotRef", "finalSnapshotRef", "captureManifestRef", "resourceManifestRef")),
     ("workspace", ("changedFilesRef", "workspaceFilesRef", "sessionFilesRef", "diffRef", "childSessionRefs")),

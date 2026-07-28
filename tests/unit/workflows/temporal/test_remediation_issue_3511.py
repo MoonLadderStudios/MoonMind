@@ -144,3 +144,45 @@ async def test_control_plane_executor_requires_branch_for_corrected_input() -> N
     assert result["status"] == "denied"
     assert result["reason"] == "checkpoint_branch_required_for_corrected_input"
     assert result["changedFields"] == ["model"]
+
+
+async def test_typed_evidence_operations_delegate_to_their_bounded_classes() -> None:
+    service = object.__new__(RemediationEvidenceToolService)
+    seen: list[str] = []
+
+    async def read_evidence_page(**kwargs):
+        seen.append(kwargs["evidence_class"])
+        return kwargs["evidence_class"]
+
+    service.read_evidence_page = read_evidence_page
+
+    assert await service.read_execution_and_step_details(
+        remediation_workflow_id="remediation"
+    ) == "execution_and_steps"
+    assert await service.read_checkpoint_and_recovery_manifests(
+        remediation_workflow_id="remediation"
+    ) == "checkpoint_and_recovery"
+    assert await service.read_bridge_event_pages(
+        remediation_workflow_id="remediation"
+    ) == "bridge_events"
+    assert await service.read_capture_and_resource_manifests(
+        remediation_workflow_id="remediation"
+    ) == "capture"
+    assert await service.read_cleanup_and_janitor_evidence(
+        remediation_workflow_id="remediation"
+    ) == "lifecycle"
+    assert await service.read_branch_and_publication_evidence(
+        remediation_workflow_id="remediation"
+    ) == "checkpoint_branches"
+    assert await service.read_policy_and_approval_snapshots(
+        remediation_workflow_id="remediation"
+    ) == "policy"
+    assert seen == [
+        "execution_and_steps",
+        "checkpoint_and_recovery",
+        "bridge_events",
+        "capture",
+        "lifecycle",
+        "checkpoint_branches",
+        "policy",
+    ]
