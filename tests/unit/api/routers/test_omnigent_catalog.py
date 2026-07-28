@@ -145,6 +145,13 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     assert diagnostics["failureReason"] is None
     assert diagnostics["rollbackRecommendation"] is None
     assert diagnostics["capabilitySummary"] == []
+    assert diagnostics["releaseMetadata"]["bridgeMode"] == (
+        "upstream_omnigent_server_proxy"
+    )
+    assert {row["hostMode"] for row in diagnostics["supportMatrix"]} == {
+        "static_compose",
+        "on_demand_docker",
+    }
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):

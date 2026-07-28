@@ -90,6 +90,10 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
     assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
     assert diagnostics["rollbackRecommendation"] is None
+    assert [row["hostMode"] for row in diagnostics["supportMatrix"]] == [
+        "static_compose",
+        "on_demand_docker",
+    ]
 
 
 @pytest.mark.asyncio
@@ -180,6 +184,7 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
         "Select upstream_omnigent_server_proxy for new sessions; "
         "existing sessions retain their recorded bridge mode."
     )
+    assert all(row["supported"] is False for row in diagnostics["supportMatrix"])
 
 
 def _mock_user():
@@ -598,7 +603,12 @@ def test_list_hosts_returns_bounded_profile_discovery() -> None:
     client, _, _ = _build()
     resp = client.get(_HOSTS_PATH)
     assert resp.status_code == 200
-    assert resp.json() == [{"id": "host-profile-bound", "status": "ready"}]
+    host = resp.json()[0]
+    assert host["id"] == "host-profile-bound"
+    assert host["status"] == "ready"
+    diagnostics = host["compatibilityDiagnostics"]
+    assert diagnostics["lifecycleState"] == "ready"
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
 
 
 def test_resource_route_authorizes_before_proxying() -> None:
@@ -1008,6 +1018,10 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
             "executionProfileRef": "codex-default@2",
             "launchPolicyRef": "restricted@3",
             "snapshotRef": "omnigent-launch:sha256:safe-ref",
+            "compatibilityEvidenceRef": "artifact://embedded-mode-row",
+            "serverImage": "registry.test/server@sha256:" + "1" * 64,
+            "hostImage": "registry.test/host@sha256:" + "2" * 64,
+            "hostArchitecture": "linux/amd64",
         },
     }))
     resp = client.get(
@@ -1028,6 +1042,13 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
         "omnigentRunnerRef": "runner-1",
     }
     assert {key: resp.json()[key] for key in expected_identity} == expected_identity
+    diagnostics = resp.json()["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
+    assert diagnostics["hostMode"] == "on_demand_docker"
+    assert diagnostics["authGeneration"] == 4
+    assert diagnostics["evidenceRef"] == "artifact://embedded-mode-row"
+    assert diagnostics["lifecycleState"] == "active"
+    assert diagnostics["supportedCapabilities"] == []
 
 
 def test_resolve_bridge_session_projection_filters_capabilities_to_booleans() -> None:

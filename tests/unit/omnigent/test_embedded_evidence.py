@@ -28,6 +28,7 @@ def _claim(**overrides):
         "bridgeConfigSha256": SHA,
         "omnigentSourceCommit": PINNED_OMNIGENT_COMMIT,
         "protocolProfile": EMBEDDED_PROTOCOL_PROFILE,
+        "supportedHostModes": ["static_compose", "on_demand_docker"],
         "images": {
             "server": f"ghcr.io/omnigent/server@sha256:{'1' * 64}",
             "host": f"ghcr.io/omnigent/host@sha256:{'2' * 64}",
@@ -60,6 +61,7 @@ def test_accepts_current_passing_policy_bound_claim() -> None:
     )
 
     assert result.status == "passed"
+    assert result.supported_host_modes == ("static_compose", "on_demand_docker")
 
 
 @pytest.mark.parametrize(
@@ -71,6 +73,7 @@ def test_accepts_current_passing_policy_bound_claim() -> None:
         ({"secretScan": "failed"}, "malformed"),
         ({"cleanup": "failed"}, "malformed"),
         ({"images": {}}, "images"),
+        ({"supportedHostModes": []}, "supportedHostModes"),
     ],
 )
 def test_rejects_failed_revoked_or_incomplete_claims(override, match) -> None:

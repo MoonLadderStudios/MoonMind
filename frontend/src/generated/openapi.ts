@@ -5106,6 +5106,10 @@ export interface components {
             capabilities?: {
                 [key: string]: boolean;
             };
+            /** Compatibilitydiagnostics */
+            compatibilityDiagnostics?: {
+                [key: string]: unknown;
+            };
         };
         /** BridgeTerminalEnvelope */
         BridgeTerminalEnvelope: {

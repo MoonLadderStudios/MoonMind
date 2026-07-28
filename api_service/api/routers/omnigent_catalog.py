@@ -413,6 +413,13 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if policy.host_mode == "static_compose" and not static_ready:
                 policy_reasons.append(_reason("static_host_not_ready"))
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                mode_readiness = config.readiness(
+                    evidence_validation=evidence,
+                    host_mode=policy.host_mode,
+                )
+                if mode_readiness["conformanceState"] != "ready":
+                    policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
                 policy_refs.append(policy.ref)
                 available_modes.append(policy.host_mode)
