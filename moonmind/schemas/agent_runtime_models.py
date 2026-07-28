@@ -428,6 +428,11 @@ def validate_codex_oauth_profile_refs(
         missing.append(f"{volume_mount_path_field_name} is required")
     if missing:
         raise ValueError("; ".join(missing))
+    expected_mount_path = "/home/app/.codex" if is_codex else "/home/app/.claude"
+    if str(volume_mount_path or "").strip() != expected_mount_path:
+        raise ValueError(
+            f"{volume_mount_path_field_name} must be {expected_mount_path}"
+        )
     if max_parallel_runs is not None:
         validator = (
             validate_codex_oauth_capacity

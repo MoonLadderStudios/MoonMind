@@ -889,6 +889,7 @@ services:
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
     volumes:
+      - omnigent-host-claude-home:/home/app
       - omnigent-host-claude-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts
       - omnigent-host-cache:/home/app/.cache
@@ -918,13 +919,6 @@ services:
     networks:
       - local-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
   omnigent-host-claude-init:
     profiles: ["omnigent-host-claude"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
@@ -1211,6 +1205,7 @@ volumes:
   qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
+  omnigent-host-claude-home:
   omnigent-host-codex-state:
   omnigent-tools:
     name: moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}

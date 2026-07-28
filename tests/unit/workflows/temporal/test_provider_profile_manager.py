@@ -11,6 +11,7 @@ import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     BILLING_AWARE_PROFILE_SELECTION_PATCH,
+    CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH,
     CODEX_OAUTH_LEGACY_RESTORE_PATCH,
     DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
     DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
@@ -44,6 +45,21 @@ class TestProfileSlotState:
                     "max_parallel_runs": 2,
                 }
             )
+
+    def test_claude_capacity_change_preserves_pre_patch_replay(self):
+        profile = {
+            "runtime_id": "claude_code",
+            "credential_source": "oauth_volume",
+            "runtime_materialization_mode": "oauth_home",
+            "max_parallel_runs": 2,
+        }
+
+        assert _validated_profile_capacity(
+            profile, apply_claude_exclusive_capacity=False
+        ) == 2
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            _validated_profile_capacity(profile)
+        assert CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH.endswith("-v1")
 
     def test_available_slots_enabled(self):
         state = ProfileSlotState(

@@ -143,6 +143,7 @@ def _bind_exact_host(
     workspace_path: str,
     profile_authorization: Mapping[str, Any],
     harness: str,
+    agent_name: str,
 ) -> AgentExecutionRequest:
     parameters = dict(request.parameters or {})
     raw = parameters.get("omnigent")
@@ -168,6 +169,7 @@ def _bind_exact_host(
             code="OMNIGENT_HARNESS_PROVIDER_MISMATCH",
         )
     agent["harnessOverride"] = harness
+    agent["agentName"] = agent_name
     omnigent["agent"] = agent
     omnigent["_moonmindProfileAuthorization"] = dict(profile_authorization)
     parameters["omnigent"] = omnigent
@@ -690,6 +692,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "effectiveLaunchRef": effective_launch["snapshotRef"],
                     },
                     harness=str(effective_launch["harness"]),
+                    agent_name=str(effective_launch["agentName"]),
                 ),
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
@@ -931,6 +934,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         by_alias=True, mode="json", exclude_none=True
                     ),
                     harness=harness,
+                    agent_name=("claude" if runtime_id == "claude_code" else "codex"),
                 ),
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,

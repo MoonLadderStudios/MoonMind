@@ -883,6 +883,10 @@ class OmnigentOAuthHostRuntime:
             )
             adapter = self._runtime_adapter(binding)
             child_env[str(adapter["generation_env"])] = str(generation)
+            if binding.credential_mount_ref.auth_volume_ref.runtime_id == "claude_code":
+                child_env["CLAUDE_VOLUME_NAME"] = (
+                    binding.credential_mount_ref.auth_volume_ref.volume_ref
+                )
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         if effective_launch is not None:

@@ -389,14 +389,19 @@ async def get_omnigent_codex_catalog_readiness(
     static_profile_ids = {
         binding.provider_profile_id for binding in bindings if binding.static_host_id
     }
-    static_ready = any(
-        lease.provider_profile_id in static_profile_ids
+    profile_runtime_by_id = {
+        row.profile_id: str(getattr(row.runtime_id, "value", row.runtime_id))
+        for row in rows
+    }
+    static_ready_runtimes = {
+        profile_runtime_by_id.get(lease.provider_profile_id)
+        for lease in host_leases
+        if lease.provider_profile_id in static_profile_ids
         and lease.status in {"ready", "assigned"}
         and lease.expires_at > now
         and lease.disconnected_at is None
         and (lease.host_readiness or lease.status) in {"ready", "assigned"}
-        for lease in host_leases
-    )
+    }
     try:
         backend_configured = resolve_container_backend_settings().enabled
     except ContainerBackendConfigError:
@@ -428,7 +433,10 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("network_policy_unavailable"))
             if policy.host_mode == "on_demand_docker" and not backend_ready:
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
-            if policy.host_mode == "static_compose" and not static_ready:
+            if (
+                policy.host_mode == "static_compose"
+                and profile.provider_runtime not in static_ready_runtimes
+            ):
                 policy_reasons.append(_reason("static_host_not_ready"))
             if not policy_reasons:
                 policy_refs.append(policy.ref)

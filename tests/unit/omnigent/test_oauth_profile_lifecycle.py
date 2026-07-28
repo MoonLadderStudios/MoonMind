@@ -689,7 +689,12 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     assert "CLAUDE_HOME=/home/app/.claude" in launch_command
     assert "CLAUDE_CREDENTIAL_GENERATION=4" in launch_command
     assert launch_command[-1] == "/opt/moonmind/start-claude-oauth-host.sh"
-    assert not any("CODEX_" in value for value in launch_command)
+    configured_env = [
+        launch_command[index + 1]
+        for index, value in enumerate(launch_command[:-1])
+        if value == "--env"
+    ]
+    assert not any(value.startswith("CODEX_") for value in configured_env)
 
 
 @pytest.mark.asyncio

@@ -7,15 +7,13 @@ Create Date: 2026-07-28
 
 from __future__ import annotations
 
-from typing import Sequence, Union
-
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "348_claude_oauth_capacity"
-down_revision: Union[str, None] = "347_control_stop_continuations"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = "348_claude_oauth_capacity"
+down_revision = "347_control_stop_continuations"
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:

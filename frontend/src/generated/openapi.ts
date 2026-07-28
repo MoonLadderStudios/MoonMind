@@ -6779,7 +6779,10 @@ export interface components {
             label: string;
             /** Providerid */
             providerId: string;
-            /** Runtimeid */
+            /**
+             * Runtimeid
+             * @enum {string}
+             */
             runtimeId: "codex_cli" | "claude_code";
             /**
              * Busy
@@ -7069,8 +7072,6 @@ export interface components {
             value: string;
             /** Label */
             label: string;
-            /** Runtimeid */
-            runtimeId: "codex_cli" | "claude_code";
             /** Count */
             count: number;
         };
@@ -8333,6 +8334,11 @@ export interface components {
             profileId: string;
             /** Label */
             label: string;
+            /**
+             * Runtimeid
+             * @enum {string}
+             */
+            runtimeId: "codex_cli" | "claude_code";
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
         };
@@ -9075,6 +9081,8 @@ export interface components {
              * @constant
              */
             harness: "codex-native";
+            /** Harnesses */
+            harnesses?: ("codex-native" | "claude-native")[];
             /** Available */
             available: boolean;
             /** Defaultexecutionprofileref */

@@ -1397,6 +1397,14 @@ class OmnigentEmbeddedHostProtocolFacade:
         """Create or reuse a local embedded bridge session."""
 
         self._require_embedded_mode()
+        requested_agent = _clean(request.agent_id)
+        if requested_agent and requested_agent != "codex-native":
+            raise OmnigentBridgeError(
+                "Embedded Omnigent host protocol supports only codex-native",
+                failure_class="user_error",
+                status_code=422,
+                code="omnigent_embedded_harness_unsupported",
+            )
         validate_bridge_host_fields(
             host_type=request.host_type,
             host_id=request.host_id,

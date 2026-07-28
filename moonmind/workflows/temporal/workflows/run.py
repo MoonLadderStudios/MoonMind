@@ -21107,7 +21107,7 @@ class MoonMindRunWorkflow:
             "endpointRef": None,
             "executionTargetRef": None,
             "launchPolicyRef": None,
-            "agent": frozenset({"harnessOverride"}),
+            "agent": frozenset({"harnessOverride", "agentName"}),
             "capture": frozenset(
                 {
                     "required",

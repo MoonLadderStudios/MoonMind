@@ -69,6 +69,9 @@ SCHEDULED_PENDING_REQUESTS_PATCH = (
 CODEX_OAUTH_LEGACY_RESTORE_PATCH = (
     "provider-profile-manager-codex-oauth-legacy-restore-v1"
 )
+CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH = (
+    "provider-profile-manager-claude-oauth-exclusive-capacity-v1"
+)
 PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH = (
     "provider-profile-manager-purpose-aware-credential-lease-v1"
 )
@@ -118,6 +121,7 @@ def _validated_profile_capacity(
     runtime_id: str | None = None,
     existing_capacity: int | None = None,
     repair_legacy: bool = False,
+    apply_claude_exclusive_capacity: bool = True,
 ) -> int:
     if "max_parallel_runs" not in profile and existing_capacity is not None:
         capacity = existing_capacity
@@ -139,6 +143,8 @@ def _validated_profile_capacity(
         "materialization_mode": profile.get("runtime_materialization_mode"),
     }
     is_claude_oauth = is_claude_oauth_profile(**identity)
+    if is_claude_oauth and not apply_claude_exclusive_capacity:
+        return capacity
     if (is_codex_oauth or is_claude_oauth) and capacity != 1:
         if repair_legacy:
             return 1
@@ -899,12 +905,16 @@ class MoonMindProviderProfileManagerWorkflow:
 
         # Restore state from continue-as-new or initial profile load.
         repair_legacy_codex_oauth = workflow.patched(CODEX_OAUTH_LEGACY_RESTORE_PATCH)
+        apply_claude_exclusive_capacity = workflow.patched(
+            CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH
+        )
         self._purpose_aware_leases = workflow.patched(
             PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH
         )
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
+            apply_claude_exclusive_capacity=apply_claude_exclusive_capacity,
         )
 
         # If no profiles were provided, load them via activity.
@@ -1017,6 +1027,7 @@ class MoonMindProviderProfileManagerWorkflow:
         input_payload: dict[str, Any],
         *,
         repair_legacy_codex_oauth: bool = True,
+        apply_claude_exclusive_capacity: bool = True,
     ) -> None:
         """Restore profile and lease state from input (e.g. after continue-as-new)."""
         profiles_data = input_payload.get("profiles", [])
@@ -1095,6 +1106,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     p,
                     runtime_id=self._runtime_id,
                     repair_legacy=repair_legacy_codex_oauth,
+                    apply_claude_exclusive_capacity=apply_claude_exclusive_capacity,
                 ),
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
