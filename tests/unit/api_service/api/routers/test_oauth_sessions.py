@@ -1496,7 +1496,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         )
         assert profile.volume_ref == "claude_auth_volume"
         assert profile.volume_mount_path == "/home/app/.claude"
-        assert profile.max_parallel_runs == 3
+        assert profile.max_parallel_runs == 1
         assert "credentials" not in repr(profile.__dict__)
         assert "token" not in repr(profile.__dict__).lower()
     assert synced_runtimes == ["claude_code"]

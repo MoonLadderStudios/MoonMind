@@ -1,4 +1,4 @@
-"""Safe, versioned Omnigent Codex readiness projection for Workflow Create.
+"""Safe, versioned Omnigent OAuth readiness projection for Workflow Create.
 
 MoonLadderStudios/MoonMind#3451.  This boundary deliberately returns product
 selection data, never launch authority or provider/host secret material.
@@ -91,6 +91,7 @@ class EligibleProviderProfile(BaseModel):
     profile_id: str = Field(alias="profileId")
     label: str
     provider_id: str = Field(alias="providerId")
+    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
     busy: bool = False
     queue_when_busy: bool = Field(alias="queueWhenBusy")
 
@@ -99,6 +100,7 @@ class IneligibleProviderProfile(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     profile_id: str = Field(alias="profileId")
     label: str
+    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
@@ -123,6 +125,9 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     agent_kind: Literal["external"] = Field("external", alias="agentKind")
     agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")
     harness: Literal["codex-native"] = "codex-native"
+    harnesses: list[Literal["codex-native", "claude-native"]] = Field(
+        default_factory=lambda: ["codex-native", "claude-native"]
+    )
     available: bool
     default_execution_profile_ref: str = Field(alias="defaultExecutionProfileRef")
     execution_profiles: list[ExecutionProfileReadiness] = Field(alias="executionProfiles")
@@ -144,16 +149,16 @@ _REASONS: dict[str, tuple[str, str]] = {
     "bridge_endpoint_unavailable": ("Configure the selected Omnigent endpoint.", "/settings#omnigent"),
     "rollout_gate_disabled": ("Enable the Omnigent runtime rollout gate.", "/settings#omnigent"),
     "host_auth_unavailable": ("Configure or rotate Omnigent bridge credentials.", "/settings#omnigent"),
-    "no_eligible_codex_oauth_profile": ("Connect and validate a Codex OAuth Provider Profile.", "/settings#provider-profiles"),
+    "no_eligible_codex_oauth_profile": ("Connect and validate a compatible OAuth Provider Profile for the selected execution target.", "/settings#provider-profiles"),
     "execution_profile_unavailable": ("Enable a compatible Omnigent execution profile.", "/settings#omnigent"),
     "on_demand_backend_unavailable": ("Enable the trusted container backend and worker route.", "/settings#system"),
-    "static_host_not_ready": ("Start and validate the static Omnigent Codex host.", "/settings#omnigent"),
+    "static_host_not_ready": ("Start and validate the selected static Omnigent host.", "/settings#omnigent"),
     "immutable_image_unavailable": ("Configure immutable Omnigent server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
     "acceptance_evidence_unavailable": ("Publish a current #3508 browser acceptance matrix for this source commit.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
-    "profile_reconnect_required": ("Reconnect this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
-    "profile_validation_required": ("Validate this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_capacity_unavailable": ("Wait for Provider Profile capacity or enable queued execution.", "/settings#provider-profiles"),
 }
 
@@ -342,7 +347,9 @@ async def get_omnigent_codex_catalog_readiness(
         (
             await session.execute(
                 select(ManagedAgentProviderProfile).where(
-                    ManagedAgentProviderProfile.runtime_id == "codex_cli"
+                    ManagedAgentProviderProfile.runtime_id.in_(
+                        ("codex_cli", "claude_code")
+                    )
                 )
             )
         )
@@ -358,7 +365,9 @@ async def get_omnigent_codex_catalog_readiness(
         (
             await session.execute(
                 select(ProviderProfileSlotLease).where(
-                    ProviderProfileSlotLease.runtime_id == "codex_cli"
+                    ProviderProfileSlotLease.runtime_id.in_(
+                        ("codex_cli", "claude_code")
+                    )
                 )
             )
         )
@@ -374,8 +383,11 @@ async def get_omnigent_codex_catalog_readiness(
             )
 
     eligible: list[EligibleProviderProfile] = []
+    eligible_by_runtime: dict[str, int] = {}
     ineligible: list[IneligibleProviderProfile] = []
     for row in rows:
+        raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
+        runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
         credential_source = getattr(row.credential_source, "value", row.credential_source)
         materialization = getattr(
             row.runtime_materialization_mode, "value", row.runtime_materialization_mode
@@ -400,11 +412,13 @@ async def get_omnigent_codex_catalog_readiness(
             credential_source == "oauth_volume" and materialization == "oauth_home"
         )
         if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
+            eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
                 EligibleProviderProfile(
                     profileId=row.profile_id,
                     label=label,
                     providerId=row.provider_id,
+                    runtimeId=runtime_id,
                     busy=busy,
                     queueWhenBusy=queue_when_busy,
                 )
@@ -421,6 +435,7 @@ async def get_omnigent_codex_catalog_readiness(
                 IneligibleProviderProfile(
                     profileId=row.profile_id,
                     label=label,
+                    runtimeId=runtime_id,
                     gateReasons=[
                         _reason(code)
                         for code in codes or ["profile_validation_required"]
@@ -437,14 +452,19 @@ async def get_omnigent_codex_catalog_readiness(
     static_profile_ids = {
         binding.provider_profile_id for binding in bindings if binding.static_host_id
     }
-    static_ready = any(
-        lease.provider_profile_id in static_profile_ids
+    profile_runtime_by_id = {
+        row.profile_id: str(getattr(row.runtime_id, "value", row.runtime_id))
+        for row in rows
+    }
+    static_ready_runtimes = {
+        profile_runtime_by_id.get(lease.provider_profile_id)
+        for lease in host_leases
+        if lease.provider_profile_id in static_profile_ids
         and lease.status in {"ready", "assigned"}
         and lease.expires_at > now
         and lease.disconnected_at is None
         and (lease.host_readiness or lease.status) in {"ready", "assigned"}
-        for lease in host_leases
-    )
+    }
     try:
         backend_configured = resolve_container_backend_settings().enabled
     except ContainerBackendConfigError:
@@ -464,9 +484,14 @@ async def get_omnigent_codex_catalog_readiness(
     available_modes: list[str] = []
     for profile in PROFILES.values():
         profile_reasons = list(deployment_reasons)
+        provider_slug = (
+            "claude" if profile.provider_runtime == "claude_code" else "codex"
+        )
         policy_refs: list[str] = []
         policy_gate_reasons: list[GateReason] = []
         for policy in POLICIES.values():
+            if not policy.policy_id.startswith(provider_slug + "-"):
+                continue
             policy_reasons: list[GateReason] = []
             if not policy.enabled:
                 policy_reasons.append(_reason("execution_profile_unavailable"))
@@ -480,7 +505,10 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("network_policy_unavailable"))
             if policy.host_mode == "on_demand_docker" and not backend_ready:
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
-            if policy.host_mode == "static_compose" and not static_ready:
+            if (
+                policy.host_mode == "static_compose"
+                and profile.provider_runtime not in static_ready_runtimes
+            ):
                 policy_reasons.append(_reason("static_host_not_ready"))
             if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
                 mode_readiness = config.readiness(
@@ -520,12 +548,17 @@ async def get_omnigent_codex_catalog_readiness(
         for reason in policy_gate_reasons:
             if reason.code not in {existing.code for existing in profile_reasons}:
                 profile_reasons.append(reason)
-        if not eligible:
+        if not eligible_by_runtime.get(profile.provider_runtime):
             profile_reasons.append(_reason("no_eligible_codex_oauth_profile"))
         profile_views.append(ExecutionProfileReadiness(
             ref=profile.ref,
             displayName=profile.display_name,
-            available=profile.enabled and bool(policy_refs) and bool(eligible) and not deployment_reasons,
+            available=(
+                profile.enabled
+                and bool(policy_refs)
+                and bool(eligible_by_runtime.get(profile.provider_runtime))
+                and not deployment_reasons
+            ),
             policyRefs=policy_refs,
             gateReasons=profile_reasons,
         ))

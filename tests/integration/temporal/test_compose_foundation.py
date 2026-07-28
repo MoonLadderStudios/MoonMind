@@ -549,7 +549,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
-    assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
+    assert host_service["entrypoint"] == ["/opt/moonmind/start-claude-oauth-host.sh"]
     assert host_service["user"] == "1000:1000"
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
@@ -563,6 +563,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "CLAUDE_HOME": "/home/app/.claude",
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
+        "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_AUTH_TOKEN": "",
         "CLAUDE_API_KEY": "",
@@ -575,23 +576,24 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     host_volumes = {
         volume for volume in host_service["volumes"] if isinstance(volume, str)
     }
+    assert "omnigent-host-claude-home:/home/app" in host_volumes
     assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
     assert "claude_auth_volume:/home/app/.claude" in host_volumes
-    assert "./omnigent_workspaces:/workspaces" in host_volumes
+    assert (
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
+        in host_volumes
+    )
     assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
     assert (
         "${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:"
         "/opt/moonmind-skills:ro"
     ) in host_volumes
-    assert (
-        "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
-        "/workspaces/MoonMind:ro"
-    ) in host_volumes
     assert "omnigent-host-claude-state" in compose["volumes"]
+    assert "omnigent-host-claude-home" in compose["volumes"]
 
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
-        "claude-auth-init": {"condition": "service_completed_successfully"},
+        "omnigent-host-claude-init": {"condition": "service_completed_successfully"},
         "omnigent-tools-init": {"condition": "service_completed_successfully"},
     }
     assert _network_names(host_service) == {"local-network"}
@@ -599,12 +601,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["healthcheck"] == {
         "test": [
             "CMD-SHELL",
-            "test -d /home/app/.claude && test -w /home/app/.claude",
+            "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
         ],
         "interval": "10s",
         "timeout": "5s",
-        "retries": 3,
-        "start_period": "10s",
+        "retries": 12,
+        "start_period": "30s",
     }
 
 

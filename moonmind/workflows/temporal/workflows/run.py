@@ -21152,7 +21152,7 @@ class MoonMindRunWorkflow:
             "endpointRef": None,
             "executionTargetRef": None,
             "launchPolicyRef": None,
-            "agent": frozenset({"harnessOverride"}),
+            "agent": frozenset({"harnessOverride", "agentName"}),
             "capture": frozenset(
                 {
                     "required",
@@ -21230,9 +21230,9 @@ class MoonMindRunWorkflow:
         agent = normalized.get("agent")
         if isinstance(agent, Mapping):
             harness = agent.get("harnessOverride")
-            if harness != "codex-native":
+            if harness not in {"codex-native", "claude-native"}:
                 raise ValueError(
-                    f"{path}.agent.harnessOverride must be codex-native"
+                    f"{path}.agent.harnessOverride must be a supported native harness"
                 )
         return normalized
 

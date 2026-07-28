@@ -441,14 +441,16 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
         runtimeId="claude_code",
         credentialSource="oauth_volume",
         runtimeMaterializationMode="oauth_home",
-        maxParallelRuns=2,
+        volumeRef="claude_auth_volume",
+        volumeMountPath="/home/app/.claude",
+        maxParallelRuns=1,
         cooldownAfter429Seconds=120,
         enabled=True,
         authState="connected",
         disabledReason=None,
         rateLimitPolicy={"strategy": "provider_backoff"},
     )
-    assert profile.max_parallel_runs == 2
+    assert profile.max_parallel_runs == 1
     assert profile.cooldown_after_429_seconds == 120
 
 def test_managed_agent_provider_profile_clears_disabled_reason_when_enabled() -> None:

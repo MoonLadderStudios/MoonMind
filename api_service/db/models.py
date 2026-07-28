@@ -2588,9 +2588,10 @@ class ManagedAgentProviderProfile(Base):
             name="ck_provider_profiles_default_model_tier_positive",
         ),
         CheckConstraint(
-            "NOT (runtime_id = 'codex_cli' AND credential_source = 'oauth_volume' "
+            "NOT (runtime_id IN ('codex_cli', 'claude_code') "
+            "AND credential_source = 'oauth_volume' "
             "AND runtime_materialization_mode = 'oauth_home') OR max_parallel_runs = 1",
-            name="ck_provider_profiles_codex_oauth_exclusive_capacity",
+            name="ck_provider_profiles_oauth_home_exclusive_capacity",
         ),
         CheckConstraint(
             "credential_generation >= 1",

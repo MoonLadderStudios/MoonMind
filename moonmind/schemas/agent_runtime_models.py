@@ -435,15 +435,20 @@ def validate_codex_oauth_profile_refs(
     volume_mount_path_field_name: str = "volumeMountPath",
 ) -> None:
     from moonmind.provider_profiles.oauth_policy import (
+        is_claude_oauth_profile,
         is_codex_oauth_profile,
+        validate_claude_oauth_capacity,
         validate_codex_oauth_capacity,
     )
 
-    if not is_codex_oauth_profile(
+    identity = dict(
         runtime_id=runtime_id,
         credential_source=credential_source,
         materialization_mode=runtime_materialization_mode,
-    ):
+    )
+    is_codex = is_codex_oauth_profile(**identity)
+    is_claude = is_claude_oauth_profile(**identity)
+    if not (is_codex or is_claude):
         return
 
     missing: list[str] = []
@@ -453,13 +458,18 @@ def validate_codex_oauth_profile_refs(
         missing.append(f"{volume_mount_path_field_name} is required")
     if missing:
         raise ValueError("; ".join(missing))
-    if max_parallel_runs is not None:
-        validate_codex_oauth_capacity(
-            runtime_id=runtime_id,
-            credential_source=credential_source,
-            materialization_mode=runtime_materialization_mode,
-            max_parallel_runs=max_parallel_runs,
+    expected_mount_path = "/home/app/.codex" if is_codex else "/home/app/.claude"
+    if str(volume_mount_path or "").strip() != expected_mount_path:
+        raise ValueError(
+            f"{volume_mount_path_field_name} must be {expected_mount_path}"
         )
+    if max_parallel_runs is not None:
+        validator = (
+            validate_codex_oauth_capacity
+            if is_codex
+            else validate_claude_oauth_capacity
+        )
+        validator(**identity, max_parallel_runs=max_parallel_runs)
 
 def is_terminal_agent_run_state(status: AgentRunState) -> bool:
     """Return whether one canonical run status is terminal."""
@@ -1044,6 +1054,11 @@ class CredentialMountRef(BaseModel):
                 raise ValueError("Codex OAuth homes must mount at /home/app/.codex")
             if self.runtime_uid != 1000 or self.runtime_gid != 1000:
                 raise ValueError("Codex OAuth hosts must run with UID/GID 1000")
+        elif self.auth_volume_ref.runtime_id == "claude_code":
+            if self.target_path != "/home/app/.claude":
+                raise ValueError("Claude OAuth homes must mount at /home/app/.claude")
+            if self.runtime_uid != 1000 or self.runtime_gid != 1000:
+                raise ValueError("Claude OAuth hosts must run with UID/GID 1000")
         return self
 
 
@@ -1055,7 +1070,7 @@ class OmnigentOAuthHostBinding(BaseModel):
     binding_ref: str = Field(..., alias="bindingRef", min_length=1)
     provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
     endpoint_ref: str = Field(..., alias="endpointRef", min_length=1)
-    harness: Literal["codex-native"]
+    harness: Literal["codex-native", "claude-native"]
     credential_mount_ref: CredentialMountRef = Field(..., alias="credentialMountRef")
     max_hosts: Literal[1] = Field(1, alias="maxHosts")
     max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")
