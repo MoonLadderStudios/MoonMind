@@ -25,7 +25,10 @@ from api_service.db.models import (
     TemporalArtifact,
     User,
 )
-from api_service.services.omnigent_agent_profile_service import projection_identity
+from api_service.services.omnigent_agent_profile_service import (
+    projection_identity,
+    projection_readiness,
+)
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.services.omnigent_agent_bundle_service import (
     BundleValidationError,
@@ -337,11 +340,10 @@ async def validate_profile(
                 source.get("upstreamVersion"),
             ),
         )
+        upstream_readiness = projection_readiness(projection)
         checks.append({
             "name": "upstream_identity",
-            "ready": bool(projection and projection.available and projection.compatible),
-            "reason": None if projection and projection.available and projection.compatible
-            else "stable upstream identity is unavailable or incompatible",
+            **upstream_readiness,
         })
         target.upstream_snapshot = projection.metadata_snapshot if projection else None
     else:
@@ -499,8 +501,9 @@ async def resolve_snapshot(profile_id: str, body: SnapshotCreate, session: Async
             source.get("upstreamVersion"),
         )
         projection = await session.get(OmnigentUpstreamAgentProjection, projection_id)
-        if projection is None or not projection.available or not projection.compatible:
-            raise HTTPException(409, "upstream agent is unavailable or incompatible")
+        upstream_readiness = projection_readiness(projection)
+        if not upstream_readiness["ready"]:
+            raise HTTPException(409, upstream_readiness["reason"])
     allowed_overrides = {"model", "capture", "rag", "publish"}
     rejected = set(body.overrides) - allowed_overrides
     if rejected:

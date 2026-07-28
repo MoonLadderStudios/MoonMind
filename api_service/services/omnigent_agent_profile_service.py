@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from api_service.db.models import OmnigentUpstreamAgentProjection
 
 _SUPPORTED_HARNESSES = {"codex-native"}
 _MAX_INVENTORY = 500
+_INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 
 
 def projection_identity(endpoint_ref: str, upstream_id: str, version: str | None) -> str:
@@ -24,6 +25,49 @@ def projection_identity(endpoint_ref: str, upstream_id: str, version: str | None
         ensure_ascii=False,
     ).encode()
     return "upstream:" + hashlib.sha256(raw).hexdigest()
+
+
+def projection_readiness(
+    projection: OmnigentUpstreamAgentProjection | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return one explicit, server-owned launch readiness classification."""
+    if projection is None:
+        return {
+            "ready": False,
+            "freshness": "missing",
+            "reason": "stable upstream identity has not been synchronized",
+        }
+
+    observed_at = now or datetime.now(timezone.utc)
+    last_success = projection.last_successful_sync_at
+    if last_success is not None and last_success.tzinfo is None:
+        last_success = last_success.replace(tzinfo=timezone.utc)
+    stale = (
+        last_success is None
+        or observed_at - last_success > _INVENTORY_FRESHNESS_TTL
+        or projection.error is not None
+    )
+    if not projection.available:
+        reason = "stable upstream identity is unavailable"
+    elif not projection.compatible:
+        reason = "stable upstream identity is incompatible"
+    elif stale:
+        reason = "upstream inventory is stale"
+    else:
+        reason = None
+    return {
+        "ready": reason is None,
+        "freshness": "stale" if stale else "fresh",
+        "reason": reason,
+        "lastSuccessfulSyncAt": last_success.isoformat() if last_success else None,
+        "lastAttemptAt": (
+            projection.last_attempt_at.isoformat()
+            if projection.last_attempt_at
+            else None
+        ),
+    }
 
 
 def _text(row: Mapping[str, Any], *keys: str) -> str:
@@ -122,4 +166,3 @@ async def record_upstream_sync_failure(
         projection.last_attempt_at = attempted_at
         projection.error = safe_error
     await session.commit()
-
