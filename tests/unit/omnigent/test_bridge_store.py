@@ -427,6 +427,40 @@ async def test_initial_retrieval_cannot_change_after_message_preparation(store):
 
 
 @pytest.mark.asyncio
+async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    evidence = {
+        "state": "degraded",
+        "contextPackRef": "artifact://context/pack.json",
+        "failureClass": "artifact_publication_failed",
+        "mode": "degraded_without_context",
+        "reason": "context_artifact_publication_failed",
+    }
+
+    await store.record_initial_context("idem-1", evidence=evidence)
+    await store.record_initial_context("idem-1", evidence=evidence)
+
+    events = await store.list_events(row.bridge_session_id)
+    retrieval_events = [
+        event for event in events
+        if event.event_type == "lifecycle.initial_retrieval"
+    ]
+    assert len(retrieval_events) == 1
+    event = retrieval_events[0]
+    assert event.artifact_ref == "artifact://context/pack.json"
+    assert event.metadata_["status"] == "running"
+    assert event.metadata_["failureClass"] == "artifact_publication_failed"
+    assert event.metadata_["metadata"] == {
+        "retrievalState": "degraded",
+        "retrievalMode": "degraded_without_context",
+        "retrievalReason": "context_artifact_publication_failed",
+    }
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(

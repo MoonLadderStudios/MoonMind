@@ -197,17 +197,18 @@ def _retrieval_evidence(request: AgentExecutionRequest) -> dict[str, Any]:
     ref = str(moonmind.get("latestContextPackRef") or "").strip() or None
     mode = str(moonmind.get("retrievalMode") or "disabled").strip()
     failure_class = str(moonmind.get("retrievalFailureClass") or "").strip()
-    state = (
-        "degraded"
-        if mode.startswith("degraded")
-        else "completed"
-        if ref
-        else "failed"
-        if failure_class == "denied"
-        else "skipped"
-        if failure_class == "unavailable"
-        else "disabled"
-    )
+    if mode.startswith("degraded"):
+        state = "degraded"
+    elif ref:
+        state = "completed"
+    elif failure_class == "denied":
+        state = "denied"
+    elif failure_class == "unavailable":
+        state = "unavailable"
+    elif failure_class or mode not in {"disabled", ""}:
+        state = "failed"
+    else:
+        state = "disabled"
     return {
         "state": state,
         "contextPackRef": ref,
@@ -318,6 +319,12 @@ async def _resolve_initial_context_message(
     )
     evidence["required"] = retrieval_required
     if retrieval_required and evidence["state"] not in {"completed", "degraded"}:
+        record_context = getattr(run_store, "record_initial_context", None)
+        if callable(record_context):
+            await record_context(
+                request.idempotency_key,
+                evidence=evidence,
+            )
         raise OmnigentContractError(
             "required initial context retrieval is unavailable: "
             f"{evidence.get('reason') or 'retrieval_disabled'}"

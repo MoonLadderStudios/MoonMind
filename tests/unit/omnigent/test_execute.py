@@ -480,6 +480,34 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
     )
 
     assert result.failure_class is None
+
+
+def test_build_omnigent_result_exposes_initial_context_pack_ref() -> None:
+    request = _request()
+    request.parameters = {
+        "metadata": {
+            "moonmind": {
+                "latestContextPackRef": "artifact://context/input.context-pack.json"
+            }
+        }
+    }
+
+    result = build_omnigent_result(
+        request=request,
+        terminal_status="completed",
+        session_id="session-1",
+        agent_id="agent-1",
+        final_snapshot={"summary": "done"},
+        event_count=1,
+        capture_bundle=_bundle(
+            output_refs=["artifact://transcript"],
+            diagnostics_ref="artifact://diagnostics",
+        ),
+    )
+
+    assert result.metadata["initialContextPackRef"] == (
+        "artifact://context/input.context-pack.json"
+    )
     assert result.provider_error_code is None
     assert result.output_refs == ["artifact://transcript", "artifact://snapshot"]
     assert result.diagnostics_ref == "artifact://diagnostics"

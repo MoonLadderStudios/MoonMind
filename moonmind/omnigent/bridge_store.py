@@ -1177,6 +1177,9 @@ class OmnigentBridgeSessionStore:
                         "captureManifestRef",
                         "resourceProjectionRef",
                         "evidenceCompleteness",
+                        "retrievalState",
+                        "retrievalMode",
+                        "retrievalReason",
                     }
                 }
             journal.append(entry)
@@ -1584,13 +1587,39 @@ class OmnigentBridgeSessionStore:
                     raise OmnigentDigestMismatchError(
                         "initial retrieval changed after first-message preparation"
                     )
-                return _detached(session, row)
-            metadata = dict(row.metadata_ or {})
-            metadata["initialRetrieval"] = redact_sensitive_payload(evidence)
-            row.metadata_ = metadata
-            await session.commit()
-            await session.refresh(row)
-            return _detached(session, row)
+            else:
+                metadata = dict(row.metadata_ or {})
+                metadata["initialRetrieval"] = redact_sensitive_payload(evidence)
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
+            detached = _detached(session, row)
+
+        retrieval_state = str(evidence.get("state") or "unknown")[:32]
+        retrieval_mode = str(evidence.get("mode") or "unknown")[:64]
+        retrieval_reason = str(evidence.get("reason") or "")[:256]
+        failure_class = str(evidence.get("failureClass") or "").strip() or None
+        context_pack_ref = (
+            str(evidence.get("contextPackRef") or "").strip() or None
+        )
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="initial_retrieval",
+            event_identity="initial_retrieval",
+            code=f"initial_retrieval_{retrieval_state}",
+            summary=(
+                f"Initial retrieval {retrieval_state}"
+                + (f": {retrieval_reason}" if retrieval_reason else "")
+            ),
+            failure_class=failure_class,
+            diagnostics_ref=context_pack_ref,
+            metadata={
+                "retrievalState": retrieval_state,
+                "retrievalMode": retrieval_mode,
+                "retrievalReason": retrieval_reason,
+            },
+        )
+        return detached
 
     async def mark_posting(self, idempotency_key: str) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
