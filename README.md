@@ -11,7 +11,7 @@ MoonMind is an open-source framework that makes Claude Code and Codex CLI **safe
 
 For now, MoonMind is focused on software engineering use cases, but can be used for other use cases as well and this will be made easier in the future (e.g. not requiring a git repo).
 
-UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://github.com/omnigent-ai/omnigent) as a supported managed agent, which will make MoonMind compatible with Claude Code, Codex, Antigravity, Cursor, OpenCode, Hermes, Pi, and other agents. This should be finished by the end of July 2026.
+MoonMind includes a Codex-through-[Omnigent](https://github.com/omnigent-ai/omnigent) managed-runtime path with profile and policy readiness gating, static and on-demand hosts, durable event replay, controls, and artifact harvesting. It is currently an explicit opt-in path while the protected live support matrix is completed; direct Codex remains a truthfully labeled migration fallback and historical-read substrate. See the [versioned support and cutover matrix](docs/Omnigent/CodexSupportAndCutover.md). Claude-through-Omnigent parity is deliberately deferred.
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://gith
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
     - Configure any other secrets or settings you want to adjust for your first workflow
-8. Click Create and submit a workflow!
+8. Click Create and submit a workflow. Choose Codex via Omnigent when its readiness entry is available; the default changes only through the evidence-gated rollout described in the support matrix.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
@@ -104,7 +104,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, MCP/context surfaces, and the API-owned Docker Backend Service contract. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, external integrations, and durable container-job execution. |
-| **Managed Session Plane** | Workflow-scoped owned runtime sessions for Codex CLI and future Omnigent-backed runtimes. Container jobs remain separate from session identity and are requested through MoonMind tools. |
+| **Managed Session Plane** | Workflow-scoped Codex CLI compatibility sessions and profile-bound Codex-through-Omnigent sessions. Omnigent is opt-in until its live matrix permits staged default promotion; container jobs remain separate from session identity. |
 | **Docker Backend Service** | Authenticated MCP/HTTP container-job surface that resolves workspaces, applies policy, dispatches bounded jobs through Temporal, and uses one deployment-selected Docker daemon whose image cache is reusable across workflows. |
 | **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |

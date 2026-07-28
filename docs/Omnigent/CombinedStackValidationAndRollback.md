@@ -1,5 +1,11 @@
 # Combined Stack Validation and Rollback
 
+Release support and default promotion are separate from successful local stack
+startup. The authoritative phase, evidence requirements, support statuses, and
+direct-runtime retirement gates are defined in
+[`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md). Local validation must
+not promote a rollout phase without the protected-live artifact required there.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Updated:** 2026-07-18  

@@ -159,7 +159,7 @@ MoonMind UI / API
           -> Codex managed runtime
 ```
 
-This is a temporary migration path. The direct Codex adapter can emit Omnigent-shaped session events while MoonMind continues to support current managed-session execution. Once Codex execution moves behind Omnigent, this compatibility producer can be retired.
+This is a temporary migration path. The direct Codex adapter can emit Omnigent-shaped session events while MoonMind continues to support current managed-session execution. It is retired only under the evidence and history gates in [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md); an Omnigent default by itself is not sufficient.
 
 ---
 
