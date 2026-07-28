@@ -682,9 +682,9 @@ class RemediationContextBuilder:
                     refs.append(ref)
 
         for kind, raw_ref in (
-            ("input", record.input_ref),
-            ("plan", record.plan_ref),
-            ("manifest", record.manifest_ref),
+            ("input", getattr(record, "input_ref", None)),
+            ("plan", getattr(record, "plan_ref", None)),
+            ("manifest", getattr(record, "manifest_ref", None)),
         ):
             ref = _artifact_ref_payload(raw_ref, kind=kind)
             if ref is not None:

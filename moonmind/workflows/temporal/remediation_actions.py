@@ -855,23 +855,6 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
-        parameter_error = _action_parameter_error(
-            action_info=action_info,
-            parameters=parameters,
-        )
-        if parameter_error is not None:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason=parameter_error,
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
         if not permissions.can_view_target:
             return self._linked_result(
                 link=link,
@@ -1005,6 +988,24 @@ class RemediationActionAuthorityService:
                     approval_ref=approval_ref,
                     parameters=parameters,
                 )
+
+        parameter_error = _action_parameter_error(
+            action_info=action_info,
+            parameters=parameters,
+        )
+        if parameter_error is not None:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=parameter_error,
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
 
         return self._linked_result(
             link=link,

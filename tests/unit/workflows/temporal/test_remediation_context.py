@@ -2476,7 +2476,10 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "Authorization: Bearer raw-secret-token"},
+            parameters={
+                "reason": "Authorization: Bearer raw-secret-token",
+                "containerRef": "container-1",
+            },
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2807,7 +2810,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         approved = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="gated-approved",
             requesting_principal="user:operator",
@@ -2861,7 +2864,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="medium-allowed",
             requesting_principal="user:operator",
@@ -2945,7 +2948,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="same-idempotency-key",
             requesting_principal="user:operator",
@@ -3147,7 +3150,10 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         decision = await service.evaluate_action_request(
             remediation_workflow_id=preparation.remediation_workflow_id,
             action_kind=preparation.action_kind,
-            parameters={"reason": f"target state was {preparation.target.state}"},
+            parameters={
+                "reason": f"target state was {preparation.target.state}",
+                "containerRef": "container-1",
+            },
             dry_run=False,
             idempotency_key="prepared-action",
             requesting_principal="workflow:remediator",
