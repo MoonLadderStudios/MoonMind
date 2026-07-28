@@ -241,7 +241,7 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
                 "static-after" if name == "static_restart_replay" else None
             ),
             "_sourceRecords": [
-                {"type": record_type, "_resolved": authority}
+                {"type": record_type, "_resolved": row_authority}
                 for record_type in module.BROWSER_RECORD_ORDER
             ],
             "evidenceRefs": [f"artifact://{name}"],

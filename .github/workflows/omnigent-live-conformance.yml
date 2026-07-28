@@ -344,6 +344,7 @@ jobs:
               "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
               "issue": "MoonLadderStudios/MoonMind#3508",
               "parentIssue": "MoonLadderStudios/MoonMind#3448",
+              "acceptanceIssue": "MoonLadderStudios/MoonMind#3456",
               "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
               "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
               "runId": os.environ["GITHUB_RUN_ID"],
