@@ -1941,6 +1941,16 @@ class MoonMindRunWorkflow:
         if resolved_summary is not None:
             bounded_outputs.setdefault("summary", resolved_summary[:500])
         prepared_input_refs = self._combined_step_execution_input_refs(input_refs)
+        cached_context = self._step_execution_context_projections.get(
+            (logical_step_id, attempt)
+        )
+        initial_context_ref = (
+            str(cached_context.get("initialContextPackRef") or "").strip()
+            if isinstance(cached_context, Mapping)
+            else ""
+        )
+        if initial_context_ref and initial_context_ref not in prepared_input_refs:
+            prepared_input_refs.append(initial_context_ref)
         input_payload: dict[str, Any] = {}
         if prepared_input_refs:
             input_payload["preparedInputRefs"] = prepared_input_refs
@@ -11385,6 +11395,11 @@ class MoonMindRunWorkflow:
                         node_id,
                         execution_result=execution_result,
                         updated_at=workflow.now(),
+                    )
+                    self._record_omnigent_initial_context_ref(
+                        node_id,
+                        attempt=self._step_execution_for(node_id) or 1,
+                        execution_result=execution_result,
                     )
                     if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
                         outcome_recorded_at = workflow.now()

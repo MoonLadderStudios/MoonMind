@@ -8284,8 +8284,9 @@ describe('Workflow Detail Entrypoint', () => {
     );
     expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Collections: canonical, workspace-overlay');
     expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain('Context consumed: yes');
-    expect(screen.getByRole('link', { name: 'Open ContextPack artifact' }).getAttribute('href')).toContain(
-      '/artifacts/artifact%3A%2F%2Fcontext%2Fpack.json/download',
+    expect(screen.queryByRole('link', { name: 'Open ContextPack artifact' })).toBeNull();
+    expect(screen.getByTestId('omnigent-initial-retrieval').textContent).toContain(
+      'ContextPack artifact: artifact://context/pack.json',
     );
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),

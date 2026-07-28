@@ -6248,7 +6248,7 @@ function BridgeSessionLogsPanel({
             {projection.initialRetrieval.contextPackDigest ? <> · pack <code className="text-xs">{String(projection.initialRetrieval.contextPackDigest)}</code></> : null}
           </p>
           {projection.initialRetrieval.contextPackRef ? (
-            <p><a href={buildArtifactDownloadHref(apiBase, String(projection.initialRetrieval.contextPackRef))}>Open ContextPack artifact</a></p>
+            <p>ContextPack artifact: <code className="text-xs break-all">{String(projection.initialRetrieval.contextPackRef)}</code></p>
           ) : null}
         </div>
       ) : null}

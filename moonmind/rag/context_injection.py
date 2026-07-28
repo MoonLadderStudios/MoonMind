@@ -194,6 +194,12 @@ class ContextInjectionService:
             workspace_path=workspace_path,
         )
         items_count = len(pack.items)
+        authored_rag = self._authored_rag(request)
+        effective_query = str(
+            authored_rag.get("queryOverride")
+            or authored_rag.get("query")
+            or instruction_ref
+        )
         self._record_context_metadata(
             request=request,
             artifact_ref=artifact_ref,
@@ -201,7 +207,8 @@ class ContextInjectionService:
             items_count=items_count,
             degraded_reason=retrieval_skip_reason,
             pack=pack,
-            query=instruction_ref,
+            query=effective_query,
+            overlay_policy=self._resolve_rag_overlay_policy(),
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
             settings=RagRuntimeSettings.from_env(self._env),
         )
@@ -383,6 +390,7 @@ class ContextInjectionService:
         query: str = "",
         duration_ms: float = 0.0,
         settings: RagRuntimeSettings | None = None,
+        overlay_policy: str = "skip",
     ) -> None:
         moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
         normalized_transport = str(transport or "").strip()
@@ -408,9 +416,8 @@ class ContextInjectionService:
         moonmind_meta["retrievalQueryDigest"] = "sha256:" + hashlib.sha256(
             query_value.encode()
         ).hexdigest()
-        moonmind_meta["retrievalQueryPreview"] = query_value[:160]
         moonmind_meta["retrievedContextSources"] = list(
-            dict.fromkeys(item.source for item in (pack.items if pack else []))
+            dict.fromkeys(str(item.source)[:160] for item in (pack.items if pack else []))
         )[:20]
         authored_collections = ContextInjectionService._authored_rag(request).get("collections")
         selected_collections = (
@@ -451,12 +458,8 @@ class ContextInjectionService:
             str(item.payload.get("freshness") or "").lower()
             for item in (pack.items if pack else [])
         }
-        has_overlay = any(
-            "overlay" in str(item.payload).lower()
-            for item in (pack.items if pack else [])
-        )
         moonmind_meta["retrievalOverlay"] = {
-            "policy": "include" if has_overlay else "skip",
+            "policy": str(overlay_policy or "skip"),
             "freshness": "stale" if "stale" in freshness_values else "fresh",
         }
         embedding_identity = (
@@ -507,7 +510,7 @@ class ContextInjectionService:
             str(initiation_mode or "automatic").strip() or "automatic"
         )
         moonmind_meta["retrievalContextTruncated"] = False
-        moonmind_meta["retrievalFailureClass"] = failure_class or "disabled"
+        moonmind_meta["retrievalFailureClass"] = failure_class or None
 
     @staticmethod
     def _authored_rag(request: AgentExecutionRequest) -> dict[str, object]:

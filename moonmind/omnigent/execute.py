@@ -255,9 +255,62 @@ async def _resolve_initial_context_message(
     prepared_ref = str(existing.get("preparedMessageRef") or "").strip()
     if prepared_ref:
         restored = json.loads(await artifact_gateway.read_text(prepared_ref))
-        if not isinstance(restored, dict):
+        if not isinstance(restored, dict) or not _first_message_text(restored):
             raise OmnigentContractError("persisted first-message artifact is invalid")
+        restored_digest = hashlib.sha256(
+            json.dumps(restored, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        expected_digest = str(existing.get("preparedMessageDigest") or "").removeprefix(
+            "sha256:"
+        )
+        if expected_digest and restored_digest != expected_digest:
+            raise OmnigentContractError("persisted first-message artifact digest mismatch")
+        context_ref = str(existing.get("contextPackRef") or "").strip()
+        if context_ref:
+            moonmind = (
+                request.parameters.setdefault("metadata", {}).setdefault("moonmind", {})
+            )
+            moonmind["latestContextPackRef"] = context_ref
         return restored, existing
+
+    # Cut over rows prepared by the pre-retrieval bridge without attempting a
+    # new retrieval. Reconstruct and verify the already committed message, then
+    # add the portable artifact ref used by subsequent retries. The durable row
+    # remains the authority for the original digest.
+    durable_state = str(getattr(durable_row, "first_message_state", "") or "")
+    durable_digest = str(getattr(durable_row, "first_message_digest", "") or "")
+    if durable_state and durable_state != FIRST_MESSAGE_NOT_PREPARED:
+        first_message.setdefault("metadata", {})[
+            "moonmindIdempotencyKey"
+        ] = request.idempotency_key
+        if include_idempotency_marker:
+            original_text = _first_message_text(first_message)
+            first_message["data"]["content"][0]["text"] = (
+                f"{original_text}\n\n{_first_message_marker(request=request)}".strip()
+            )
+        message_bytes = json.dumps(
+            first_message, sort_keys=True, separators=(",", ":")
+        ).encode()
+        reconstructed_digest = hashlib.sha256(message_bytes).hexdigest()
+        if not durable_digest or reconstructed_digest != durable_digest.removeprefix(
+            "sha256:"
+        ):
+            raise OmnigentContractError(
+                "pre-change prepared first message cannot be reconstructed"
+            )
+        return first_message, {
+            "state": "disabled",
+            "mode": "legacy_prepared_message",
+            "reason": "pre_context_retrieval_cutover",
+            "preparedMessageDigest": reconstructed_digest,
+            "preparedMessageRef": await artifact_gateway.write_json(
+                request=request,
+                name="input.omnigent.first_message.prepared.json",
+                payload=first_message,
+                link_type="input.omnigent.first_message.prepared",
+            ),
+            "firstMessageConsumedContextRef": False,
+        }
 
     text = _first_message_text(first_message)
     if text:
@@ -267,7 +320,9 @@ async def _resolve_initial_context_message(
         retrieval_request.instruction_ref = text
         resolution = await ContextInjectionService().inject_context(
             request=retrieval_request,
-            workspace_path=Path(workspace or ".").resolve(),
+            # The provider session workspace may be a URL or a path visible only
+            # inside the Omnigent host. Retrieval and staging run on this worker.
+            workspace_path=Path.cwd().resolve(),
         )
         first_message["data"]["content"][0]["text"] = resolution.instruction
         # Copy only the compact RAG metadata back to the canonical request so it
@@ -346,7 +401,9 @@ async def _resolve_initial_context_message(
         payload=first_message,
         link_type="input.omnigent.first_message.prepared",
     )
-    evidence["firstMessageConsumedContextRef"] = bool(evidence.get("contextPackRef"))
+    evidence["firstMessageConsumedContextRef"] = bool(
+        evidence.get("contextPackRef") and resolution.items_count > 0
+    ) if text else False
     record_context = getattr(run_store, "record_initial_context", None)
     if callable(record_context):
         durable_row = await record_context(
@@ -903,14 +960,6 @@ async def run_omnigent_execution(
             external_state["initialRetrieval"] = retrieval_evidence
             if run_store is not None:
                 try:
-                    record_context = getattr(
-                        run_store, "record_initial_context", None
-                    )
-                    if callable(record_context):
-                        durable_row = await record_context(
-                            request.idempotency_key,
-                            evidence=retrieval_evidence,
-                        )
                     durable_row = await run_store.mark_prepared(
                         request.idempotency_key,
                         digest=digest,
