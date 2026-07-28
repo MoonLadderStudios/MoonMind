@@ -74,6 +74,34 @@ async def test_managed_runtime_workspace_cleanup_invokes_cleanup_activity(
 
 
 @pytest.mark.asyncio
+async def test_managed_runtime_cleanup_forwards_remediation_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supplied = {
+        "actionKind": "cleanup.request_janitor",
+        "cleanupRef": "artifact://cleanup",
+        "targetWorkflowId": "target",
+        "expectedState": "pending",
+        "requestId": "request-1",
+    }
+
+    async def _execute_activity(
+        activity_name: str, payload: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        assert activity_name == "agent_runtime.cleanup_managed_runtime_files"
+        assert payload == supplied
+        return {"errors": ()}
+
+    monkeypatch.setattr(cleanup_module.workflow, "set_current_details", lambda _: None)
+    monkeypatch.setattr(
+        cleanup_module.workflow, "upsert_search_attributes", lambda _: None
+    )
+    monkeypatch.setattr(cleanup_module.workflow, "execute_activity", _execute_activity)
+
+    await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run(supplied)
+
+
+@pytest.mark.asyncio
 async def test_managed_runtime_workspace_cleanup_marks_errors_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

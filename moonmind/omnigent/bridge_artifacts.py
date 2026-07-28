@@ -392,6 +392,20 @@ def build_omnigent_result(
         metadata["externalStateRef"] = capture_bundle.external_state_ref
         metadata["stateCheckpointRef"] = capture_bundle.external_state_ref
         metadata["checkpointKind"] = "external_state_ref"
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    request_metadata = parameters.get("metadata")
+    moonmind_metadata = (
+        request_metadata.get("moonmind")
+        if isinstance(request_metadata, dict)
+        else None
+    )
+    initial_context_pack_ref = (
+        str(moonmind_metadata.get("latestContextPackRef") or "").strip()
+        if isinstance(moonmind_metadata, dict)
+        else ""
+    )
+    if initial_context_pack_ref:
+        metadata["initialContextPackRef"] = initial_context_pack_ref
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
         "omnigentAgentName": "omnigent_agent_name",

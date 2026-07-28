@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative
 **Status:** Current
 **Updated:** 2026-07-23
-**Authority:** MoonLadderStudios/MoonMind#3456 product acceptance and MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract
+**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance and MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -101,7 +101,15 @@ Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
 removes that project's containers and networks only; it intentionally never
 passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
 runner always attempts cleanup and evidence scanning, including after a failed
-startup or journey. `--mode static` covers restart and replay; `stock`,
+startup or journey. `--mode browser` is the controlling #3508 journey. It
+drives `/workflows/new` through an operator-provisioned headless browser and
+independently proves the static, restart/replay, on-demand, repository read,
+controlled mutation, admission failure, host-readiness failure, cancellation,
+and cleanup-reconciliation rows. Every row resolves the full profile, policy,
+runtime, host, session, workspace, artifact, cleanup, janitor, and lease
+authority chain and fails on any direct-Codex or alternate-authority fallback.
+
+`--mode static` covers restart and replay; `stock`,
 `product`, `cumulative`, `ondemand`, and `failures` can be gated independently in provider
 environments.
 
@@ -133,7 +141,7 @@ changing replay or historical reads for already-started destinations.
 ## Credentialed CI publication
 
 `.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
-dispatchable publication gate for MoonLadderStudios/MoonMind#3456. It runs on a
+dispatchable publication gate for MoonLadderStudios/MoonMind#3508. It runs on a
 dedicated `omnigent-provider-verification` self-hosted runner so the enrolled
 OAuth profile and live action adapter remain outside GitHub-hosted workers. The
 protected environment supplies the adapter command; repository variables supply
@@ -141,14 +149,16 @@ the digest-pinned server and host images plus the four bounded evidence-channel
 paths. Manual dispatch may override the two image references, but the workflow
 rejects mutable references before provider execution.
 
-Normal-create product journey, cumulative remediation, stock proxy, static
+Browser-controlled release rows, normal-create product journey, cumulative remediation, stock proxy, static
 restart/replay, on-demand lifecycle, and failure/redaction run as independent
 matrix jobs. Each job uploads evidence even on failure. The publication job
 runs only after all six
 jobs pass, combines their reports, and uploads a
-`moonmind.omnigent.product-acceptance/v1` manifest with the six report trees as
-the durable GitHub Actions artifact. It links that passing report from #3480,
-parent #3471, #3456, and parent #3448. A configured workflow, fixture-generated success, or an
+`moonmind.omnigent.product-acceptance/v1` manifest with the seven report trees as
+the durable GitHub Actions artifact. It links that passing report from #3508
+and parent #3448. The manifest expires after 30 days; missing, expired,
+malformed, mutable-image, incomplete-row, or incomplete-authority evidence
+keeps the release gate closed. A configured workflow, fixture-generated success, or an
 individual passing case is not published acceptance evidence.
 
 Omnigent selection remains evidence-gated and must not become a general default
