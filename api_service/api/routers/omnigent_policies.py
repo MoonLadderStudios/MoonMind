@@ -54,6 +54,16 @@ def _require(user: User, permission: str) -> None:
         raise HTTPException(403, f"Missing required Omnigent policy permission: {permission}.")
 
 
+def _can_read_policy(policy: Any, user: User) -> bool:
+    return policy.visibility == "deployment" or policy.owner_user_id == getattr(user, "id", None)
+
+
+async def _require_policy_read(service: OmnigentPolicyService, policy_id: str, user: User) -> None:
+    policy = await service.get_policy(policy_id)
+    if not _can_read_policy(policy, user):
+        raise HTTPException(404, "Policy not found")
+
+
 def _version_json(row: Any) -> dict[str, Any]:
     return {
         "policyId": row.policy_id, "version": row.version, "ref": f"{row.policy_id}@{row.version}",
@@ -70,6 +80,7 @@ def _version_json(row: Any) -> dict[str, Any]:
 async def list_policies(session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.catalog.read")
     rows = await OmnigentPolicyService(session).list()
+    rows = [(policy, version) for policy, version in rows if _can_read_policy(policy, user)]
     return {"items": [{"id": policy.policy_id, "name": policy.name, "visibility": policy.visibility,
                        "status": version.state if version else "draft", "defaultVersion": policy.default_version,
                        "summary": f"Immutable policy authority; default {policy.default_version or 'not selected'}",
@@ -93,8 +104,10 @@ async def create_policy(body: CreatePolicy, session: AsyncSession = Depends(get_
 @router.get("/{policy_id}/versions")
 async def list_versions(policy_id: str, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.catalog.read")
+    service = OmnigentPolicyService(session)
     try:
-        return {"items": [_version_json(row) for row in await OmnigentPolicyService(session).versions(policy_id)]}
+        await _require_policy_read(service, policy_id, user)
+        return {"items": [_version_json(row) for row in await service.versions(policy_id)]}
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -104,6 +117,7 @@ async def validate_version(policy_id: str, version: int, session: AsyncSession =
     _require(user, "settings.system.write")
     service = OmnigentPolicyService(session)
     try:
+        await _require_policy_read(service, policy_id, user)
         row = await service.get_version(policy_id, version)
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -119,8 +133,10 @@ async def validate_version(policy_id: str, version: int, session: AsyncSession =
 @router.get("/{policy_id}/audit")
 async def policy_audit(policy_id: str, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.catalog.read")
+    service = OmnigentPolicyService(session)
     try:
-        events = await OmnigentPolicyService(session).audit(policy_id)
+        await _require_policy_read(service, policy_id, user)
+        events = await service.audit(policy_id)
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"items": [{
@@ -167,8 +183,10 @@ async def transition(policy_id: str, version: int, body: Transition, session: As
 @router.get("/{policy_id}/versions/{version}/snapshot")
 async def get_snapshot(policy_id: str, version: int, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.catalog.read")
+    service = OmnigentPolicyService(session)
     try:
-        return await OmnigentPolicyService(session).snapshot(policy_id, version)
+        await _require_policy_read(service, policy_id, user)
+        return await service.snapshot(policy_id, version)
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -178,6 +196,7 @@ async def diff_versions(policy_id: str, from_version: int, to_version: int, sess
     _require(user, "settings.catalog.read")
     service = OmnigentPolicyService(session)
     try:
+        await _require_policy_read(service, policy_id, user)
         before, after = await service.get_version(policy_id, from_version), await service.get_version(policy_id, to_version)
     except PolicyNotFound as exc:
         raise HTTPException(404, str(exc)) from exc

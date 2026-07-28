@@ -240,6 +240,7 @@ def _compile_persisted_effective_launch(
             "temporaryStorageMiB": resources["temporaryStorageMiB"],
         },
         "mountClasses": list(workspace["mountClasses"]),
+        "repositoryMutation": bool(workspace["repositoryMutation"]),
         "runtimeUid": workspace["runtimeUid"],
         "runtimeGid": workspace["runtimeGid"],
         # The Codex host substrate is intentionally stricter than selectable
@@ -447,6 +448,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 policy_snapshot,
                 provider_profile_id=profile_id,
             )
+            if (
+                self._repository_mutation_required(request)
+                and not effective_launch["repositoryMutation"]
+            ):
+                raise OmnigentOAuthHostError(
+                    "persisted policy denies required repository mutation",
+                    code="OMNIGENT_REPOSITORY_MUTATION_DENIED",
+                )
             await emit(
                 current_stage,
                 "completed",
@@ -564,13 +573,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             current_stage = "host_binding_resolution"
-            if binding is None:
-                selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
-                binding = await self._hosts.create_or_update_static_binding(
-                    profile_id=profile_id,
-                    endpoint_ref=str(effective_launch["endpointRef"]),
-                    static_host_id=None,
-                    host_launch_profile_ref=(
+            selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
+            binding = await self._hosts.create_or_update_static_binding(
+                profile_id=profile_id,
+                endpoint_ref=str(effective_launch["endpointRef"]),
+                static_host_id=binding.static_host_id if binding is not None else None,
+                host_launch_profile_ref=(
+                    binding.host_launch_profile_ref
+                    if binding is not None
+                    else (
                         (
                             "codex-on-demand@1"
                             if requested_target
@@ -578,11 +589,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                         )
                         if selected_on_demand
                         else None
-                    ),
-                    execution_profile_ref=str(effective_launch["executionProfileRef"]),
-                    launch_policy_ref=str(effective_launch["launchPolicyRef"]),
-                    effective_launch_snapshot=effective_launch,
-                )
+                    )
+                ),
+                execution_profile_ref=str(effective_launch["executionProfileRef"]),
+                launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+                effective_launch_snapshot=effective_launch,
+            )
             await emit(
                 current_stage,
                 "completed",

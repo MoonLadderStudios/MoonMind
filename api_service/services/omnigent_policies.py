@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import os
+import platform
 import re
 from typing import Any
 from uuid import uuid4
@@ -13,9 +14,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
+)
+from moonmind.config.container_backend_settings import (
+    ContainerBackendConfigError,
+    resolve_container_backend_settings,
 )
 from moonmind.omnigent.policies import (
     PolicyDocument,
@@ -76,13 +82,21 @@ def validate_policy(
             "path": "network.egressProfileRef",
             "message": "Network attachment and enforced-egress authority must be distinct references.",
         })
-    declared = capabilities or {
-        "hostModes": {"static_compose", "on_demand_docker"},
-        "backends": {"compose", "container-backend"},
-        "architectures": {"amd64", "arm64"},
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+    try:
+        container_backend_enabled = resolve_container_backend_settings().enabled
+    except ContainerBackendConfigError:
+        container_backend_enabled = False
+    deployment_capabilities = {
+        "hostModes": {"static_compose"} | ({"on_demand_docker"} if container_backend_enabled else set()),
+        "backends": {"compose"} | ({"container-backend"} if container_backend_enabled else set()),
+        "architectures": {architecture},
         "providers": {"codex"},
         "workspaceClasses": {"workflow"},
     }
+    declared = capabilities or deployment_capabilities
     capability_checks = (
         ("hostModes", payload["host"]["mode"], "host.mode", "OMNIGENT_HOST_MODE_UNAVAILABLE"),
         ("backends", payload["host"]["backendRef"], "host.backendRef", "OMNIGENT_BACKEND_UNAVAILABLE"),
@@ -166,7 +180,11 @@ class OmnigentPolicyService:
         self._event(policy_id, 1, "version_created", actor, {
             "cloneSourceRef": clone_source_ref, "digest": row.digest,
         })
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise PolicyConflict("policy identity or name already exists") from exc
         return row
 
     async def new_version(self, *, policy_id: str, document: PolicyDocument, actor: str,
@@ -199,8 +217,23 @@ class OmnigentPolicyService:
 
     async def transition(self, *, policy_id: str, version: int, state: PolicyState, actor: str,
                          make_default: bool = False) -> OmnigentPolicyVersion:
-        policy = await self.get_policy(policy_id)
-        row = await self.get_version(policy_id, version)
+        policy = (await self.session.execute(
+            select(OmnigentPolicy)
+            .where(OmnigentPolicy.policy_id == policy_id)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if policy is None:
+            raise PolicyNotFound(policy_id)
+        row = (await self.session.execute(
+            select(OmnigentPolicyVersion)
+            .where(
+                OmnigentPolicyVersion.policy_id == policy_id,
+                OmnigentPolicyVersion.version == version,
+            )
+            .with_for_update()
+        )).scalar_one_or_none()
+        if row is None:
+            raise PolicyNotFound(f"{policy_id}@{version}")
         allowed = {
             PolicyState.DRAFT: {PolicyState.ACTIVE, PolicyState.DISABLED},
             PolicyState.ACTIVE: {PolicyState.DISABLED, PolicyState.DEPRECATED, PolicyState.SUPERSEDED},
@@ -220,6 +253,17 @@ class OmnigentPolicyService:
             raise PolicyConflict(
                 "default policy version cannot be made unavailable; switch the default first"
             )
+        if state in {PolicyState.DISABLED, PolicyState.DEPRECATED, PolicyState.SUPERSEDED}:
+            bound = (await self.session.execute(
+                select(OmnigentOAuthHostBindingRecord.binding_ref).where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref
+                    == f"{policy_id}@{version}"
+                ).limit(1)
+            )).scalar_one_or_none()
+            if bound is not None:
+                raise PolicyConflict(
+                    "policy version is bound to an active host profile and cannot be made unavailable"
+                )
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
@@ -301,12 +345,15 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
     image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
     server_image = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
     host_image = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
     return PolicyDocument.model_validate({
         "schemaVersion": 1,
         "endpoint": {"ref": "default", "bridgeModes": ["embedded", "proxy"]},
         "execution": {"profileRef": execution_profile_ref, "harness": "codex-native", "agentIdentities": ["codex"]},
         "host": {"mode": host_mode, "backendRef": "compose" if host_mode == "static_compose" else "container-backend",
-                 "architectures": ["amd64", "arm64"],
+                 "architectures": [architecture],
                  "serverImageRef": server_image if image_pattern.fullmatch(server_image) else "image-ref:omnigent-server",
                  "hostImageRef": host_image if image_pattern.fullmatch(host_image) else "image-ref:omnigent-codex-host"},
         "resources": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400,
@@ -341,18 +388,28 @@ async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
         ("codex-static", "Codex static host", "static_compose", "omnigent-codex@1"),
         ("codex-on-demand", "Codex on-demand host", "on_demand_docker", "omnigent-codex@1"),
     ):
-        if await session.get(OmnigentPolicy, policy_id):
-            continue
         document = bootstrap_document(host_mode=host_mode, execution_profile_ref=profile_ref)
-        row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
-                                   document=document, actor="bootstrap")
-        row.env_fallback_used = any(
-            os.getenv(variable, "").strip() == document.model_dump(by_alias=True)["host"].get(field)
-            for variable, field in (
-                ("OMNIGENT_IMAGE_REF", "serverImageRef"),
-                ("OMNIGENT_HOST_IMAGE_REF", "hostImageRef"),
-            )
-        )
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None:
+            row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
+                                       document=document, actor="bootstrap")
+        else:
+            row = await service.get_version(policy_id, 1)
+            if row.state != PolicyState.DRAFT.value or row.validation_json.get("valid"):
+                continue
+            normalized = normalize_document(document)
+            validation, compatibility = validate_policy(document)
+            if not validation.get("valid"):
+                continue
+            row.document_json = normalized
+            row.digest = document_digest(normalized)
+            row.validation_json = validation
+            row.compatibility_json = compatibility
+            row.rollout_json = normalized["rollout"]
+            service._event(policy_id, 1, "bootstrap_repaired", "bootstrap", {
+                "digest": row.digest,
+            })
+        row.env_fallback_used = False
         await session.commit()
         if row.validation_json.get("valid"):
             await service.transition(

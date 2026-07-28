@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
@@ -35,6 +36,7 @@ async def policy_db(tmp_path):
                     OmnigentPolicy.__table__,
                     OmnigentPolicyVersion.__table__,
                     OmnigentPolicyEvent.__table__,
+                    OmnigentOAuthHostBindingRecord.__table__,
                 ],
             )
         )
@@ -168,6 +170,62 @@ async def test_clone_requires_existing_immutable_source_and_records_lineage(tmp_
                 document=PolicyDocument.model_validate(policy_document()),
                 actor="operator",
                 clone_source_ref="missing@1",
+            )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_policy_name_is_a_conflict(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service, "first")
+        with pytest.raises(PolicyConflict, match="identity or name already exists"):
+            await service.create(
+                policy_id="second",
+                name="first name",
+                owner_user_id=None,
+                visibility="deployment",
+                document=PolicyDocument.model_validate(policy_document()),
+                actor="operator",
+            )
+
+
+@pytest.mark.asyncio
+async def test_bound_policy_version_cannot_be_retired(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        await service.transition(
+            policy_id="policy", version=1, state=PolicyState.ACTIVE,
+            actor="operator", make_default=True,
+        )
+        changed = deepcopy(policy_document())
+        changed["resources"]["cpuMillis"] = 3000
+        await service.new_version(
+            policy_id="policy",
+            document=PolicyDocument.model_validate(changed),
+            actor="operator",
+            expected_parent_ref="policy@1",
+        )
+        await service.transition(
+            policy_id="policy", version=2, state=PolicyState.ACTIVE,
+            actor="operator", make_default=True,
+        )
+        session.add(OmnigentOAuthHostBindingRecord(
+            binding_ref="binding", provider_profile_id="profile",
+            endpoint_ref="default", harness="codex-native",
+            credential_mount_template_json={
+                "kind": "managed_secret_volume", "sourceRef": "profile",
+                "targetPath": "/home/app/.codex", "accessMode": "read_write",
+                "runtimeUid": 1000, "runtimeGid": 1000,
+            },
+            launch_policy_ref="policy@1",
+        ))
+        await session.commit()
+
+        with pytest.raises(PolicyConflict, match="bound to an active host profile"):
+            await service.transition(
+                policy_id="policy", version=1, state=PolicyState.DISABLED,
+                actor="operator",
             )
 
 
