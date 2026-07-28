@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -200,6 +201,8 @@ class RemediationEvidenceToolService:
         action_executor: RemediationActionExecutor | None = None,
         cursor_recorder: Callable[[str, dict[str, Any] | None], Awaitable[None]]
         | None = None,
+        stabilization_interval_seconds: float = 1.0,
+        stabilization_max_observations: int = 5,
     ) -> None:
         self._session = session
         self._artifact_service = artifact_service
@@ -211,6 +214,12 @@ class RemediationEvidenceToolService:
             artifact_service=artifact_service,
         )
         self._cursor_recorder = cursor_recorder
+        self._stabilization_interval_seconds = max(
+            0.0, stabilization_interval_seconds
+        )
+        self._stabilization_max_observations = max(
+            2, stabilization_max_observations
+        )
         self._context_payload_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def get_context(
@@ -416,8 +425,42 @@ class RemediationEvidenceToolService:
             action_kind=action_kind,
             principal=principal,
         )
-        link = await self._load_link(remediation_workflow_id)
-        await self._session.refresh(link)
+        # Hold row locks across the final comparison and the owning side effect.
+        # This is the authority handoff: target/policy writers cannot commit a
+        # competing generation while the executor acts on the validated one.
+        link = (
+            await self._session.execute(
+                select(db_models.TemporalExecutionRemediationLink)
+                .where(
+                    db_models.TemporalExecutionRemediationLink.remediation_workflow_id
+                    == remediation_workflow_id
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        target_record = (
+            await self._session.execute(
+                select(db_models.TemporalExecutionCanonicalRecord)
+                .where(
+                    db_models.TemporalExecutionCanonicalRecord.workflow_id
+                    == link.target_workflow_id
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if target_record is None:
+            raise RemediationEvidenceToolError(
+                "Approved action target no longer exists."
+            )
+        locked_target = _target_health_snapshot(link=link, target=target_record)
+        preparation = RemediationActionRequestPreparation(
+            remediation_workflow_id=preparation.remediation_workflow_id,
+            action_kind=preparation.action_kind,
+            target=locked_target,
+            context_target=preparation.context_target,
+        )
         self._validate_execution_context(
             link=link,
             remediation_workflow_id=remediation_workflow_id,
@@ -506,13 +549,16 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        immediate_target = await self._fresh_target_state(link)
-        # This service owns the stabilization observation. The second read is a
-        # distinct durable boundary and never trusts executor-supplied verdicts.
-        stabilized_target = await asyncio.wait_for(
-            self._fresh_target_state(link),
-            timeout=5.0,
+        immediate_target, stabilized_target, observations = await asyncio.wait_for(
+            self._observe_until_stable(link),
+            timeout=max(
+                5.0,
+                self._stabilization_interval_seconds
+                * self._stabilization_max_observations
+                + 1.0,
+            ),
         )
+        verification_contract = _verification_contract_for_action(action_kind)
         verification_payload = self._verification_payload(
             action_status=status,
             verification_required=verification_required,
@@ -522,6 +568,8 @@ class RemediationEvidenceToolService:
             before=preparation.target,
             immediate_after=immediate_target,
             stabilized_after=stabilized_target,
+            verification_contract=verification_contract,
+            observations=observations,
         )
         get_metrics_emitter().increment(
             "remediation.verification",
@@ -690,6 +738,20 @@ class RemediationEvidenceToolService:
             },
         }
 
+    async def _observe_until_stable(
+        self,
+        link: db_models.TemporalExecutionRemediationLink,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """Read fresh durable evidence until two consecutive observations converge."""
+
+        observations = [await self._fresh_target_state(link)]
+        for _ in range(1, self._stabilization_max_observations):
+            await asyncio.sleep(self._stabilization_interval_seconds)
+            observations.append(await self._fresh_target_state(link))
+            if observations[-1] == observations[-2]:
+                break
+        return observations[0], observations[-1], observations
+
     async def publish_lifecycle_summary(
         self,
         *,
@@ -715,10 +777,50 @@ class RemediationEvidenceToolService:
             target_run_id=link.target_run_id,
             principal=principal,
         )
+        prevention_payload = dict(prevention)
+        prevention_refs = prevention_payload.get("artifactRefs")
+        prevention_state = str(prevention_payload.get("status") or "").lower()
+        has_prevention_evidence = isinstance(prevention_refs, Mapping) and bool(
+            prevention_refs
+        )
+        prevention_verification_payload = {
+            "schemaVersion": "v1",
+            "scope": "prevention",
+            "status": (
+                "verified_resolved"
+                if prevention_state in {"completed", "merged", "applied"}
+                and has_prevention_evidence
+                else (
+                    "evidence_unavailable"
+                    if prevention_state
+                    in {"completed", "merged", "applied", "proposed", "open"}
+                    else "verified_no_change"
+                )
+            ),
+            "preventionKind": prevention_payload.get("kind"),
+            "artifactRefs": dict(prevention_refs)
+            if isinstance(prevention_refs, Mapping)
+            else {},
+        }
+        prevention_verification_artifact = (
+            await self._lifecycle_publisher.publish_json_artifact(
+                remediation_workflow_id=link.remediation_workflow_id,
+                artifact_type="remediation.prevention_verification",
+                name="reports/remediation_prevention_verification.json",
+                payload=prevention_verification_payload,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal=principal,
+            )
+        )
+        prevention_payload["verification"] = {
+            "status": prevention_verification_payload["status"],
+            "artifactRef": prevention_verification_artifact.artifact_id,
+        }
         final_summary = build_remediation_final_summary(
             summary=summary,
             repair=repair,
-            prevention=prevention,
+            prevention=prevention_payload,
             decision_log_ref=decision_artifact.artifact_id,
             final_audit_ref=final_audit_ref,
             lock_release=lock_release,
@@ -754,6 +856,7 @@ class RemediationEvidenceToolService:
             "artifactRefs": {
                 "decisionLog": decision_artifact.artifact_id,
                 "summary": summary_artifact.artifact_id,
+                "preventionVerification": prevention_verification_artifact.artifact_id,
             },
             "repairOutcome": final_summary.get("repair", {}).get("repairOutcome")
             if isinstance(final_summary.get("repair"), Mapping)
@@ -798,6 +901,8 @@ class RemediationEvidenceToolService:
         before: RemediationTargetHealthSnapshot,
         immediate_after: Mapping[str, Any],
         stabilized_after: Mapping[str, Any],
+        verification_contract: Mapping[str, Any],
+        observations: Sequence[Mapping[str, Any]],
     ) -> dict[str, Any]:
         status = _derive_verification_status(
             action_kind=action_kind,
@@ -811,6 +916,7 @@ class RemediationEvidenceToolService:
             },
             immediate_after=immediate_after,
             stabilized_after=stabilized_after,
+            verification_contract=verification_contract,
         )
         return {
             "schemaVersion": "v1",
@@ -830,6 +936,14 @@ class RemediationEvidenceToolService:
             },
             "immediateAfter": dict(immediate_after),
             "stabilizedAfter": dict(stabilized_after),
+            "contract": dict(verification_contract),
+            "stabilization": {
+                "policy": "two_consecutive_equal_observations",
+                "observationCount": len(observations),
+                "converged": (
+                    len(observations) >= 2 and observations[-1] == observations[-2]
+                ),
+            },
         }
 
     def _validate_final_approval_binding(
@@ -1099,6 +1213,7 @@ def _derive_verification_status(
     before: Mapping[str, Any],
     immediate_after: Mapping[str, Any],
     stabilized_after: Mapping[str, Any],
+    verification_contract: Mapping[str, Any] | None = None,
 ) -> str:
     """Derive the canonical verdict from action delivery and fresh evidence."""
 
@@ -1118,21 +1233,14 @@ def _derive_verification_status(
         or stabilized_after.get("closeStatus")
         or ""
     ).lower()
-    action_expected_states = {
-        "execution.pause": {"paused"},
-        "execution.resume": {"running", "executing"},
-        "execution.cancel": {"canceled", "cancelled"},
-        "execution.force_terminate": {"terminated"},
-        "session.cancel": {"canceled", "cancelled"},
-        "session.terminate": {"terminated"},
-    }
-    if after_state in action_expected_states.get(action_kind, set()):
+    contract = dict(
+        verification_contract or _verification_contract_for_action(action_kind)
+    )
+    if after_state in set(contract.get("expectedStates") or ()):
         return "verified_resolved"
-    if action_kind in {
-        "execution.request_rerun_same_workflow",
-        "execution.start_fresh_rerun",
-        "session.restart_container",
-    } and stabilized_after.get("runId") != before.get("runId"):
+    if contract.get("requireRunChange") and (
+        stabilized_after.get("runId") != before.get("runId")
+    ):
         return "verified_resolved"
     if after_state in resolved_states:
         return "verified_resolved"
@@ -1144,6 +1252,54 @@ def _derive_verification_status(
     if immediate_after != stabilized_after and after_state in failed_states:
         return "still_failed"
     return "still_failed"
+
+
+def _verification_contract_for_action(action_kind: str) -> dict[str, Any]:
+    """Return the typed, host-owned verification contract for an action."""
+
+    expected_states = {
+        "execution.pause": ("paused",),
+        "execution.resume": ("running", "executing"),
+        "execution.cancel": ("canceled", "cancelled"),
+        "execution.force_terminate": ("terminated",),
+        "session.cancel": ("canceled", "cancelled"),
+        "session.terminate": ("terminated",),
+    }
+    run_change_actions = {
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "session.restart_container",
+        "workload.restart_helper_container",
+    }
+    return {
+        "schemaVersion": "v1",
+        "actionKind": action_kind,
+        "evidenceSource": "temporal_execution_canonical_record",
+        "expectedStates": list(expected_states.get(action_kind, ())),
+        "requireRunChange": action_kind in run_change_actions,
+    }
+
+
+def _target_health_snapshot(
+    *,
+    link: db_models.TemporalExecutionRemediationLink,
+    target: db_models.TemporalExecutionCanonicalRecord,
+) -> RemediationTargetHealthSnapshot:
+    return RemediationTargetHealthSnapshot(
+        workflow_id=target.workflow_id,
+        pinned_run_id=link.target_run_id,
+        current_run_id=target.run_id,
+        state=_enum_value(target.state) or "",
+        close_status=_enum_value(target.close_status),
+        title=_string_or_none(
+            target.memo.get("title") if isinstance(target.memo, Mapping) else None
+        ),
+        summary=_string_or_none(
+            target.memo.get("summary") if isinstance(target.memo, Mapping) else None
+        ),
+        target_run_changed=target.run_id != link.target_run_id,
+        identity_bindings=_target_identity_bindings(target),
+    )
 
 def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")

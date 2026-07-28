@@ -2877,6 +2877,19 @@ def test_remediation_verification_taxonomy_is_derived_from_fresh_evidence(
     )
 
 
+def test_remediation_verification_contract_is_action_specific():
+    rerun = remediation_tools._verification_contract_for_action(
+        "execution.start_fresh_rerun"
+    )
+    pause = remediation_tools._verification_contract_for_action("execution.pause")
+
+    assert rerun["requireRunChange"] is True
+    assert rerun["expectedStates"] == []
+    assert pause["requireRunChange"] is False
+    assert pause["expectedStates"] == ["paused"]
+    assert rerun["evidenceSource"] == "temporal_execution_canonical_record"
+
+
 def test_remediation_rollout_metrics_cover_required_operator_signals():
     emitter = MagicMock()
     with patch(

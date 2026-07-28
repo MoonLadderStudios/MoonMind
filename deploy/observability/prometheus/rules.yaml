@@ -7,6 +7,38 @@ groups:
         expr: sum(rate(moonmind_workflow_started_total{outcome="failure"}[1h])) / clamp_min(sum(rate(moonmind_workflow_started_total[1h])), 1)
   - name: moonmind-alerts
     rules:
+      - alert: MoonMindRemediationActionRateHigh
+        expr: sum(rate(moonmind_workflow_remediation_action_total[10m])) > 0.5
+        for: 10m
+        labels: {severity: ticket, owner: workflows}
+        annotations: &remediation_annotations
+          summary: Autonomous remediation crossed an operator safety threshold
+          impact: Remediation may be looping, conflicting, or mutating without verification.
+          dashboard: moonmind-overview
+          runbook: docs/Workflows/WorkflowRemediation.md
+          query: Inspect remediation action, approval, verification, and audit artifacts.
+          recovery: Signal remains below threshold for 30 minutes and the rollout gate stays closed until reviewed.
+          dedupe_key: moonmind-remediation-safety
+      - alert: MoonMindRemediationRepeatedFailure
+        expr: sum(increase(moonmind_workflow_remediation_repeated_failure_total[15m])) >= 3
+        for: 5m
+        labels: {severity: page, owner: workflows}
+        annotations: *remediation_annotations
+      - alert: MoonMindRemediationLockConflict
+        expr: sum(increase(moonmind_workflow_remediation_lock_conflict_total[15m])) >= 3
+        for: 5m
+        labels: {severity: ticket, owner: workflows}
+        annotations: *remediation_annotations
+      - alert: MoonMindRemediationDeniedOrEscalated
+        expr: sum(increase(moonmind_workflow_remediation_denial_total[15m])) + sum(increase(moonmind_workflow_remediation_escalation_total[15m])) >= 3
+        for: 5m
+        labels: {severity: ticket, owner: workflows}
+        annotations: *remediation_annotations
+      - alert: MoonMindRemediationUnverifiedMutation
+        expr: sum(increase(moonmind_workflow_remediation_verification_total{unverified_mutation="True"}[5m])) > 0
+        for: 0m
+        labels: {severity: page, owner: workflows}
+        annotations: *remediation_annotations
       - alert: MoonMindApiErrorBudgetBurn
         expr: moonmind:api_error_ratio:5m > 0.05
         for: 15m

@@ -26,4 +26,13 @@ def test_dashboard_queries_registered_metrics_and_runbooks_exist():
         assert metric.name in expressions
     rules = (ROOT / "deploy/observability/prometheus/rules.yaml").read_text()
     assert "docs/Runbooks/Observability/ServiceHealth.md" in rules
+    for alert in (
+        "MoonMindRemediationActionRateHigh",
+        "MoonMindRemediationRepeatedFailure",
+        "MoonMindRemediationLockConflict",
+        "MoonMindRemediationDeniedOrEscalated",
+        "MoonMindRemediationUnverifiedMutation",
+    ):
+        assert alert in rules
+    assert "dashboard: moonmind-overview" in rules
     assert (ROOT / "docs/Runbooks/Observability/ServiceHealth.md").is_file()

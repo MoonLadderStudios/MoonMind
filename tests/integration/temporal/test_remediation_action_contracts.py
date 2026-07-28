@@ -341,6 +341,15 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             summary_payload["decisionLogRef"]
             == summary_result["artifactRefs"]["decisionLog"]
         )
+        prevention_verification = await _read_artifact_json(
+            artifact_service,
+            summary_result["artifactRefs"]["preventionVerification"],
+        )
+        assert prevention_verification["scope"] == "prevention"
+        assert prevention_verification["status"] == "verified_no_change"
+        assert summary_payload["prevention"]["verification"]["artifactRef"] == (
+            summary_result["artifactRefs"]["preventionVerification"]
+        )
         remediation_link = await session.get(
             TemporalExecutionRemediationLink, remediation.workflow_id
         )
