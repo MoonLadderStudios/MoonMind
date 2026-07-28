@@ -6,10 +6,13 @@ import pytest
 
 from moonmind.omnigent.cutover import (
     CUTOVER_POLICY_VERSION,
+    REQUIRED_TELEMETRY_GROUPS,
     CutoverPhase,
+    effective_phase,
     evaluate_promotion,
     select_runtime,
 )
+from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
 
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
@@ -25,7 +28,21 @@ def _evidence() -> dict[str, object]:
         "temporalReplayPassed": True,
         "historicalReadsPassed": True,
         "capacitySingleOwnerPassed": True,
-        "thresholds": {"withinLimits": True},
+        "authorizedPhase": "CREATE_DEFAULT",
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "images": {
+            "server": "example/server@sha256:" + "1" * 64,
+            "host": "example/host@sha256:" + "2" * 64,
+        },
+        "architectures": ["linux/amd64"],
+        "telemetry": {
+            group: {"sampleCount": 10} for group in REQUIRED_TELEMETRY_GROUPS
+        },
+        "thresholds": {
+            "withinLimits": True,
+            "results": {"launchSuccessRate": True, "secretViolations": True},
+        },
         "evidenceRefs": ["artifact://protected-live/codex-omnigent/v1"],
     }
 
@@ -44,7 +61,10 @@ def test_promotion_fails_closed_without_live_evidence() -> None:
 def test_promotion_rejects_stale_evidence_and_failed_thresholds() -> None:
     evidence = _evidence()
     evidence["generatedAt"] = (NOW - timedelta(days=8)).isoformat()
-    evidence["thresholds"] = {"withinLimits": False}
+    evidence["thresholds"] = {
+        "withinLimits": False,
+        "results": {"launchSuccessRate": False},
+    }
     decision = evaluate_promotion(
         current_phase=CutoverPhase.OPT_IN,
         requested_phase=CutoverPhase.CREATE_DEFAULT,
@@ -119,3 +139,50 @@ def test_explicit_selection_is_preserved_and_direct_launch_eventually_rejected()
             configured_default="codex_cli",
             phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
         )
+
+
+def test_effective_phase_cannot_be_promoted_by_environment_alone() -> None:
+    status = effective_phase(
+        env={"MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default"},
+        now=NOW,
+    )
+    assert status.configured_phase is CutoverPhase.CREATE_DEFAULT
+    assert status.phase is CutoverPhase.OPT_IN
+    assert status.blockers == ("live_conformance_evidence_missing",)
+
+
+def test_effective_phase_loads_exact_authorized_local_evidence(tmp_path) -> None:
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(_evidence()), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": path.as_uri(),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.CREATE_DEFAULT
+    assert status.blockers == ()
+    assert status.as_dict()["images"]["host"].endswith("2" * 64)
+
+
+def test_effective_phase_rejects_stale_or_wrong_phase_evidence(tmp_path) -> None:
+    evidence = _evidence()
+    evidence["authorizedPhase"] = "BROAD_DEFAULT"
+    evidence["generatedAt"] = (NOW - timedelta(days=8)).isoformat()
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "evidence_authorized_phase_mismatch" in status.blockers
+    assert "live_conformance_evidence_stale" in status.blockers

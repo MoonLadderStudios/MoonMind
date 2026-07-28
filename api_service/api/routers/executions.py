@@ -198,7 +198,7 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.omnigent.cutover import configured_phase, select_runtime
+from moonmind.omnigent.cutover import effective_phase, select_runtime
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -10326,13 +10326,15 @@ async def _create_execution_from_workflow_request(
     # --- Model resolution ---
     authored_runtime = payload.get("targetRuntime") or runtime_payload.get("mode")
     try:
+        cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
             configured_default=settings.workflow.default_runtime,
-            phase=configured_phase(),
+            phase=cutover_status.phase,
             submission_kind=(
                 "schedule" if task_payload.get("presetSchedule") else "create"
             ),
+            release_status=cutover_status,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
@@ -10762,11 +10764,13 @@ async def _resolve_recurring_runtime_metadata(
         or runtime_payload.get("mode")
     )
     try:
+        cutover_status = effective_phase()
         cutover_selection = select_runtime(
             authored_runtime=authored_runtime,
             configured_default=settings.workflow.default_runtime,
-            phase=configured_phase(),
+            phase=cutover_status.phase,
             submission_kind="schedule",
+            release_status=cutover_status,
         )
     except ValueError as exc:
         raise _invalid_workflow_request(str(exc)) from exc

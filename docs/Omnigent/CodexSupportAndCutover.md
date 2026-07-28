@@ -1,6 +1,6 @@
 # Codex via Omnigent Support and Cutover
 
-**Contract version:** `moonmind.codex-omnigent-cutover/v1`  
+**Contract version:** `moonmind.codex-omnigent-cutover/v1`
 **Source:** MoonLadderStudios/MoonMind#3518
 
 This is the canonical support, compatibility, and retirement policy for Codex
@@ -41,9 +41,16 @@ evidence blocks promotion. Rollback to an earlier phase is always allowed and
 does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.
 
-The API reads `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) and
-publishes the effective phase, policy version, evidence ref, and direct-launch
-status in `/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults
+The API reads `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) as a
+desired phase. For every later phase it also reads the JSON document at the
+local path or `file://` URI in
+`MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF`. Remote and opaque artifact
+references are evidence links, not launch authority. The mounted document must
+authorize the exact desired phase and pass the complete gate; otherwise the
+effective phase remains `opt_in`. The API publishes desired/effective phase,
+policy/profile versions, generation/expiry, image digests, architectures,
+thresholds, evidence refs, blockers, and direct-launch status in
+`/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults
 advance at `create_default`; schedule and preset defaults advance at
 `schedule_default`. Every created execution stores `runtimeCutover` beside its
 runtime/profile/model evidence. Invalid phases and explicit direct launches at
