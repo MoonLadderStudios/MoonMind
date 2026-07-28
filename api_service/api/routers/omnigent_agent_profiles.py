@@ -80,6 +80,29 @@ class ContinuationDefaults(BaseModel):
     branch: bool = True
     remediation: bool = True
 
+class ModelDefaults(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model: str | None = Field(None, max_length=128)
+    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+class CaptureDefaults(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    stream: bool = True
+    retention_days: int | None = Field(None, alias="retentionDays", ge=1, le=3650)
+    evidence: bool = True
+
+class RagDefaults(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    initial: dict[str, Any] = Field(default_factory=dict)
+    follow_up: dict[str, Any] = Field(default_factory=dict, alias="followUp")
+    max_tokens: int | None = Field(None, alias="maxTokens", ge=0, le=1_000_000)
+    max_latency_ms: int | None = Field(None, alias="maxLatencyMs", ge=1, le=600_000)
+
+class PublishDefaults(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    mode: Literal["none", "draft", "ready", "auto"] = "none"
+
 class AgentProfileDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     schema_version: Literal["moonmind.omnigent-agent-profile.v1"] = Field("moonmind.omnigent-agent-profile.v1", alias="schemaVersion")
@@ -90,14 +113,14 @@ class AgentProfileDocument(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list, alias="requiredCapabilities", max_length=64)
     execution: ExecutionDefaults
     provider_requirements: ProviderRequirements = Field(alias="providerRequirements")
-    model: dict[str, Any] = Field(default_factory=dict)
+    model: ModelDefaults = Field(default_factory=ModelDefaults)
     workspace: WorkspaceDefaults = Field(default_factory=WorkspaceDefaults)
     skills: list[str] = Field(default_factory=list, max_length=128)
     tools: list[str] = Field(default_factory=list, max_length=128)
-    capture: dict[str, Any] = Field(default_factory=dict)
-    rag: dict[str, Any] = Field(default_factory=dict)
+    capture: CaptureDefaults = Field(default_factory=CaptureDefaults)
+    rag: RagDefaults = Field(default_factory=RagDefaults)
     continuations: ContinuationDefaults = Field(default_factory=ContinuationDefaults)
-    publish: dict[str, Any] = Field(default_factory=dict)
+    publish: PublishDefaults = Field(default_factory=PublishDefaults)
     policy_ref: str = Field(alias="policyRef", min_length=1, max_length=255)
     @model_validator(mode="after")
     def reject_authority(self) -> "AgentProfileDocument":

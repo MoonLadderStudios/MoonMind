@@ -40,7 +40,7 @@ def test_profile_rejects_runtime_authority(field):
 @pytest.mark.parametrize("field", ["apiToken", "access_token", "clientSecret", "passwordHash"])
 def test_profile_rejects_nested_credential_like_authority(field):
     value = document(upstreamId="agent-123").model_dump(by_alias=True)
-    value["model"]["nested"] = {field: "unsafe"}
+    value["model"]["settings"] = {field: "unsafe"}
     with pytest.raises(ValidationError, match="runtime authority"):
         AgentProfileDocument.model_validate(value)
 
@@ -49,3 +49,26 @@ def test_profile_contracts_are_typed_and_reject_unknown_execution_authority():
     value["execution"]["hostId"] = "caller-host"
     with pytest.raises(ValidationError):
         AgentProfileDocument.model_validate(value)
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("model", "effort", "unbounded"),
+        ("capture", "retentionDays", 0),
+        ("rag", "maxTokens", 1_000_001),
+        ("rag", "maxLatencyMs", 600_001),
+        ("publish", "mode", "force"),
+    ],
+)
+def test_profile_rejects_unsupported_or_unbounded_defaults(section, field, value):
+    payload = document(upstreamId="agent-123").model_dump(by_alias=True)
+    payload[section][field] = value
+    with pytest.raises(ValidationError):
+        AgentProfileDocument.model_validate(payload)
+
+def test_profile_rejects_unknown_model_capture_rag_and_publish_fields():
+    for section in ("model", "capture", "rag", "publish"):
+        payload = document(upstreamId="agent-123").model_dump(by_alias=True)
+        payload[section]["unexpected"] = True
+        with pytest.raises(ValidationError):
+            AgentProfileDocument.model_validate(payload)

@@ -4,6 +4,16 @@ Status: **Desired-State Design**
 Owners: MoonMind Engineering  
 Issue: MoonLadderStudios/MoonMind#3517
 
+## Implementation status
+
+This document defines the target contract. The repository currently implements the
+persistent profile/version/audit/usage records, lifecycle API, bounded upstream
+projection, basic metadata validation, and an explicit snapshot-resolution API.
+Dashboard authoring selectors, transactional snapshot use by workflow and
+continuation submissions, archive-content inspection and import, smoke-session
+validation with lease cleanup, and durable bootstrap migration remain desired
+state until their corresponding production boundaries and controlling tests land.
+
 ## Purpose and identities
 
 An Omnigent agent profile is MoonMind-owned reusable configuration. It does not create a new runtime identity: dispatch remains `agentKind=external`, `agentId=omnigent`. An upstream agent id and version (or immutable bundle artifact and digest) identify provider content. A Provider Profile identifies credential and capacity materialization. An execution profile and launch policy identify host realization. These identities are separate and a display name is never identity.
