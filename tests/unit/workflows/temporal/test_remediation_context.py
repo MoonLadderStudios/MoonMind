@@ -1218,6 +1218,57 @@ async def test_prevention_verification_consumes_independent_head_bound_evidence(
         principal="service:test",
     )
 
+
+@pytest.mark.asyncio
+async def test_lifecycle_summary_persists_prevention_verification_for_workflow_detail(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+        )
+
+        result = await tools.publish_lifecycle_summary(
+            remediation_workflow_id=remediation.workflow_id,
+            summary={
+                "phase": "resolved",
+                "resolution": "resolved_without_action",
+            },
+            repair={"repairOutcome": "not_attempted"},
+            prevention={
+                "status": "findings_reported",
+                "summary": "No prevention change was created.",
+            },
+            decision_log_entries=(),
+            lock_release="released",
+            principal="service:test",
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        assert link.target_workflow_id == target.workflow_id
+        assert link.operator_state["prevention"]["verification"] == {
+            "status": "verified_no_change",
+            "artifactRef": result["artifactRefs"]["preventionVerification"],
+        }
+
     decision_log = build_remediation_decision_log(
         entries=(
             {

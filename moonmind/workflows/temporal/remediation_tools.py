@@ -835,7 +835,7 @@ class RemediationEvidenceToolService:
             {
                 "phase": final_summary.get("phase") or operator_state.get("phase"),
                 "immediateRepair": dict(repair),
-                "prevention": dict(prevention),
+                "prevention": dict(prevention_payload),
                 "cleanup": cleanup,
                 "summaryArtifactRef": summary_artifact.artifact_id,
                 "decisionLogRef": decision_artifact.artifact_id,
