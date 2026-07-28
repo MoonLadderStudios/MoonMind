@@ -35,7 +35,7 @@ class OmnigentOAuthHostJanitor:
         if force and profile_id:
             binding = await self._repository.get_binding_for_profile(profile_id)
             if binding is not None and not binding.host_launch_profile_ref:
-                await self._runtime.stop_static_host()
+                await self._runtime.stop_static_host(binding=binding)
                 actions.append(
                     {
                         "hostBindingRef": binding.binding_ref,

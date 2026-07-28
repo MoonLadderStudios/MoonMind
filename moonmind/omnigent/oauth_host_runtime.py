@@ -63,6 +63,38 @@ _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 
+_RUNTIME_ADAPTERS = {
+    "codex_cli": {
+        "harness": "codex-native",
+        "provider": "openai",
+        "home": "/home/app/.codex",
+        "compose_profile": "omnigent-host-codex",
+        "compose_service": "omnigent-host-codex",
+        "start_script": "/opt/moonmind/start-codex-oauth-host.sh",
+        "generation_env": "CODEX_CREDENTIAL_GENERATION",
+        "env": (
+            "CODEX_HOME=/home/app/.codex",
+            "CODEX_CONFIG_HOME=/home/app/.codex",
+            "CODEX_CONFIG_PATH=/home/app/.codex/config.toml",
+            "CODEX_VOLUME_PATH=/home/app/.codex",
+        ),
+    },
+    "claude_code": {
+        "harness": "claude-native",
+        "provider": "anthropic",
+        "home": "/home/app/.claude",
+        "compose_profile": "omnigent-host-claude",
+        "compose_service": "omnigent-host-claude",
+        "start_script": "/opt/moonmind/start-claude-oauth-host.sh",
+        "generation_env": "CLAUDE_CREDENTIAL_GENERATION",
+        "env": (
+            "CLAUDE_HOME=/home/app/.claude",
+            "CLAUDE_CONFIG_DIR=/home/app/.claude",
+            "CLAUDE_VOLUME_PATH=/home/app/.claude",
+        ),
+    },
+}
+
 
 class OmnigentOAuthHostRuntime:
     """Launch/check/stop hosts using server-resolved resources only."""
@@ -160,6 +192,7 @@ class OmnigentOAuthHostRuntime:
             await self._exec_tools_check(container_name)
         else:
             await self._compose_static_check(
+                binding=binding,
                 workspace_source=daemon_workspace_source,
                 skill_projection=daemon_skill_projection, effective_launch=launch
             )
@@ -169,9 +202,10 @@ class OmnigentOAuthHostRuntime:
         capabilities = host.get("harnesses") or host.get("capabilities") or []
         if isinstance(capabilities, Mapping):
             capabilities = list(capabilities)
-        if "codex-native" not in {str(value) for value in capabilities}:
+        adapter = self._runtime_adapter(binding)
+        if adapter["harness"] not in {str(value) for value in capabilities}:
             raise OmnigentOAuthHostError(
-                "registered host does not advertise codex-native",
+                f"registered host does not advertise {adapter['harness']}",
                 code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
             )
         mounted_tool_evidence = await self._preflight_mounted_tools(
@@ -184,15 +218,15 @@ class OmnigentOAuthHostRuntime:
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
-            "runtimeId": "codex_cli",
-            "providerId": "openai",
+            "runtimeId": binding.credential_mount_ref.auth_volume_ref.runtime_id,
+            "providerId": adapter["provider"],
             "credentialGeneration": host_lease.credential_generation,
-            "mountPath": "/home/app/.codex",
+            "mountPath": adapter["home"],
             "runtimeUid": 1000,
             "runtimeGid": 1000,
             "loginStatus": "authenticated",
             "hostId": host_id,
-            "harness": "codex-native",
+            "harness": adapter["harness"],
             "competingCredentialsPresent": False,
             "mountedTools": mounted_tool_evidence,
             "workspacePath": (
@@ -210,6 +244,17 @@ class OmnigentOAuthHostRuntime:
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
         return validated
+
+    @staticmethod
+    def _runtime_adapter(binding: OmnigentOAuthHostBinding) -> Mapping[str, Any]:
+        runtime_id = binding.credential_mount_ref.auth_volume_ref.runtime_id
+        adapter = _RUNTIME_ADAPTERS.get(runtime_id)
+        if adapter is None or adapter["harness"] != binding.harness:
+            raise OmnigentOAuthHostError(
+                "OAuth runtime and harness binding are incompatible",
+                code=HostPreflightFailure.BINDING_MISMATCH.value,
+            )
+        return adapter
 
     @staticmethod
     def _validate_effective_launch(
@@ -379,7 +424,7 @@ class OmnigentOAuthHostRuntime:
         self, *, binding: OmnigentOAuthHostBinding, host_lease: OmnigentHostLease
     ) -> None:
         if not binding.host_launch_profile_ref:
-            await self.stop_static_host()
+            await self.stop_static_host(binding=binding)
             return
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
@@ -398,18 +443,25 @@ class OmnigentOAuthHostRuntime:
             "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
         )
 
-    async def stop_static_host(self) -> None:
+    async def stop_static_host(
+        self, *, binding: OmnigentOAuthHostBinding | None = None
+    ) -> None:
         """Stop the static credential consumer even when no host lease is active."""
 
+        adapter = (
+            self._runtime_adapter(binding)
+            if binding is not None
+            else _RUNTIME_ADAPTERS["codex_cli"]
+        )
         await self._run(
             "docker",
             "compose",
             "-f",
             "docker-compose.yaml",
             "--profile",
-            "omnigent-host-codex",
+            str(adapter["compose_profile"]),
             "stop",
-            "omnigent-host-codex",
+            str(adapter["compose_service"]),
             check=False,
         )
 
@@ -478,6 +530,7 @@ class OmnigentOAuthHostRuntime:
             await self._assert_container_owned(container_name, host_lease.lease_id)
             return
         mount = binding.credential_mount_ref
+        adapter = self._runtime_adapter(binding)
         state_volume = f"{container_name}-state"
         artifacts_volume = f"{container_name}-artifacts"
         cache_volume = f"{container_name}-cache"
@@ -510,7 +563,7 @@ class OmnigentOAuthHostRuntime:
             "--user",
             "0:0",
             "--mount",
-            f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
+            f"type=volume,src={mount.auth_volume_ref.volume_ref},dst={adapter['home']}",
             "--mount",
             f"type=volume,src={state_volume},dst=/home/app/.omnigent",
             "--mount",
@@ -519,8 +572,10 @@ class OmnigentOAuthHostRuntime:
             f"type=volume,src={cache_volume},dst=/home/app/.cache",
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
+            "--env",
+            f"OAUTH_HOME={adapter['home']}",
             "--entrypoint",
-            "/opt/moonmind/init-codex-oauth-host.sh",
+            "/opt/moonmind/init-oauth-host.sh",
             host_image_ref,
         )
         labels = {
@@ -562,7 +617,7 @@ class OmnigentOAuthHostRuntime:
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,size={effective_launch['limits']['temporaryStorageMiB']}m",
             "--mount",
-            f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
+            f"type=volume,src={mount.auth_volume_ref.volume_ref},dst={adapter['home']}",
             "--mount",
             f"type=volume,src={state_volume},dst=/home/app/.omnigent",
             "--mount",
@@ -582,15 +637,7 @@ class OmnigentOAuthHostRuntime:
             "--env",
             "HOME=/home/app",
             "--env",
-            "CODEX_HOME=/home/app/.codex",
-            "--env",
-            "CODEX_CONFIG_HOME=/home/app/.codex",
-            "--env",
-            "CODEX_CONFIG_PATH=/home/app/.codex/config.toml",
-            "--env",
-            "CODEX_VOLUME_PATH=/home/app/.codex",
-            "--env",
-            f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
+            f"{adapter['generation_env']}={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
@@ -606,6 +653,8 @@ class OmnigentOAuthHostRuntime:
             "--env",
             "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
+        for runtime_env in adapter["env"]:
+            args.extend(["--env", runtime_env])
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
         if token:
@@ -641,7 +690,7 @@ class OmnigentOAuthHostRuntime:
         args.extend(["--entrypoint", "/usr/bin/env"])
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
-        args.extend([host_image_ref, "/opt/moonmind/start-codex-oauth-host.sh"])
+        args.extend([host_image_ref, str(adapter["start_script"])])
         await self._run(*args, env=child_env)
 
     async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
@@ -812,12 +861,19 @@ class OmnigentOAuthHostRuntime:
     async def _compose_static_check(
         self,
         *,
+        binding: OmnigentOAuthHostBinding | None = None,
         workspace_source: Path,
         skill_projection: Path | None = None,
         effective_launch: Mapping[str, Any] | None = None,
     ) -> None:
         child_env = dict(os.environ)
         child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
+        if binding is not None:
+            generation = (
+                binding.credential_mount_ref.auth_volume_ref.credential_generation
+            )
+            adapter = self._runtime_adapter(binding)
+            child_env[str(adapter["generation_env"])] = str(generation)
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         if effective_launch is not None:
@@ -851,16 +907,21 @@ class OmnigentOAuthHostRuntime:
                     ),
                 }
             )
+        adapter = (
+            self._runtime_adapter(binding)
+            if binding is not None
+            else _RUNTIME_ADAPTERS["codex_cli"]
+        )
         await self._run(
             "docker",
             "compose",
             "-f",
             "docker-compose.yaml",
             "--profile",
-            "omnigent-host-codex",
+            str(adapter["compose_profile"]),
             "up",
             "-d",
-            "omnigent-host-codex",
+            str(adapter["compose_service"]),
             env=child_env,
         )
         await self._run(
@@ -869,10 +930,10 @@ class OmnigentOAuthHostRuntime:
             "-f",
             "docker-compose.yaml",
             "--profile",
-            "omnigent-host-codex",
+            str(adapter["compose_profile"]),
             "exec",
             "-T",
-            "omnigent-host-codex",
+            str(adapter["compose_service"]),
             "/opt/moonmind/check-runner-projections.sh",
             env=child_env,
         )
@@ -899,11 +960,12 @@ class OmnigentOAuthHostRuntime:
             ]
         else:
             expected_name = deterministic_host_container_name(host_lease.lease_id)
+            adapter = self._runtime_adapter(binding)
             matches = [
                 host
                 for host in hosts
                 if str(host.get("name") or host.get("hostname") or "")
-                in {expected_name, "omnigent-host-codex"}
+                in {expected_name, str(adapter["compose_service"])}
             ]
         online = [
             host for host in matches if str(host.get("status", "online")) == "online"

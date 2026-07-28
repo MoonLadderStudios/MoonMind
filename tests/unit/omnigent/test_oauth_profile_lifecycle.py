@@ -584,7 +584,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:3] == ("docker", "inspect", "--format")
-    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
+    assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
     assert commands[1][-1] == snapshot_image
@@ -616,6 +616,80 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(
+        side_effect=[(1, "", "no such container"), (0, "", ""), (0, "", "")]
+    )
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:claude",
+        providerProfileId="claude",
+        endpointRef="default",
+        harness="claude-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="claude",
+                runtimeId="claude_code",
+                providerId="anthropic",
+                volumeRef="claude_auth_volume",
+                credentialGeneration=4,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.claude",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        hostLaunchProfileRef="claude-oauth-v1",
+    )
+    lease = _host_lease().model_copy(
+        update={
+            "provider_profile_id": "claude",
+            "credential_generation": 4,
+            "container_name": "mm-host-lease-claude",
+        }
+    )
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-claude@1",
+        policy_ref="claude-on-demand@1",
+        provider_profile_id="claude",
+    )
+
+    await runtime._launch_on_demand(
+        binding=binding,
+        host_lease=lease,
+        container_name="mm-host-lease-claude",
+        workspace_source=tmp_path,
+        skill_projection=tmp_path / "skills",
+        effective_launch=effective_launch,
+    )
+
+    init_command, launch_command = [
+        call.args for call in runtime._run.await_args_list
+    ][1:]
+    assert (
+        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
+        in init_command
+    )
+    assert "/opt/moonmind/init-oauth-host.sh" in init_command
+    assert "OAUTH_HOME=/home/app/.claude" in init_command
+    assert (
+        "type=volume,src=claude_auth_volume,dst=/home/app/.claude"
+        in launch_command
+    )
+    assert "CLAUDE_CONFIG_DIR=/home/app/.claude" in launch_command
+    assert "CLAUDE_HOME=/home/app/.claude" in launch_command
+    assert "CLAUDE_CREDENTIAL_GENERATION=4" in launch_command
+    assert launch_command[-1] == "/opt/moonmind/start-claude-oauth-host.sh"
+    assert not any("CODEX_" in value for value in launch_command)
 
 
 @pytest.mark.asyncio
@@ -1098,6 +1172,7 @@ def test_host_launchers_wait_for_projection_and_clear_stale_state_before_startin
 
     for script_name in (
         "start-codex-oauth-host.sh",
+        "start-claude-oauth-host.sh",
         "start-host-with-projections.sh",
     ):
         source = (scripts / script_name).read_text(encoding="utf-8")

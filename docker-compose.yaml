@@ -864,7 +864,14 @@ services:
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
-    entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
@@ -873,6 +880,7 @@ services:
       CLAUDE_HOME: /home/app/.claude
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
+      CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
       ANTHROPIC_API_KEY: ""
       ANTHROPIC_AUTH_TOKEN: ""
       CLAUDE_API_KEY: ""
@@ -882,18 +890,18 @@ services:
       GOOGLE_API_KEY: ""
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - claude_auth_volume:/home/app/.claude
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
-      claude-auth-init:
+      omnigent-host-claude-init:
         condition: service_completed_successfully
       omnigent-tools-init:
         condition: service_completed_successfully
@@ -906,6 +914,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  omnigent-host-claude-init:
+    profiles: ["omnigent-host-claude"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    user: "0:0"
+    entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
+    environment:
+      OMNIGENT_STATE_PATH: /home/app/.omnigent
+      OAUTH_HOME: /home/app/.claude
+    volumes:
+      - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - claude_auth_volume:/home/app/.claude
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+    depends_on:
+      claude-auth-init:
+        condition: service_completed_successfully
+    restart: "no"
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
