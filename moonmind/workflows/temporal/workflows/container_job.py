@@ -189,6 +189,7 @@ class MoonMindContainerJobWorkflow:
                         "container_job.create_container", request
                     )
                     request.container_ref = created.container_ref
+                    request.egress_evidence_ref = created.egress_evidence_ref
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)
@@ -286,6 +287,8 @@ class MoonMindContainerJobWorkflow:
 
         await self._project(request, ContainerJobState.CLEANING_UP)
         removed = await self._best_effort("container_job.remove_container", request)
+        if removed is not None and removed.egress_evidence_ref is not None:
+            request.egress_evidence_ref = removed.egress_evidence_ref
         cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(
             state="succeeded" if removed is not None and cleaned is not None else "failed"
@@ -316,6 +319,7 @@ class MoonMindContainerJobWorkflow:
             cleanup=cleanup,
             logsRef=logs_ref,
             artifactsRef=artifacts_ref,
+            egressEvidenceRef=request.egress_evidence_ref,
             projectionSequence=self._projection_sequence,
             projectionRepairRequired=self._projection_repair_required,
         )

@@ -42,6 +42,14 @@ not accepted by name-only rules. CIDRs overlapping unspecified, private,
 loopback, carrier NAT, link-local, multicast, reserved, IPv4-mapped IPv6, or
 unique-local ranges are rejected.
 
+The reviewed profile currently permits only Container Jobs, managed helpers,
+and static or on-demand Omnigent hosts. RAG gateways and separate remediation
+launchers have no credential-bearing network adapter in this profile and are
+therefore unsupported, rather than being represented by an unenforced
+declaration. A future adapter must join this same attested launch boundary and
+add its workload class to a newly reviewed profile version before it may
+acquire credentials or start networked work.
+
 The proxy permits only HTTPS `CONNECT` to port 443 for approved provider,
 source-control, artifact, and retrieval domains. All other methods, ports, IP
 literals, redirects to unapproved names, and alternate CONNECT targets fail.
@@ -64,7 +72,12 @@ Before readiness or a networked launch, the worker verifies:
 
 A passing attestation records the profile ref and digest, backend and enforcer
 implementation, network and gateway identities, applied-rule digest,
-validation result and time, bounded denial counters, and bounded diagnostics.
+validation result and time. At terminal Container Job cleanup, the trusted
+backend reads only that attachment's bounded proxy-denial tail, removes the
+owned container, verifies the attachment is absent, and publishes a terminal
+attestation linked to the launch evidence. That terminal artifact records
+bounded redacted denial counters/diagnostics plus cleanup and reconciliation
+outcomes, and its ref is carried in the workflow result and status projection.
 Only a passing attestation contributes to `enforcedNetworkRefs`. Workload
 labels bind the attachment to the profile/rule digest. Stale profile versions,
 partial setup, missing labels, extra gateway networks, missing cleanup state,

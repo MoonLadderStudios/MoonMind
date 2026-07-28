@@ -363,6 +363,7 @@ class OmnigentOAuthHostRepository:
             omnigentSessionId=record.omnigent_session_id,
             bridgeSessionId=record.bridge_session_id,
             effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
+            egressAttestation=record.egress_attestation_json,
             status=record.status,
             acquiredAt=record.acquired_at,
             lastHeartbeatAt=record.last_heartbeat_at,

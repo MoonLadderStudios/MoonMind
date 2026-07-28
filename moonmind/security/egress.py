@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import re
 from datetime import UTC, datetime
 from typing import Awaitable, Callable, Literal, Sequence
 
@@ -160,6 +161,19 @@ class EgressAttestation(BaseModel):
     diagnostics: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
 
 
+class EgressLifecycleEvidence(BaseModel):
+    """Bounded terminal observations collected by the trusted enforcer owner."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    denied_connection_count: int = Field(
+        0, alias="deniedConnectionCount", ge=0
+    )
+    denial_diagnostics: tuple[str, ...] = Field(
+        default_factory=tuple, alias="denialDiagnostics", max_length=20
+    )
+
+
 DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
     {
         "profileId": "moonmind-provider-egress",
@@ -185,8 +199,6 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
             "managed_helper",
             "omnigent_static",
             "omnigent_on_demand",
-            "rag_gateway",
-            "remediation",
         ],
         "maxConnections": 128,
         "idleSeconds": 300,
@@ -293,6 +305,69 @@ async def attest_docker_egress(
         gatewayImageDigest=image_digest,
         healthResult="healthy",
         validatedAt=datetime.now(UTC),
+    )
+
+
+async def collect_egress_lifecycle_evidence(
+    *,
+    runner: CommandRunner,
+    profile: EgressProfile,
+    attachment_ref: str,
+) -> EgressLifecycleEvidence:
+    """Read bounded, redacted denial evidence for one workload attachment."""
+
+    code, stdout, _ = await runner(
+        (
+            "inspect",
+            "--format",
+            f'{{{{(index .NetworkSettings.Networks "{profile.network_ref}").IPAddress}}}}',
+            attachment_ref,
+        )
+    )
+    if code:
+        raise RuntimeError("restricted-egress workload attachment is unavailable")
+    attachment_ip = stdout.decode(errors="replace").strip()
+    try:
+        address = ipaddress.ip_address(attachment_ip)
+    except ValueError as exc:
+        raise RuntimeError(
+            "restricted-egress workload attachment is malformed"
+        ) from exc
+    if address.version != 4:
+        raise RuntimeError("restricted-egress workload attachment is not IPv4")
+
+    code, stdout, _ = await runner(
+        (
+            "exec",
+            profile.gateway_ref,
+            "tail",
+            "-n",
+            "200",
+            "/var/log/squid/access.log",
+        )
+    )
+    if code:
+        raise RuntimeError("restricted-egress denial evidence is unavailable")
+
+    diagnostics: list[str] = []
+    count = 0
+    for raw_line in stdout.decode(errors="replace").splitlines():
+        fields = raw_line.split()
+        if len(fields) < 7 or fields[2] != attachment_ip:
+            continue
+        outcome = fields[3]
+        if "DENIED" not in outcome.upper():
+            continue
+        count += 1
+        if len(diagnostics) >= 20:
+            continue
+        method = re.sub(r"[^A-Z]", "", fields[5].upper())[:16] or "UNKNOWN"
+        authority = fields[6].split("?", 1)[0]
+        authority = re.sub(r"[^A-Za-z0-9.:\-\[\]]", "_", authority)[:200]
+        diagnostics.append(f"{outcome[:48]} {method} {authority}")
+    return EgressLifecycleEvidence(
+        deniedConnectionCount=count,
+        denialDiagnostics=tuple(diagnostics),
     )
 
 

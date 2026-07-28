@@ -2440,6 +2440,8 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                 record.artifacts_ref = request.artifacts_ref
             if request.events_ref:
                 record.events_ref = request.events_ref
+            if request.egress_evidence_ref:
+                record.egress_evidence_ref = request.egress_evidence_ref
             # Compact, non-sensitive execution observations. Only write when the
             # trusted backend produced them so intermediate projections never
             # clobber earlier timing/probe evidence with nulls.

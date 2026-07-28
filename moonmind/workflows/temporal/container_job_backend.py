@@ -81,6 +81,7 @@ from moonmind.workloads.docker_launcher import structured_container_security_arg
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     attest_docker_egress,
+    collect_egress_lifecycle_evidence,
     restricted_proxy_env,
 )
 from moonmind.schemas.workspace_locator_models import (
@@ -1547,7 +1548,9 @@ class DockerContainerJobBackend:
                     "restricted-egress launch evidence could not be persisted"
                 ) from exc
         return ContainerJobActivityResult(
-            containerRef=name, diagnosticsRef=egress_evidence_ref
+            containerRef=name,
+            diagnosticsRef=egress_evidence_ref,
+            egressEvidenceRef=egress_evidence_ref,
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -1719,11 +1722,57 @@ class DockerContainerJobBackend:
         ref = request.container_ref or self._name(request)
         ownership = await self._owned_ownership_label(ref)
         if ownership is None:
-            return ContainerJobActivityResult()
+            return ContainerJobActivityResult(
+                egressEvidenceRef=request.egress_evidence_ref
+            )
         if ownership != request.ownership_token:
             raise RuntimeError("container job ownership mismatch; refusing removal")
+        egress_attestation = None
+        lifecycle_evidence = None
+        if request.request.spec.network_mode == "bridge":
+            egress_attestation = await attest_docker_egress(
+                runner=self._runner,
+                profile=DEFAULT_EGRESS_PROFILE,
+                backend_ref=self._backend_ref,
+            )
+            lifecycle_evidence = await collect_egress_lifecycle_evidence(
+                runner=self._runner,
+                profile=DEFAULT_EGRESS_PROFILE,
+                attachment_ref=ref,
+            )
         await self._checked("rm", "--force", ref)
-        return ContainerJobActivityResult()
+        evidence_ref = request.egress_evidence_ref
+        if egress_attestation is not None:
+            code, _, _ = await self._runner(("inspect", ref))
+            if code == 0:
+                raise RuntimeError(
+                    "restricted-egress workload reconciliation found a stale attachment"
+                )
+            if self._publish is None:
+                raise RuntimeError(
+                    "restricted-egress terminal evidence publisher is unavailable"
+                )
+            evidence = {
+                "schemaVersion": 1,
+                "kind": "restricted-egress-terminal-attestation",
+                "attachmentIdentity": ref,
+                "launchEvidenceRef": request.egress_evidence_ref,
+                "attestation": egress_attestation.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                **lifecycle_evidence.model_dump(by_alias=True, mode="json"),
+                "cleanupResult": "container-removed",
+                "reconciliationResult": "attachment-absent",
+                "finalizedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            evidence_ref = await self._publish(
+                request,
+                f"{request.job_id}-egress-terminal-attestation.json",
+                json.dumps(
+                    evidence, sort_keys=True, separators=(",", ":")
+                ).encode(),
+            )
+        return ContainerJobActivityResult(egressEvidenceRef=evidence_ref)
 
     @staticmethod
     def _bound_tail(data: bytes, limit: int) -> bytes:

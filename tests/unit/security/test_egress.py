@@ -13,6 +13,7 @@ from moonmind.security.egress import (
     EGRESS_NETWORK_REF,
     ENFORCER_IMPLEMENTATION,
     attest_docker_egress,
+    collect_egress_lifecycle_evidence,
     restricted_proxy_env,
 )
 
@@ -218,3 +219,32 @@ def test_proxy_environment_clears_bypass_variables():
     assert "NO_PROXY=" in values
     assert "no_proxy=" in values
     assert all("169.254.169.254" not in value for value in values)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_evidence_is_attachment_scoped_bounded_and_redacted():
+    allowed = (
+        "1.0 1 172.30.0.8 TCP_TUNNEL/200 1 CONNECT "
+        "api.openai.com:443 - HIER_DIRECT/1.2.3.4 -\n"
+    )
+    denied = "".join(
+        f"1.0 1 172.30.0.7 TCP_DENIED/403 1 CONNECT "
+        f"blocked-{index}.example:443?token=secret - HIER_NONE/- text/html\n"
+        for index in range(25)
+    )
+
+    async def runner(args):
+        if args[0] == "inspect":
+            return 0, b"172.30.0.7\n", b""
+        return 0, (allowed + denied).encode(), b""
+
+    evidence = await collect_egress_lifecycle_evidence(
+        runner=runner,
+        profile=DEFAULT_EGRESS_PROFILE,
+        attachment_ref="job",
+    )
+
+    assert evidence.denied_connection_count == 25
+    assert len(evidence.denial_diagnostics) == 20
+    assert all("token" not in item and "secret" not in item for item in evidence.denial_diagnostics)
+    assert all("blocked-" in item for item in evidence.denial_diagnostics)

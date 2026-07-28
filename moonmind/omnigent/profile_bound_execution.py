@@ -576,7 +576,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
             )
-            await emit(current_stage, "completed")
+            await emit(
+                current_stage,
+                "completed",
+                metadata={"egressAttestation": preflight["egressAttestation"]},
+            )
             await emit("credential_mount", "started")
             await emit(
                 "credential_mount",
@@ -608,7 +612,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     host_lease.lease_id,
                     expected_status="starting",
                     new_status="ready",
-                    fields={"omnigent_host_id": host_id},
+                    fields={
+                        "omnigent_host_id": host_id,
+                        "egress_attestation_json": preflight[
+                            "egressAttestation"
+                        ],
+                    },
                 )
             await self._run_store.bind_profile_authorization(
                 request=request,

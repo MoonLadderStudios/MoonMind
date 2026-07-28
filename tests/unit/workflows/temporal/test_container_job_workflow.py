@@ -289,12 +289,19 @@ def _result_for(name: str) -> ContainerJobActivityResult:
     if name.endswith("reconcile_container"):
         return ContainerJobActivityResult()
     if name.endswith("create_container"):
-        return ContainerJobActivityResult(containerRef="owned:3277")
+        return ContainerJobActivityResult(
+            containerRef="owned:3277",
+            egressEvidenceRef="art:egress-launch",
+        )
     if name.endswith("observe_container"):
         return ContainerJobActivityResult(terminalState="succeeded", exitCode=0)
     if name.endswith("publish_evidence"):
         return ContainerJobActivityResult(
             logsRef="art:logs", artifactsRef="art:outputs"
+        )
+    if name.endswith("remove_container"):
+        return ContainerJobActivityResult(
+            egressEvidenceRef="art:egress-terminal"
         )
     return ContainerJobActivityResult()
 
@@ -319,6 +326,7 @@ async def test_workspace_volume_mount_survives_activity_boundaries(
     assert create_request is not None
     assert create_request.resolved_workspace_volume_name == "agent_workspaces"
     assert create_request.resolved_workspace_volume_subpath == "run-1/repo"
+    assert result["egressEvidenceRef"] == "art:egress-terminal"
 
 
 @pytest.mark.asyncio

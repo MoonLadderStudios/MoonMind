@@ -475,6 +475,9 @@ class ContainerJobStatus(TemporalContractModel):
     cleanup: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    egress_evidence_ref: str | None = Field(
+        None, alias="egressEvidenceRef", max_length=1024
+    )
     updated_at: datetime = Field(alias="updatedAt")
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
@@ -668,6 +671,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     events_ref: str | None = Field(None, alias="eventsRef", max_length=1024)
+    egress_evidence_ref: str | None = Field(
+        None, alias="egressEvidenceRef", max_length=1024
+    )
     # Resumable live-log cursor carried across observe polls, and the compact
     # timing/probe observations threaded into the terminal projection (#3258).
     log_cursor: str | None = Field(None, alias="logCursor", max_length=512)
@@ -709,6 +715,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
     )
+    egress_evidence_ref: str | None = Field(
+        None, alias="egressEvidenceRef", max_length=1024
+    )
     # Durable observability-event journal ref (the terminal fallback for the
     # bounded live log stream) and the resumable live-log paging cursor (#3258).
     events_ref: str | None = Field(None, alias="eventsRef", max_length=1024)
@@ -734,6 +743,9 @@ class ContainerJobWorkflowResult(TemporalContractModel):
     cleanup: AuxiliaryOutcome
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    egress_evidence_ref: str | None = Field(
+        None, alias="egressEvidenceRef", max_length=1024
+    )
     projection_sequence: int = Field(alias="projectionSequence", ge=0)
     projection_repair_required: bool = Field(alias="projectionRepairRequired")
 

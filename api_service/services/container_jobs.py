@@ -324,7 +324,9 @@ class ContainerJobService:
             authorization=record.authorization_observation_json,
             terminal=record.terminal_outcome_json, publication=record.publication_outcome_json,
             cleanup=record.cleanup_outcome_json, logsRef=record.logs_ref,
-            artifactsRef=record.artifacts_ref, updatedAt=record.updated_at or record.created_at,
+            artifactsRef=record.artifacts_ref,
+            egressEvidenceRef=record.egress_evidence_ref,
+            updatedAt=record.updated_at or record.created_at,
         )
 
     async def cancel(self, *, owner: OwnerIdentity, job_id: str, request: ContainerJobCancelRequest) -> ContainerJobCancelResult:

@@ -416,6 +416,9 @@ class OmnigentBridgeSession(Base):
     effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         JSON, nullable=True
     )
+    egress_attestation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
 
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -3166,6 +3169,9 @@ class ContainerJobRecord(Base):
     cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
     logs_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     artifacts_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    egress_evidence_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
     # Durable observability-event journal ref (terminal live-log fallback) and
     # compact non-sensitive execution observations (MoonLadderStudios/MoonMind#3258).
     events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)

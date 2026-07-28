@@ -1036,6 +1036,9 @@ class OmnigentOAuthHostBinding(BaseModel):
     effective_launch_snapshot: dict[str, Any] | None = Field(
         None, alias="effectiveLaunchSnapshot"
     )
+    egress_attestation: dict[str, Any] | None = Field(
+        None, alias="egressAttestation"
+    )
 
     @model_validator(mode="after")
     def _validate_profile_ownership(self) -> "OmnigentOAuthHostBinding":

@@ -329,6 +329,79 @@ async def test_remove_is_idempotent_when_owned_container_is_absent(tmp_path) -> 
 
 
 @pytest.mark.asyncio
+async def test_remove_publishes_terminal_egress_denials_and_reconciliation(
+    tmp_path,
+) -> None:
+    published: dict[str, bytes] = {}
+
+    async def publish(_request, name, payload):
+        published[name] = payload
+        return f"artifact:{name}"
+
+    async def runner(args):
+        args = tuple(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 0, json.dumps(
+                {"moonmind.ownership": f"{JOB_ID}:v1"}
+            ).encode(), b""
+        if args[:2] == ("network", "inspect"):
+            return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
+            return 0, json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": {
+                        EGRESS_NETWORK_REF: {},
+                        "moonmind_sandbox-egress-network": {},
+                        "local-network": {},
+                    },
+                    "image": "sha256:gateway-image",
+                    "health": "healthy",
+                }
+            ).encode(), b""
+        if args[0] == "inspect" and ".IPAddress" in args[2]:
+            return 0, b"172.30.0.7\n", b""
+        if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
+            if args[2] == "sha256sum":
+                return 0, (
+                    EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
+                    + "  /etc/squid/squid.conf\n"
+                ).encode(), b""
+            return 0, (
+                b"1 1 172.30.0.7 TCP_DENIED/403 1 CONNECT "
+                b"metadata.invalid:443?credential=hidden - HIER_NONE/- text/html\n"
+            ), b""
+        if args[0] == "inspect":
+            return 1, b"", b"not found"
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-job"
+    request.egress_evidence_ref = "artifact:launch.json"
+
+    result = await backend.remove_container(request)
+
+    assert result.egress_evidence_ref.endswith(
+        "-egress-terminal-attestation.json"
+    )
+    payload = json.loads(next(iter(published.values())))
+    assert payload["launchEvidenceRef"] == "artifact:launch.json"
+    assert payload["deniedConnectionCount"] == 1
+    assert payload["cleanupResult"] == "container-removed"
+    assert payload["reconciliationResult"] == "attachment-absent"
+    assert "credential" not in payload["denialDiagnostics"][0]
+
+
+@pytest.mark.asyncio
 async def test_remove_refuses_replacement_with_mismatched_ownership(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
     backend = DockerContainerJobBackend(

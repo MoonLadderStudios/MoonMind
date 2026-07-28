@@ -23,7 +23,9 @@ from moonmind.schemas.workload_models import (
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
+    EgressAttestation,
     attest_docker_egress,
+    collect_egress_lifecycle_evidence,
     restricted_proxy_env,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
@@ -800,7 +802,7 @@ class DockerWorkloadLauncher:
 
     async def _attest_egress_before_launch(
         self, request: ValidatedWorkloadRequest
-    ) -> None:
+    ) -> EgressAttestation | None:
         """Fail closed at the shared process-creation boundary.
 
         Argument construction is deliberately side-effect free, but a bridge
@@ -815,7 +817,7 @@ class DockerWorkloadLauncher:
             stdout, stderr, code = await self._janitor._run_control(args)
             return code, stdout, stderr
 
-        await attest_docker_egress(
+        return await attest_docker_egress(
             runner=runner,
             profile=DEFAULT_EGRESS_PROFILE,
             backend_ref="docker-workload-launcher",
@@ -937,6 +939,8 @@ class DockerWorkloadLauncher:
         stderr_buffer = bytearray()
         exit_code: int | None = None
         timeout_reason: str | None = None
+        egress_attestation = None
+        egress_lifecycle: dict[str, object] | None = None
         configured_timeout = (
             timeout_seconds
             if timeout_seconds is not None
@@ -945,7 +949,7 @@ class DockerWorkloadLauncher:
         lease = await self._concurrency_limiter.acquire(request)
 
         try:
-            await self._attest_egress_before_launch(request)
+            egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -1005,8 +1009,61 @@ class DockerWorkloadLauncher:
                         )
                 raise
             finally:
-                if request.profile is not None and request.profile.cleanup.remove_container_on_exit:
+                if egress_attestation is not None:
+                    async def egress_runner(args: Sequence[str]):
+                        stdout, stderr, code = await self._janitor._run_control(args)
+                        return code, stdout, stderr
+
+                    try:
+                        observed = await collect_egress_lifecycle_evidence(
+                            runner=egress_runner,
+                            profile=DEFAULT_EGRESS_PROFILE,
+                            attachment_ref=request.container_name,
+                        )
+                    except RuntimeError:
+                        egress_lifecycle = {
+                            "evidenceCollectionResult": "failed",
+                            "deniedConnectionCount": 0,
+                            "denialDiagnostics": [],
+                        }
+                    else:
+                        egress_lifecycle = observed.model_dump(
+                            by_alias=True, mode="json"
+                        )
+                if (
+                    request.profile is not None
+                    and request.profile.cleanup.remove_container_on_exit
+                ):
                     await self._janitor.remove(request.container_name)
+                    if (
+                        egress_lifecycle is not None
+                        and egress_lifecycle.get("evidenceCollectionResult")
+                        != "failed"
+                    ):
+                        _stdout, _stderr, code = await self._janitor._run_control(
+                            ("inspect", request.container_name)
+                        )
+                        egress_lifecycle.update(
+                            {
+                                "cleanupResult": "container-removed",
+                                "reconciliationResult": (
+                                    "attachment-absent"
+                                    if code != 0
+                                    else "stale-attachment"
+                                ),
+                            }
+                        )
+                        if code == 0:
+                            raise DockerWorkloadLauncherError(
+                                "restricted-egress cleanup left a stale attachment"
+                            )
+                    elif egress_lifecycle is not None:
+                        egress_lifecycle.update(
+                            {
+                                "cleanupResult": "container-removed",
+                                "reconciliationResult": "unverified",
+                            }
+                        )
         finally:
             await lease.release()
 
@@ -1035,6 +1092,12 @@ class DockerWorkloadLauncher:
                 exclude_none=True,
             ),
             "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS}),
+            "egressAttestation": (
+                egress_attestation.model_dump(by_alias=True, mode="json")
+                if egress_attestation is not None
+                else None
+            ),
+            "egressLifecycle": egress_lifecycle,
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
         collected_refs, collected_outputs = _collect_workspace_artifacts(request)
