@@ -46,6 +46,14 @@ REQUIRED_TELEMETRY_GROUPS = (
     "secretRedaction",
     "policyReadinessDenials",
 )
+REQUIRED_EVIDENCE_KINDS = (
+    "submissionMatrix",
+    "historicalReads",
+    "temporalReplay",
+    "capacityOwnership",
+    "secretScan",
+    "releaseMetadata",
+)
 
 
 class CutoverPhase(IntEnum):
@@ -323,6 +331,44 @@ def evaluate_promotion(
         not isinstance(ref, str) or not ref.strip() for ref in refs
     ):
         blockers.append("independently_resolvable_evidence_refs_required")
+    manifest = evidence.get("evidenceManifest")
+    if not isinstance(manifest, list) or not manifest:
+        blockers.append("provenance_bound_evidence_manifest_required")
+    else:
+        manifest_refs: set[str] = set()
+        manifest_kinds: set[str] = set()
+        valid_manifest = True
+        for item in manifest:
+            if not isinstance(item, Mapping):
+                valid_manifest = False
+                continue
+            ref = item.get("ref")
+            kind = item.get("kind")
+            digest = item.get("sha256")
+            if (
+                not isinstance(ref, str)
+                or not ref.strip()
+                or not isinstance(kind, str)
+                or not kind.strip()
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                valid_manifest = False
+                continue
+            if ref in manifest_refs:
+                valid_manifest = False
+            manifest_refs.add(ref)
+            manifest_kinds.add(kind)
+        if (
+            not valid_manifest
+            or not isinstance(refs, list)
+            or set(refs) != manifest_refs
+        ):
+            blockers.append("provenance_bound_evidence_manifest_invalid")
+        missing_kinds = set(REQUIRED_EVIDENCE_KINDS) - manifest_kinds
+        if missing_kinds:
+            blockers.append("complete_evidence_kind_coverage_required")
     if requested_phase is CutoverPhase.DIRECT_LAUNCH_REMOVED:
         if DIRECT_LAUNCH_REMOVAL_VERSION is None:
             blockers.append("direct_launch_retirement_not_built")

@@ -44,7 +44,35 @@ def _evidence() -> dict[str, object]:
             "withinLimits": True,
             "results": {"launchSuccessRate": True, "secretViolations": True},
         },
-        "evidenceRefs": ["artifact://protected-live/codex-omnigent/v1"],
+        "evidenceRefs": [
+            f"artifact://protected-live/codex-omnigent/{kind}"
+            for kind in (
+                "submission-matrix",
+                "historical-reads",
+                "temporal-replay",
+                "capacity-ownership",
+                "secret-scan",
+                "release-metadata",
+            )
+        ],
+        "evidenceManifest": [
+            {
+                "kind": kind,
+                "ref": f"artifact://protected-live/codex-omnigent/{slug}",
+                "sha256": str(index) * 64,
+            }
+            for index, (kind, slug) in enumerate(
+                (
+                    ("submissionMatrix", "submission-matrix"),
+                    ("historicalReads", "historical-reads"),
+                    ("temporalReplay", "temporal-replay"),
+                    ("capacityOwnership", "capacity-ownership"),
+                    ("secretScan", "secret-scan"),
+                    ("releaseMetadata", "release-metadata"),
+                ),
+                start=1,
+            )
+        ],
     }
 
 
@@ -75,6 +103,28 @@ def test_promotion_rejects_stale_evidence_and_failed_thresholds() -> None:
     assert decision.allowed is False
     assert "live_conformance_evidence_stale" in decision.blockers
     assert "rollback_threshold_exceeded_or_missing" in decision.blockers
+
+
+def test_promotion_rejects_unbound_or_incomplete_evidence_provenance() -> None:
+    evidence = _evidence()
+    evidence["evidenceManifest"] = [
+        {
+            "kind": "submissionMatrix",
+            "ref": evidence["evidenceRefs"][0],
+            "sha256": "not-a-digest",
+        }
+    ]
+
+    decision = evaluate_promotion(
+        current_phase=CutoverPhase.OPT_IN,
+        requested_phase=CutoverPhase.CREATE_DEFAULT,
+        evidence=evidence,
+        now=NOW,
+    )
+
+    assert decision.allowed is False
+    assert "provenance_bound_evidence_manifest_invalid" in decision.blockers
+    assert "complete_evidence_kind_coverage_required" in decision.blockers
 
 
 def test_promotion_requires_single_phase_and_complete_authority_handoffs() -> None:

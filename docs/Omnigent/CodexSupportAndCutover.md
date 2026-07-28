@@ -36,7 +36,11 @@ The persisted rollout value is the numbered phase, not an inferred default:
 one-step promotion with a fresh, version-matched evidence artifact. It requires
 profile/policy readiness, all required cases, raw-channel secret scans, replay,
 historical reads, single capacity ownership, objective thresholds, and nonempty
-artifact refs. Missing, malformed, older than seven days, or over-threshold
+artifact refs. Every ref must also appear exactly once in the provenance-bound
+evidence manifest with a lowercase SHA-256 digest and one of the required
+submission-matrix, historical-read, Temporal-replay, capacity-ownership,
+secret-scan, or release-metadata evidence kinds. Missing, malformed, older than
+seven days, incomplete, or over-threshold
 evidence blocks promotion. Rollback to an earlier phase is always allowed and
 does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.
