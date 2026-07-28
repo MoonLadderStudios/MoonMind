@@ -1855,3 +1855,36 @@ def test_bridge_profile_resolves_to_restricted_attested_network(tmp_path: Path) 
     assert "NO_PROXY=" in args
     assert "--privileged=false" in args
     assert args[args.index("--cap-drop") + 1] == "ALL"
+
+
+@pytest.mark.asyncio
+async def test_bridge_launch_fails_before_process_when_egress_is_unattested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="bridge")],
+    )
+    process_started = False
+
+    async def _fake_create_subprocess_exec(*_args: str, **_kwargs: Any) -> _Process:
+        nonlocal process_started
+        process_started = True
+        return _Process()
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    launcher = DockerWorkloadLauncher()
+
+    async def _unavailable(_args: list[str]) -> tuple[bytes, bytes, int]:
+        return b"", b"not found", 1
+
+    monkeypatch.setattr(launcher._janitor, "_run_control", _unavailable)
+
+    with pytest.raises(RuntimeError, match="network is unavailable"):
+        await launcher.run(request)
+
+    assert process_started is False
