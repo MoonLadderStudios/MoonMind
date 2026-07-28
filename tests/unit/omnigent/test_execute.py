@@ -113,7 +113,111 @@ async def test_initial_context_is_persisted_before_first_message_digest(
     assert evidence["embeddingConfigRef"] == "sha256:embedding"
     assert evidence["firstMessageConsumedContextRef"] is True
     assert evidence["preparedMessageRef"].startswith("artifact://omnigent/")
+    prepared_payload = json.dumps(
+        message, sort_keys=True, separators=(",", ":")
+    ).encode()
+    assert evidence["preparedMessageDigest"] == hashlib.sha256(
+        prepared_payload
+    ).hexdigest()
+    assert message["metadata"]["moonmindIdempotencyKey"] == "idem-1"
+    assert "MoonMind-Omnigent-Run:" in _first_message_text(message)
     assert recorded == [evidence]
+
+
+@pytest.mark.asyncio
+async def test_initial_context_pack_is_published_through_artifact_gateway(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}}
+    context_path = tmp_path / "workspace-context.json"
+    context_path.write_text('{"items":[]}\n', encoding="utf-8")
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "published")
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifacts/context/workspace-context.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievedContextItemCount": 0,
+            "retrievalMode": "semantic",
+        }
+        return PromptContextResolution(
+            instruction="Do work", artifact_path=context_path
+        )
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    _, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Do work"}],
+            },
+        },
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=None,
+        workspace=str(tmp_path),
+    )
+
+    assert evidence["contextPackRef"].startswith("artifact://omnigent/")
+    assert (
+        request.parameters["metadata"]["moonmind"]["retrievalDurabilityAuthority"]
+        == "artifact_gateway"
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_context_artifact_publication_failure_fails_before_commit(
+    monkeypatch, tmp_path
+) -> None:
+    request = _request()
+    request.parameters = {"metadata": {}, "rag": {"required": True}}
+    context_path = tmp_path / "workspace-context.json"
+    context_path.write_text('{"items":[]}\n', encoding="utf-8")
+
+    async def inject_context(self, *, request, workspace_path):
+        request.parameters["metadata"]["moonmind"] = {
+            "latestContextPackRef": "artifacts/context/workspace-context.json",
+            "retrievedContextDigest": "sha256:pack",
+            "retrievalMode": "semantic",
+        }
+        return PromptContextResolution(
+            instruction="Do work", artifact_path=context_path
+        )
+
+    class FailingGateway(LocalOmnigentArtifactGateway):
+        async def write_text(self, **kwargs):
+            if kwargs.get("link_type") == "input.context-pack":
+                raise OmnigentArtifactError("artifact service unavailable")
+            return await super().write_text(**kwargs)
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService.inject_context",
+        inject_context,
+    )
+    with pytest.raises(
+        OmnigentContractError,
+        match="required initial context artifact publication failed",
+    ):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=FailingGateway(root=tmp_path / "published"),
+            run_store=None,
+            durable_row=None,
+            workspace=str(tmp_path),
+        )
 
 
 @pytest.mark.asyncio

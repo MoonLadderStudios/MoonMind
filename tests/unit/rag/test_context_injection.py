@@ -243,6 +243,51 @@ def test_retrieve_context_pack_rejects_collection_scope_widening(
     with pytest.raises(PermissionError, match="outside the configured scope"):
         service._retrieve_context_pack(mock_request)
 
+
+@patch("moonmind.rag.context_injection.ContextRetrievalService.retrieve")
+def test_retrieve_context_pack_enforces_tenant_and_workspace_scope(
+    mock_retrieve,
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters.update({"tenantId": "tenant-1"})
+    mock_request.workspace_spec = {
+        "repository": "workspace-repo",
+        "workspaceId": "workspace-1",
+    }
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "GOOGLE_API_KEY": "test",
+        }
+    )
+    mock_retrieve.return_value = ContextPack(
+        items=[], filters={}, budgets={}, usage={}, transport="direct",
+        context_text="", retrieved_at="2026-04-24T00:00:00Z", telemetry_id="tid",
+    )
+
+    service._retrieve_context_pack(mock_request)
+
+    assert mock_retrieve.call_args.kwargs["filters"]["tenant"] == "tenant-1"
+    assert mock_retrieve.call_args.kwargs["filters"]["workspace"] == "workspace-1"
+
+
+def test_retrieve_context_pack_rejects_authored_workspace_scope_conflict(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    mock_request.parameters["rag"] = {"workspace": "other-workspace"}
+    mock_request.workspace_spec = {"workspaceId": "workspace-1"}
+    service = ContextInjectionService(
+        env={
+            "MOONMIND_RAG_AUTO_CONTEXT": "true",
+            "QDRANT_ENABLED": "true",
+            "GOOGLE_API_KEY": "test",
+        }
+    )
+
+    with pytest.raises(PermissionError, match="outside the launch scope"):
+        service._retrieve_context_pack(mock_request)
+
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")

@@ -254,6 +254,23 @@ class ContextInjectionService:
         if repo_filter:
             filters.setdefault("repo", repo_filter)
             filters.setdefault("repository", repo_filter)
+        tenant_scope = str(
+            parameters.get("tenant") or parameters.get("tenantId") or ""
+        ).strip()
+        workspace_scope = str(
+            (request.workspace_spec or {}).get("workspaceId") or ""
+        ).strip()
+        for scope_name, authoritative_value in (
+            ("tenant", tenant_scope),
+            ("workspace", workspace_scope),
+        ):
+            authored_value = str(authored_rag.get(scope_name) or "").strip()
+            if authored_value and authored_value != authoritative_value:
+                raise PermissionError(
+                    f"authored RAG {scope_name} is outside the launch scope"
+                )
+            if authoritative_value:
+                filters[scope_name] = authoritative_value
 
         service = ContextRetrievalService(settings=settings, env=self._env)
         planning_ref = (

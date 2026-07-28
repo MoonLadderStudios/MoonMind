@@ -178,13 +178,12 @@ def _first_message_text(first_message: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _first_message_marker(*, request: AgentExecutionRequest, digest: str) -> str:
+def _first_message_marker(*, request: AgentExecutionRequest) -> str:
     return "\n".join(
         [
             "MoonMind-Omnigent-Run:",
             f"  correlationId: {request.correlation_id}",
             f"  idempotencyKey: {request.idempotency_key}",
-            f"  firstMessageDigest: {digest}",
         ]
     )
 
@@ -245,6 +244,7 @@ async def _resolve_initial_context_message(
     run_store: OmnigentBridgeSessionStore | None,
     durable_row: Any,
     workspace: str | None,
+    include_idempotency_marker: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve or restore the exact context-bearing first message."""
 
@@ -272,6 +272,43 @@ async def _resolve_initial_context_message(
         # Copy only the compact RAG metadata back to the canonical request so it
         # is projected into terminal Step Execution evidence.
         request.parameters = retrieval_request.parameters
+        moonmind = (
+            request.parameters.get("metadata", {}).get("moonmind", {})
+            if isinstance(request.parameters, dict)
+            else {}
+        )
+        if resolution.artifact_path is not None:
+            try:
+                context_ref = await artifact_gateway.write_text(
+                    request=request,
+                    name="input.context-pack.json",
+                    payload=resolution.artifact_path.read_text(encoding="utf-8"),
+                    link_type="input.context-pack",
+                    content_type="application/json",
+                )
+            except Exception as exc:
+                authored_rag = request.parameters.get("rag")
+                required = bool(
+                    isinstance(authored_rag, dict) and authored_rag.get("required")
+                )
+                if required:
+                    raise OmnigentContractError(
+                        "required initial context artifact publication failed"
+                    ) from exc
+                first_message["data"]["content"][0]["text"] = text
+                if isinstance(moonmind, dict):
+                    moonmind.pop("latestContextPackRef", None)
+                    moonmind.pop("retrievedContextArtifactPath", None)
+                    moonmind["retrievalMode"] = "degraded_without_context"
+                    moonmind["retrievalFailureClass"] = "artifact_publication_failed"
+                    moonmind["retrievalDegradedReason"] = (
+                        "context_artifact_publication_failed"
+                    )
+            else:
+                if isinstance(moonmind, dict):
+                    moonmind["latestContextPackRef"] = context_ref
+                    moonmind["retrievedContextArtifactPath"] = context_ref
+                    moonmind["retrievalDurabilityAuthority"] = "artifact_gateway"
 
     evidence = _retrieval_evidence(request)
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
@@ -285,9 +322,16 @@ async def _resolve_initial_context_message(
             "required initial context retrieval is unavailable: "
             f"{evidence.get('reason') or 'retrieval_disabled'}"
         )
-    message_bytes = json.dumps(
-        first_message, sort_keys=True, separators=(",", ":")
-    ).encode()
+    first_message.setdefault("metadata", {})[
+        "moonmindIdempotencyKey"
+    ] = request.idempotency_key
+    marker = _first_message_marker(request=request)
+    if include_idempotency_marker:
+        first_message_text = _first_message_text(first_message)
+        first_message["data"]["content"][0]["text"] = (
+            f"{first_message_text}\n\n{marker}".strip()
+        )
+    message_bytes = json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
     evidence["preparedMessageDigest"] = hashlib.sha256(message_bytes).hexdigest()
     evidence["preparedMessageRef"] = await artifact_gateway.write_json(
         request=request,
@@ -831,20 +875,12 @@ async def run_omnigent_execution(
                 run_store=run_store,
                 durable_row=durable_row,
                 workspace=selection.session.workspace,
+                include_idempotency_marker=selection.prompt.get(
+                    "includeIdempotencyMarker", True
+                ),
             )
-            digest = hashlib.sha256(
-                json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            marker = _first_message_marker(request=request, digest=digest)
-            first_message.setdefault("metadata", {})[
-                "moonmindFirstMessageDigest"
-            ] = digest
-            first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
-            if selection.prompt.get("includeIdempotencyMarker", True):
-                first_message_text = _first_message_text(first_message)
-                first_message["data"]["content"][0]["text"] = (
-                    f"{first_message_text}\n\n{marker}".strip()
-                )
+            digest = str(retrieval_evidence["preparedMessageDigest"])
+            marker = _first_message_marker(request=request)
             external_state["firstMessage"].update(
                 {
                     "digest": digest,
