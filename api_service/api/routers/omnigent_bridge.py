@@ -30,9 +30,11 @@ from api_service.api.execution_principal import (
     resolve_execution_principal,
 )
 from api_service.api.routers.executions import _get_service as _get_execution_service
+from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker
 from api_service.db.models import User
+from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -768,6 +770,8 @@ async def delete_omnigent_session(
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
     facade = (
         embedded_facade
@@ -776,6 +780,12 @@ async def delete_omnigent_session(
     )
     await _authorize_session_control(
         session_id=session_id, user=user, service=service, proxy=facade
+    )
+    await _revoke_session_retrieval_authority(
+        session_id=session_id,
+        registry=registry,
+        store=store,
+        reason="session_deleted",
     )
     try:
         return await facade.delete_session(session_id)
@@ -826,6 +836,61 @@ async def _authorize_session_control(
                 ),
             },
         )
+
+
+async def _revoke_session_retrieval_authority(
+    *,
+    session_id: str,
+    registry: RetrievalCapabilityRegistry,
+    store: OmnigentBridgeSessionStore,
+    reason: str,
+) -> list[str]:
+    """Close scoped retrieval authority before a destructive host boundary."""
+
+    row = await store.get_session_by_provider_session_id(session_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_retrieval_authority_unresolved",
+                "message": "The bridge session retrieval authority could not be resolved.",
+            },
+        )
+    revoked = registry.revoke_scope(
+        run_id=str(row.moonmind_run_id),
+        host_id=(
+            str(row.omnigent_host_id)
+            if getattr(row, "omnigent_host_id", None)
+            else None
+        ),
+        session_id=(
+            str(row.omnigent_session_id)
+            if getattr(row, "omnigent_session_id", None)
+            else None
+        ),
+        step_id=(
+            str(row.step_execution_id)
+            if getattr(row, "step_execution_id", None)
+            else None
+        ),
+    )
+    await store.append_events(
+        row.bridge_session_id,
+        [
+            {
+                "eventType": "retrieval.capabilities.revoked",
+                "direction": "moonmind_to_host",
+                "deduplicationKey": (
+                    f"retrieval-capabilities-revoked:{row.bridge_session_id}:{reason}"
+                ),
+                "metadata": {
+                    "revokedCount": len(revoked),
+                    "reason": reason,
+                },
+            }
+        ],
+    )
+    return revoked
 
 
 async def _authorize_bridge_session_projection(
@@ -1357,6 +1422,8 @@ async def post_omnigent_session_event(
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
     """Apply Omnigent controls, including bridge-local harvest/clear policy."""
 
@@ -1380,7 +1447,20 @@ async def post_omnigent_session_event(
         proxy=control_facade,
     )
     try:
+        if payload.type in {"clear_session", "reset_session"}:
+            await _revoke_session_retrieval_authority(
+                session_id=session_id,
+                registry=registry,
+                store=store,
+                reason="session_replaced",
+            )
         if payload.type in {"stop", "session.stop", "stop_session"}:
+            await _revoke_session_retrieval_authority(
+                session_id=session_id,
+                registry=registry,
+                store=store,
+                reason="session_stopped",
+            )
             if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
                 assert embedded_facade is not None
                 return await embedded_facade.stop_session(
@@ -1397,6 +1477,12 @@ async def post_omnigent_session_event(
                     code="omnigent_bridge_capability_unavailable",
                 )
             assert embedded_facade is not None
+            await _revoke_session_retrieval_authority(
+                session_id=session_id,
+                registry=registry,
+                store=store,
+                reason="session_cleanup",
+            )
             return await embedded_facade.cleanup_session(
                 session_id,
                 payload=payload.model_dump(by_alias=True, exclude_none=True),

@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -27,6 +27,7 @@ from api_service.api.routers.omnigent_bridge import (
     embedded_host_auth_preflight,
     router,
 )
+from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -300,6 +301,7 @@ class _FakeStore:
         )
         self._session_overrides = session_overrides or {}
         self.active_modes: dict[str, int] = {}
+        self.appended_events: list[dict[str, Any]] = []
 
     async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
         self.excluded_idempotency_key = exclude_idempotency_key
@@ -322,6 +324,13 @@ class _FakeStore:
 
     async def get_bridge_session(self, bridge_session_id: str):
         return self._session()
+
+    async def get_session_by_provider_session_id(self, session_id: str):
+        return self._session() if session_id == "sess-77" else None
+
+    async def append_events(self, bridge_session_id: str, events: list[dict[str, Any]]):
+        assert bridge_session_id == "brs-1"
+        self.appended_events.extend(events)
 
     def _session(self):
         terminal_status = next(
@@ -424,6 +433,7 @@ def _build(
     proxy: _FakeProxy | None = None,
     store: _FakeStore | None = None,
     config: Any | None = None,
+    registry: Any | None = None,
 ) -> tuple[TestClient, _FakeProxy, _FakeStore]:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
@@ -433,6 +443,8 @@ def _build(
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
+    if registry is not None:
+        app.dependency_overrides[get_capability_registry] = lambda: registry
     if config is not None:
         app.dependency_overrides[_require_bridge_enabled] = lambda: config
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
@@ -620,10 +632,35 @@ def test_attach_reconciles_existing_provider_session() -> None:
 
 
 def test_delete_authorizes_and_delegates() -> None:
-    client, proxy, _ = _build()
+    registry = SimpleNamespace(revoke_scope=Mock(return_value=["cap-1"]))
+    client, proxy, store = _build(registry=registry)
     resp = client.delete(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 200
     assert proxy.deleted == ["sess-77"]
+    registry.revoke_scope.assert_called_once_with(
+        run_id="run-1", host_id=None, session_id="session-ref", step_id="step-1"
+    )
+    assert store.appended_events[0]["metadata"] == {
+        "revokedCount": 1,
+        "reason": "session_deleted",
+    }
+
+
+def test_delete_blocks_host_mutation_when_retrieval_authority_is_unresolved() -> None:
+    store = _FakeStore()
+    store.get_session_by_provider_session_id = AsyncMock(return_value=None)
+    client, proxy, _ = _build(
+        store=store,
+        registry=SimpleNamespace(revoke_scope=Mock(return_value=[])),
+    )
+
+    response = client.delete(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "omnigent_retrieval_authority_unresolved"
+    )
+    assert proxy.deleted == []
 
 
 def test_provider_stream_authorizes_and_proxies_sse() -> None:
