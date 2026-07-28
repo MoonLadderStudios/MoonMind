@@ -13,8 +13,8 @@ type InventoryRow = {
   freshness: string | null;
   formattedFreshness: string | null;
   version?: number | null;
-  validation?: { valid?: boolean; diagnostics?: Array<{ code: string; message: string }> };
-  document?: Record<string, unknown>;
+  validation?: { valid?: boolean; diagnostics?: Array<{ code: string; path?: string; message: string }> } | undefined;
+  document?: Record<string, unknown> | undefined;
 };
 type PolicyVersion = {
   policyId: string;
