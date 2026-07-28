@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -509,7 +510,7 @@ def test_build_omnigent_result_exposes_initial_context_pack_ref() -> None:
         "artifact://context/input.context-pack.json"
     )
     assert result.provider_error_code is None
-    assert result.output_refs == ["artifact://transcript", "artifact://snapshot"]
+    assert result.output_refs == ["artifact://transcript"]
     assert result.diagnostics_ref == "artifact://diagnostics"
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["normalizedStatus"] == "completed"

@@ -37,6 +37,7 @@ from moonmind.omnigent.bridge_security import (
     redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_NOT_PREPARED,
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
