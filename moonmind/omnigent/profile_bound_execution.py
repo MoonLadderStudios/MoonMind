@@ -279,7 +279,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     raise
             if status in {"started", "waiting"}:
                 active_stages.add(stage)
-            elif status in {"completed", "ready", "failed"}:
+            elif status in {"completed", "ready", "failed", "canceled"}:
                 active_stages.discard(stage)
 
         provider_lease: CredentialLease | None = None
@@ -704,6 +704,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     metadata={"providerProfileId": profile_id},
                 )
             return result
+        except asyncio.CancelledError:
+            terminal_status = "canceled"
+            if bridge_ready:
+                for stage in list(active_stages) or [current_stage]:
+                    await emit(
+                        stage,
+                        "canceled",
+                        code="execution_canceled",
+                        summary="Omnigent execution was canceled",
+                        failure_class="canceled",
+                        remediation_action="inspect_cancellation_evidence",
+                        ignore_errors=True,
+                    )
+            raise
         except Exception as exc:
             terminal_status = "failed"
             if bridge_ready:

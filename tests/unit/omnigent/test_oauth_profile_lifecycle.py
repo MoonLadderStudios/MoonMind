@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -1738,6 +1739,8 @@ async def _run_coordinator_failure_case(
             "first_message_reconcile",
             "resource_harvest",
         ):
+            if fail_at == "cancellation" and owner == "session_create":
+                raise asyncio.CancelledError("worker cancellation")
             await owners.fail(owner)
         return AgentRunResult(summary="done")
 
@@ -1791,6 +1794,9 @@ async def _run_coordinator_failure_case(
 
     if fail_at in {"host_stop", "host_remove", "release"}:
         await coordinator.execute(request)
+    elif fail_at == "cancellation":
+        with pytest.raises(asyncio.CancelledError, match="worker cancellation"):
+            await coordinator.execute(request)
     else:
         with pytest.raises(OmnigentOAuthHostError) as captured:
             await coordinator.execute(request)
@@ -1956,6 +1962,160 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
     else:
         assert "provider_released" in actions
     assert events[-1][1]["metadata"]["janitorRequired"] is janitor_required
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_cold_restore_and_branch_retries_keep_stable_launch_identity() -> None:
+    execute = AsyncMock(return_value=AgentRunResult(summary="done"))
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator.execute = execute  # type: ignore[method-assign]
+    checkpoint = _checkpoint()
+    candidate = CandidateWorkspaceAuthority(
+        loopId="workflow-1",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="checkpoint-attempt-2",
+    )
+
+    for _ in range(2):
+        await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=checkpoint,
+            provider_lease=None,
+            host_lease=None,
+            host_registered=False,
+            session_valid=False,
+            first_message_consistent=False,
+            event_cursor_valid=False,
+            workspace_authority_valid=True,
+            policy_valid=True,
+            current_credential_generation=3,
+            candidate_workspace=candidate,
+        )
+    cold_requests = [call.args[0] for call in execute.await_args_list]
+    assert cold_requests[0] == cold_requests[1]
+    assert cold_requests[0].idempotency_key != request.idempotency_key
+    assert cold_requests[0].parameters["checkpointRestore"]["mode"] == "cold_restore"
+
+    execute.reset_mock()
+    for _ in range(2):
+        await coordinator.branch_from_checkpoint(
+            request=request,
+            checkpoint=checkpoint,
+            current_credential_generation=3,
+            candidate_workspace=candidate,
+        )
+    branch_requests = [call.args[0] for call in execute.await_args_list]
+    assert branch_requests[0] == branch_requests[1]
+    assert branch_requests[0].idempotency_key == request.idempotency_key
+    assert branch_requests[0].parameters["checkpointRestore"]["mode"] == "branch"
+
+
+@pytest.mark.asyncio
+async def test_live_reattach_retry_reuses_source_authority_and_cancellation() -> None:
+    execution_runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=execution_runner,
+        artifact_gateway=object(),
+    )
+    coordinator.execute = AsyncMock()  # type: ignore[method-assign]
+    checkpoint = _checkpoint()
+    candidate = CandidateWorkspaceAuthority(
+        loopId="workflow-1",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="resume-attempt-2",
+    )
+    authority = {
+        "provider_lease": {"active": True, "leaseId": "provider-lease-1"},
+        "host_lease": {
+            "status": "assigned",
+            "leaseId": "host-lease-1",
+            "credentialGeneration": 3,
+        },
+        "host_registered": True,
+        "session_valid": True,
+        "first_message_consistent": True,
+        "event_cursor_valid": True,
+        "workspace_authority_valid": True,
+        "policy_valid": True,
+    }
+
+    for _ in range(2):
+        await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=checkpoint,
+            current_credential_generation=3,
+            candidate_workspace=candidate,
+            **authority,
+        )
+    retried_requests = [call.args[0] for call in execution_runner.await_args_list]
+    assert retried_requests[0] == retried_requests[1]
+    assert retried_requests[0].idempotency_key == checkpoint.idempotency_key
+    assert retried_requests[0].parameters["omnigent"]["session"]["hostId"] == "host-1"
+    coordinator.execute.assert_not_awaited()  # type: ignore[attr-defined]
+
+    execution_runner.side_effect = asyncio.CancelledError("worker restart")
+    with pytest.raises(asyncio.CancelledError, match="worker restart"):
+        await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=checkpoint,
+            current_credential_generation=3,
+            candidate_workspace=candidate,
+            **authority,
+        )
+    coordinator.execute.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_partial_launch_cleans_host_before_profile_release() -> None:
+    events, actions, _owner_calls = await _run_coordinator_failure_case(
+        fail_at="cancellation",
+        code="execution_canceled",
+    )
+
+    assert actions.index("host_stopped") < actions.index("provider_released")
+    assert any(
+        stage == "session_creation" and details.get("status") == "canceled"
+        for stage, details in events
+    )
+    assert events[-1][0] == "terminal"
+    assert events[-1][1]["status"] == "canceled"
+    assert events[-1][1]["metadata"]["cleanupCompleted"] is True
+    assert events[-1][1]["metadata"]["leaseReleased"] is True
+
+
 @pytest.fixture(autouse=True)
 def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)

@@ -22,6 +22,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+    RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
@@ -109,6 +111,25 @@ class _CurrentRemediationReplayFixture:
         )
         assert decision.successor is not None
         return ["verify-1", decision.successor.logical_step_id]
+
+
+@workflow.defn(name="MM3510OmnigentCheckpointReplayFixture")
+class _LegacyOmnigentCheckpointReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        return ["legacy-agent-request"]
+
+
+@workflow.defn(name="MM3510OmnigentCheckpointReplayFixture")
+class _CurrentOmnigentCheckpointReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        commands = ["legacy-agent-request"]
+        if workflow.patched(RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH):
+            commands.append("branch-turn-request")
+        if workflow.patched(RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH):
+            commands.append("checkpoint-execution")
+        return commands
 
 
 @workflow.defn(name="MM3475StaticLoopCutoverReplayFixture")
@@ -511,6 +532,49 @@ async def test_moonspec_remediation_pre_and_post_patch_histories_replay() -> Non
     assert current_commands.count("verify-1") == 1
     replayer = Replayer(
         workflows=[_CurrentRemediationReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_omnigent_checkpoint_pre_and_post_orchestration_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3510-legacy-replay",
+            workflows=[_LegacyOmnigentCheckpointReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyOmnigentCheckpointReplayFixture.run,
+                id="test-mm3510-legacy-history",
+                task_queue="test-mm3510-legacy-replay",
+            )
+            assert await legacy.result() == ["legacy-agent-request"]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3510-current-replay",
+            workflows=[_CurrentOmnigentCheckpointReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentOmnigentCheckpointReplayFixture.run,
+                id="test-mm3510-current-history",
+                task_queue="test-mm3510-current-replay",
+            )
+            assert await current.result() == [
+                "legacy-agent-request",
+                "branch-turn-request",
+                "checkpoint-execution",
+            ]
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentOmnigentCheckpointReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
