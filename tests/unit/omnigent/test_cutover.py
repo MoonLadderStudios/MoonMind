@@ -1,6 +1,7 @@
 """MoonLadderStudios/MoonMind#3518 cutover gate tests."""
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 
 import pytest
 
@@ -18,7 +19,30 @@ from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 
 
-def _evidence() -> dict[str, object]:
+def _evidence(tmp_path=None) -> dict[str, object]:
+    kinds = (
+        ("submissionMatrix", "submission-matrix"),
+        ("historicalReads", "historical-reads"),
+        ("temporalReplay", "temporal-replay"),
+        ("capacityOwnership", "capacity-ownership"),
+        ("secretScan", "secret-scan"),
+        ("releaseMetadata", "release-metadata"),
+    )
+    manifest = []
+    for kind, slug in kinds:
+        content = f"{kind} protected evidence\n".encode()
+        ref = f"artifact://protected-live/codex-omnigent/{slug}"
+        if tmp_path is not None:
+            path = tmp_path / f"{slug}.json"
+            path.write_bytes(content)
+            ref = path.name
+        manifest.append(
+            {
+                "kind": kind,
+                "ref": ref,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
     return {
         "schemaVersion": CUTOVER_POLICY_VERSION,
         "generatedAt": NOW.isoformat(),
@@ -44,35 +68,8 @@ def _evidence() -> dict[str, object]:
             "withinLimits": True,
             "results": {"launchSuccessRate": True, "secretViolations": True},
         },
-        "evidenceRefs": [
-            f"artifact://protected-live/codex-omnigent/{kind}"
-            for kind in (
-                "submission-matrix",
-                "historical-reads",
-                "temporal-replay",
-                "capacity-ownership",
-                "secret-scan",
-                "release-metadata",
-            )
-        ],
-        "evidenceManifest": [
-            {
-                "kind": kind,
-                "ref": f"artifact://protected-live/codex-omnigent/{slug}",
-                "sha256": str(index) * 64,
-            }
-            for index, (kind, slug) in enumerate(
-                (
-                    ("submissionMatrix", "submission-matrix"),
-                    ("historicalReads", "historical-reads"),
-                    ("temporalReplay", "temporal-replay"),
-                    ("capacityOwnership", "capacity-ownership"),
-                    ("secretScan", "secret-scan"),
-                    ("releaseMetadata", "release-metadata"),
-                ),
-                start=1,
-            )
-        ],
+        "evidenceRefs": [item["ref"] for item in manifest],
+        "evidenceManifest": manifest,
     }
 
 
@@ -205,7 +202,7 @@ def test_effective_phase_cannot_be_promoted_by_environment_alone() -> None:
 
 def test_effective_phase_loads_exact_authorized_local_evidence(tmp_path) -> None:
     path = tmp_path / "release.json"
-    path.write_text(__import__("json").dumps(_evidence()), encoding="utf-8")
+    path.write_text(__import__("json").dumps(_evidence(tmp_path)), encoding="utf-8")
 
     status = effective_phase(
         env={
@@ -220,10 +217,41 @@ def test_effective_phase_loads_exact_authorized_local_evidence(tmp_path) -> None
     assert status.as_dict()["images"]["host"].endswith("2" * 64)
 
 
+def test_effective_phase_rejects_missing_or_tampered_manifest_evidence(
+    tmp_path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    missing = tmp_path / str(evidence["evidenceRefs"][0])
+    missing.unlink()
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
+
+    missing_status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+    assert missing_status.phase is CutoverPhase.OPT_IN
+    assert "evidence_manifest_ref_unreadable" in missing_status.blockers
+
+    missing.write_text("tampered", encoding="utf-8")
+    tampered_status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+    assert tampered_status.phase is CutoverPhase.OPT_IN
+    assert "evidence_manifest_digest_mismatch" in tampered_status.blockers
+
+
 def test_effective_phase_uses_durable_deployed_phase_for_sequential_promotion(
     tmp_path,
 ) -> None:
-    evidence = _evidence()
+    evidence = _evidence(tmp_path)
     evidence["authorizedPhase"] = "BROAD_DEFAULT"
     path = tmp_path / "release.json"
     path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
@@ -242,7 +270,7 @@ def test_effective_phase_uses_durable_deployed_phase_for_sequential_promotion(
 
 
 def test_effective_phase_requires_evidence_to_match_deployed_phase(tmp_path) -> None:
-    evidence = _evidence()
+    evidence = _evidence(tmp_path)
     evidence["authorizedPhase"] = "SCHEDULE_DEFAULT"
     path = tmp_path / "release.json"
     path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
@@ -263,7 +291,7 @@ def test_effective_phase_requires_evidence_to_match_deployed_phase(tmp_path) -> 
 def test_denied_promotion_preserves_deployed_phase_instead_of_resetting_defaults(
     tmp_path,
 ) -> None:
-    evidence = _evidence()
+    evidence = _evidence(tmp_path)
     evidence["authorizedPhase"] = "SCHEDULE_DEFAULT"
     evidence["currentPhase"] = "CREATE_DEFAULT"
     evidence["allRequiredCasesPassed"] = False
@@ -305,7 +333,7 @@ def test_phase_six_requires_separate_code_removal_evidence() -> None:
 
 
 def test_effective_phase_rejects_stale_or_wrong_phase_evidence(tmp_path) -> None:
-    evidence = _evidence()
+    evidence = _evidence(tmp_path)
     evidence["authorizedPhase"] = "BROAD_DEFAULT"
     evidence["generatedAt"] = (NOW - timedelta(days=8)).isoformat()
     path = tmp_path / "release.json"

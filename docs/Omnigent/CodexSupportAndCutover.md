@@ -39,8 +39,11 @@ historical reads, single capacity ownership, objective thresholds, and nonempty
 artifact refs. Every ref must also appear exactly once in the provenance-bound
 evidence manifest with a lowercase SHA-256 digest and one of the required
 submission-matrix, historical-read, Temporal-replay, capacity-ownership,
-secret-scan, or release-metadata evidence kinds. Missing, malformed, older than
-seven days, incomplete, or over-threshold
+secret-scan, or release-metadata evidence kinds. At promotion time every
+manifest ref must resolve to a deployment-local file (absolute, `file://`, or
+relative to the conformance document), and the SHA-256 digest of its bytes must
+match the manifest. Missing, unreadable, digest-mismatched, malformed, older
+than seven days, incomplete, or over-threshold
 evidence blocks promotion. Rollback to an earlier phase is always allowed and
 does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.

@@ -407,6 +407,39 @@ def _evidence_path(ref: str) -> Path:
     return Path(ref)
 
 
+def _verify_manifest_artifacts(
+    evidence: Mapping[str, Any],
+    *,
+    evidence_document_path: Path,
+) -> tuple[str, ...]:
+    """Resolve every manifest ref locally and bind its bytes to its digest."""
+
+    manifest = evidence.get("evidenceManifest")
+    if not isinstance(manifest, list) or not manifest:
+        return ()
+
+    blockers: list[str] = []
+    base = evidence_document_path.resolve().parent
+    for item in manifest:
+        if not isinstance(item, Mapping):
+            continue
+        ref = item.get("ref")
+        expected = item.get("sha256")
+        if not isinstance(ref, str) or not isinstance(expected, str):
+            continue
+        try:
+            artifact_path = _evidence_path(ref)
+            if not artifact_path.is_absolute():
+                artifact_path = base / artifact_path
+            content = artifact_path.read_bytes()
+        except (OSError, ValueError):
+            blockers.append("evidence_manifest_ref_unreadable")
+            continue
+        if hashlib.sha256(content).hexdigest() != expected:
+            blockers.append("evidence_manifest_digest_mismatch")
+    return tuple(dict.fromkeys(blockers))
+
+
 def effective_phase(
     *,
     env: Mapping[str, Any] | None = None,
@@ -431,11 +464,13 @@ def effective_phase(
 
     blockers: list[str] = []
     evidence: Mapping[str, Any] | None = None
+    evidence_document_path: Path | None = None
     if not ref:
         blockers.append("live_conformance_evidence_missing")
     else:
         try:
-            payload = json.loads(_evidence_path(ref).read_text(encoding="utf-8"))
+            evidence_document_path = _evidence_path(ref)
+            payload = json.loads(evidence_document_path.read_text(encoding="utf-8"))
             if not isinstance(payload, Mapping):
                 raise ValueError("conformance_evidence_not_object")
             evidence = payload
@@ -458,6 +493,13 @@ def effective_phase(
             now=now,
         )
         blockers.extend(decision.blockers)
+        if evidence_document_path is not None:
+            blockers.extend(
+                _verify_manifest_artifacts(
+                    evidence,
+                    evidence_document_path=evidence_document_path,
+                )
+            )
 
     unique_blockers = tuple(dict.fromkeys(blockers))
     return EffectivePhase(
