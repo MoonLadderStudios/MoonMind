@@ -459,3 +459,144 @@ async def test_stale_context_requires_authored_freshness_permission(
     evidence = mock_request.parameters["metadata"]["moonmind"]
     assert evidence["retrievalDisabledReason"] == "stale_context_denied"
     assert evidence["retrievalFailureClass"] == "denied"
+
+
+@pytest.mark.parametrize(
+    ("gateway_url", "expected_transport"),
+    [
+        ("https://retrieval.moonmind.test", "gateway"),
+        ("", "direct"),
+    ],
+)
+@patch("moonmind.rag.context_injection.ContextRetrievalService")
+def test_omnigent_retrieval_transport_scope_and_budgets_are_forwarded_without_secrets(
+    service_cls,
+    mock_request: AgentExecutionRequest,
+    gateway_url: str,
+    expected_transport: str,
+) -> None:
+    mock_request.parameters.update(
+        {
+            "repository": "https://github.com/org/repo.git",
+            "rag": {
+                "queryOverride": "bounded authored query",
+                "collections": ["primary", "docs"],
+            },
+        }
+    )
+    pack = ContextPack(
+        items=[],
+        filters={},
+        budgets={},
+        usage={},
+        transport=expected_transport,
+        context_text="",
+        retrieved_at="2026-07-28T00:00:00Z",
+        telemetry_id="transport-matrix",
+    )
+    service_cls.return_value.retrieve.return_value = pack
+    env = {
+        "MOONMIND_RETRIEVAL_URL": gateway_url,
+        "MOONMIND_RETRIEVAL_TOKEN": "retrieval-token-secret",
+        "QDRANT_API_KEY": "qdrant-secret",
+        "GOOGLE_API_KEY": "embedding-secret",
+        "VECTOR_STORE_COLLECTION_NAME": "primary",
+        "VECTOR_STORE_COLLECTION_NAMES": "primary,docs",
+        "MOONMIND_RAG_OVERLAY_POLICY": "include",
+        "RAG_QUERY_TOKEN_BUDGET": "512",
+        "RAG_LATENCY_BUDGET_MS": "900",
+    }
+
+    result, reason = ContextInjectionService(env=env)._retrieve_context_pack(mock_request)
+
+    assert result is pack
+    assert reason is None
+    kwargs = service_cls.return_value.retrieve.call_args.kwargs
+    assert kwargs["query"] == "bounded authored query"
+    assert kwargs["transport"] == expected_transport
+    assert kwargs["collections"] == ("primary", "docs")
+    assert kwargs["filters"]["repository"] == "org/repo"
+    assert kwargs["overlay_policy"] == "include"
+    assert kwargs["budgets"] == {"tokens": 512, "latency_ms": 900}
+    assert "secret" not in repr(kwargs)
+
+
+@pytest.mark.parametrize(
+    "collections",
+    [["other-tenant"], ["primary", "unauthorized"], []],
+)
+def test_omnigent_retrieval_rejects_collection_scope_broadening(
+    mock_request: AgentExecutionRequest,
+    collections: list[str],
+) -> None:
+    mock_request.parameters["rag"] = {"collections": collections}
+    service = ContextInjectionService(
+        env={
+            "VECTOR_STORE_COLLECTION_NAME": "primary",
+            "VECTOR_STORE_COLLECTION_NAMES": "primary,docs",
+        }
+    )
+
+    with pytest.raises(PermissionError, match="outside the configured scope"):
+        service._retrieve_context_pack(mock_request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required", "local_authorized", "expected_mode", "expected_failure"),
+    [
+        (False, False, "disabled", "unavailable"),
+        (True, False, "disabled", "unavailable"),
+        (False, True, "degraded_local_fallback", None),
+    ],
+)
+@patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_omnigent_unavailable_retrieval_outcomes_are_explicit_and_scope_preserving(
+    mock_retrieve,
+    mock_fallback,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+    required: bool,
+    local_authorized: bool,
+    expected_mode: str,
+    expected_failure: str | None,
+) -> None:
+    mock_request.parameters["rag"] = {
+        "required": required,
+        "localFallback": local_authorized,
+        "localFallbackAuthorized": local_authorized,
+    }
+    mock_retrieve.side_effect = RuntimeError("retrieval gateway unavailable")
+    mock_fallback.return_value = (
+        ContextPack(
+            items=[
+                ContextItem(
+                    score=0.5,
+                    source="docs/local.md",
+                    text="local bounded result",
+                    payload={"repository": "test-repo"},
+                )
+            ],
+            filters={"repository": "test-repo"},
+            budgets={"tokens": 32},
+            usage={"tokens": 8},
+            transport="local_fallback",
+            context_text="local bounded result",
+            retrieved_at="2026-07-28T00:00:00Z",
+            telemetry_id="fallback",
+        )
+        if local_authorized
+        else None
+    )
+
+    await ContextInjectionService(
+        env={"MOONMIND_RAG_AUTO_CONTEXT": "true"}
+    ).inject_context(request=mock_request, workspace_path=tmp_path)
+
+    evidence = mock_request.parameters["metadata"]["moonmind"]
+    assert evidence["retrievalMode"] == expected_mode
+    assert evidence.get("retrievalFailureClass") == expected_failure
+    if local_authorized:
+        assert evidence["retrievedContextSources"] == ["docs/local.md"]
+        assert evidence["retrievalScope"]["repository"] == "test-repo"

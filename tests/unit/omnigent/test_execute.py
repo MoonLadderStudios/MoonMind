@@ -172,6 +172,67 @@ async def test_initial_context_retry_reuses_exact_prepared_message(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("artifact_payload", ["[]", "{not-json"])
+async def test_initial_context_retry_rejects_corrupt_prepared_message(
+    tmp_path, artifact_payload: str
+) -> None:
+    request = _request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    prepared_ref = await gateway.write_text(
+        request=request,
+        name="input.omnigent.first_message.prepared.json",
+        payload=artifact_payload,
+        link_type="input.omnigent.first_message.prepared",
+        content_type="application/json",
+    )
+
+    class Row:
+        metadata_ = {"initialRetrieval": {"preparedMessageRef": prepared_ref}}
+
+    with pytest.raises((OmnigentContractError, json.JSONDecodeError)):
+        await _resolve_initial_context_message(
+            request=request,
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=gateway,
+            run_store=None,
+            durable_row=Row(),
+            workspace=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_initial_context_retry_rejects_missing_prepared_message(tmp_path) -> None:
+    class Row:
+        metadata_ = {
+            "initialRetrieval": {
+                "preparedMessageRef": "artifact://omnigent/missing/prepared.json"
+            }
+        }
+
+    with pytest.raises(OmnigentArtifactError):
+        await _resolve_initial_context_message(
+            request=_request(),
+            first_message={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Do work"}],
+                },
+            },
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=None,
+            durable_row=Row(),
+            workspace=str(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
 async def test_required_initial_context_fails_before_message_commit(
     monkeypatch, tmp_path
 ) -> None:

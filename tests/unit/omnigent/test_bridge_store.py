@@ -400,6 +400,33 @@ async def test_digest_mismatch_fails_fast(store):
 
 
 @pytest.mark.asyncio
+async def test_initial_retrieval_cannot_change_after_message_preparation(store):
+    await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    evidence = {
+        "state": "completed",
+        "contextPackRef": "artifact://context/pack.json",
+        "preparedMessageRef": "artifact://omnigent/prepared.json",
+        "preparedMessageDigest": "sha256:prepared",
+    }
+    await store.record_initial_context("idem-1", evidence=evidence)
+    await store.mark_prepared("idem-1", digest="sha256:first", marker="marker")
+
+    with pytest.raises(
+        OmnigentDigestMismatchError,
+        match="initial retrieval changed after first-message preparation",
+    ):
+        await store.record_initial_context(
+            "idem-1", evidence={**evidence, "contextPackRef": "artifact://context/other.json"}
+        )
+
+    unchanged = await store.record_initial_context("idem-1", evidence=evidence)
+    assert unchanged.metadata_["initialRetrieval"] == evidence
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(
