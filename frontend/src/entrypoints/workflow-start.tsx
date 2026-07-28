@@ -11777,14 +11777,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
             </p>
             <div className="grid-2" aria-label="Remediation evidence controls">
-              {[
+              {([
                 ["includeStepLedger", "Step execution ledger"],
                 ["includeDiagnostics", "Diagnostics"],
                 ["includeRecovery", "Recovery evidence"],
                 ["includeIncident", "Incident evidence"],
                 ["includeCheckpointBranches", "Checkpoint branches"],
                 ["includeAdapterRefs", "Runtime adapter evidence"],
-              ].map(([key, label]) => (
+              ] as const).map(([key, label]) => (
                 <label key={key} className="checkbox-label">
                   <input
                     type="checkbox"
@@ -11863,17 +11863,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 <input
                   type="checkbox"
                   checked={remediationDraft.remediation.checkpointBranchPolicy?.runtimeContextPolicy === "fresh_agent_run"}
-                  onChange={(event) => setRemediationDraft((current) => current ? {
-                    ...current,
-                    remediation: {
-                      ...current.remediation,
-                      checkpointBranchPolicy: event.target.checked ? {
-                        ...current.remediation.checkpointBranchPolicy,
-                        actionKind: "checkpoint_branch.create_from_remediation_context",
-                        runtimeContextPolicy: "fresh_agent_run",
-                      } : undefined,
-                    },
-                  } : current)}
+                  onChange={(event) => setRemediationDraft((current) => {
+                    if (!current) return current;
+                    const { checkpointBranchPolicy: _disabledPolicy, ...remediation } = current.remediation;
+                    return {
+                      ...current,
+                      remediation: event.target.checked ? {
+                        ...remediation,
+                        checkpointBranchPolicy: {
+                          ...current.remediation.checkpointBranchPolicy,
+                          actionKind: "checkpoint_branch.create_from_remediation_context",
+                          runtimeContextPolicy: "fresh_agent_run",
+                        },
+                      } : remediation,
+                    };
+                  })}
                 />
                 Create branch for corrected inputs
               </label>
