@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.omnigent.checkpoints import OmnigentCheckpointExecutionInput
+
 from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchStateValue,
     CheckpointBranchTurnStateValue,
@@ -175,6 +177,22 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", min_length=1, max_length=1024
     )
+    omnigent_checkpoint_execution: OmnigentCheckpointExecutionInput | None = Field(
+        None, alias="omnigentCheckpointExecution"
+    )
+
+    @model_validator(mode="after")
+    def _validate_omnigent_branch_execution(
+        self,
+    ) -> "CheckpointBranchTurnLaunchRequest":
+        if (
+            self.omnigent_checkpoint_execution is not None
+            and self.omnigent_checkpoint_execution.action != "branch"
+        ):
+            raise ValueError(
+                "checkpoint branch launch requires execution action 'branch'"
+            )
+        return self
 
     @field_validator(
         "created_step_execution_id",

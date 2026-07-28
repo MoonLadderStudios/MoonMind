@@ -13315,6 +13315,24 @@ async def launch_checkpoint_branch_turn(
             "digest": "sha256:checkpoint-branch-launch-api-v1",
         },
     }
+    if payload.omnigent_checkpoint_execution is not None:
+        checkpoint_execution = payload.omnigent_checkpoint_execution
+        if checkpoint_execution.candidate_workspace.checkpoint_ref != (
+            turn.source_checkpoint_ref
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "checkpoint_branch_source_mismatch",
+                    "reason": (
+                        "Omnigent candidate workspace must use the branch turn "
+                        "source checkpoint"
+                    ),
+                },
+            )
+        context_payload["branch"]["omnigentCheckpointExecution"] = (
+            checkpoint_execution.model_dump(by_alias=True, mode="json")
+        )
     try:
         context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
     except CheckpointBranchContextBundleError as exc:

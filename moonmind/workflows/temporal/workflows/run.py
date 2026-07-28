@@ -654,6 +654,9 @@ RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
 )
+RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH = (
+    "run-omnigent-checkpoint-execution-wiring-v1"
+)
 RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
     "run-omnigent-authored-selection-compiler-v1"
 )
@@ -4845,6 +4848,55 @@ class MoonMindRunWorkflow:
         prompt_payload["instructionRef"] = instruction_ref
         omnigent_payload["prompt"] = prompt_payload
         parameters["omnigent"] = omnigent_payload
+
+    def _omnigent_checkpoint_execution_payload(
+        self,
+        *,
+        workflow_parameters: Mapping[str, Any] | None,
+        branch_turn_payload: Mapping[str, Any] | None,
+        execution_profile_ref: str | None,
+    ) -> dict[str, Any] | None:
+        """Compile controller-owned checkpoint authority into Activity input."""
+
+        raw: Any = None
+        expected_action: str | None = None
+        if branch_turn_payload is not None:
+            raw = branch_turn_payload.get("omnigentCheckpointExecution")
+            expected_action = "branch"
+        elif isinstance(workflow_parameters, Mapping):
+            recovery_target = workflow_parameters.get("recoveryTarget")
+            if isinstance(recovery_target, Mapping):
+                destination = recovery_target.get("destination")
+                if (
+                    isinstance(destination, Mapping)
+                    and destination.get("runtimeId") == "omnigent"
+                ):
+                    raw = recovery_target.get("omnigentCheckpointExecution")
+                    expected_action = "resume"
+                    if raw is None:
+                        raise ValueError(
+                            "resume_unavailable:omnigent_checkpoint_evidence_missing"
+                        )
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise ValueError("resume_unavailable:checkpoint_execution_invalid")
+        payload = self._json_mapping(
+            raw,
+            path="omnigentCheckpointExecution",
+        )
+        if payload.get("action") != expected_action:
+            raise ValueError(
+                "resume_unavailable:checkpoint_execution_action_mismatch"
+            )
+        checkpoint = payload.get("checkpoint")
+        if not isinstance(checkpoint, Mapping):
+            raise ValueError("resume_unavailable:checkpoint_identity_missing")
+        if checkpoint.get("providerProfileId") != execution_profile_ref:
+            if expected_action == "resume":
+                raise ValueError("branch_required:provider_profile_changed")
+            raise ValueError("resume_unavailable:provider_profile_mismatch")
+        return payload
 
     def _checkpoint_branch_turn_source_checkpoint(
         self,
@@ -18776,6 +18828,49 @@ class MoonMindRunWorkflow:
             idempotency_key = (
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
+
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH
+            )
+        ):
+            checkpoint_execution = self._omnigent_checkpoint_execution_payload(
+                workflow_parameters=workflow_parameters,
+                branch_turn_payload=branch_turn_payload,
+                execution_profile_ref=execution_profile_ref,
+            )
+            if branch_turn_payload is not None and checkpoint_execution is None:
+                raise ValueError(
+                    "resume_unavailable:omnigent_checkpoint_evidence_missing"
+                )
+            if checkpoint_execution is not None:
+                parameters["checkpointExecution"] = checkpoint_execution
+                checkpoint_identity = checkpoint_execution["checkpoint"]
+                candidate_workspace = checkpoint_execution["candidateWorkspace"]
+                step_execution_payload["checkpointRecovery"] = {
+                    "action": checkpoint_execution["action"],
+                    "validationRef": checkpoint_execution["validationRef"],
+                    "sourceCheckpointRef": candidate_workspace["checkpointRef"],
+                    "workspaceHeadRef": candidate_workspace["headRef"],
+                    "sourceExecutionOrdinal": candidate_workspace[
+                        "attemptOrdinal"
+                    ],
+                    "providerProfileId": checkpoint_identity[
+                        "providerProfileId"
+                    ],
+                    "sourceHostId": checkpoint_identity.get("omnigentHostId"),
+                    "sourceSessionId": checkpoint_identity.get(
+                        "omnigentSessionId"
+                    ),
+                    "externalStateRef": checkpoint_identity["externalStateRef"],
+                    "requestedAction": (
+                        "checkpoint_branch"
+                        if checkpoint_execution["action"] == "branch"
+                        else "resume"
+                    ),
+                }
 
         # Repository work delegated through Omnigent carries durable ownership,
         # never a worker or daemon filesystem path. The activity resolves this

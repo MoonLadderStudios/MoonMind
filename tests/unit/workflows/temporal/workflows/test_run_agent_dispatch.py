@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
@@ -38,6 +39,48 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+def _omnigent_checkpoint_execution(action: str) -> dict[str, Any]:
+    return {
+        "action": action,
+        "checkpoint": {
+            "providerProfileId": "codex-oauth",
+            "credentialGeneration": 3,
+            "providerLeaseRef": "provider-lease-1",
+            "hostBindingRef": "binding-1",
+            "hostLeaseRef": "host-lease-1",
+            "endpointRef": "endpoint-1",
+            "omnigentHostId": "host-1",
+            "omnigentSessionId": "session-1",
+            "bridgeSessionId": "bridge-1",
+            "externalStateRef": "artifact://state/1",
+            "idempotencyKey": "source-attempt",
+        },
+        "candidateWorkspace": {
+            "loopId": "loop-1",
+            "attemptOrdinal": 2,
+            "headRef": "artifact://head/2",
+            "headDigest": "sha256:" + "a" * 64,
+            "checkpointRef": "artifact://checkpoint/source",
+            "checkpointDigest": "sha256:" + "b" * 64,
+        },
+        "currentCredentialGeneration": 3,
+        "providerLease": {"active": True, "leaseId": "provider-lease-1"},
+        "hostLease": {
+            "status": "assigned",
+            "leaseId": "host-lease-1",
+            "credentialGeneration": 3,
+        },
+        "hostRegistered": True,
+        "sessionValid": True,
+        "firstMessageConsistent": True,
+        "eventCursorValid": True,
+        "workspaceAuthorityValid": True,
+        "policyValid": True,
+        "originalInputUnchanged": action == "resume",
+        "validationRef": "artifact://validation/1",
+    }
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -73,6 +116,95 @@ class TestAgentKindForId(unittest.TestCase):
                 wf._agent_kind_for_id(agent_id),
                 "managed",
                 f"{agent_id} should be managed",
+            )
+
+    def test_omnigent_recovery_compiles_checkpoint_execution_for_activity(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "recovery-wf"
+            run_id = "recovery-run"
+
+        execution = _omnigent_checkpoint_execution("resume")
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth",
+                    }
+                },
+                node_id="implement",
+                tool_name="omnigent",
+                workflow_parameters={
+                    "recoveryTarget": {
+                        "destination": {"runtimeId": "omnigent"},
+                        "omnigentCheckpointExecution": execution,
+                    }
+                },
+            )
+
+        self.assertEqual(request.parameters["checkpointExecution"], execution)
+        assert request.step_execution is not None
+        self.assertEqual(
+            request.step_execution.checkpoint_recovery,
+            {
+                "action": "resume",
+                "validationRef": "artifact://validation/1",
+                "sourceCheckpointRef": "artifact://checkpoint/source",
+                "workspaceHeadRef": "artifact://head/2",
+                "sourceExecutionOrdinal": 2,
+                "providerProfileId": "codex-oauth",
+                "sourceHostId": "host-1",
+                "sourceSessionId": "session-1",
+                "externalStateRef": "artifact://state/1",
+                "requestedAction": "resume",
+            },
+        )
+
+    def test_omnigent_recovery_without_authority_fails_closed(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "recovery-wf"
+            run_id = "recovery-run"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_CHECKPOINT_EXECUTION_WIRING_PATCH
+            ),
+        ), pytest.raises(
+            ValueError,
+            match="resume_unavailable:omnigent_checkpoint_evidence_missing",
+        ):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth",
+                    }
+                },
+                node_id="implement",
+                tool_name="omnigent",
+                workflow_parameters={
+                    "recoveryTarget": {
+                        "destination": {"runtimeId": "omnigent"},
+                    }
+                },
             )
 
 class TestSlotContinuityMetadata(unittest.TestCase):

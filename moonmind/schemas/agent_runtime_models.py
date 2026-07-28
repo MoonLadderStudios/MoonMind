@@ -118,6 +118,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     external_provider_continuation: dict[str, Any] | None = Field(
         None, alias="externalProviderContinuation"
     )
+    checkpoint_recovery: dict[str, Any] | None = Field(
+        None, alias="checkpointRecovery"
+    )
     branch: dict[str, Any] | None = None
     branch_artifact_manifest: dict[str, Any] | None = Field(
         None, alias="branchArtifactManifest"

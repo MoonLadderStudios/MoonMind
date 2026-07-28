@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.checkpoints import OmnigentCheckpointExecutionInput
+
 RecoveryTargetKind = Literal[
     "failed_step", "control_stop", "publication", "restoration_failure"
 ]
@@ -166,9 +168,42 @@ class WorkflowRecoveryTargetModel(BaseModel):
         None, alias="sideEffectReconciliationRef"
     )
     destination: RecoveryDestinationModel
+    omnigent_checkpoint_execution: OmnigentCheckpointExecutionInput | None = Field(
+        None, alias="omnigentCheckpointExecution"
+    )
 
     @model_validator(mode="after")
     def _validate_ref_only_contract(self) -> "WorkflowRecoveryTargetModel":
+        if self.omnigent_checkpoint_execution is not None:
+            if self.destination.runtime_id != "omnigent":
+                raise ValueError(
+                    "omnigentCheckpointExecution requires an Omnigent destination"
+                )
+            if self.omnigent_checkpoint_execution.action != "resume":
+                raise ValueError(
+                    "typed recovery requires checkpoint execution action 'resume'"
+                )
+            if (
+                self.omnigent_checkpoint_execution.checkpoint.provider_profile_id
+                != self.destination.execution_profile_ref
+            ):
+                raise ValueError(
+                    "Omnigent checkpoint Provider Profile must match the destination"
+                )
+            if (
+                self.omnigent_checkpoint_execution.candidate_workspace.checkpoint_ref
+                != self.checkpoint.ref
+            ):
+                raise ValueError(
+                    "Omnigent candidate workspace must use the admitted checkpoint"
+                )
+            if (
+                self.omnigent_checkpoint_execution.validation_ref
+                != self.checkpoint.validation_ref
+            ):
+                raise ValueError(
+                    "Omnigent validation evidence must match the admitted checkpoint"
+                )
         payload = self.model_dump(by_alias=True, mode="json")
         forbidden = {"path", "archive", "logs", "providerpayload", "credentials"}
         for key, value in _walk(payload):
