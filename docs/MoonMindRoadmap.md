@@ -136,7 +136,7 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 - [ ] **1.0 Declarative reconciliation** — update the Create-to-host, workspace, adapter, host OAuth, combined-stack validation, and managed/external execution docs to match the completed implementation and the exact remaining authority boundaries.
 - [ ] **1.1 Authoritative normal-workflow workspace and host lifecycle** — complete repository, branch, attachment, Skill/tool, checkpoint/external-state, publication, output-manifest, diagnostics, partial-start reconciliation, static/on-demand parity, and shared-runtime behavior in #3507.
 - [ ] **1.2 Real browser-to-host acceptance matrix** — run `/workflows/new` through a real enrolled Codex OAuth profile and stock host, covering static, restart/replay, on-demand, repository read/mutation, failure, cancellation, cleanup, and janitor evidence in #3508.
-- [ ] **1.3 Release linkage** — link the passing matrix from #3448, the roadmap, combined-stack validation, and readiness/rollout gates; keep the product path gated when qualifying evidence is missing or stale.
+- [ ] **1.3 Release linkage** — the protected workflow now binds a qualifying seven-mode artifact to #3508 and #3448 and rejects incomplete or stale evidence; keep this item open until the credentialed browser matrix actually passes and its independently resolvable artifact is linked.
 
 **Done means:** a browser-originated normal Workflow request materializes the authored repository state, reaches the exact policy/profile-bound stock host, posts the first message once, produces durable Workflow Detail and artifact evidence, cleans only owned resources, releases Provider Profile capacity last, and passes the independently resolvable protected matrix.
 
@@ -208,8 +208,8 @@ Changing an identifier above is a deliberate owner-approved invariant change. Up
 
 ### Remaining work
 
-- [ ] **6.0 Compatibility and cutover design reconciliation** — classify every direct-Codex surface as historical read, Temporal compatibility, temporary event producer, bounded fallback, fixture, or removable launch path.
-- [ ] **6.1 Versioned support matrix** — publish exact support/evidence status for host modes, bridge modes, repository work, controls, recovery, remediation, RAG, policy/profile UI, egress, architectures, and compatibility in #3518.
+- [x] **6.0 Compatibility and cutover design reconciliation** — `docs/Omnigent/CodexSupportAndCutover.md` classifies every direct-Codex surface as historical read, Temporal compatibility, temporary event producer, bounded fallback, fixture, or removable launch path.
+- [x] **6.1 Versioned support matrix** — the same canonical contract publishes exact support/evidence status without advertising implemented-but-unverified combinations as supported.
 - [ ] **6.2 Staged default and telemetry rollout** — move cohorts, Create defaults, schedules, and presets only when readiness, live evidence, and objective rollback thresholds pass.
 - [ ] **6.3 Historical and Temporal compatibility** — preserve truthful direct provenance, Workflow Detail reads, schema decoders, recorded histories, and mixed-version worker replay.
 - [ ] **6.4 Controlled retirement** — disable direct scheduling before removing launch/UI/configuration code; retain the compatibility event/read model until its explicit history and rollback gates pass.

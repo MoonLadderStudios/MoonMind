@@ -301,12 +301,16 @@ def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
             "effective launch snapshot digest does not match its content",
             code="OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT",
         )
-    authority_markers = ("credential", "password", "token", "secret")
+    forbidden_authority_keys = {
+        "credential", "credentials", "password", "token", "secret",
+        "accesstoken", "authtoken", "refreshtoken", "secretbody",
+        "credentialbody",
+    }
 
     def contains_forbidden_authority(value: object) -> bool:
         if isinstance(value, Mapping):
             return any(
-                any(marker in str(key).lower() for marker in authority_markers)
+                str(key).lower().replace("_", "") in forbidden_authority_keys
                 or contains_forbidden_authority(item)
                 for key, item in value.items()
             )

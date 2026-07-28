@@ -27,11 +27,15 @@ class _Result:
     def scalars(self):
         return _Scalars(self._rows)
 
+    def all(self):
+        return self._rows
+
 
 class _Session:
-    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=()):
+    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=(), policies=()):
         self._results = iter((
-            _Result(profiles), _Result(slots), _Result(bindings), _Result(host_leases)
+            _Result(profiles), _Result(slots), _Result(bindings),
+            _Result(host_leases), _Result(policies),
         ))
 
     async def execute(self, _statement):
@@ -74,8 +78,10 @@ def _config(*, enabled=True):
     return SimpleNamespace(
         enabled=enabled,
         host_protocol_mode="upstream_omnigent_server_proxy",
+        compatibility=SimpleNamespace(profile="omnigent.server.v1"),
         readiness=lambda **_kwargs: {
-            "conformanceState": "ready" if enabled else "disabled"
+            "conformanceState": "ready" if enabled else "disabled",
+            "protocolProfile": "omnigent.server.v1",
         },
     )
 
@@ -106,6 +112,10 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64)
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abc123")
+    monkeypatch.setattr(catalog.Path, "read_text", lambda *_args, **_kwargs: "{}")
+    monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None)
     app = FastAPI()
     app.include_router(catalog.router)
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
@@ -125,9 +135,64 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     response = client.get("/api/omnigent/codex-catalog-readiness")
 
     assert response.status_code == 200
+
+
+def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
+    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    response = client.get(
+        "/api/omnigent/codex-catalog-readiness",
+        headers={"X-MoonMind-Acceptance-Canary": "canary-secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "acceptance_evidence_unavailable" not in {
+        reason["code"] for reason in payload["gateReasons"]
+    }
+
+
+def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
+    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    response = client.get(
+        "/api/omnigent/codex-catalog-readiness",
+        headers={"X-MoonMind-Acceptance-Canary": "wrong"},
+    )
+
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in response.json()["gateReasons"]
+    }
     body = response.json()
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
-    assert body["available"] is True
+    assert body["available"] is False
+    assert body["cutover"] == {
+        "policyVersion": "moonmind.codex-omnigent-cutover/v1",
+        "configuredPhase": "opt_in",
+        "deployedPhase": "opt_in",
+        "phase": "opt_in",
+        "promotionAllowed": True,
+        "evidenceRef": None,
+        "evidenceSha256": None,
+        "generatedAt": None,
+        "expiresAt": None,
+        "profileVersion": None,
+        "profileSha256": None,
+        "images": {},
+        "architectures": [],
+        "thresholds": {},
+        "evidenceRefs": [],
+        "blockers": [],
+        "directLaunchAllowed": True,
+    }
     assert body["hostModes"] == ["on_demand_docker"]
     assert body["eligibleProviderProfiles"] == [{
         "profileId": "codex-oauth",
@@ -138,6 +203,37 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
         "queueWhenBusy": True,
     }]
     assert body["ineligibleProviderProfiles"] == []
+    diagnostics = body["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
+    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["evidence"]["fresh"] is True
+    assert diagnostics["failureReason"] is None
+    assert diagnostics["rollbackRecommendation"] is None
+    assert diagnostics["capabilitySummary"] == []
+    assert diagnostics["releaseMetadata"]["bridgeMode"] == (
+        "upstream_omnigent_server_proxy"
+    )
+    assert {row["hostMode"] for row in diagnostics["supportMatrix"]} == {
+        "static_compose",
+        "on_demand_docker",
+    }
+
+
+def test_catalog_summarizes_persisted_stock_host_harnesses(monkeypatch):
+    lease = SimpleNamespace(
+        provider_profile_id="codex-oauth",
+        host_capabilities_json={"harnesses": ["codex-native"]},
+    )
+    client = TestClient(_app(
+        monkeypatch, session=_Session([_profile()], host_leases=[lease])
+    ))
+
+    response = client.get("/api/omnigent/codex-catalog-readiness")
+
+    assert response.status_code == 200
+    assert response.json()["compatibilityDiagnostics"]["capabilitySummary"] == [
+        "codex-native"
+    ]
 
 
 def test_catalog_projects_runtime_identity_for_mixed_provider_profiles(monkeypatch):
@@ -265,6 +361,36 @@ def test_catalog_projects_authoritative_deployment_gates(
 
     assert body["available"] is False
     assert expected in {reason["code"] for reason in body["gateReasons"]}
+
+
+@pytest.mark.parametrize(
+    ("manifest_path", "source_commit"),
+    [
+        ("", "abc123"),
+        ("/missing/matrix.json", "abc123"),
+        ("/evidence/matrix.json", ""),
+    ],
+)
+def test_catalog_fails_closed_without_qualifying_acceptance_evidence(
+    monkeypatch, manifest_path, source_commit
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(
+        catalog,
+        "validate_acceptance_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            catalog.ConformanceContractError("invalid")
+        ),
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", manifest_path)
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", source_commit)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in body["gateReasons"]
+    }
 
 
 def test_catalog_rejects_placeholder_image_digests(monkeypatch):

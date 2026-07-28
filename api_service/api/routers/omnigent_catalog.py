@@ -6,14 +6,17 @@ selection data, never launch authority or provider/host secret material.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +32,8 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     ProviderProfileSlotLease,
@@ -42,11 +47,17 @@ from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
+from moonmind.omnigent.conformance import (
+    ConformanceContractError,
+    validate_acceptance_manifest,
+)
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
+from moonmind.omnigent.cutover import effective_phase
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
     _active_host_auth_profile,
+    _compatibility_diagnostics,
     _resolve_embedded_evidence,
     get_bridge_config,
 )
@@ -55,6 +66,17 @@ router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
 _SCHEMA_VERSION = "moonmind.omnigent-codex-readiness.v1"
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_ACCEPTANCE_ROWS = (
+    "static_profile_bound",
+    "static_restart_replay",
+    "on_demand_policy_selected",
+    "repository_read_analysis",
+    "repository_mutation_publication",
+    "failed_credential_readiness_admission",
+    "failed_host_registration_readiness",
+    "active_cancellation_interruption",
+    "partial_start_cleanup_janitor",
+)
 
 
 class GateReason(BaseModel):
@@ -117,6 +139,8 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     )
     host_modes: list[str] = Field(alias="hostModes")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
+    compatibility_diagnostics: dict[str, Any] = Field(alias="compatibilityDiagnostics")
+    cutover: dict[str, Any]
 
 
 _REASONS: dict[str, tuple[str, str]] = {
@@ -131,6 +155,7 @@ _REASONS: dict[str, tuple[str, str]] = {
     "static_host_not_ready": ("Start and validate the selected static Omnigent host.", "/settings#omnigent"),
     "immutable_image_unavailable": ("Configure immutable Omnigent server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
+    "acceptance_evidence_unavailable": ("Publish a current #3508 browser acceptance matrix for this source commit.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
     "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
@@ -143,7 +168,9 @@ def _reason(code: str) -> GateReason:
     return GateReason(code=code, message=message, remediationHref=href)
 
 
-def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]:
+def _deployment_reasons(
+    config: Any, bridge: dict[str, Any], *, acceptance_canary: bool = False
+) -> list[GateReason]:
     reasons: list[GateReason] = []
     if not config.enabled:
         return [_reason("bridge_disabled")]
@@ -161,6 +188,27 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
         "1", "true", "yes", "on"
     }:
         reasons.append(_reason("workspace_resolver_unavailable"))
+    # A protected deployment may admit the first acceptance canary through the
+    # same catalog and Workflow Create UI used by operators.  This flag grants
+    # no alternate API or launch authority; ordinary deployments remain gated.
+    if not acceptance_canary:
+        manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
+        source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
+        try:
+            if not manifest_path or not source_commit:
+                raise ConformanceContractError("acceptance evidence is not configured")
+            manifest_file = Path(manifest_path)
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ConformanceContractError("acceptance manifest must be an object")
+            validate_acceptance_manifest(
+                manifest,
+                expected_commit=source_commit,
+                required_rows=_ACCEPTANCE_ROWS,
+                evidence_root=manifest_file.parent,
+            )
+        except (OSError, json.JSONDecodeError, ConformanceContractError):
+            reasons.append(_reason("acceptance_evidence_unavailable"))
     return reasons
 
 
@@ -250,6 +298,7 @@ def _profile_gate_codes(readiness: dict[str, Any]) -> list[str]:
     response_model_by_alias=True,
 )
 async def get_omnigent_codex_catalog_readiness(
+    request: Request,
     session: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ) -> OmnigentCodexCatalogReadiness:
@@ -263,7 +312,20 @@ async def get_omnigent_codex_catalog_readiness(
         else None
     )
     bridge = config.readiness(evidence_validation=evidence)
-    deployment_reasons = _deployment_reasons(config, bridge)
+    configured_canary_token = os.getenv(
+        "MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", ""
+    ).strip()
+    supplied_canary_token = request.headers.get(
+        "X-MoonMind-Acceptance-Canary", ""
+    ).strip()
+    acceptance_canary = bool(
+        configured_canary_token
+        and supplied_canary_token
+        and secrets.compare_digest(configured_canary_token, supplied_canary_token)
+    )
+    deployment_reasons = _deployment_reasons(
+        config, bridge, acceptance_canary=acceptance_canary
+    )
     endpoint_ready, enforced_network_refs = await _live_deployment_readiness()
     if (
         config.enabled
@@ -272,6 +334,7 @@ async def get_omnigent_codex_catalog_readiness(
         and not endpoint_ready
     ):
         deployment_reasons.append(_reason("bridge_endpoint_unavailable"))
+    auth: dict[str, Any] | None = None
     if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
         try:
             auth = await host_auth_readiness(profile=await _active_host_auth_profile())
@@ -407,6 +470,15 @@ async def get_omnigent_codex_catalog_readiness(
     except ContainerBackendConfigError:
         backend_configured = False
     backend_ready = backend_configured and bool(enforced_network_refs)
+    persisted_policies = list((await session.execute(
+        select(OmnigentPolicy, OmnigentPolicyVersion)
+        .join(
+            OmnigentPolicyVersion,
+            (OmnigentPolicyVersion.policy_id == OmnigentPolicy.policy_id)
+            & (OmnigentPolicyVersion.version == OmnigentPolicy.default_version),
+        )
+        .where(OmnigentPolicyVersion.state == "active")
+    )).all())
 
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
@@ -438,9 +510,40 @@ async def get_omnigent_codex_catalog_readiness(
                 and profile.provider_runtime not in static_ready_runtimes
             ):
                 policy_reasons.append(_reason("static_host_not_ready"))
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                mode_readiness = config.readiness(
+                    evidence_validation=evidence,
+                    host_mode=policy.host_mode,
+                )
+                if mode_readiness["conformanceState"] != "ready":
+                    policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
                 policy_refs.append(policy.ref)
                 available_modes.append(policy.host_mode)
+            policy_gate_reasons.extend(policy_reasons)
+        for identity, version in persisted_policies:
+            document = version.document_json
+            if document.get("execution", {}).get("profileRef") != profile.ref:
+                continue
+            host = document.get("host", {})
+            network = document.get("network", {})
+            policy_reasons = []
+            if not version.validation_json.get("valid"):
+                policy_reasons.append(_reason("execution_profile_unavailable"))
+            if not all(_DIGEST_IMAGE.fullmatch(str(host.get(field) or "")) for field in ("serverImageRef", "hostImageRef")):
+                policy_reasons.append(_reason("immutable_image_unavailable"))
+            if network.get("egressProfileRef") not in enforced_network_refs:
+                policy_reasons.append(_reason("network_policy_unavailable"))
+            host_mode = str(host.get("mode") or "")
+            if host_mode == "on_demand_docker" and not backend_ready:
+                policy_reasons.append(_reason("on_demand_backend_unavailable"))
+            if host_mode == "static_compose" and not static_ready:
+                policy_reasons.append(_reason("static_host_not_ready"))
+            if not policy_reasons:
+                persisted_ref = f"{identity.policy_id}@{version.version}"
+                if persisted_ref not in policy_refs:
+                    policy_refs.append(persisted_ref)
+                available_modes.append(host_mode)
             policy_gate_reasons.extend(policy_reasons)
         for reason in policy_gate_reasons:
             if reason.code not in {existing.code for existing in profile_reasons}:
@@ -462,6 +565,18 @@ async def get_omnigent_codex_catalog_readiness(
 
     available = any(item.available for item in profile_views)
     top_reasons = [] if available else (profile_views[0].gate_reasons if profile_views else [_reason("execution_profile_unavailable")])
+    diagnostics = _compatibility_diagnostics(
+        config=config, readiness=bridge, auth=auth
+    )
+    diagnostics["capabilitySummary"] = sorted({
+        str(capability)
+        for lease in host_leases
+        for field in ("harnesses", "capabilities")
+        for capability in (
+            (getattr(lease, "host_capabilities_json", None) or {}).get(field, [])
+        )
+    })
+    cutover_status = effective_phase()
     return OmnigentCodexCatalogReadiness(
         available=available,
         defaultExecutionProfileRef=next(iter(PROFILES)),
@@ -470,4 +585,6 @@ async def get_omnigent_codex_catalog_readiness(
         ineligibleProviderProfiles=ineligible,
         hostModes=sorted(set(available_modes)),
         gateReasons=top_reasons,
+        compatibilityDiagnostics=diagnostics,
+        cutover=cutover_status.as_dict(),
     )

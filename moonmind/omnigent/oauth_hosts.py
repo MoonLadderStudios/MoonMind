@@ -393,6 +393,13 @@ class OmnigentOAuthHostRepository:
             expiresAt=record.expires_at,
         )
 
+    async def get_host_lease(self, lease_id: str) -> OmnigentHostLease | None:
+        """Load one authoritative lease by its stable ownership identity."""
+
+        async with self._session_factory() as session:
+            record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
+            return None if record is None else self._lease_model(record)
+
     async def transition_host_lease(
         self,
         lease_id: str,

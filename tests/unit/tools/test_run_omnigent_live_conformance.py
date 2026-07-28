@@ -149,6 +149,155 @@ def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypat
         raise AssertionError("incomplete product acceptance evidence was accepted")
 
 
+def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    authority = {name: f"{name}-value" for name in module.BROWSER_AUTHORITY_FIELDS}
+    authority["hostCapability"] = "codex-native"
+    authority["runtime"] = "external/omnigent"
+    authority["providerProfileRef"] = "oauth-1"
+    authority["executionProfileRef"] = "omnigent-codex-default"
+    authority["launchPolicyRef"] = "on-demand-v1"
+    authority["terminalState"] = "completed"
+    authority["janitorState"] = "reconciled"
+    observation = {
+        "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+        "workflowId": "workflow-1",
+        "selected": {
+            "profileId": "oauth-1",
+            "executionTargetRef": "omnigent-codex-default",
+            "launchPolicyRef": "on-demand-v1",
+        },
+        "createRequest": {"payload": {"targetRuntime": "omnigent"}},
+        "terminalUrl": "https://moonmind/workflows/workflow-1",
+        "replayUrl": "https://moonmind/workflows/workflow-1",
+        "replayComplete": True,
+        "hostRemovedBeforeReplay": True,
+    }
+    monkeypatch.setattr(
+        runner,
+        "browser_observation",
+        lambda row: (
+            {
+                "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+                "row": row,
+                "admissionRejected": True,
+                "createRequestCount": 0,
+                "selected": observation["selected"],
+                "admissionReason": (
+                    "credential_readiness"
+                    if row == "failed_credential_readiness_admission"
+                    else "host_registration_readiness"
+                ),
+            }
+            if row in {
+                "failed_credential_readiness_admission",
+                "failed_host_registration_readiness",
+            }
+            else {
+                **observation,
+                "row": row,
+                "controlAction": "cancel_or_interrupt" if row == "active_cancellation_interruption" else None,
+                "janitorReconciled": row == "partial_start_cleanup_janitor",
+                "repositoryOutcome": (
+                    "read_analysis" if row == "repository_read_analysis"
+                    else "mutation_publication" if row == "repository_mutation_publication"
+                    else None
+                ),
+            }
+        ),
+    )
+
+    def action(scenario, name, **inputs):
+        if scenario == "browser":
+            actions.append(name)
+        row_authority = dict(authority)
+        if name == "active_cancellation_interruption":
+            row_authority["terminalState"] = "cancelled"
+        return {
+            "ok": True,
+            "row": name,
+            "workflowId": "workflow-1",
+            "browserOriginated": True,
+            "normalCreateRequest": True,
+            "workflowDetailTerminalReplay": True,
+            "noFallback": True,
+            "authorityChain": row_authority,
+            "admissionAuthority": {"providerProfileRef": "oauth-1"},
+            "repositoryMutationPublished": name == "repository_mutation_publication",
+            "repositoryCommitSha": (
+                "a" * 40 if name == "repository_mutation_publication" else None
+            ),
+            "publicationRef": (
+                "https://github.example/pull/1"
+                if name == "repository_mutation_publication" else None
+            ),
+            "staticHostRestarted": name == "static_restart_replay",
+            "hostIdentityBeforeRestart": (
+                "static-before" if name == "static_restart_replay" else None
+            ),
+            "hostIdentityAfterRestart": (
+                "static-after" if name == "static_restart_replay" else None
+            ),
+            "_sourceRecords": [
+                {"type": record_type, "_resolved": row_authority}
+                for record_type in module.BROWSER_RECORD_ORDER
+            ],
+            "evidenceRefs": [f"artifact://{name}"],
+        }
+
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.browser()
+    assert actions == list(module.BROWSER_ROWS)
+    evidence = json.loads((tmp_path / "browser-evidence.json").read_text())
+    assert evidence["issue"] == "MoonLadderStudios/MoonMind#3508"
+    assert set(evidence["rows"]) == set(module.BROWSER_ROWS)
+    assert all(row["status"] == "passed" for row in evidence["rows"].values())
+
+
+def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    monkeypatch.setattr(runner, "browser_observation", lambda name: {
+        "schemaVersion": "moonmind.omnigent.browser-observation/v1",
+        "row": name,
+        "workflowId": "workflow-1",
+        "selected": {
+            "profileId": "oauth-1",
+            "executionTargetRef": "target",
+            "launchPolicyRef": "policy",
+        },
+        "createRequest": {"payload": {"targetRuntime": "omnigent"}},
+        "terminalUrl": "detail",
+        "replayUrl": "detail",
+    })
+    monkeypatch.setattr(runner, "action", lambda scenario, name, **inputs: {
+        "ok": True,
+        "row": name,
+        "browserOriginated": True,
+        "normalCreateRequest": True,
+        "workflowDetailTerminalReplay": True,
+        "noFallback": name != module.BROWSER_ROWS[-1],
+        "authorityChain": {},
+        "browserControl": {
+            "headless": True,
+            "startPath": "/workflows/new",
+            "submissionPath": "operator-frontend",
+            "readinessObserved": True,
+            "manualHostId": False,
+        },
+        "evidenceRefs": [f"artifact://{name}"],
+    })
+    try:
+        runner.browser()
+    except module.ConformanceContractError as exc:
+        assert "authority chain" in str(exc) or "fallback" in str(exc)
+    else:
+        raise AssertionError("incomplete browser acceptance evidence was accepted")
+
+
 def test_cumulative_journey_requires_destroyed_source_and_distinct_attempts(
     tmp_path, monkeypatch
 ):

@@ -68,6 +68,33 @@ async def test_managed_session_reconcile_updates_terminal_visibility(
 
 
 @pytest.mark.asyncio
+async def test_managed_session_reconcile_forwards_remediation_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supplied = {
+        "actionKind": "workload.reap_orphan_container",
+        "containerRef": "container-1",
+        "expectedState": "orphaned",
+        "requestId": "request-1",
+    }
+
+    async def _execute_activity(
+        activity_name: str, payload: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        assert activity_name == "agent_runtime.reconcile_managed_sessions"
+        assert payload == supplied
+        return {"degradedSessionRecords": 0}
+
+    monkeypatch.setattr(reconcile_module.workflow, "set_current_details", lambda _: None)
+    monkeypatch.setattr(
+        reconcile_module.workflow, "upsert_search_attributes", lambda _: None
+    )
+    monkeypatch.setattr(reconcile_module.workflow, "execute_activity", _execute_activity)
+
+    await MoonMindManagedSessionReconcileWorkflow().run(supplied)
+
+
+@pytest.mark.asyncio
 async def test_managed_session_reconcile_passes_orphan_reap_summary_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

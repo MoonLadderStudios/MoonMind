@@ -17,6 +17,7 @@ stream is preserved per event on ``omnigent_bridge_session_events``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -648,6 +649,35 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
+        if effective_launch_snapshot is not None:
+            authority = effective_launch_snapshot.get("policyAuthority")
+            if not isinstance(authority, dict):
+                raise OmnigentIdempotencyError(
+                    "bridge authorization requires policy authority evidence"
+                )
+            required_authority = {
+                "policyId",
+                "policyVersion",
+                "policyRef",
+                "policyDigest",
+                "snapshotRef",
+                "validation",
+            }
+            missing_authority = sorted(
+                key for key in required_authority if not authority.get(key)
+            )
+            if missing_authority:
+                raise OmnigentIdempotencyError(
+                    "bridge authorization policy authority is incomplete: "
+                    + ", ".join(missing_authority)
+                )
+            if effective_launch_snapshot.get("launchPolicyRef") != authority.get(
+                "policyRef"
+            ):
+                raise OmnigentIdempotencyError(
+                    "bridge launch policy does not match persisted policy authority"
+                )
+
         await self.get_or_create(
             request=request,
             endpoint_ref=endpoint_ref,
@@ -1176,6 +1206,9 @@ class OmnigentBridgeSessionStore:
                         "captureManifestRef",
                         "resourceProjectionRef",
                         "evidenceCompleteness",
+                        "retrievalState",
+                        "retrievalMode",
+                        "retrievalReason",
                     }
                 }
             journal.append(entry)
@@ -1548,6 +1581,74 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
+
+    async def record_initial_context(
+        self,
+        idempotency_key: str,
+        *,
+        evidence: dict[str, Any],
+    ) -> OmnigentBridgeSession:
+        """Persist bounded initial-retrieval evidence before message commitment."""
+
+        allowed_keys = {
+            "state", "contextPackRef", "contextPackDigest", "queryDigest",
+            "queryPreview", "transport", "resultCount", "sources", "collections",
+            "scope", "budgets", "usage", "overlay", "embeddingConfigRef",
+            "durationMs", "failureClass", "truncated", "mode", "reason",
+            "initiationMode", "durabilityAuthority", "required",
+            "preparedMessageDigest", "preparedMessageRef",
+            "firstMessageConsumedContextRef", "firstMessageDigest",
+        }
+        unknown = set(evidence) - allowed_keys
+        if unknown:
+            raise ValueError(
+                "initial retrieval evidence contains unsupported fields: "
+                f"{sorted(unknown)}"
+            )
+        if len(json.dumps(evidence, default=str).encode("utf-8")) > 16_384:
+            raise ValueError("initial retrieval evidence exceeds the 16 KiB durable limit")
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.first_message_state != FIRST_MESSAGE_NOT_PREPARED:
+                existing = dict((row.metadata_ or {}).get("initialRetrieval") or {})
+                if existing != evidence:
+                    raise OmnigentDigestMismatchError(
+                        "initial retrieval changed after first-message preparation"
+                    )
+            else:
+                metadata = dict(row.metadata_ or {})
+                metadata["initialRetrieval"] = redact_sensitive_payload(evidence)
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
+            detached = _detached(session, row)
+
+        retrieval_state = str(evidence.get("state") or "unknown")[:32]
+        retrieval_mode = str(evidence.get("mode") or "unknown")[:64]
+        retrieval_reason = str(evidence.get("reason") or "")[:256]
+        failure_class = str(evidence.get("failureClass") or "").strip() or None
+        context_pack_ref = (
+            str(evidence.get("contextPackRef") or "").strip() or None
+        )
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="initial_retrieval",
+            event_identity="initial_retrieval",
+            code=f"initial_retrieval_{retrieval_state}",
+            summary=(
+                f"Initial retrieval {retrieval_state}"
+                + (f": {retrieval_reason}" if retrieval_reason else "")
+            ),
+            failure_class=failure_class,
+            diagnostics_ref=context_pack_ref,
+            metadata={
+                "retrievalState": retrieval_state,
+                "retrievalMode": retrieval_mode,
+                "retrievalReason": retrieval_reason,
+            },
+        )
+        return detached
 
     async def mark_posting(self, idempotency_key: str) -> OmnigentBridgeSession:
         async with self._session_factory() as session:

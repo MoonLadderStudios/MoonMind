@@ -324,7 +324,7 @@ class OmnigentOAuthHostRuntime:
                 "launch resource limits are incomplete or invalid",
                 code="OMNIGENT_LAUNCH_RESOURCES_UNREALIZABLE",
             )
-        required_mounts = {
+        allowed_mounts = {
             "workspace",
             "oauth_home",
             "omnigent_state",
@@ -332,7 +332,8 @@ class OmnigentOAuthHostRuntime:
             "artifacts",
             "cache",
         }
-        if set(launch.get("mountClasses") or ()) != required_mounts:
+        mount_classes = set(launch.get("mountClasses") or ())
+        if not mount_classes <= allowed_mounts or "oauth_home" not in mount_classes:
             raise OmnigentOAuthHostError(
                 "launch mount classes cannot be realized by the Codex host",
                 code="OMNIGENT_LAUNCH_MOUNTS_UNREALIZABLE",
