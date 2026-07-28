@@ -154,12 +154,25 @@ async def omnigent_oauth_host_janitor_activity(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        return await OmnigentOAuthHostJanitor(
+        janitor = OmnigentOAuthHostJanitor(
             repository=OmnigentOAuthHostRepository(async_session_maker),
             runtime=OmnigentOAuthHostRuntime(client=client),
             client=client,
             run_store=OmnigentBridgeSessionStore(async_session_maker),
-        ).run(
+        )
+        payload = dict(request or {})
+        action_kind = str(payload.get("actionKind") or "").strip()
+        if action_kind:
+            return await janitor.run_action(
+                action_kind=action_kind,
+                profile_id=str(payload.get("profile_id") or "").strip(),
+                host_lease_ref=str(payload.get("hostLeaseRef") or "").strip(),
+                expected_host_state=(
+                    str(payload.get("expectedHostState") or "").strip() or None
+                ),
+                request_id=str(payload.get("requestId") or "").strip(),
+            )
+        return await janitor.run(
             profile_id=str((request or {}).get("profile_id") or "").strip() or None,
             force=bool((request or {}).get("force", False)),
         )

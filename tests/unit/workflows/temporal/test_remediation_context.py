@@ -48,6 +48,91 @@ from moonmind.workflows.temporal.remediation_context import (
     normalize_remediation_phase,
     normalize_remediation_resolution,
 )
+
+
+def test_omnigent_evidence_index_is_complete_bounded_and_explicitly_degraded():
+    index = RemediationContextBuilder._omnigent_evidence_index(
+        {
+            "generatedAt": "2026-07-26T12:00:00Z",
+            "bridgeEventPageRefs": ["art_bridge_page"],
+            "hostLeaseRef": {"artifact_id": "art_host_lease"},
+        }
+    )
+
+    by_class = {entry["class"]: entry for entry in index}
+    assert by_class["bridge_events"] == {
+        "class": "bridge_events",
+        "status": "available",
+        "bounded": True,
+        "contentsIncluded": False,
+        "refs": [
+            {
+                "artifact_id": "art_bridge_page",
+                "kind": "bridgeEventPageRefs",
+            }
+        ],
+        "observedAt": "2026-07-26T12:00:00Z",
+        "freshness": "source_reported",
+    }
+    assert by_class["provider_and_leases"]["status"] == "available"
+    assert by_class["provider_and_leases"]["refs"][0]["artifact_id"] == (
+        "art_host_lease"
+    )
+    assert by_class["prior_remediation"]["status"] == "missing"
+    assert by_class["prior_remediation"]["bounded"] is True
+    assert by_class["prior_remediation"]["freshness"] == "source_reported"
+    assert by_class["prior_remediation"]["degradedReason"] == (
+        "historical evidence was not recorded"
+    )
+
+
+def test_context_aggregate_is_degraded_when_omnigent_classes_are_missing():
+    target_record = SimpleNamespace(
+        workflow_id="target",
+        run_id="target-run",
+        state=MoonMindWorkflowState.EXECUTING,
+        close_status=None,
+        memo={},
+        parameters={},
+        artifact_refs=[],
+    )
+    remediation_record = SimpleNamespace(
+        workflow_id="remediation",
+        run_id="remediation-run",
+        state=MoonMindWorkflowState.EXECUTING,
+        close_status=None,
+        memo={},
+        parameters={
+            "workflow": {
+                "remediation": {
+                    "target": {"agentRunIds": ["agent-run"]},
+                    "evidencePolicy": {"liveFollow": "disabled"},
+                }
+            }
+        },
+        artifact_refs=[],
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="remediation",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target",
+        target_run_id="target-run",
+        authority_mode="observe_only",
+        mode="snapshot",
+    )
+
+    payload = RemediationContextBuilder(
+        session=object(), artifact_service=object()
+    )._build_payload(
+        link=link,
+        remediation_record=remediation_record,
+        target_record=target_record,
+    )
+
+    evidence = payload["evidence"]
+    assert evidence["evidenceDegraded"] is True
+    assert "execution_and_steps" in evidence["unavailableEvidenceClasses"]
+    assert "prior_remediation" in evidence["unavailableEvidenceClasses"]
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -636,7 +721,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
                 ],
             }
         ]
-        assert result.payload["evidence"]["availability"] == [
+        assert result.payload["evidence"]["availability"][:7] == [
             {"class": "stdout", "status": "available"},
             {"class": "stderr", "status": "available"},
             {"class": "merged_logs", "status": "available"},
@@ -645,7 +730,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
             {"class": "continuity", "status": "available"},
             {"class": "live_follow", "status": "available"},
         ]
-        assert result.payload["evidence"]["evidenceDegraded"] is False
+        assert result.payload["evidence"]["evidenceDegraded"] is True
         assert result.payload["evidence"]["diagnosisHints"] == [
             "Prefer diagnostics before merged logs"
         ]
@@ -804,7 +889,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             }
         ]
         assert result.payload["evidence"]["evidenceDegraded"] is True
-        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+        assert result.payload["evidence"]["unavailableEvidenceClasses"][:6] == [
             "stdout",
             "stderr",
             "diagnostics",
@@ -812,7 +897,7 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             "continuity",
             "live_follow",
         ]
-        assert result.payload["evidence"]["availability"] == [
+        assert result.payload["evidence"]["availability"][:7] == [
             {
                 "class": "stdout",
                 "status": "missing",
@@ -920,10 +1005,15 @@ async def test_remediation_context_builder_marks_unsupported_live_follow_degrade
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
         assert result.payload["evidence"]["evidenceDegraded"] is True
-        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+        assert result.payload["evidence"]["unavailableEvidenceClasses"][0] == (
             "live_follow"
-        ]
-        assert result.payload["evidence"]["availability"][-1] == {
+        )
+        live_follow_availability = next(
+            item
+            for item in result.payload["evidence"]["availability"]
+            if item["class"] == "live_follow"
+        )
+        assert live_follow_availability == {
             "class": "live_follow",
             "status": "unsupported",
             "reason": "agent run does not support live follow",
@@ -2197,7 +2287,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             dry_run=False,
             idempotency_key="execute-action-1",
             requesting_principal="workflow:remediator",
@@ -2213,7 +2303,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-1",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2293,7 +2383,7 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2307,7 +2397,7 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2386,7 +2476,10 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "Authorization: Bearer raw-secret-token"},
+            parameters={
+                "reason": "Authorization: Bearer raw-secret-token",
+                "containerRef": "container-1",
+            },
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2400,7 +2493,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2478,7 +2571,7 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             dry_run=False,
             idempotency_key="unsupported-status",
             requesting_principal="workflow:remediator",
@@ -2492,7 +2585,7 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="unsupported-status",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2536,7 +2629,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             dry_run=False,
             idempotency_key="execute-action-context",
             requesting_principal="workflow:remediator",
@@ -2552,7 +2645,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-context",
-            parameters={"reason": "restart helper"},
+            parameters={"reason": "restart helper", "containerRef": "container-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2717,7 +2810,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         approved = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="gated-approved",
             requesting_principal="user:operator",
@@ -2771,7 +2864,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="medium-allowed",
             requesting_principal="user:operator",
@@ -2855,7 +2948,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="same-idempotency-key",
             requesting_principal="user:operator",
@@ -3057,7 +3150,10 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         decision = await service.evaluate_action_request(
             remediation_workflow_id=preparation.remediation_workflow_id,
             action_kind=preparation.action_kind,
-            parameters={"reason": f"target state was {preparation.target.state}"},
+            parameters={
+                "reason": f"target state was {preparation.target.state}",
+                "containerRef": "container-1",
+            },
             dry_run=False,
             idempotency_key="prepared-action",
             requesting_principal="workflow:remediator",

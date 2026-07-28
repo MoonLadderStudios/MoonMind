@@ -18,7 +18,7 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        del payload
+        payload = dict(payload or {})
         workflow.set_current_details("Cleaning retained managed runtime files")
         workflow.upsert_search_attributes(
             {
@@ -32,7 +32,7 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
         try:
             result = await workflow.execute_activity(
                 "agent_runtime.cleanup_managed_runtime_files",
-                {},
+                payload,
                 task_queue=route.task_queue,
                 start_to_close_timeout=timedelta(
                     seconds=route.timeouts.start_to_close_seconds
