@@ -298,11 +298,7 @@ class TestProviderProfileManagerHelpers:
     ) -> None:
         wf = self._make_workflow()
         wf._runtime_id = runtime_id
-        initial_capacity = (
-            1
-            if runtime_id == "codex_cli" and credential_source == "oauth_volume"
-            else 4
-        )
+        initial_capacity = 1 if credential_source == "oauth_volume" else 4
         wf._profiles["profile"] = ProfileSlotState(
             profile_id="profile",
             max_parallel_runs=initial_capacity,
