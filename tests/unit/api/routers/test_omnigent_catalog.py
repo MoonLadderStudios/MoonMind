@@ -130,6 +130,7 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
         "configuredPhase": "opt_in",
+        "deployedPhase": "opt_in",
         "phase": "opt_in",
         "promotionAllowed": True,
         "evidenceRef": None,

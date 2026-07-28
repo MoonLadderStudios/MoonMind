@@ -27,6 +27,10 @@ from moonmind.omnigent.conformance import (
 )
 
 CUTOVER_POLICY_VERSION = "moonmind.codex-omnigent-cutover/v1"
+# Phase 6 is a build property, not a live-artifact assertion. The retirement
+# change that actually removes direct launch/UI/configuration ownership must set
+# this to its versioned removal manifest only after absence guards pass.
+DIRECT_LAUNCH_REMOVAL_VERSION: str | None = None
 MAX_EVIDENCE_AGE_SECONDS = 7 * 24 * 60 * 60
 REQUIRED_TELEMETRY_GROUPS = (
     "launchReadiness",
@@ -65,6 +69,20 @@ def configured_phase(*, env: Mapping[str, Any] | None = None) -> CutoverPhase:
         raise ValueError(f"unsupported Codex Omnigent cutover phase: {raw!r}") from exc
 
 
+def deployed_phase(*, env: Mapping[str, Any] | None = None) -> CutoverPhase:
+    """Resolve the durable phase currently deployed by the operator."""
+
+    values = os.environ if env is None else env
+    raw = str(values.get("MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE", "opt_in"))
+    normalized = raw.strip().upper().replace("-", "_")
+    try:
+        return CutoverPhase[normalized]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported deployed Codex Omnigent cutover phase: {raw!r}"
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class PromotionDecision:
     allowed: bool
@@ -88,6 +106,7 @@ class EffectivePhase:
     """Authoritative, fail-closed release status used by every launch boundary."""
 
     configured_phase: CutoverPhase
+    deployed_phase: CutoverPhase
     phase: CutoverPhase
     evidence_ref: str | None
     evidence: Mapping[str, Any] | None
@@ -121,6 +140,7 @@ class EffectivePhase:
         return {
             "policyVersion": self.policy_version,
             "configuredPhase": self.configured_phase.name.lower(),
+            "deployedPhase": self.deployed_phase.name.lower(),
             "phase": self.phase.name.lower(),
             "promotionAllowed": not self.blockers,
             "evidenceRef": self.evidence_ref,
@@ -303,6 +323,25 @@ def evaluate_promotion(
         not isinstance(ref, str) or not ref.strip() for ref in refs
     ):
         blockers.append("independently_resolvable_evidence_refs_required")
+    if requested_phase is CutoverPhase.DIRECT_LAUNCH_REMOVED:
+        if DIRECT_LAUNCH_REMOVAL_VERSION is None:
+            blockers.append("direct_launch_retirement_not_built")
+        retirement_assertions = (
+            "directLaunchCodeRemoved",
+            "directLaunchUiRemoved",
+            "directLaunchConfigRemoved",
+            "duplicateCapacityOwnershipRemoved",
+        )
+        blockers.extend(
+            f"{key}_required"
+            for key in retirement_assertions
+            if evidence.get(key) is not True
+        )
+        retirement_refs = evidence.get("retirementEvidenceRefs")
+        if not isinstance(retirement_refs, list) or not retirement_refs or any(
+            not isinstance(ref, str) or not ref.strip() for ref in retirement_refs
+        ):
+            blockers.append("retirement_evidence_refs_required")
 
     return PromotionDecision(
         not blockers, current_phase, requested_phase, tuple(dict.fromkeys(blockers))
@@ -336,12 +375,13 @@ def effective_phase(
 
     values = os.environ if env is None else env
     requested = configured_phase(env=values)
+    current = deployed_phase(env=values)
     raw_ref = str(
         values.get("MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF", "")
     ).strip()
     ref = raw_ref or None
-    if requested == CutoverPhase.OPT_IN:
-        return EffectivePhase(requested, requested, ref, None, ())
+    if requested <= current:
+        return EffectivePhase(requested, current, requested, ref, None, ())
 
     blockers: list[str] = []
     evidence: Mapping[str, Any] | None = None
@@ -362,8 +402,11 @@ def effective_phase(
         authorized = str(evidence.get("authorizedPhase") or "").strip().upper()
         if authorized != requested.name:
             blockers.append("evidence_authorized_phase_mismatch")
+        evidence_current = str(evidence.get("currentPhase") or "").strip().upper()
+        if evidence_current != current.name:
+            blockers.append("evidence_current_phase_mismatch")
         decision = evaluate_promotion(
-            current_phase=CutoverPhase(requested - 1),
+            current_phase=current,
             requested_phase=requested,
             evidence=evidence,
             now=now,
@@ -373,7 +416,8 @@ def effective_phase(
     unique_blockers = tuple(dict.fromkeys(blockers))
     return EffectivePhase(
         configured_phase=requested,
-        phase=CutoverPhase.OPT_IN if unique_blockers else requested,
+        deployed_phase=current,
+        phase=current if unique_blockers else requested,
         evidence_ref=ref,
         evidence=evidence,
         blockers=unique_blockers,
@@ -382,11 +426,13 @@ def effective_phase(
 
 __all__ = [
     "CUTOVER_POLICY_VERSION",
+    "DIRECT_LAUNCH_REMOVAL_VERSION",
     "MAX_EVIDENCE_AGE_SECONDS",
     "REQUIRED_TELEMETRY_GROUPS",
     "CutoverPhase",
     "EffectivePhase",
     "configured_phase",
+    "deployed_phase",
     "effective_phase",
     "PromotionDecision",
     "RuntimeSelection",

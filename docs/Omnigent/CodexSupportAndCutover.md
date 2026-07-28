@@ -42,12 +42,24 @@ does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.
 
 The API reads `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) as a
-desired phase. For every later phase it also reads the JSON document at the
+desired phase and `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` (default `opt_in`)
+as the durable, operator-controlled current phase. Promotion is valid only to
+the immediate successor of that deployed phase; the evidence document must
+name both values. After deployment succeeds, operators advance the deployed
+value. A denied promotion preserves the deployed phase, while an explicit
+lower desired value performs a rollback for future defaults. For every
+promotion it also reads the JSON document at the
 local path or `file://` URI in
 `MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF`. Remote and opaque artifact
 references are evidence links, not launch authority. The mounted document must
-authorize the exact desired phase and pass the complete gate; otherwise the
-effective phase remains `opt_in`. The API publishes desired/effective phase,
+authorize the exact desired phase and current deployed phase and pass the
+complete gate; otherwise the effective phase remains the deployed phase.
+Phase 6 additionally requires explicit code, UI, configuration, and duplicate
+capacity-owner removal assertions plus independently resolvable retirement
+evidence refs. It also remains compile-time blocked by
+`DIRECT_LAUNCH_REMOVAL_VERSION` until the cohesive retirement change removes
+those paths and enables its absence guards; protected-live evidence alone
+cannot authorize removal. The API publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in
 `/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults

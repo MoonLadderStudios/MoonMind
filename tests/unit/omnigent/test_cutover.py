@@ -29,6 +29,7 @@ def _evidence() -> dict[str, object]:
         "historicalReadsPassed": True,
         "capacitySingleOwnerPassed": True,
         "authorizedPhase": "CREATE_DEFAULT",
+        "currentPhase": "OPT_IN",
         "profileVersion": PROFILE_VERSION,
         "profileSha256": PROFILE_SHA256,
         "images": {
@@ -147,6 +148,7 @@ def test_effective_phase_cannot_be_promoted_by_environment_alone() -> None:
         now=NOW,
     )
     assert status.configured_phase is CutoverPhase.CREATE_DEFAULT
+    assert status.deployed_phase is CutoverPhase.OPT_IN
     assert status.phase is CutoverPhase.OPT_IN
     assert status.blockers == ("live_conformance_evidence_missing",)
 
@@ -166,6 +168,90 @@ def test_effective_phase_loads_exact_authorized_local_evidence(tmp_path) -> None
     assert status.phase is CutoverPhase.CREATE_DEFAULT
     assert status.blockers == ()
     assert status.as_dict()["images"]["host"].endswith("2" * 64)
+
+
+def test_effective_phase_uses_durable_deployed_phase_for_sequential_promotion(
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    evidence["authorizedPhase"] = "BROAD_DEFAULT"
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "broad_default",
+            "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": "opt_in",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "promotion_must_advance_one_phase" in status.blockers
+
+
+def test_effective_phase_requires_evidence_to_match_deployed_phase(tmp_path) -> None:
+    evidence = _evidence()
+    evidence["authorizedPhase"] = "SCHEDULE_DEFAULT"
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "schedule_default",
+            "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.CREATE_DEFAULT
+    assert "evidence_current_phase_mismatch" in status.blockers
+
+
+def test_denied_promotion_preserves_deployed_phase_instead_of_resetting_defaults(
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    evidence["authorizedPhase"] = "SCHEDULE_DEFAULT"
+    evidence["currentPhase"] = "CREATE_DEFAULT"
+    evidence["allRequiredCasesPassed"] = False
+    path = tmp_path / "release.json"
+    path.write_text(__import__("json").dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "schedule_default",
+            "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.CREATE_DEFAULT
+    assert "allRequiredCasesPassed_required" in status.blockers
+
+
+def test_phase_six_requires_separate_code_removal_evidence() -> None:
+    evidence = _evidence()
+    evidence["authorizedPhase"] = "DIRECT_LAUNCH_REMOVED"
+    evidence["currentPhase"] = "DIRECT_LAUNCH_DISABLED"
+
+    decision = evaluate_promotion(
+        current_phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        requested_phase=CutoverPhase.DIRECT_LAUNCH_REMOVED,
+        evidence=evidence,
+        now=NOW,
+    )
+
+    assert decision.allowed is False
+    assert "direct_launch_retirement_not_built" in decision.blockers
+    assert "directLaunchCodeRemoved_required" in decision.blockers
+    assert "directLaunchUiRemoved_required" in decision.blockers
+    assert "directLaunchConfigRemoved_required" in decision.blockers
+    assert "duplicateCapacityOwnershipRemoved_required" in decision.blockers
+    assert "retirement_evidence_refs_required" in decision.blockers
 
 
 def test_effective_phase_rejects_stale_or_wrong_phase_evidence(tmp_path) -> None:
