@@ -1671,7 +1671,6 @@ async def startup_event():
             get_or_create_default_user,
             get_user_manager_context,
         )
-        from api_service.db.base import get_async_session_context
         from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:
