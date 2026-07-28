@@ -51,6 +51,15 @@ describe('remediationCreateDraft', () => {
         mode: 'snapshot_then_follow',
         authorityMode: 'approval_gated',
         actionPolicyRef: 'admin_healer_default',
+        approvalPolicy: {
+          requiredForHighRisk: true,
+        },
+        lockPolicy: {
+          targetMutationLock: true,
+        },
+        verificationPolicy: {
+          verifyAppliedActions: true,
+        },
         checkpointBranchPolicy: {
           actionKind: 'checkpoint_branch.create_from_remediation_context',
           runtimeContextPolicy: 'fresh_agent_run',
