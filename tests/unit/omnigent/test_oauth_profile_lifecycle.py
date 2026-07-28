@@ -36,14 +36,19 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
-from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.execution_profiles import (
+    compile_effective_launch,
+    validate_effective_launch_snapshot,
+)
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _compile_persisted_effective_launch,
     _bind_candidate_workspace,
     _failure_evidence,
 )
+from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -64,6 +69,54 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.unit.omnigent.test_policy_authority import policy_document
+
+
+@pytest.fixture(autouse=True)
+def persisted_policy_authority(monkeypatch):
+    """Keep coordinator tests focused while requiring the production authority seam."""
+
+    async def resolve(_self, policy_ref):
+        document = policy_document()
+        if policy_ref.startswith("codex-on-demand@"):
+            document["host"]["mode"] = "on_demand_docker"
+            document["host"]["backendRef"] = "container-backend"
+            document["session"]["cleanup"] = "remove"
+        return compile_policy_snapshot(
+            policy_id=policy_ref.rsplit("@", 1)[0],
+            version=int(policy_ref.rsplit("@", 1)[1]),
+            document=document,
+            validation={"valid": True, "diagnostics": []},
+        )
+
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_resolve_policy_snapshot",
+        resolve,
+    )
+
+
+def test_persisted_policy_snapshot_is_complete_launch_authority():
+    snapshot = compile_policy_snapshot(
+        policy_id="codex-static",
+        version=1,
+        document=policy_document(),
+        validation={"valid": True, "diagnostics": []},
+    )
+
+    realized = _compile_persisted_effective_launch(
+        snapshot, provider_profile_id="profile-1"
+    )
+
+    assert realized["hostMode"] == snapshot["boundaries"]["host"]["mode"]
+    assert realized["serverImageRef"] == snapshot["boundaries"]["host"]["serverImageRef"]
+    assert realized["limits"]["memoryMiB"] == snapshot["boundaries"]["resources"]["memoryMiB"]
+    assert realized["networkRef"] == snapshot["boundaries"]["network"]["attachmentRef"]
+    assert realized["mountClasses"] == snapshot["boundaries"]["workspace"]["mountClasses"]
+    assert realized["boundaries"] == snapshot["boundaries"]
+    assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
+    assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
+    validate_effective_launch_snapshot(realized)
 
 
 @pytest.mark.parametrize(
@@ -1253,6 +1306,13 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
 
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
+
         async def create_or_get_host_lease(self, **_kwargs):
             actions.append("host_lease_created")
             return self.lease
@@ -1410,6 +1470,13 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
 
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
@@ -1636,6 +1703,14 @@ async def _run_coordinator_failure_case(
                     update={"static_host_id": None, "host_launch_profile_ref": "codex"}
                 )
             return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            binding = await self.get_binding_for_profile(kwargs["profile_id"])
+            return binding.model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
 
         async def create_or_get_host_lease(self, **_kwargs):
             if fail_at == "host_lease":
