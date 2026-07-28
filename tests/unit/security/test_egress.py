@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
     ENFORCER_IMPLEMENTATION,
     attest_docker_egress,
@@ -65,18 +66,26 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
             return 0, json.dumps(
                 {"Internal": True, "EnableIPv6": False}
             ).encode(), b""
-        return 0, json.dumps(
-            {
-                "labels": {
-                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
-                    "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                },
-                "networks": {
-                    EGRESS_NETWORK_REF: {},
-                    "moonmind_sandbox-egress-network": {},
-                    "local-network": {},
-                },
-            }
+        if args[0] == "inspect":
+            return 0, json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": {
+                        EGRESS_NETWORK_REF: {},
+                        "moonmind_sandbox-egress-network": {},
+                        "local-network": {},
+                    },
+                    "image": "sha256:gateway-image",
+                    "health": "healthy",
+                }
+            ).encode(), b""
+        return 0, (
+            f"{EGRESS_CONFIG_DIGEST.removeprefix('sha256:')}  "
+            "/etc/squid/squid.conf\n"
         ).encode(), b""
 
     evidence = await attest_docker_egress(
@@ -88,7 +97,11 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
     assert evidence.validation_result == "passed"
     assert evidence.profile_digest == DEFAULT_EGRESS_PROFILE.digest
     assert evidence.applied_rule_digest.startswith("sha256:")
+    assert evidence.config_digest == EGRESS_CONFIG_DIGEST
+    assert evidence.gateway_image_digest == "sha256:gateway-image"
+    assert evidence.health_result == "healthy"
     assert calls[0][0:2] == ("network", "inspect")
+    assert calls[-1][0:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref)
 
 
 @pytest.mark.asyncio
@@ -122,6 +135,7 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
             {
                 "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
                 "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
             },
             {
                 EGRESS_NETWORK_REF: {},
@@ -140,8 +154,56 @@ async def test_attestation_fails_closed_on_unproven_or_stale_state(
         payload = network if args[0] == "network" else {
             "labels": labels,
             "networks": networks,
+            "image": "sha256:gateway-image",
+            "health": "healthy",
         }
         return 0, json.dumps(payload).encode(), b""
+
+    with pytest.raises(RuntimeError, match=message):
+        await attest_docker_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref="local",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_digest", "health", "message"),
+    [
+        ("sha256:" + "0" * 64, "healthy", "config"),
+        (EGRESS_CONFIG_DIGEST, "unhealthy", "healthy"),
+    ],
+)
+async def test_attestation_rejects_unobserved_rules_or_unhealthy_gateway(
+    config_digest, health, message
+):
+    async def runner(args):
+        if args[0] == "network":
+            return 0, json.dumps(
+                {"Internal": True, "EnableIPv6": False}
+            ).encode(), b""
+        if args[0] == "inspect":
+            return 0, json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": {
+                        EGRESS_NETWORK_REF: {},
+                        "moonmind_sandbox-egress-network": {},
+                        "local-network": {},
+                    },
+                    "image": "sha256:gateway-image",
+                    "health": health,
+                }
+            ).encode(), b""
+        return 0, (
+            f"{config_digest.removeprefix('sha256:')}  "
+            "/etc/squid/squid.conf\n"
+        ).encode(), b""
 
     with pytest.raises(RuntimeError, match=message):
         await attest_docker_egress(

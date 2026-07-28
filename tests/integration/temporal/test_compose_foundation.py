@@ -419,8 +419,13 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     assert _network_names(proxy_service) == {
         "local-network",
         "sandbox-egress-network",
+        "restricted-egress-network",
     }
     assert proxy_service["expose"] == ["3128"]
+    assert proxy_service["labels"]["moonmind.egress.config-digest"].startswith(
+        "sha256:"
+    )
+    assert "squid -k parse" in proxy_service["healthcheck"]["test"][1]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
     assert sandbox_env["HTTPS_PROXY"] == (
@@ -445,6 +450,9 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
+    assert "dns_nameservers 1.1.1.1 8.8.8.8" in squid_config
+    assert "request_timeout 300 seconds" in squid_config
+    assert "acl connection_limit maxconn 128" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
 
 def test_temporal_persistence_and_visibility_environment_defaults():

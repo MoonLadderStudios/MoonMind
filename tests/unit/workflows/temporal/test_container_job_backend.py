@@ -9,6 +9,7 @@ import pytest
 
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
     ENFORCER_IMPLEMENTATION,
     PROXY_URL,
@@ -176,14 +177,22 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
                 "labels": {
                     "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
                     "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                 },
                 "networks": {
                     EGRESS_NETWORK_REF: {},
                     "moonmind_sandbox-egress-network": {},
                     "local-network": {},
                 },
+                "image": "sha256:gateway-image",
+                "health": "healthy",
             }
             return 0, json.dumps(payload).encode(), b""
+        if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
+            return 0, (
+                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
+                + "  /etc/squid/squid.conf\n"
+            ).encode(), b""
         return await _recording_runner(commands)(args)
 
     backend = DockerContainerJobBackend(

@@ -18,6 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 
 ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
+# Digest of the reviewed, mounted Squid policy. Attestation compares this
+# deployment-owned value with both the container label and the live file.
+EGRESS_CONFIG_DIGEST = "sha256:c3ad0d533dab70608bbbbcb0a5e82b94f67364cfcb2f4d670d0c944b2e945faa"
 EGRESS_NETWORK_REF = "moonmind_restricted-egress-network"
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
@@ -148,6 +151,9 @@ class EgressAttestation(BaseModel):
     network_ref: str = Field(alias="networkRef")
     gateway_ref: str = Field(alias="gatewayRef")
     applied_rule_digest: str = Field(alias="appliedRuleDigest")
+    config_digest: str = Field(alias="configDigest")
+    gateway_image_digest: str = Field(alias="gatewayImageDigest")
+    health_result: Literal["healthy"] = Field("healthy", alias="healthResult")
     validated_at: datetime = Field(alias="validatedAt")
     validation_result: Literal["passed"] = Field("passed", alias="validationResult")
     denied_connection_count: int = Field(0, alias="deniedConnectionCount", ge=0)
@@ -220,7 +226,8 @@ async def attest_docker_egress(
 
     format_value = (
         '{"labels":{{json .Config.Labels}},"networks":'
-        '{{json .NetworkSettings.Networks}}}'
+        '{{json .NetworkSettings.Networks}},"image":{{json .Image}},'
+        '"health":{{json .State.Health.Status}}}'
     )
     code, stdout, _ = await runner(
         ("inspect", "--format", format_value, profile.gateway_ref)
@@ -237,11 +244,35 @@ async def attest_docker_egress(
         raise RuntimeError("restricted-egress gateway profile is stale or mismatched")
     if labels.get("moonmind.egress.enforcer") != ENFORCER_IMPLEMENTATION:
         raise RuntimeError("restricted-egress gateway implementation is unattested")
+    if labels.get("moonmind.egress.config-digest") != EGRESS_CONFIG_DIGEST:
+        raise RuntimeError("restricted-egress gateway config label is stale")
     if set(networks) != _EXPECTED_GATEWAY_NETWORKS:
         raise RuntimeError("restricted-egress gateway attachment is invalid")
+    image_digest = str(gateway.get("image") or "")
+    if not image_digest.startswith("sha256:"):
+        raise RuntimeError("restricted-egress gateway image is unattested")
+    health = str(gateway.get("health") or "")
+    if health != "healthy":
+        raise RuntimeError("restricted-egress gateway is not healthy")
+
+    code, stdout, _ = await runner(
+        (
+            "exec",
+            profile.gateway_ref,
+            "sha256sum",
+            "/etc/squid/squid.conf",
+        )
+    )
+    if code:
+        raise RuntimeError("restricted-egress live config cannot be observed")
+    observed_config_digest = "sha256:" + stdout.decode(errors="replace").split()[0]
+    if observed_config_digest != EGRESS_CONFIG_DIGEST:
+        raise RuntimeError("restricted-egress live config is stale or mismatched")
 
     applied = {
         "profileDigest": profile.digest,
+        "configDigest": observed_config_digest,
+        "gatewayImageDigest": image_digest,
         "internal": True,
         "ipv6": False,
         "gatewayNetworks": sorted(networks),
@@ -258,6 +289,9 @@ async def attest_docker_egress(
         networkRef=profile.network_ref,
         gatewayRef=profile.gateway_ref,
         appliedRuleDigest=applied_digest,
+        configDigest=observed_config_digest,
+        gatewayImageDigest=image_digest,
+        healthResult="healthy",
         validatedAt=datetime.now(UTC),
     )
 

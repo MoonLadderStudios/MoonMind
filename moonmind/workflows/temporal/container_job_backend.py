@@ -1517,7 +1517,38 @@ class DockerContainerJobBackend:
             # Docker mount errors echo the trusted host source. Keep it out of
             # workflow history and caller-visible terminal diagnostics.
             raise RuntimeError("docker create failed for the resolved workspace")
-        return ContainerJobActivityResult(containerRef=name)
+        egress_evidence_ref = None
+        if egress_attestation is not None and self._publish is not None:
+            evidence = {
+                "schemaVersion": 1,
+                "kind": "restricted-egress-launch-attestation",
+                "attachmentIdentity": name,
+                "attestation": egress_attestation.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "deniedConnectionCount": 0,
+                "denialDiagnostics": [],
+                "cleanupResult": "pending",
+                "reconciliationResult": "not-required",
+            }
+            try:
+                egress_evidence_ref = await self._publish(
+                    request,
+                    f"{request.job_id}-egress-attestation.json",
+                    json.dumps(
+                        evidence, sort_keys=True, separators=(",", ":")
+                    ).encode(),
+                )
+            except Exception as exc:
+                # Evidence is part of readiness at this authority boundary. A
+                # container that cannot publish it must never be started.
+                await self._runner(("rm", "--force", name))
+                raise RuntimeError(
+                    "restricted-egress launch evidence could not be persisted"
+                ) from exc
+        return ContainerJobActivityResult(
+            containerRef=name, diagnosticsRef=egress_evidence_ref
+        )
 
     async def start_container(self, request: ContainerJobActivityRequest):
         await self._checked("start", request.container_ref or self._name(request))
