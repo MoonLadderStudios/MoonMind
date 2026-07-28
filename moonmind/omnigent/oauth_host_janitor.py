@@ -58,18 +58,66 @@ class OmnigentOAuthHostJanitor:
         if expected_host_state and expected_host_state != before_state:
             raise ValueError("expectedHostState does not match the current host lease")
         binding = await self._repository.validate_binding(lease.binding_ref)
+        now = datetime.now(UTC)
+        stale = (
+            lease.expires_at <= now
+            or lease.last_heartbeat_at <= now - self._heartbeat_timeout
+        )
 
         if action_kind == "host.drain":
+            if before_state in {"draining", "stopped", "failed"}:
+                return self._action_result(
+                    action_kind, request_id, profile_id, lease, before_state
+                )
             lease = await self._repository.transition_host_lease(
                 lease.lease_id, expected_status=before_state, new_status="draining"
             )
         elif action_kind == "host.restart":
+            if before_state not in {"stopped", "failed"}:
+                raise ValueError("host.restart requires a terminal host lease")
             lease = await self._repository.restart_host_lease(lease.lease_id)
-        else:
+        elif action_kind == "host.stop":
             if before_state not in {"stopped", "failed"}:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "host.remove":
+            if lease.container_name:
+                await self._runtime.remove_container(lease.container_name)
+            if before_state != "stopped":
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "provider_profile.evict_stale_lease":
+            if not stale:
+                raise ValueError("Provider Profile host lease is not stale")
+            if before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+        elif action_kind == "host_lease.reconcile_stale":
+            if not stale:
+                return self._action_result(
+                    action_kind, request_id, profile_id, lease, before_state
+                )
+            missing = bool(
+                lease.container_name
+                and not await self._runtime.container_exists(lease.container_name)
+            )
+            if missing:
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+            elif before_state not in {"stopped", "failed"}:
+                await self._runtime.stop_host(binding=binding, host_lease=lease)
+                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
 
+        return self._action_result(
+            action_kind, request_id, profile_id, lease, before_state
+        )
+
+    @staticmethod
+    def _action_result(
+        action_kind: str,
+        request_id: str,
+        profile_id: str,
+        lease: Any,
+        before_state: str,
+    ) -> dict[str, Any]:
         return {
             "status": "applied" if lease.status != before_state else "no_op",
             "actionKind": action_kind,

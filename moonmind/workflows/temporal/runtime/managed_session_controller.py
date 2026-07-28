@@ -4196,6 +4196,68 @@ class DockerCodexManagedSessionController:
             )
         return containers
 
+    async def run_container_remediation_action(
+        self,
+        *,
+        action_kind: str,
+        container_ref: str,
+        expected_state: str | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Mutate exactly one label-owned managed-session container."""
+
+        containers = await self._list_managed_session_containers()
+        matches = [
+            item for item in containers if item.container_id == container_ref
+        ]
+        if len(matches) != 1:
+            raise ValueError("containerRef is not an owned managed-session container")
+        container = matches[0]
+        record = (
+            self._session_store.load(container.session_id)
+            if self._session_store is not None
+            else None
+        )
+        before_state = (
+            "orphaned"
+            if record is None
+            or record.status in TERMINAL_MANAGED_SESSION_STATUSES
+            else "running"
+        )
+        if expected_state and expected_state != before_state:
+            raise ValueError("expectedState does not match the managed container")
+
+        if action_kind == "workload.restart_helper_container":
+            if container.kind != "session-docker-sidecar":
+                raise ValueError("containerRef is not a managed helper container")
+            if before_state != "running":
+                raise ValueError("only an owned running helper container can restart")
+            await self._run((self._docker_binary, "restart", container.container_id))
+            after_state = "running"
+        elif action_kind == "workload.reap_orphan_container":
+            if before_state != "orphaned":
+                raise ValueError("an active managed container cannot be reaped")
+            await self._remove_container(container.container_id, ignore_failure=False)
+            after_state = "removed"
+        else:
+            raise ValueError(f"unsupported container remediation action: {action_kind}")
+
+        before_ref = (
+            f"managed-container:{container.container_id}:state:{before_state}"
+        )
+        after_ref = f"managed-container:{container.container_id}:state:{after_state}"
+        return {
+            "status": "applied",
+            "actionKind": action_kind,
+            "requestId": request_id,
+            "containerRef": container.container_id,
+            "sessionId": container.session_id,
+            "before": {"state": before_state, "evidenceRef": before_ref},
+            "after": {"state": after_state, "evidenceRef": after_ref},
+            "beforeEvidenceRefs": [before_ref],
+            "afterEvidenceRefs": [after_ref],
+        }
+
     @staticmethod
     def _is_managed_session_sidecar_volume_name(volume_name: str) -> bool:
         return bool(_MANAGED_SESSION_SIDECAR_VOLUME_NAME.match(volume_name))

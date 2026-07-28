@@ -44,6 +44,7 @@ class _Repository:
 class _Runtime:
     def __init__(self, order=None):
         self.stopped = 0
+        self.removed: list[str] = []
         self.order = order if order is not None else []
 
     async def container_exists(self, _name):
@@ -55,6 +56,9 @@ class _Runtime:
 
     async def list_managed_containers(self):
         return []
+
+    async def remove_container(self, name):
+        self.removed.append(name)
 
 
 class _Client:
@@ -121,6 +125,42 @@ async def test_action_rejects_stale_expected_state_before_mutation() -> None:
         )
 
     assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+async def test_host_remove_removes_named_owned_container() -> None:
+    repository = _Repository(_lease())
+    runtime = _Runtime()
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository, runtime=runtime, client=_Client()
+    ).run_action(
+        action_kind="host.remove",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="ready",
+        request_id="request-remove",
+    )
+
+    assert result["status"] == "applied"
+    assert runtime.removed == ["host-1"]
+    assert repository.stopped == ["lease-1"]
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_eviction_rejects_fresh_lease() -> None:
+    repository = _Repository(_lease())
+
+    with pytest.raises(ValueError, match="not stale"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository, runtime=_Runtime(), client=_Client()
+        ).run_action(
+            action_kind="provider_profile.evict_stale_lease",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="request-evict",
+        )
 
 
 @pytest.mark.asyncio

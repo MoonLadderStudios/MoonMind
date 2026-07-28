@@ -285,6 +285,7 @@ class TemporalRemediationControlPlane:
                 "actionKind": kind,
                 "containerRef": container_ref,
                 "expectedState": params.get("expectedState"),
+                "targetWorkflowId": target.workflow_id,
                 "requestId": action_id,
             },
         )

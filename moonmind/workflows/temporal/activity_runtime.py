@@ -1174,6 +1174,9 @@ class ManagedSessionController(Protocol):
     async def reap_orphan_session_containers(self) -> Any:
         pass
 
+    async def run_container_remediation_action(self, **kwargs: Any) -> Mapping[str, Any]:
+        pass
+
     async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
         pass
 
@@ -11900,6 +11903,22 @@ class TemporalAgentRuntimeActivities:
                 raise TemporalActivityRuntimeError(
                     "containerRef is required for managed-runtime remediation"
                 )
+            return await _await_with_activity_heartbeats(
+                controller.run_container_remediation_action(
+                    action_kind=action_kind,
+                    container_ref=str(action_payload["containerRef"]),
+                    expected_state=(
+                        str(action_payload.get("expectedState") or "").strip() or None
+                    ),
+                    request_id=(
+                        str(action_payload.get("requestId") or "").strip()
+                    ),
+                ),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.reconcile_managed_sessions",
+                    "actionKind": action_kind,
+                },
+            )
         records = await _await_with_activity_heartbeats(
             controller.reconcile(),
             heartbeat_payload={
