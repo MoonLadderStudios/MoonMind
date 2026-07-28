@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum
+import os
 from typing import Any, Mapping
 
 CUTOVER_POLICY_VERSION = "moonmind.codex-omnigent-cutover/v1"
@@ -25,6 +26,18 @@ class CutoverPhase(IntEnum):
     BROAD_DEFAULT = 4
     DIRECT_LAUNCH_DISABLED = 5
     DIRECT_LAUNCH_REMOVED = 6
+
+
+def configured_phase(*, env: Mapping[str, Any] | None = None) -> CutoverPhase:
+    """Resolve the versioned deployment phase; invalid values fail closed."""
+
+    values = os.environ if env is None else env
+    raw = str(values.get("MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE", "opt_in"))
+    normalized = raw.strip().upper().replace("-", "_")
+    try:
+        return CutoverPhase[normalized]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Codex Omnigent cutover phase: {raw!r}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +56,57 @@ class PromotionDecision:
             "requestedPhase": self.requested_phase.name.lower(),
             "blockers": list(self.blockers),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSelection:
+    """Immutable evidence explaining one cutover-aware runtime choice."""
+
+    runtime_id: str
+    authored: bool
+    fallback_reason: str | None
+    phase: CutoverPhase
+    policy_version: str = CUTOVER_POLICY_VERSION
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "policyVersion": self.policy_version,
+            "phase": self.phase.name.lower(),
+            "runtimeId": self.runtime_id,
+            "authored": self.authored,
+            "fallbackReason": self.fallback_reason,
+        }
+
+
+def select_runtime(
+    *,
+    authored_runtime: str | None,
+    configured_default: str,
+    phase: CutoverPhase,
+    submission_kind: str = "create",
+) -> RuntimeSelection:
+    """Apply rollout defaults without ever rewriting an explicit selection.
+
+    Create/edit/rerun defaults advance at phase 2; schedule and preset defaults
+    advance at phase 3.  Explicit direct launch is rejected from phase 5.  This
+    helper never performs automatic fallback: callers must persist the returned
+    evidence on the run before launch.
+    """
+
+    explicit = str(authored_runtime or "").strip().lower()
+    if explicit:
+        if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
+            raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
+        return RuntimeSelection(explicit, True, None, phase)
+
+    default = str(configured_default or "codex_cli").strip().lower()
+    threshold = (
+        CutoverPhase.SCHEDULE_DEFAULT
+        if submission_kind in {"schedule", "preset"}
+        else CutoverPhase.CREATE_DEFAULT
+    )
+    selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
+    return RuntimeSelection(selected, False, None, phase)
 
 
 def evaluate_promotion(
@@ -110,6 +174,9 @@ __all__ = [
     "CUTOVER_POLICY_VERSION",
     "MAX_EVIDENCE_AGE_SECONDS",
     "CutoverPhase",
+    "configured_phase",
     "PromotionDecision",
+    "RuntimeSelection",
     "evaluate_promotion",
+    "select_runtime",
 ]

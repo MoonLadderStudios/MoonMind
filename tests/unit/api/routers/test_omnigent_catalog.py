@@ -127,6 +127,12 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     body = response.json()
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
     assert body["available"] is True
+    assert body["cutover"] == {
+        "policyVersion": "moonmind.codex-omnigent-cutover/v1",
+        "phase": "opt_in",
+        "evidenceRef": None,
+        "directLaunchAllowed": True,
+    }
     assert body["hostModes"] == ["on_demand_docker"]
     assert body["eligibleProviderProfiles"] == [{
         "profileId": "codex-oauth",

@@ -41,6 +41,15 @@ evidence blocks promotion. Rollback to an earlier phase is always allowed and
 does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.
 
+The API reads `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) and
+publishes the effective phase, policy version, evidence ref, and direct-launch
+status in `/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults
+advance at `create_default`; schedule and preset defaults advance at
+`schedule_default`. Every created execution stores `runtimeCutover` beside its
+runtime/profile/model evidence. Invalid phases and explicit direct launches at
+or after `direct_launch_disabled` fail before Temporal submission. Rollback
+changes only future default selection and never rewrites existing run evidence.
+
 ## Support and conformance matrix v1
 
 | Capability | Mode(s) | Status | Independently resolvable evidence / gate |

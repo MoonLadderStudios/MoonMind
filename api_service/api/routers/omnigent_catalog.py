@@ -43,6 +43,7 @@ from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
+from moonmind.omnigent.cutover import CUTOVER_POLICY_VERSION, CutoverPhase, configured_phase
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -112,6 +113,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     )
     host_modes: list[str] = Field(alias="hostModes")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
+    cutover: dict[str, Any]
 
 
 _REASONS: dict[str, tuple[str, str]] = {
@@ -437,4 +439,13 @@ async def get_omnigent_codex_catalog_readiness(
         ineligibleProviderProfiles=ineligible,
         hostModes=sorted(set(available_modes)),
         gateReasons=top_reasons,
+        cutover={
+            "policyVersion": CUTOVER_POLICY_VERSION,
+            "phase": configured_phase().name.lower(),
+            "evidenceRef": os.getenv(
+                "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF", ""
+            ).strip() or None,
+            "directLaunchAllowed": configured_phase()
+            < CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        },
     )

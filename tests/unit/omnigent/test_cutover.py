@@ -2,10 +2,13 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from moonmind.omnigent.cutover import (
     CUTOVER_POLICY_VERSION,
     CutoverPhase,
     evaluate_promotion,
+    select_runtime,
 )
 
 
@@ -82,3 +85,37 @@ def test_fresh_complete_evidence_allows_next_phase_and_rollback_is_unconditional
         now=NOW,
     )
     assert rolled_back.allowed is True
+
+
+def test_create_and_schedule_defaults_advance_in_separate_phases() -> None:
+    create = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.CREATE_DEFAULT,
+    )
+    schedule = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.CREATE_DEFAULT,
+        submission_kind="schedule",
+    )
+    assert create.runtime_id == "omnigent"
+    assert schedule.runtime_id == "codex_cli"
+    assert create.as_dict()["authored"] is False
+
+
+def test_explicit_selection_is_preserved_and_direct_launch_eventually_rejected() -> None:
+    explicit = select_runtime(
+        authored_runtime="omnigent",
+        configured_default="codex_cli",
+        phase=CutoverPhase.OPT_IN,
+    )
+    assert explicit.runtime_id == "omnigent"
+    assert explicit.authored is True
+
+    with pytest.raises(ValueError, match="codex_direct_launch_disabled"):
+        select_runtime(
+            authored_runtime="codex_cli",
+            configured_default="codex_cli",
+            phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        )

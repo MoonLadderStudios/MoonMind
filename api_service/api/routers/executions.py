@@ -198,6 +198,7 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.omnigent.cutover import configured_phase, select_runtime
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -10323,12 +10324,19 @@ async def _create_execution_from_workflow_request(
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
-    raw_target_runtime = (
-        payload.get("targetRuntime")
-        or runtime_payload.get("mode")
-        or settings.workflow.default_runtime
-        or ""
-    )
+    authored_runtime = payload.get("targetRuntime") or runtime_payload.get("mode")
+    try:
+        cutover_selection = select_runtime(
+            authored_runtime=authored_runtime,
+            configured_default=settings.workflow.default_runtime,
+            phase=configured_phase(),
+            submission_kind=(
+                "schedule" if task_payload.get("presetSchedule") else "create"
+            ),
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+    raw_target_runtime = cutover_selection.runtime_id
     raw_profile_id = str(
         runtime_payload.get("providerProfileRef")
         or runtime_payload.get("profileId")
@@ -10434,6 +10442,7 @@ async def _create_execution_from_workflow_request(
         "effort": resolved_effort,
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
+        "runtimeCutover": cutover_selection.as_dict(),
     }
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
@@ -10747,13 +10756,21 @@ async def _resolve_recurring_runtime_metadata(
                     step_runtime,
                     field_name=f"payload.workflow.steps[{index}].runtime",
                 )
-    raw_target_runtime = (
+    authored_runtime = (
         request_payload.get("targetRuntime")
         or parameter_payload.get("targetRuntime")
         or runtime_payload.get("mode")
-        or settings.workflow.default_runtime
-        or ""
     )
+    try:
+        cutover_selection = select_runtime(
+            authored_runtime=authored_runtime,
+            configured_default=settings.workflow.default_runtime,
+            phase=configured_phase(),
+            submission_kind="schedule",
+        )
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+    raw_target_runtime = cutover_selection.runtime_id
     canonical_target_runtime: str | None = None
     if raw_target_runtime:
         normalized_rt = normalize_runtime_id(raw_target_runtime)
@@ -10827,6 +10844,7 @@ async def _resolve_recurring_runtime_metadata(
         "model": resolved_model,
         "requestedModel": raw_requested_model,
         "modelSource": model_source,
+        "runtimeCutover": cutover_selection.as_dict(),
     }
     if model_tier_resolution is not None:
         metadata["modelTierResolution"] = model_tier_resolution
@@ -10856,6 +10874,8 @@ def _stamp_recurring_runtime_metadata(
 
     if runtime_metadata.get("targetRuntime"):
         initial_parameters["targetRuntime"] = runtime_metadata["targetRuntime"]
+    if isinstance(runtime_metadata.get("runtimeCutover"), Mapping):
+        initial_parameters["runtimeCutover"] = dict(runtime_metadata["runtimeCutover"])
     if runtime_metadata.get("model"):
         initial_parameters["model"] = runtime_metadata["model"]
     if runtime_metadata.get("requestedModel") is not None:
