@@ -1284,6 +1284,7 @@ async def resolve_omnigent_bridge_session_projection(
                 else HOST_PROTOCOL_MODE_PROXY
             ),
             "compatibilityProfile": compatibility_profile,
+            "hostMode": str(launch.get("hostMode") or "") or None,
             "authProfile": (
                 str(launch.get("authProfile") or "") or "upstream_runner_tunnel"
                 if historical_embedded
