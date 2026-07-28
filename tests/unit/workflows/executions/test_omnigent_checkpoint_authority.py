@@ -1,9 +1,13 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from moonmind.workflows.executions.omnigent_checkpoint_authority import (
     OmnigentCheckpointAuthorityError,
     compile_omnigent_checkpoint_execution,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 
 
 def _workspace() -> dict[str, object]:
@@ -34,14 +38,28 @@ def _workspace() -> dict[str, object]:
     }
 
 
-def test_compiler_defaults_to_fail_closed_cold_restore_authority() -> None:
+def test_compiler_rejects_missing_current_authority() -> None:
+    with pytest.raises(
+        OmnigentCheckpointAuthorityError,
+        match="resume_unavailable:checkpoint_evidence_invalid",
+    ):
+        compile_omnigent_checkpoint_execution(
+            recovery_workspace=_workspace(),
+            validation_ref="artifact://validation/1",
+        )
+
+
+def test_compiler_accepts_resolved_cold_restore_authority() -> None:
     execution = compile_omnigent_checkpoint_execution(
         recovery_workspace=_workspace(),
         validation_ref="artifact://validation/1",
+        current_authority={
+            "currentCredentialGeneration": 3,
+            "workspaceAuthorityValid": True,
+            "policyValid": True,
+        },
     )
 
-    assert execution.action == "resume"
-    assert execution.checkpoint.provider_profile_id == "codex"
     assert execution.provider_lease is None
     assert execution.host_lease is None
     assert execution.host_registered is False
@@ -67,6 +85,8 @@ def test_compiler_accepts_controller_resolved_live_authority() -> None:
             "sessionValid": True,
             "firstMessageConsistent": True,
             "eventCursorValid": True,
+            "workspaceAuthorityValid": True,
+            "policyValid": True,
         },
     )
 
@@ -89,3 +109,56 @@ def test_compiler_rejects_mismatched_checkpoint_authority() -> None:
             recovery_workspace=workspace,
             validation_ref="artifact://validation/1",
         )
+
+
+@pytest.mark.asyncio
+async def test_service_resolves_live_authority_from_current_owners() -> None:
+    service = object.__new__(TemporalExecutionService)
+    service._session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=[
+                SimpleNamespace(credential_generation=3),
+                SimpleNamespace(
+                    provider_profile_id="codex",
+                    provider_lease_id="provider-lease-1",
+                    binding_ref="binding-1",
+                    lease_id="host-lease-1",
+                    credential_generation=3,
+                    omnigent_host_id="host-1",
+                    omnigent_session_id="session-1",
+                    bridge_session_id="bridge-1",
+                    disconnected_at=None,
+                    status="assigned",
+                    host_readiness="ready",
+                ),
+                SimpleNamespace(
+                    provider_profile_id="codex",
+                    provider_lease_id="provider-lease-1",
+                    host_binding_ref="binding-1",
+                    host_lease_ref="host-lease-1",
+                    omnigent_host_id="host-1",
+                    omnigent_session_id="session-1",
+                    external_state_ref="artifact://omnigent/state/1",
+                    first_message_state="posted",
+                    idempotency_key="source-attempt",
+                    normalized_events_ref="artifact://events/1",
+                    raw_events_ref=None,
+                ),
+            ]
+        )
+    )
+    admitted = SimpleNamespace(admitted=True)
+
+    authority = await service._resolve_omnigent_checkpoint_authority(
+        recovery_workspace=_workspace(),
+        admitted_decision=admitted,
+    )
+
+    assert authority["currentCredentialGeneration"] == 3
+    assert authority["providerLease"]["active"] is True
+    assert authority["hostRegistered"] is True
+    assert authority["sessionValid"] is True
+    assert authority["firstMessageConsistent"] is True
+    assert authority["eventCursorValid"] is True
+    assert authority["workspaceAuthorityValid"] is True
+    assert authority["policyValid"] is True

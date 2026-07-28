@@ -23,7 +23,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
+    OmnigentBridgeSession,
+    OmnigentOAuthHostLeaseRecord,
     SettingsOverride,
     TemporalArtifact,
     TemporalArtifactLink,
@@ -436,6 +439,98 @@ class TemporalExecutionService:
                 TemporalArtifactRepository(self._session)
             ),
         )
+
+    async def _resolve_omnigent_checkpoint_authority(
+        self,
+        *,
+        recovery_workspace: Mapping[str, Any],
+        admitted_decision: AdmittedCheckpointResumeDecision | None,
+    ) -> dict[str, Any]:
+        """Resolve live reattach claims from their current database owners."""
+
+        raw = recovery_workspace.get("workspaceCheckpoint")
+        if not isinstance(raw, Mapping):
+            return {}
+        profile_id = str(raw.get("providerProfileId") or "").strip()
+        host_lease_ref = str(raw.get("hostLeaseRef") or "").strip()
+        bridge_session_id = str(raw.get("bridgeSessionId") or "").strip()
+        if not profile_id:
+            return {}
+
+        profile = await self._session.get(ManagedAgentProviderProfile, profile_id)
+        host_lease = (
+            await self._session.get(OmnigentOAuthHostLeaseRecord, host_lease_ref)
+            if host_lease_ref
+            else None
+        )
+        bridge_session = (
+            await self._session.get(OmnigentBridgeSession, bridge_session_id)
+            if bridge_session_id
+            else None
+        )
+        host_matches = bool(
+            host_lease
+            and host_lease.provider_profile_id == profile_id
+            and host_lease.binding_ref == raw.get("hostBindingRef")
+            and host_lease.omnigent_host_id == raw.get("omnigentHostId")
+            and host_lease.omnigent_session_id == raw.get("omnigentSessionId")
+            and host_lease.bridge_session_id == bridge_session_id
+            and host_lease.disconnected_at is None
+        )
+        session_matches = bool(
+            bridge_session
+            and bridge_session.provider_profile_id == profile_id
+            and bridge_session.provider_lease_id == raw.get("providerLeaseRef")
+            and bridge_session.host_binding_ref == raw.get("hostBindingRef")
+            and bridge_session.host_lease_ref == host_lease_ref
+            and bridge_session.omnigent_host_id == raw.get("omnigentHostId")
+            and bridge_session.omnigent_session_id == raw.get("omnigentSessionId")
+            and bridge_session.external_state_ref == raw.get("externalStateRef")
+        )
+        provider_lease_ref = str(raw.get("providerLeaseRef") or "").strip()
+        return {
+            "currentCredentialGeneration": (
+                profile.credential_generation if profile is not None else None
+            ),
+            "providerLease": (
+                {
+                    "active": host_matches
+                    and host_lease.status in {"ready", "assigned"},
+                    "leaseId": provider_lease_ref,
+                }
+                if provider_lease_ref and host_lease is not None
+                and host_lease.provider_lease_id == provider_lease_ref
+                else None
+            ),
+            "hostLease": (
+                {
+                    "status": host_lease.status,
+                    "leaseId": host_lease.lease_id,
+                    "credentialGeneration": host_lease.credential_generation,
+                }
+                if host_matches
+                else None
+            ),
+            "hostRegistered": host_matches
+            and host_lease.host_readiness == "ready",
+            "sessionValid": session_matches,
+            "firstMessageConsistent": session_matches
+            and bridge_session.first_message_state == "posted"
+            and bridge_session.idempotency_key == raw.get("idempotencyKey"),
+            "eventCursorValid": session_matches
+            and bool(
+                bridge_session.normalized_events_ref
+                or bridge_session.raw_events_ref
+            ),
+            "workspaceAuthorityValid": bool(
+                admitted_decision
+                and admitted_decision.admitted
+                and recovery_workspace.get("candidateWorkspace")
+            ),
+            "policyValid": bool(
+                admitted_decision and admitted_decision.admitted
+            ),
+        }
 
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
@@ -3959,9 +4054,16 @@ class TemporalExecutionService:
             )
 
             try:
+                current_authority = (
+                    await self._resolve_omnigent_checkpoint_authority(
+                        recovery_workspace=checkpoint.recovery_workspace,
+                        admitted_decision=admitted_checkpoint_resume_decision,
+                    )
+                )
                 omnigent_execution = compile_omnigent_checkpoint_execution(
                     recovery_workspace=checkpoint.recovery_workspace,
                     validation_ref=manifest_ref,
+                    current_authority=current_authority,
                 )
             except OmnigentCheckpointAuthorityError as exc:
                 raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc

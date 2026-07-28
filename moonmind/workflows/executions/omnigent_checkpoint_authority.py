@@ -93,10 +93,7 @@ def compile_omnigent_checkpoint_execution(
                 diagnosticsRef=workspace.diagnostics_ref,
             ),
             candidateWorkspace=candidate,
-            currentCredentialGeneration=(
-                authority.get("currentCredentialGeneration")
-                or workspace.credential_generation
-            ),
+            currentCredentialGeneration=authority.get("currentCredentialGeneration"),
             providerLease=authority.get("providerLease"),
             hostLease=authority.get("hostLease"),
             hostRegistered=authority.get("hostRegistered", False),
@@ -105,8 +102,10 @@ def compile_omnigent_checkpoint_execution(
                 "firstMessageConsistent", False
             ),
             eventCursorValid=authority.get("eventCursorValid", False),
-            workspaceAuthorityValid=True,
-            policyValid=True,
+            workspaceAuthorityValid=authority.get(
+                "workspaceAuthorityValid", False
+            ),
+            policyValid=authority.get("policyValid", False),
             originalInputUnchanged=action == "resume",
             validationRef=validation_ref,
         )
