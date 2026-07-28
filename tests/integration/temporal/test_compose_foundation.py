@@ -601,8 +601,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["healthcheck"] == {
         "test": [
             "CMD-SHELL",
-            "/opt/moonmind/check-claude-oauth-host.sh && "
-            "/opt/moonmind/check-runner-projections.sh",
+            "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
         ],
         "interval": "10s",
         "timeout": "5s",
