@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_PROJECT_DIR="$REPO_ROOT"
 COMPOSE_FILE="$COMPOSE_PROJECT_DIR/docker-compose.test.yaml"
+EGRESS_COMPOSE_FILE="$COMPOSE_PROJECT_DIR/docker-compose.egress-conformance.yaml"
 TEMP_COMPOSE_PROJECT_DIR=""
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 TEST_COMPOSE_PROJECT_NAME="${MOONMIND_TEST_COMPOSE_PROJECT_NAME:-moonmind-test}"
@@ -18,6 +19,7 @@ fi
 
 cleanup() {
   if (( ${#COMPOSE_CMD[@]} )); then
+    "${COMPOSE_CMD[@]}" --project-name "${TEST_COMPOSE_PROJECT_NAME}-egress" -f "$EGRESS_COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" down --remove-orphans >/dev/null 2>&1 || true
     "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" down --remove-orphans >/dev/null 2>&1 || true
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
@@ -74,6 +76,7 @@ if [[ "$REPO_ROOT" == *:* ]]; then
     -cf - . | tar -C "$TEMP_COMPOSE_PROJECT_DIR" -xf -
   COMPOSE_PROJECT_DIR="$TEMP_COMPOSE_PROJECT_DIR"
   COMPOSE_FILE="$COMPOSE_PROJECT_DIR/docker-compose.test.yaml"
+  EGRESS_COMPOSE_FILE="$COMPOSE_PROJECT_DIR/docker-compose.egress-conformance.yaml"
 fi
 
 if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
@@ -82,6 +85,13 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
 fi
 
 export MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1
+
+# Exercise the real dual-homed proxy and internal-only workload topology before
+# model-level integration checks. Compose removes all owned resources on exit,
+# including cancellation or failure via the cleanup trap.
+"${COMPOSE_CMD[@]}" --project-name "${TEST_COMPOSE_PROJECT_NAME}-egress" \
+  -f "$EGRESS_COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" \
+  run --rm conformance-runner
 
 # Build pytest service
 "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" build pytest

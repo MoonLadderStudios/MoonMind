@@ -16,6 +16,7 @@ from api_service.db.models import (
     ProviderCredentialSource,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
 
 def _mount_ref(profile_id: str, generation: int = 1) -> dict:
@@ -58,6 +59,7 @@ def test_host_lease_enforces_one_active_record_per_profile_and_provider_lease() 
     assert ("provider_lease_id",) in unique_columns
     assert ("idempotency_key",) in unique_columns
     assert table.c.credential_generation.nullable is False
+    assert table.c.egress_attestation_json.nullable is True
     assert any(
         index.name == "ix_omnigent_oauth_host_lease_expiry"
         and tuple(column.name for column in index.columns) == ("expires_at",)
@@ -161,6 +163,61 @@ async def test_host_lease_composite_fk_and_active_index_reject_bypasses(
                 ValueError, match="credential_generation must match"
             ):
                 await session.commit()
+
+        attestation = {
+            "profileId": "moonmind-provider-egress",
+            "profileVersion": 1,
+            "profileDigest": "sha256:profile",
+            "appliedRuleDigest": "sha256:rules",
+            "networkRef": "restricted-egress-network",
+            "validated": True,
+        }
+        async with session_factory() as session:
+            session.add(
+                OmnigentOAuthHostLeaseRecord(
+                    lease_id="attested-lease",
+                    provider_profile_id="profile-a",
+                    provider_lease_id="provider-lease-attested",
+                    binding_ref="binding-a",
+                    credential_generation=1,
+                    holder_workflow_id="workflow-attested",
+                    idempotency_key="attested-lease",
+                    lease_purpose="execution_omnigent",
+                    status="allocating",
+                    acquired_at=acquired_at,
+                    last_heartbeat_at=acquired_at,
+                    expires_at=acquired_at + timedelta(minutes=10),
+                )
+            )
+            await session.commit()
+
+        repository = OmnigentOAuthHostRepository(session_factory)
+        transitioned = await repository.transition_host_lease(
+            "attested-lease",
+            expected_status="allocating",
+            new_status="starting",
+            fields={"egress_attestation_json": attestation},
+        )
+        assert transitioned.egress_attestation == attestation
+
+        async with session_factory() as session:
+            reloaded = await session.get(
+                OmnigentOAuthHostLeaseRecord, "attested-lease"
+            )
+            assert reloaded is not None
+            assert reloaded.egress_attestation_json == attestation
+            serialized = repository._lease_model(reloaded).model_dump(
+                by_alias=True, mode="json"
+            )
+            assert serialized["egressAttestation"] == attestation
+
+        async with session_factory() as session:
+            reloaded = await session.get(
+                OmnigentOAuthHostLeaseRecord, "attested-lease"
+            )
+            assert reloaded is not None
+            reloaded.status = "stopped"
+            await session.commit()
 
         async with session_factory() as session:
             for suffix in ("one", "two"):

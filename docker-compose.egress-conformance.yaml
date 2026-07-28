@@ -1,0 +1,61 @@
+services:
+  allowed-origin:
+    image: nginx:1.27-alpine
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        apk add --no-cache openssl
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+          -subj /CN=allowed.test \
+          -keyout /tmp/key.pem -out /tmp/cert.pem
+        exec nginx -g 'daemon off;'
+    volumes:
+      - ./tests/integration/security/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      fixture-network:
+        aliases:
+          - allowed.test
+        ipv4_address: 198.18.0.2
+
+  egress-proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./tests/integration/security/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - fixture-network
+      - restricted-network
+    depends_on:
+      - allowed-origin
+
+  conformance-runner:
+    image: curlimages/curl:8.12.1
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: ""
+    volumes:
+      - ./tests/integration/security/run_conformance.sh:/run_conformance.sh:ro
+    command: ["/bin/sh", "/run_conformance.sh"]
+    networks:
+      - restricted-network
+    depends_on:
+      - egress-proxy
+
+networks:
+  fixture-network:
+    internal: true
+    ipam:
+      config:
+        - subnet: 198.18.0.0/24
+  restricted-network:
+    internal: true
+    ipam:
+      config:
+        - subnet: 198.19.0.0/24
