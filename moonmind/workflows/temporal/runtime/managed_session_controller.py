@@ -2966,7 +2966,8 @@ class DockerCodexManagedSessionController:
         if self._session_store is not None:
             existing_record = self._session_store.load(request.session_id)
             if (
-                existing_record is not None
+                not request.replace_existing
+                and existing_record is not None
                 and self._request_matches_record(request, existing_record)
                 and await self._container_exists(existing_record.container_id)
                 and await self._container_uses_current_image(

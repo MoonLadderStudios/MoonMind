@@ -582,8 +582,8 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
             return evaluated.model_dump(mode="json", by_alias=True)
         if name == "agent_runtime.load_session_snapshot":
             return {
-                "sessionId": binding.session_id,
-                "sessionEpoch": binding.session_epoch,
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "status": "active",
                 "containerId": container_id,
                 "threadId": thread_id,
             }

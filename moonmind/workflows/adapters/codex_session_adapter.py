@@ -573,6 +573,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         session_image_ref: str,
         task_workflow_id: str | None = None,
         defer_turn_instructions_until_session_launch: bool = True,
+        replace_existing_on_resume_mismatch: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -594,6 +595,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._task_workflow_id = str(task_workflow_id or "").strip() or None
         self._defer_turn_instructions_until_session_launch = bool(
             defer_turn_instructions_until_session_launch
+        )
+        self._replace_existing_on_resume_mismatch = bool(
+            replace_existing_on_resume_mismatch
         )
         self._run_states: dict[str, CodexSessionExecutionState] = {}
 
@@ -1777,6 +1781,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
+        replace_existing = False
         if snapshot.container_id and snapshot.thread_id:
             locator = self._locator_from_snapshot(snapshot)
             try:
@@ -1793,6 +1798,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         binding.session_id,
                     )
                     snapshot = refreshed_snapshot
+                    replace_existing = self._replace_existing_on_resume_mismatch
                 else:
                     refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
                     logger.warning(
@@ -1814,6 +1820,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             refreshed_locator.session_id,
                         )
                         snapshot = refreshed_snapshot
+                        replace_existing = self._replace_existing_on_resume_mismatch
                     else:
                         await self._signal_control_action(
                             action="resume_session",
@@ -1861,6 +1868,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             sessionId=active_binding.session_id,
             sessionEpoch=active_binding.session_epoch,
             threadId=self._default_thread_id(active_binding),
+            replaceExisting=replace_existing,
             workspacePath=workspace_path,
             sessionWorkspacePath=str(self._session_root(binding) / "session"),
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
@@ -1875,8 +1883,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else {}
             ),
         )
+        launch_request_payload = launch_request.model_dump(mode="json", by_alias=True)
+        if not replace_existing:
+            # Preserve the pre-replacement activity payload for Temporal replay.
+            launch_request_payload.pop("replaceExisting", None)
         launch_payload = {
-            "request": launch_request.model_dump(mode="json", by_alias=True),
+            "request": launch_request_payload,
             "profile": profile.model_dump(mode="json", by_alias=True),
         }
         handle = await self._coerce_handle(self._launch_session(launch_payload))

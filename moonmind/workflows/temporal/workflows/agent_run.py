@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
+        CodexManagedSessionSnapshot,
         CodexManagedSessionWorkflowInput,
         SendCodexManagedSessionTurnRequest,
         build_codex_managed_session_turn_environment,
@@ -75,6 +76,9 @@ with workflow.unsafe.imports_passed_through():
     )
 
 TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
+TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
+    "agent-run-terminal-contract-runtime-failure-authority-v1"
+)
 PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuation-v1"
 PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
     "agent-run-pr-resolver-continuation-observability-v1"
@@ -401,6 +405,9 @@ MANAGED_SESSION_PR_PUBLISH_BASE_BRANCH_PATCH_ID = (
 )
 MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-bridge-events-activity-v1"
+)
+MANAGED_SESSION_REPLACE_ON_LOCATOR_MISMATCH_PATCH_ID = (
+    "agent-run-managed-session-replace-on-locator-mismatch-v1"
 )
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
@@ -2116,6 +2123,16 @@ class MoonMindAgentRun:
         """Enforce terminal evidence at the runtime-neutral AgentRun boundary."""
         if request.terminal_contract is None:
             return result
+        try:
+            runtime_failure_authority_enabled = workflow.patched(
+                TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            runtime_failure_authority_enabled = True
+        if runtime_failure_authority_enabled and result.failure_class is not None:
+            return result
         workspace_path = str(
             (result.metadata or {}).get("workspacePath")
             or (request.workspace_spec or {}).get("workspacePath")
@@ -2319,16 +2336,29 @@ class MoonMindAgentRun:
                 snapshot_request,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
-            epoch_value = snapshot.get("sessionEpoch")
-            turn_request = SendCodexManagedSessionTurnRequest(
-                sessionId=request.managed_session.session_id,
-                sessionEpoch=int(
+            if runtime_failure_authority_enabled:
+                authoritative_snapshot = CodexManagedSessionSnapshot.model_validate(
+                    snapshot
+                )
+                session_id = authoritative_snapshot.binding.session_id
+                session_epoch = authoritative_snapshot.binding.session_epoch
+                container_id = authoritative_snapshot.container_id
+                thread_id = authoritative_snapshot.thread_id
+            else:
+                epoch_value = snapshot.get("sessionEpoch")
+                session_id = request.managed_session.session_id
+                session_epoch = int(
                     epoch_value
                     if epoch_value is not None
                     else request.managed_session.session_epoch
-                ),
-                containerId=snapshot.get("containerId"),
-                threadId=snapshot.get("threadId"),
+                )
+                container_id = snapshot.get("containerId")
+                thread_id = snapshot.get("threadId")
+            turn_request = SendCodexManagedSessionTurnRequest(
+                sessionId=session_id,
+                sessionEpoch=session_epoch,
+                containerId=container_id,
+                threadId=thread_id,
                 instructions=_terminal_contract_continuation_instruction(missing),
                 reason="incomplete_terminal_contract",
                 requestId=(
@@ -4399,6 +4429,9 @@ class MoonMindAgentRun:
                         use_publish_bridge_events_activity = workflow.patched(
                             MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID
                         )
+                        replace_existing_on_resume_mismatch = workflow.patched(
+                            MANAGED_SESSION_REPLACE_ON_LOCATOR_MISMATCH_PATCH_ID
+                        )
                         if request.managed_session is None:
                             raise ApplicationError(
                                 "managedSession is required for Codex session-backed runs",
@@ -4547,6 +4580,9 @@ class MoonMindAgentRun:
                             launch_context_builder=_launch_context_builder,
                             defer_turn_instructions_until_session_launch=(
                                 defer_turn_instructions_until_session_launch
+                            ),
+                            replace_existing_on_resume_mismatch=(
+                                replace_existing_on_resume_mismatch
                             ),
                         )
                     else:

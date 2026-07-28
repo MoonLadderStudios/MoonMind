@@ -188,6 +188,23 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.control_mode == "remote_container"
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
+    assert request.replace_existing is False
+
+
+def test_launch_codex_managed_session_request_serializes_explicit_replacement() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        replaceExisting=True,
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+    )
+
+    assert request.model_dump(by_alias=True)["replaceExisting"] is True
 
 def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> None:
     with pytest.raises(ValidationError, match="Input should be 'codex'"):
