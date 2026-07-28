@@ -26,6 +26,12 @@ from api_service.db.models import (
     User,
 )
 from api_service.services.omnigent_agent_profile_service import projection_identity
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.services.omnigent_agent_bundle_service import (
+    BundleValidationError,
+    validate_agent_bundle,
+)
+from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 
 router = APIRouter(prefix="/api/omnigent/agent-profiles", tags=["Omnigent Agent Profiles"])
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{1,127}$")
@@ -305,7 +311,13 @@ async def activate(profile_id: str, version: int, session: AsyncSession = Depend
     return _response(profile, versions)
 
 @router.post("/{profile_id}/validate")
-async def validate_profile(profile_id: str, body: ValidateCreate, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:
+async def validate_profile(
+    profile_id: str,
+    body: ValidateCreate,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+) -> dict[str, Any]:
     """Perform bounded, credential-free readiness validation before activation."""
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
@@ -352,6 +364,45 @@ async def validate_profile(profile_id: str, body: ValidateCreate, session: Async
             "reason": None if bundle_ready else
             "bundle must resolve to a creator-attributed artifact with matching digest, safe media type, and bounded size",
         })
+        if bundle_ready:
+            try:
+                _stored_artifact, bundle_bytes = await artifact_service.read(
+                    artifact_id=artifact_id,
+                    principal=str(current_user.id),
+                )
+                bundle_metadata = validate_agent_bundle(
+                    bundle_bytes, artifact.content_type or ""
+                )
+                declared_capabilities = set(bundle_metadata["capabilities"])
+                required_capabilities = set(document["requiredCapabilities"])
+                content_ready = (
+                    bundle_metadata["harness"] == document["harness"]
+                    and required_capabilities.issubset(declared_capabilities)
+                )
+                checks.append({
+                    "name": "bundle_contents",
+                    "ready": content_ready,
+                    "reason": None if content_ready else
+                    "bundle harness or capabilities do not satisfy the profile",
+                    "metadata": bundle_metadata,
+                })
+                target.upstream_snapshot = {
+                    "source": "artifact",
+                    "artifactRef": source["bundleArtifactRef"],
+                    "digest": source["bundleDigest"],
+                    **bundle_metadata,
+                }
+            except BundleValidationError as exc:
+                checks.append({
+                    "name": "bundle_contents", "ready": False,
+                    "reason": str(exc),
+                })
+            except Exception:
+                # Artifact authorization/storage details are intentionally not exposed.
+                checks.append({
+                    "name": "bundle_contents", "ready": False,
+                    "reason": "bundle content could not be read through the artifact boundary",
+                })
     requirements = document["providerRequirements"]
     providers = list((await session.execute(select(ManagedAgentProviderProfile).where(
         ManagedAgentProviderProfile.runtime_id == requirements["runtimeId"],
