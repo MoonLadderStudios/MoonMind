@@ -1,13 +1,13 @@
 """Add immutable Omnigent profile lifecycle and usage evidence.
 
-Revision ID: 350_omnigent_agent_profile_lifecycle
-Revises: 349_omnigent_agent_profiles
+Revision ID: 350_agent_profile_lifecycle
+Revises: 349_agent_profiles
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "350_omnigent_agent_profile_lifecycle"
-down_revision = "349_omnigent_agent_profiles"
+revision = "350_agent_profile_lifecycle"
+down_revision = "349_agent_profiles"
 branch_labels = None
 depends_on = None
 
