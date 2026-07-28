@@ -284,3 +284,46 @@ the browser terminal.
 - `docs/Security/ProviderProfiles.md`
 - `docs/UI/SettingsTab.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+
+## 11. Omnigent execution semantics
+
+An OAuth-backed `claude_code` profile is eligible for the shared
+profile-bound Omnigent execution path. It is not a separate Claude
+orchestrator. The runtime adapter contributes these Claude-specific values:
+
+| Concern | Claude value |
+|---|---|
+| Runtime and provider | `claude_code` / `anthropic` |
+| OAuth home | `/home/app/.claude` |
+| User-level state | the mounted Claude home, including `.claude.json` when produced by the supported CLI |
+| Harness | `claude-native` |
+| Static service | `omnigent-host-claude` |
+| Readiness | exact-host Claude auth status plus matching generation and harness registration |
+
+Everything else is provider neutral: profile capacity, provider and host
+leases, deterministic on-demand ownership, static/on-demand policy,
+WorkspaceLocator resolution, bridge authorization, session identity, evidence
+capture, checkpoint identity, candidate and remediation workspace authority,
+ContextPack references, cleanup, janitor reconciliation, and Provider Profile
+release-last ordering.
+
+The selected harness is the capability authority. Shared message, output,
+tool/command, resource, diagnostic, replay, interrupt, cancel, stop, reset, and
+epoch contracts are projected when the harness supplies them. A control or
+event family not advertised by `claude-native`, including an unavailable
+approval/elicitation family, is shown as unsupported or omitted with truthful
+Claude provenance; MoonMind never fabricates a Codex-shaped equivalent.
+
+Live checkpoint reattach requires the original Claude lease, credential
+generation, host, session, bridge authorization, and first-message identity.
+Otherwise recovery is a cold restore on a new Claude-authorized lease/session.
+Branches use a separate session and isolated candidate workspace. RAG and
+remediation remain host-independent artifact contracts and use the cumulative
+workspace head exactly as they do for Codex.
+
+Direct Claude remains available for compatibility and rollback until
+credentialed static and on-demand conformance has passed, no direct histories
+are in flight, historical Workflow Detail and mixed-version replay checks pass,
+and cleanup/failure telemetry meets the published support gate. Changing the
+default does not rewrite historical provenance or silently fall back between
+direct Claude, Claude-through-Omnigent, and Codex.

@@ -1247,6 +1247,86 @@ def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> No
         )
 
 
+@pytest.mark.asyncio
+async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness() -> None:
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "provider_profile_id": "claude",
+            "credential_generation": 4,
+            "provider_lease_ref": "provider-lease-claude",
+            "host_binding_ref": "omnigent-oauth:claude",
+            "host_lease_ref": "host-lease-claude",
+            "omnigent_host_id": "claude-host-1",
+            "omnigent_session_id": "claude-session-1",
+            "bridge_session_id": "claude-bridge-1",
+        }
+    )
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:claude-recovery",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/claude-2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/claude-2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=runner,
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(runtime_id="claude_code")
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="claude",
+        correlationId="workflow-claude",
+        idempotencyKey="recovery-attempt",
+        inputRefs=["artifact://context-pack/claude"],
+    )
+
+    result = await coordinator.recover_from_checkpoint(
+        request=request,
+        checkpoint=checkpoint,
+        provider_lease={"active": True, "leaseId": "provider-lease-claude"},
+        host_lease={
+            "status": "assigned",
+            "leaseId": "host-lease-claude",
+            "credentialGeneration": 4,
+        },
+        host_registered=True,
+        session_valid=True,
+        first_message_consistent=True,
+        current_credential_generation=4,
+        candidate_workspace=candidate,
+    )
+
+    assert result.summary == "reattached"
+    bound = runner.await_args.args[0]
+    assert bound.idempotency_key == checkpoint.idempotency_key
+    assert bound.parameters["omnigent"]["agent"]["harnessOverride"] == "claude-native"
+    assert bound.parameters["omnigent"]["session"] == {
+        "hostType": "external",
+        "hostId": "claude-host-1",
+        "workspace": "/workspaces/run",
+    }
+    assert bound.parameters["candidateWorkspace"]["checkpointRef"] == (
+        "artifact://workspace-checkpoint/claude-2"
+    )
+    assert bound.input_refs == [
+        "artifact://context-pack/claude",
+        "artifact://candidate-head/claude-2",
+        "artifact://workspace-checkpoint/claude-2",
+        "artifact-external-state",
+    ]
+
+
 def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> None:
     candidate = CandidateWorkspaceAuthority(
         loopId="mm:loop-1",
