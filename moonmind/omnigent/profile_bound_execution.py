@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -13,6 +15,10 @@ from temporalio import activity
 from api_service.db.models import ManagedAgentProviderProfile
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
+)
+from api_service.services.omnigent_policies import (
+    OmnigentPolicyService,
+    PolicyConflict,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
@@ -195,6 +201,37 @@ def _bind_candidate_workspace(
             ),
         }
     )
+
+
+def _apply_policy_snapshot(
+    effective_launch: Mapping[str, Any],
+    policy_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project persisted policy authority into the existing launch evidence carrier."""
+
+    boundaries = policy_snapshot["boundaries"]
+    host = boundaries["host"]
+    execution = boundaries["execution"]
+    endpoint = boundaries["endpoint"]
+    payload = {
+        **dict(effective_launch),
+        "launchPolicyRef": policy_snapshot["policyRef"],
+        "endpointRef": endpoint["ref"],
+        "harness": execution["harness"],
+        "hostMode": host["mode"],
+        "backendRef": host["backendRef"],
+        "architectures": list(host["architectures"]),
+        "serverImageRef": host["serverImageRef"],
+        "hostImageRef": host["hostImageRef"],
+        "capture": dict(boundaries["capture"]),
+        "policyAuthority": dict(policy_snapshot),
+    }
+    payload.pop("snapshotRef", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    return payload
 
 
 class OmnigentProfileBoundExecutionCoordinator:
@@ -381,6 +418,29 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     provider_profile_id=profile_id,
                 )
+            current_stage = "policy_authority_resolution"
+            await emit(current_stage, "started")
+            try:
+                policy_snapshot = await self._resolve_policy_snapshot(
+                    str(effective_launch["launchPolicyRef"])
+                )
+            except PolicyConflict as exc:
+                raise OmnigentOAuthHostError(
+                    str(exc), code="OMNIGENT_POLICY_AUTHORITY_UNAVAILABLE"
+                ) from exc
+            effective_launch = _apply_policy_snapshot(
+                effective_launch, policy_snapshot
+            )
+            await emit(
+                current_stage,
+                "completed",
+                metadata={
+                    "policyRef": policy_snapshot["policyRef"],
+                    "policyDigest": policy_snapshot["policyDigest"],
+                    "policySnapshotRef": policy_snapshot["snapshotRef"],
+                    "validation": policy_snapshot["validation"],
+                },
+            )
             try:
                 host_capabilities = resolve_runtime_execution_capabilities(
                     "omnigent"
@@ -1011,6 +1071,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     code="profile_resolution_failed",
                 )
             return profile
+
+    async def _resolve_policy_snapshot(self, policy_ref: str) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            return await OmnigentPolicyService(session).resolve_runtime_snapshot(
+                policy_ref
+            )
 
     @staticmethod
     def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:

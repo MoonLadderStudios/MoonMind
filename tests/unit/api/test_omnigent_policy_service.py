@@ -169,3 +169,30 @@ async def test_clone_requires_existing_immutable_source_and_records_lineage(tmp_
                 actor="operator",
                 clone_source_ref="missing@1",
             )
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolution_requires_exact_active_valid_version(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        row = await create_policy(service)
+
+        with pytest.raises(PolicyConflict, match="not active"):
+            await service.resolve_runtime_snapshot("policy@1")
+
+        await service.transition(
+            policy_id="policy",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
+        )
+        snapshot = await service.resolve_runtime_snapshot("policy@1")
+        assert snapshot["policyRef"] == "policy@1"
+        assert snapshot["policyDigest"] == row.digest
+        assert snapshot["validation"]["valid"] is True
+
+        row.digest = "sha256:" + "0" * 64
+        await session.commit()
+        with pytest.raises(PolicyConflict, match="digest conflict"):
+            await service.resolve_runtime_snapshot("policy@1")

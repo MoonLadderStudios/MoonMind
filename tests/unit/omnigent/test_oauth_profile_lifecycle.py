@@ -41,9 +41,11 @@ from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _apply_policy_snapshot,
     _bind_candidate_workspace,
     _failure_evidence,
 )
+from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -64,6 +66,54 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.unit.omnigent.test_policy_authority import policy_document
+
+
+@pytest.fixture(autouse=True)
+def persisted_policy_authority(monkeypatch):
+    """Keep coordinator tests focused while requiring the production authority seam."""
+
+    async def resolve(_self, policy_ref):
+        document = policy_document()
+        if policy_ref.startswith("codex-on-demand@"):
+            document["host"]["mode"] = "on_demand_docker"
+            document["host"]["backendRef"] = "container-backend"
+            document["session"]["cleanup"] = "remove"
+        return compile_policy_snapshot(
+            policy_id=policy_ref.rsplit("@", 1)[0],
+            version=int(policy_ref.rsplit("@", 1)[1]),
+            document=document,
+            validation={"valid": True, "diagnostics": []},
+        )
+
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_resolve_policy_snapshot",
+        resolve,
+    )
+
+
+def test_persisted_policy_snapshot_replaces_legacy_launch_authority():
+    legacy = {
+        "schemaVersion": 2,
+        "launchPolicyRef": "codex-static@1",
+        "hostMode": "on_demand_docker",
+        "serverImageRef": "legacy.invalid",
+        "snapshotRef": "legacy-ref",
+    }
+    snapshot = compile_policy_snapshot(
+        policy_id="codex-static",
+        version=1,
+        document=policy_document(),
+        validation={"valid": True, "diagnostics": []},
+    )
+
+    realized = _apply_policy_snapshot(legacy, snapshot)
+
+    assert realized["hostMode"] == snapshot["boundaries"]["host"]["mode"]
+    assert realized["serverImageRef"] == snapshot["boundaries"]["host"]["serverImageRef"]
+    assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
+    assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
 
 
 @pytest.mark.parametrize(

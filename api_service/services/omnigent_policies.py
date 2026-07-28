@@ -255,6 +255,25 @@ class OmnigentPolicyService:
         row = await self.get_version(policy_id, version)
         return compile_policy_snapshot(policy_id=policy_id, version=version, document=row.document_json, validation=row.validation_json)
 
+    async def resolve_runtime_snapshot(self, policy_ref: str) -> dict[str, Any]:
+        """Resolve exact, active runtime authority before any external side effect."""
+
+        policy_id, version = _split_policy_ref(policy_ref)
+        row = await self.get_version(policy_id, version)
+        if row.state != PolicyState.ACTIVE.value:
+            raise PolicyConflict(f"runtime policy is not active: {policy_ref}")
+        if not row.validation_json.get("valid"):
+            raise PolicyConflict(f"runtime policy is not valid: {policy_ref}")
+        snapshot = compile_policy_snapshot(
+            policy_id=policy_id,
+            version=version,
+            document=row.document_json,
+            validation=row.validation_json,
+        )
+        if snapshot["policyDigest"] != row.digest:
+            raise PolicyConflict(f"runtime policy digest conflict: {policy_ref}")
+        return snapshot
+
     @staticmethod
     def _version(policy_id: str, version: int, document: PolicyDocument, actor: str, **lineage: Any) -> OmnigentPolicyVersion:
         normalized = normalize_document(document)
