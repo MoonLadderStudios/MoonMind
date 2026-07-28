@@ -160,6 +160,16 @@ class OmnigentOAuthHostRuntime:
         launch = self._validate_effective_launch(
             binding=binding, effective_launch=effective_launch
         )
+        adapter = self._runtime_adapter(binding)
+        binding_runtime = binding.credential_mount_ref.auth_volume_ref.runtime_id
+        if (
+            launch.get("providerRuntime") not in {None, binding_runtime}
+            or launch.get("harness") != adapter["harness"]
+        ):
+            raise OmnigentOAuthHostError(
+                "effective launch provider does not match the OAuth host binding",
+                code=HostPreflightFailure.BINDING_MISMATCH.value,
+            )
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
@@ -202,7 +212,6 @@ class OmnigentOAuthHostRuntime:
         capabilities = host.get("harnesses") or host.get("capabilities") or []
         if isinstance(capabilities, Mapping):
             capabilities = list(capabilities)
-        adapter = self._runtime_adapter(binding)
         if adapter["harness"] not in {str(value) for value in capabilities}:
             raise OmnigentOAuthHostError(
                 f"registered host does not advertise {adapter['harness']}",

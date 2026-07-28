@@ -905,6 +905,16 @@ services:
         condition: service_completed_successfully
       omnigent-tools-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     networks:
       - local-network
     restart: unless-stopped
