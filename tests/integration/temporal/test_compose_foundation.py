@@ -512,7 +512,7 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
-    assert host_service["entrypoint"] == ["/opt/moonmind/start-claude-oauth-host.sh"]
+    assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
     assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
     assert _network_names(host_service) == {"local-network"}
 
@@ -549,7 +549,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
-    assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
+    assert host_service["entrypoint"] == ["/opt/moonmind/start-claude-oauth-host.sh"]
     assert host_service["user"] == "1000:1000"
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
