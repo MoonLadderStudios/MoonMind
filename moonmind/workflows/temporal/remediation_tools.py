@@ -28,6 +28,11 @@ from moonmind.workflows.temporal.remediation_context import (
 )
 from moonmind.workflows.temporal.remediation_actions import (
     REMEDIATION_BRANCH_SENSITIVE_FIELDS,
+    RemediationActionAuthorityService,
+    RemediationMutationGuardPolicy,
+    RemediationMutationGuardService,
+    RemediationPermissionSet,
+    RemediationSecurityProfile,
     remediation_changes_require_checkpoint_branch,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
@@ -656,16 +661,59 @@ class RemediationEvidenceToolService:
         self,
         *,
         remediation_workflow_id: str,
-        authority_result: Mapping[str, Any],
-        guard_result: Mapping[str, Any],
+        action_kind: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        dry_run: bool = False,
+        authority_result: Mapping[str, Any] | None = None,
+        guard_result: Mapping[str, Any] | None = None,
         principal: str = "service:remediation-tools",
     ) -> dict[str, Any]:
         """Execute an authorized action and publish bounded lifecycle artifacts."""
-
-        if not isinstance(authority_result, Mapping):
-            raise RemediationEvidenceToolError("authorityResult must be an object.")
-        if not isinstance(guard_result, Mapping):
-            raise RemediationEvidenceToolError("guardResult must be an object.")
+        link = await self._load_link(remediation_workflow_id)
+        if authority_result is None or guard_result is None:
+            if link.authority_mode != "admin_auto":
+                raise RemediationEvidenceToolError(
+                    "Persisted remediation authority does not permit automatic mutation."
+                )
+            normalized_action_kind = _required_string(action_kind, "actionKind")
+            normalized_idempotency_key = _required_string(
+                idempotency_key, "idempotencyKey"
+            )
+            authority = await RemediationActionAuthorityService(
+                session=self._session
+            ).evaluate_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=normalized_action_kind,
+            parameters=parameters,
+            dry_run=dry_run,
+            idempotency_key=normalized_idempotency_key,
+            requesting_principal=principal,
+            permissions=RemediationPermissionSet(
+                can_view_target=True,
+                can_request_admin_profile=True,
+            ),
+            security_profile=RemediationSecurityProfile(
+                profile_ref="persisted:admin_auto",
+                execution_principal=principal,
+                allowed_action_kinds=(normalized_action_kind,),
+            ),
+            )
+            authority_result = authority.to_dict()
+            guard = await RemediationMutationGuardService(
+                session=self._session
+            ).evaluate(
+            remediation_workflow_id=remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            action_kind=normalized_action_kind,
+            idempotency_key=normalized_idempotency_key,
+            parameters=parameters,
+            policy=RemediationMutationGuardPolicy(),
+            now=datetime.now(timezone.utc),
+            )
+            guard_result = guard.to_dict()
         if authority_result.get("executable") is not True:
             raise RemediationEvidenceToolError(
                 "authorityResult must be executable before action execution."

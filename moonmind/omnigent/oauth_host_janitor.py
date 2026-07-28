@@ -73,14 +73,16 @@ class OmnigentOAuthHostJanitor:
                 lease.lease_id, expected_status=before_state, new_status="draining"
             )
         elif action_kind == "host.restart":
-            if before_state not in {"stopped", "failed"}:
-                raise ValueError("host.restart requires a terminal host lease")
-            lease = await self._repository.restart_host_lease(lease.lease_id)
+            raise ValueError(
+                "host.restart is unsupported until the owning launch path can "
+                "return terminal generation evidence"
+            )
         elif action_kind == "host.stop":
             if before_state not in {"stopped", "failed"}:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "host.remove":
+            removed = bool(lease.container_name)
             if lease.container_name:
                 await self._runtime.remove_container(lease.container_name)
             if before_state != "stopped":
@@ -106,9 +108,15 @@ class OmnigentOAuthHostJanitor:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
 
-        return self._action_result(
+        result = self._action_result(
             action_kind, request_id, profile_id, lease, before_state
         )
+        if action_kind == "host.remove" and removed:
+            result["status"] = "applied"
+            result["afterEvidenceRefs"].append(
+                f"omnigent-host-container:{host_lease_ref}:removed"
+            )
+        return result
 
     @staticmethod
     def _action_result(

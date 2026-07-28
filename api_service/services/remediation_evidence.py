@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from api_service.api.routers import agent_runs
 from moonmind.workflows.temporal.remediation_tools import (
@@ -36,7 +37,7 @@ class ManagedRunRemediationLogAdapter:
             streams=streams,
         )
         events.sort(key=agent_runs._event_sort_key)
-        return events[:limit]
+        return events[-limit:] if since is None else events[:limit]
 
     async def read_logs(
         self,
@@ -48,9 +49,40 @@ class ManagedRunRemediationLogAdapter:
     ) -> RemediationLogReadResult:
         since = int(cursor) if cursor and cursor.isdigit() else None
         limit = max(1, min(tail_lines or 200, 2000))
+        if stream == "diagnostics":
+            store = ManagedRunStore(agent_runs._get_agent_runtime_store_root())
+            record = await agent_runs._load_managed_run_record(store, agent_run_id)
+            diagnostics_ref = str(
+                getattr(record, "diagnostics_ref", None) or ""
+            ).strip()
+            if not diagnostics_ref:
+                return RemediationLogReadResult(
+                    agent_run_id=agent_run_id,
+                    stream=stream,
+                    lines=(),
+                    next_cursor=None,
+                )
+            root = Path(agent_runs._get_agent_runtime_artifacts_root()).resolve()
+            path = (root / diagnostics_ref).resolve()
+            if root not in path.parents or not path.is_file():
+                return RemediationLogReadResult(
+                    agent_run_id=agent_run_id,
+                    stream=stream,
+                    lines=(),
+                    next_cursor=None,
+                )
+            content = await asyncio.to_thread(
+                path.read_text, encoding="utf-8", errors="replace"
+            )
+            return RemediationLogReadResult(
+                agent_run_id=agent_run_id,
+                stream=stream,
+                lines=tuple(content.splitlines()[-limit:]),
+                next_cursor=None,
+            )
         streams = (
             {"stdout", "stderr", "system", "session"}
-            if stream in {"merged", "diagnostics"}
+            if stream == "merged"
             else {stream}
         )
         events = await self._events(

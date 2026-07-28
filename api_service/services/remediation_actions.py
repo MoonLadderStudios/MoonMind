@@ -62,6 +62,8 @@ class TemporalRemediationControlPlane:
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": after,
             "verification": {"status": "pending"},
+            "verificationRequired": True,
+            "verificationHint": message,
         }
 
     @staticmethod
@@ -143,6 +145,11 @@ class TemporalRemediationControlPlane:
                 f"execution:{resulting_workflow_id}:rerun-request:{action_id}"
             ],
             "verification": {"status": "pending" if accepted else "verified"},
+            "verificationRequired": accepted,
+            "verificationHint": (
+                "Verify the resulting workflow reaches an authoritative terminal state."
+                if accepted else None
+            ),
         }
 
     async def checkpoint_branch(
@@ -220,9 +227,11 @@ class TemporalRemediationControlPlane:
             "session.interrupt_turn": "InterruptTurn",
             "session.clear": "ClearSession",
             "session.cancel": "CancelSession",
-            "session.terminate": "CancelSession",
-            "session.restart_container": "ClearSession",
+            "session.terminate": None,
+            "session.restart_container": None,
         }[kind]
+        if update is None:
+            raise ValueError(f"{kind} is unsupported by the owning session control plane")
         await self._client.update_workflow(
             f"{agent_run_id}:session:{runtime_id}",
             update,
@@ -301,23 +310,9 @@ class TemporalRemediationControlPlane:
         _guard_result: Mapping[str, Any],
         target: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
-        action_id, params, before = self._parts(action_request, target)
-        cleanup_ref = self._required(params, "cleanupRef")
-        result = await self._client.start_workflow(
-            workflow_type="MoonMind.ManagedRuntimeWorkspaceCleanup",
-            workflow_id=f"remediation-cleanup:{action_id}",
-            input_args={
-                "actionKind": "cleanup.request_janitor",
-                "cleanupRef": cleanup_ref,
-                "targetWorkflowId": target.workflow_id,
-                "expectedState": params.get("expectedState"),
-                "requestId": action_id,
-            },
-        )
-        return self._accepted(
-            before,
-            after=[f"workflow:{result.workflow_id}:run:{result.run_id}"],
-            message="Cleanup request was queued on the workspace janitor control plane.",
+        raise ValueError(
+            "targeted cleanup is unsupported until cleanupRef can be resolved "
+            "by its owning control plane"
         )
 
     async def evidence_only(
@@ -326,13 +321,10 @@ class TemporalRemediationControlPlane:
         _guard_result: Mapping[str, Any],
         target: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
-        action_id, _params, before = self._parts(action_request, target)
-        return {
-            "status": "applied",
-            "beforeEvidenceRefs": before,
-            "afterEvidenceRefs": [f"remediation-evidence:{action_id}"],
-            "verification": {"status": "verified", "targetRunChanged": False},
-        }
+        raise ValueError(
+            "verification actions require an owning evidence adapter and cannot "
+            "synthesize success"
+        )
 
     @staticmethod
     def _typed(handler: ActionHandler) -> ActionHandler:

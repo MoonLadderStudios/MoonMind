@@ -11913,6 +11913,9 @@ class TemporalAgentRuntimeActivities:
                     request_id=(
                         str(action_payload.get("requestId") or "").strip()
                     ),
+                    target_workflow_id=str(
+                        action_payload.get("targetWorkflowId") or ""
+                    ).strip(),
                 ),
                 heartbeat_payload={
                     "activityType": "agent_runtime.reconcile_managed_sessions",

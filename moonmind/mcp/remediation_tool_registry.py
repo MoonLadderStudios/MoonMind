@@ -59,8 +59,10 @@ class RemediationActionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     remediation_workflow_id: str = Field(alias="remediationWorkflowId")
-    authority_result: dict[str, Any] = Field(alias="authorityResult")
-    guard_result: dict[str, Any] = Field(alias="guardResult")
+    action_kind: str = Field(alias="actionKind")
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str = Field(alias="idempotencyKey")
+    dry_run: bool = Field(False, alias="dryRun")
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,8 +205,10 @@ class RemediationToolRegistry:
         _, context = dispatch
         return await context.service.execute_action(
             remediation_workflow_id=request.remediation_workflow_id,
-            authority_result=request.authority_result,
-            guard_result=request.guard_result,
+            action_kind=request.action_kind,
+            parameters=request.parameters,
+            idempotency_key=request.idempotency_key,
+            dry_run=request.dry_run,
             principal=context.principal,
         )
 

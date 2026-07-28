@@ -11871,7 +11871,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                         ...current.remediation.checkpointBranchPolicy,
                         actionKind: "checkpoint_branch.create_from_remediation_context",
                         runtimeContextPolicy: "fresh_agent_run",
-                      } : {},
+                      } : undefined,
                     },
                   } : current)}
                 />

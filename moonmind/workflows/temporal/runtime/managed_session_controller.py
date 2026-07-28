@@ -4203,6 +4203,7 @@ class DockerCodexManagedSessionController:
         container_ref: str,
         expected_state: str | None,
         request_id: str,
+        target_workflow_id: str,
     ) -> dict[str, Any]:
         """Mutate exactly one label-owned managed-session container."""
 
@@ -4218,6 +4219,15 @@ class DockerCodexManagedSessionController:
             if self._session_store is not None
             else None
         )
+        if not target_workflow_id:
+            raise ValueError("targetWorkflowId is required")
+        record_target = str(
+            getattr(record, "workflow_id", None)
+            or getattr(record, "agent_run_id", None)
+            or ""
+        ).strip()
+        if record is None or record_target != target_workflow_id:
+            raise ValueError("containerRef is not owned by the remediation target")
         before_state = (
             "orphaned"
             if record is None
