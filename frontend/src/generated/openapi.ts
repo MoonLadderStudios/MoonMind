@@ -5502,6 +5502,10 @@ export interface components {
             capabilities?: {
                 [key: string]: boolean;
             };
+            /** Compatibilitydiagnostics */
+            compatibilityDiagnostics?: {
+                [key: string]: unknown;
+            };
         };
         /** BridgeTerminalEnvelope */
         BridgeTerminalEnvelope: {
@@ -9653,6 +9657,10 @@ export interface components {
             hostModes: string[];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+            /** Compatibilitydiagnostics */
+            compatibilityDiagnostics: {
+                [key: string]: unknown;
+            };
             /** Cutover */
             cutover: {
                 [key: string]: unknown;

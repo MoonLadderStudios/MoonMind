@@ -57,6 +57,7 @@ from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
     _active_host_auth_profile,
+    _compatibility_diagnostics,
     _resolve_embedded_evidence,
     get_bridge_config,
 )
@@ -133,6 +134,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     )
     host_modes: list[str] = Field(alias="hostModes")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
+    compatibility_diagnostics: dict[str, Any] = Field(alias="compatibilityDiagnostics")
     cutover: dict[str, Any]
 
 
@@ -327,6 +329,7 @@ async def get_omnigent_codex_catalog_readiness(
         and not endpoint_ready
     ):
         deployment_reasons.append(_reason("bridge_endpoint_unavailable"))
+    auth: dict[str, Any] | None = None
     if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
         try:
             auth = await host_auth_readiness(profile=await _active_host_auth_profile())
@@ -479,6 +482,13 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if policy.host_mode == "static_compose" and not static_ready:
                 policy_reasons.append(_reason("static_host_not_ready"))
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                mode_readiness = config.readiness(
+                    evidence_validation=evidence,
+                    host_mode=policy.host_mode,
+                )
+                if mode_readiness["conformanceState"] != "ready":
+                    policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
                 policy_refs.append(policy.ref)
                 available_modes.append(policy.host_mode)
@@ -522,6 +532,17 @@ async def get_omnigent_codex_catalog_readiness(
 
     available = any(item.available for item in profile_views)
     top_reasons = [] if available else (profile_views[0].gate_reasons if profile_views else [_reason("execution_profile_unavailable")])
+    diagnostics = _compatibility_diagnostics(
+        config=config, readiness=bridge, auth=auth
+    )
+    diagnostics["capabilitySummary"] = sorted({
+        str(capability)
+        for lease in host_leases
+        for field in ("harnesses", "capabilities")
+        for capability in (
+            (getattr(lease, "host_capabilities_json", None) or {}).get(field, [])
+        )
+    })
     cutover_status = effective_phase()
     return OmnigentCodexCatalogReadiness(
         available=available,
@@ -531,5 +552,6 @@ async def get_omnigent_codex_catalog_readiness(
         ineligibleProviderProfiles=ineligible,
         hostModes=sorted(set(available_modes)),
         gateReasons=top_reasons,
+        compatibilityDiagnostics=diagnostics,
         cutover=cutover_status.as_dict(),
     )

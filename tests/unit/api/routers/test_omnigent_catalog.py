@@ -77,8 +77,10 @@ def _config(*, enabled=True):
     return SimpleNamespace(
         enabled=enabled,
         host_protocol_mode="upstream_omnigent_server_proxy",
+        compatibility=SimpleNamespace(profile="omnigent.server.v1"),
         readiness=lambda **_kwargs: {
-            "conformanceState": "ready" if enabled else "disabled"
+            "conformanceState": "ready" if enabled else "disabled",
+            "protocolProfile": "omnigent.server.v1",
         },
     )
 
@@ -199,6 +201,37 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         "queueWhenBusy": True,
     }]
     assert body["ineligibleProviderProfiles"] == []
+    diagnostics = body["compatibilityDiagnostics"]
+    assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
+    assert diagnostics["compatibilityProfile"] == "omnigent.server.v1"
+    assert diagnostics["evidence"]["fresh"] is True
+    assert diagnostics["failureReason"] is None
+    assert diagnostics["rollbackRecommendation"] is None
+    assert diagnostics["capabilitySummary"] == []
+    assert diagnostics["releaseMetadata"]["bridgeMode"] == (
+        "upstream_omnigent_server_proxy"
+    )
+    assert {row["hostMode"] for row in diagnostics["supportMatrix"]} == {
+        "static_compose",
+        "on_demand_docker",
+    }
+
+
+def test_catalog_summarizes_persisted_stock_host_harnesses(monkeypatch):
+    lease = SimpleNamespace(
+        provider_profile_id="codex-oauth",
+        host_capabilities_json={"harnesses": ["codex-native"]},
+    )
+    client = TestClient(_app(
+        monkeypatch, session=_Session([_profile()], host_leases=[lease])
+    ))
+
+    response = client.get("/api/omnigent/codex-catalog-readiness")
+
+    assert response.status_code == 200
+    assert response.json()["compatibilityDiagnostics"]["capabilitySummary"] == [
+        "codex-native"
+    ]
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -261,20 +262,120 @@ async def get_omnigent_bridge_readiness(
 ) -> dict[str, Any]:
     """Expose selected protocol and conformance gates without secret material."""
 
+    auth: dict[str, Any] | None = None
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
-        return config.readiness()
-    readiness = config.readiness(
-        evidence_validation=await _resolve_embedded_evidence(config)
+        readiness = config.readiness()
+    else:
+        readiness = config.readiness(
+            evidence_validation=await _resolve_embedded_evidence(config)
+        )
+        try:
+            profile = await _active_host_auth_profile()
+            auth = await host_auth_readiness(profile=profile)
+        except HostAuthProfileError as exc:
+            auth = {"ready": False, "code": exc.code}
+        readiness["hostAuthentication"] = auth
+        if not auth["ready"]:
+            readiness["conformanceState"] = "gated"
+            readiness.setdefault("gateReason", auth.get("code"))
+    readiness["compatibilityDiagnostics"] = _compatibility_diagnostics(
+        config=config, readiness=readiness, auth=auth
     )
-    try:
-        profile = await _active_host_auth_profile()
-        auth = await host_auth_readiness(profile=profile)
-    except HostAuthProfileError as exc:
-        auth = {"ready": False, "code": exc.code}
-    readiness["hostAuthentication"] = auth
-    if not auth["ready"]:
-        readiness["conformanceState"] = "gated"
     return readiness
+
+
+_PROXY_ROLLBACK_RECOMMENDATION = (
+    "Select upstream_omnigent_server_proxy for new sessions; "
+    "existing sessions retain their recorded bridge mode."
+)
+
+
+def _compatibility_diagnostics(
+    *,
+    config: OmnigentBridgeConfig,
+    readiness: dict[str, Any],
+    auth: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one bounded support projection shared by readiness surfaces."""
+
+    validation = readiness.get("evidenceValidation") or {}
+    selected_embedded = config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+    evidence_fresh = not selected_embedded or (
+        bool(validation)
+        and all(item.get("status") == "passed" for item in validation.values())
+    )
+    failure_reason = (
+        None
+        if readiness.get("conformanceState") == "ready"
+        else readiness.get("gateReason") or "bridge_not_ready"
+    )
+    support_matrix = []
+    for host_mode in ("static_compose", "on_demand_docker"):
+        row = config.readiness(
+            evidence_validation=validation or None,
+            host_mode=host_mode,
+        )
+        supported = row["conformanceState"] == "ready"
+        support_matrix.append(
+            {
+                "hostMode": host_mode,
+                "supported": supported,
+                "failureReason": None if supported else row.get("gateReason"),
+            }
+        )
+    evidence_refs = sorted(
+        {
+            str(item["evidenceRef"])
+            for item in validation.values()
+            if item.get("status") == "passed" and item.get("evidenceRef")
+        }
+    )
+    image_sets = [
+        item.get("images")
+        for item in validation.values()
+        if item.get("status") == "passed" and isinstance(item.get("images"), dict)
+    ]
+    images = image_sets[0] if image_sets else {}
+    projection = {
+        "bridgeMode": config.host_protocol_mode,
+        "compatibilityProfile": readiness.get("protocolProfile"),
+        "authProfile": (
+            config.host_connection.embedded.auth_mode if selected_embedded else None
+        ),
+        "upstreamComponentVersion": readiness.get("upstreamComponentVersion"),
+        "serverImage": (
+            images.get("server") or os.getenv("OMNIGENT_IMAGE_REF") or None
+        ),
+        "hostImage": (
+            images.get("host") or os.getenv("OMNIGENT_HOST_IMAGE_REF") or None
+        ),
+        "hostArchitecture": os.getenv("OMNIGENT_HOST_ARCHITECTURE") or None,
+        "auth": auth,
+        "evidence": {
+            "fresh": evidence_fresh,
+            "refs": evidence_refs,
+            "validation": validation,
+        },
+        "supportMatrix": support_matrix,
+        "failureReason": failure_reason,
+        "rollbackRecommendation": (
+            _PROXY_ROLLBACK_RECOMMENDATION
+            if selected_embedded and failure_reason
+            else None
+        ),
+    }
+    projection["releaseMetadata"] = {
+        key: projection[key]
+        for key in (
+            "bridgeMode",
+            "compatibilityProfile",
+            "authProfile",
+            "serverImage",
+            "hostImage",
+            "hostArchitecture",
+        )
+    }
+    return projection
 
 
 _EMBEDDED_EVIDENCE_SLOTS = {
@@ -325,12 +426,23 @@ async def _resolve_embedded_evidence(
                     expected_claim_type=claim_type,
                     moonmind_build_identity=build_identity,
                     bridge_config_sha256=config.evidence_policy_sha256(),
+                    expected_host_architecture=(
+                        os.getenv("OMNIGENT_HOST_ARCHITECTURE") or ""
+                    ),
+                    expected_images={
+                        "server": os.getenv("OMNIGENT_IMAGE_REF") or "",
+                        "host": os.getenv("OMNIGENT_HOST_IMAGE_REF") or "",
+                    },
                 )
                 results[key] = {
                     "status": "passed",
+                    "evidenceRef": getattr(embedded, attribute),
                     "schemaVersion": claim.schema_version,
                     "generatedAt": claim.generated_at.isoformat(),
                     "expiresAt": claim.expires_at.isoformat(),
+                    "supportedHostModes": list(claim.supported_host_modes),
+                    "hostArchitecture": claim.host_architecture,
+                    "images": dict(claim.images),
                 }
             except Exception:  # noqa: BLE001 - every resolver failure gates mode
                 # Read/auth/schema failures intentionally share one bounded,
@@ -909,6 +1021,7 @@ class BridgeSessionResolution(BaseModel):
     first_message_state: str | None = None
     initial_retrieval: dict[str, Any] | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    compatibility_diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 class BridgeRetentionGap(BaseModel):
@@ -1153,6 +1266,15 @@ async def resolve_omnigent_bridge_session_projection(
         if isinstance(getattr(row, "effective_launch_snapshot_json", None), dict)
         else {}
     )
+    capabilities = _projection_capabilities(row)
+    compatibility_profile = row.compatibility_profile
+    historical_embedded = (
+        str((getattr(row, "metadata_", None) or {}).get("hostProtocolMode") or "")
+        == HOST_PROTOCOL_MODE_EMBEDDED
+    )
+    compatibility_evidence_ref = (
+        str(launch.get("compatibilityEvidenceRef") or "") or None
+    )
     authority = (
         launch.get("policyAuthority")
         if isinstance(launch.get("policyAuthority"), dict)
@@ -1169,7 +1291,7 @@ async def resolve_omnigent_bridge_session_projection(
         latest_sequence=page.latest_sequence,
         live_tailing_available=row.status not in _BRIDGE_TERMINAL_STATUSES,
         terminal_evidence_available=_terminal_envelope(row) is not None,
-        compatibility_profile=row.compatibility_profile,
+        compatibility_profile=compatibility_profile,
         provider_profile_id=row.provider_profile_id,
         provider_lease_ref=getattr(row, "provider_lease_id", None),
         credential_generation=getattr(row, "credential_generation", None),
@@ -1196,11 +1318,54 @@ async def resolve_omnigent_bridge_session_projection(
         omnigent_host_ref=getattr(row, "omnigent_host_id", None),
         omnigent_runner_ref=getattr(row, "omnigent_runner_id", None),
         first_message_state=getattr(row, "first_message_state", None),
+        capabilities=capabilities,
+        compatibility_diagnostics={
+            "bridgeMode": (
+                HOST_PROTOCOL_MODE_EMBEDDED
+                if historical_embedded
+                else HOST_PROTOCOL_MODE_PROXY
+            ),
+            "compatibilityProfile": compatibility_profile,
+            "hostMode": str(launch.get("hostMode") or "") or None,
+            "authProfile": (
+                str(launch.get("authProfile") or "") or "upstream_runner_tunnel"
+                if historical_embedded
+                else None
+            ),
+            "serverImage": str(launch.get("serverImageRef") or "") or None,
+            "hostImage": str(launch.get("hostImageRef") or "") or None,
+            "hostArchitecture": str(launch.get("hostArchitecture") or "") or None,
+            "authGeneration": getattr(row, "credential_generation", None),
+            "evidenceRef": compatibility_evidence_ref,
+            "evidenceFresh": launch.get("compatibilityEvidenceFresh"),
+            "lifecycleState": row.status,
+            "supportedCapabilities": sorted(
+                key for key, supported in capabilities.items() if supported
+            ),
+            "unsupportedCapabilities": sorted(
+                key for key, supported in capabilities.items() if not supported
+            ),
+            "failureReason": (
+                str(launch.get("compatibilityFailureReason") or "")
+                or (
+                    "historical_compatibility_evidence_not_recorded"
+                    if historical_embedded and not compatibility_evidence_ref
+                    else None
+                )
+            ),
+            "rollbackRecommendation": (
+                str(launch.get("rollbackRecommendation") or "") or None
+                or (
+                    _PROXY_ROLLBACK_RECOMMENDATION
+                    if historical_embedded and not compatibility_evidence_ref
+                    else None
+                )
+            ),
+        },
         initial_retrieval=dict(
             ((getattr(row, "metadata_", None) or {}).get("initialRetrieval") or {})
         )
         or None,
-        capabilities=_projection_capabilities(row),
     )
 
 
@@ -1601,7 +1766,30 @@ async def list_omnigent_hosts(
         )
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
-        return await facade.list_hosts()
+        hosts = await facade.list_hosts()
+        evidence = (
+            await _resolve_embedded_evidence(config)
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else None
+        )
+        readiness = config.readiness(evidence_validation=evidence)
+        diagnostics = _compatibility_diagnostics(
+            config=config, readiness=readiness
+        )
+        return [
+            {
+                **host,
+                "compatibilityDiagnostics": {
+                    **diagnostics,
+                    "lifecycleState": host.get("status"),
+                    "supportedCapabilities": sorted(
+                        str(item)
+                        for item in host.get("capabilities", [])
+                    ),
+                },
+            }
+            for host in hosts
+        ]
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 

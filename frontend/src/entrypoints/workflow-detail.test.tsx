@@ -8600,6 +8600,14 @@ describe('Workflow Detail Entrypoint', () => {
         providerProfileId: 'codex-profile', executionProfileRef: 'codex-default@2', launchPolicyRef: 'restricted@3',
         hostMode: 'on_demand_docker', effectiveLaunchSnapshotRef: 'omnigent-launch:sha256:safe-ref',
         hostLeaseRef: 'host-lease-1', credentialGeneration: 4,
+        compatibilityDiagnostics: {
+          bridgeMode: 'embedded_omnigent_compatible_server',
+          authProfile: 'upstream_runner_tunnel',
+          evidenceRef: 'artifact://embedded-mode-row',
+          evidenceFresh: true,
+          lifecycleState: 'running',
+          supportedCapabilities: ['resolveElicitation', 'stop'],
+        },
         workflowId: 'test-123', runId: 'run-1', stepExecutionId: 'step-1', agentRunId: 'agent-run-1',
         firstMessageState: 'first_message_posted', omnigentHostRef: 'host-1', omnigentRunnerRef: 'runner-1',
         capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true, stop: true, terminalCleanup: true },
@@ -8623,6 +8631,9 @@ describe('Workflow Detail Entrypoint', () => {
       expect(identity.textContent).toContain('Codex via Omnigent');
       expect(identity.textContent).toContain('codex-profile');
       expect(identity.textContent).toContain('omnigent-launch:sha256:safe-ref');
+      const compatibility = screen.getByRole('region', { name: 'Omnigent compatibility diagnostics' });
+      expect(compatibility.textContent).toContain('embedded_omnigent_compatible_server');
+      expect(compatibility.textContent).toContain('artifact://embedded-mode-row');
       expect(screen.getAllByText('Previously approved by operator.').length).toBeGreaterThan(0);
       expect(screen.queryByRole('region', { name: 'Pending operator request el-resolved' })).toBeNull();
 

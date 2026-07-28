@@ -2608,6 +2608,7 @@ type BridgeSessionProjection = {
   omnigentHostRef?: string | undefined;
   omnigentRunnerRef?: string | undefined;
   firstMessageState?: string | undefined;
+  compatibilityDiagnostics?: Record<string, unknown> | undefined;
   initialRetrieval?: Record<string, unknown> | undefined;
   capabilities: Record<string, boolean>;
 };
@@ -2776,6 +2777,9 @@ async function resolveBridgeSessionProjection({
     omnigentHostRef: typeof body.omnigentHostRef === 'string' ? body.omnigentHostRef : undefined,
     omnigentRunnerRef: typeof body.omnigentRunnerRef === 'string' ? body.omnigentRunnerRef : undefined,
     firstMessageState: typeof body.firstMessageState === 'string' ? body.firstMessageState : undefined,
+    compatibilityDiagnostics: body.compatibilityDiagnostics && typeof body.compatibilityDiagnostics === 'object'
+      ? body.compatibilityDiagnostics as Record<string, unknown>
+      : undefined,
     initialRetrieval: body.initialRetrieval && typeof body.initialRetrieval === 'object'
       ? body.initialRetrieval as Record<string, unknown>
       : undefined,
@@ -6277,6 +6281,21 @@ function BridgeSessionLogsPanel({
           ))}
         </dl>
       </section>
+      {projection.compatibilityDiagnostics ? (
+        <section className="card stack" aria-label="Omnigent compatibility diagnostics">
+          <h3>Compatibility diagnostics</h3>
+          <dl className="details-grid">
+            {Object.entries(projection.compatibilityDiagnostics)
+              .filter(([, value]) => value !== undefined && value !== null && value !== '')
+              .map(([key, value]) => (
+                <div key={key}>
+                  <dt>{formatStatusLabel(key.replace(/([A-Z])/g, '_$1'))}</dt>
+                  <dd><code className="text-xs break-all">{Array.isArray(value) ? value.join(', ') || 'none' : String(value)}</code></dd>
+                </div>
+              ))}
+          </dl>
+        </section>
+      ) : null}
       {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
         ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
         : null}

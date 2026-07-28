@@ -134,6 +134,13 @@ This mode is recommended for the first production slice.
 
 ### 3.2 Embedded compatibility mode
 
+The exact version, route, authentication, lifecycle, evidence, failure,
+upgrade, and rollback contract is authoritative in
+[Embedded host authentication compatibility](EmbeddedHostAuthCompatibility.md).
+This mode is an Omnigent-compatible adapter boundary and remains experimental
+until its credentialed stock-host support rows pass; it is not a new MoonMind
+host protocol.
+
 ```text
 MoonMind UI / API
   -> MoonMind Omnigent Bridge
