@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -33,6 +34,10 @@ from api_service.api.routers.executions import _get_service as _get_execution_se
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker
 from api_service.db.models import User
+from api_service.services.omnigent_agent_profile_service import (
+    record_upstream_sync_failure,
+    synchronize_upstream_inventory,
+)
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -88,6 +93,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+
+logger = logging.getLogger(__name__)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
@@ -1542,8 +1549,31 @@ async def list_omnigent_agents(
         )
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
-        return await facade.list_agents()
+        agents = await facade.list_agents()
+        try:
+            async with async_session_maker() as session:
+                await synchronize_upstream_inventory(
+                    session,
+                    endpoint_ref="default",
+                    bridge_mode=str(config.host_protocol_mode),
+                    inventory=agents,
+                )
+        except Exception:
+            # Projection evidence is auxiliary to the authenticated inventory
+            # response and must not overwrite primary bridge success.
+            logger.exception("Failed to persist Omnigent agent inventory projection")
+        return agents
     except OmnigentBridgeError as exc:
+        try:
+            async with async_session_maker() as session:
+                await record_upstream_sync_failure(
+                    session,
+                    endpoint_ref="default",
+                    bridge_mode=str(config.host_protocol_mode),
+                    error=str(exc),
+                )
+        except Exception:
+            logger.exception("Failed to record Omnigent inventory sync failure")
         raise _http_error_from_bridge(exc) from exc
 
 

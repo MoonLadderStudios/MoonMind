@@ -6,13 +6,34 @@ import { renderWithClient } from '../utils/test-utils';
 import OmnigentInventoryPage from './omnigent-inventory';
 
 describe('OmnigentInventoryPage', () => {
+  const listResponse = [{
+    profileId: 'codex-team',
+    displayName: 'Team Codex',
+    state: 'active',
+    activeVersion: 2,
+    defaultForRuntime: true,
+    versions: [{
+      version: 2,
+      digest: `sha256:${'a'.repeat(64)}`,
+      validationResult: { ready: true },
+    }, {
+      version: 1,
+      digest: `sha256:${'b'.repeat(64)}`,
+      validationResult: null,
+    }],
+  }];
   const renderPage = (payload: Parameters<typeof OmnigentInventoryPage>[0]['payload']) =>
     renderWithClient(<BrowserRouter><OmnigentInventoryPage payload={payload} /></BrowserRouter>);
   beforeEach(() => {
     window.history.replaceState({}, '', '/omnigent/agents');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }],
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return { ok: true, json: async () => listResponse };
+      }
+      return {
+        ok: true,
+        json: async () => [{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }],
+      };
     }));
   });
   afterEach(() => {
@@ -28,8 +49,10 @@ describe('OmnigentInventoryPage', () => {
     });
 
     expect(await screen.findByText('Codex')).toBeTruthy();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/agents', { credentials: 'same-origin' });
+    expect(fetch).toHaveBeenCalledWith('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
+    expect(screen.getByText('Team Codex')).toBeTruthy();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'missing' } });
     expect(await screen.findByText('No agents match this filter.')).toBeTruthy();
     expect(window.location.search).toContain('omnigent_agents_q=missing');
@@ -43,6 +66,26 @@ describe('OmnigentInventoryPage', () => {
     });
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Agents' })).toBeTruthy();
+  });
+
+  it('offers activation when a newer validated version is ready', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return {
+          ok: true,
+          json: async () => [{ ...listResponse[0], activeVersion: 1 }],
+        } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory',
+      apiBase: '/api',
+      features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+
+    expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
   });
 
   it('does not fetch policy actions without a capability contract', async () => {

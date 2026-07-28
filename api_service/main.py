@@ -32,6 +32,7 @@ from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
 )
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
+from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
 from api_service.api.routers.chat import responses_router, router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.deployment_operations import (
@@ -463,6 +464,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
+app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")

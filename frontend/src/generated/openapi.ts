@@ -982,6 +982,201 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/agent-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Profiles */
+        get: operations["list_profiles_api_omnigent_agent_profiles_get"];
+        put?: never;
+        /** Create Profile */
+        post: operations["create_profile_api_omnigent_agent_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Profile */
+        get: operations["get_profile_api_omnigent_agent_profiles__profile_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Profile */
+        delete: operations["delete_profile_api_omnigent_agent_profiles__profile_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Version */
+        post: operations["create_version_api_omnigent_agent_profiles__profile_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clone Profile */
+        post: operations["clone_profile_api_omnigent_agent_profiles__profile_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/activate/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate */
+        post: operations["activate_api_omnigent_agent_profiles__profile_id__activate__version__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Profile
+         * @description Perform bounded, credential-free readiness validation before activation.
+         */
+        post: operations["validate_profile_api_omnigent_agent_profiles__profile_id__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make Default */
+        post: operations["make_default_api_omnigent_agent_profiles__profile_id__default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit History */
+        get: operations["audit_history_api_omnigent_agent_profiles__profile_id__audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Profile Usage */
+        get: operations["profile_usage_api_omnigent_agent_profiles__profile_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Snapshot
+         * @description Resolve and persist the exact immutable selection at an authoring boundary.
+         */
+        post: operations["resolve_snapshot_api_omnigent_agent_profiles__profile_id__snapshot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lifecycle */
+        post: operations["lifecycle_api_omnigent_agent_profiles__profile_id___action__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth-sessions": {
         parameters: {
             query?: never;
@@ -4541,6 +4736,49 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentProfileDocument */
+        AgentProfileDocument: {
+            /**
+             * Schemaversion
+             * @default moonmind.omnigent-agent-profile.v1
+             * @constant
+             */
+            schemaVersion: "moonmind.omnigent-agent-profile.v1";
+            /** Endpointref */
+            endpointRef: string;
+            /** Bridgemode */
+            bridgeMode: string;
+            source: components["schemas"]["AgentSource"];
+            /** Harness */
+            harness: string;
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            execution: components["schemas"]["ExecutionDefaults"];
+            providerRequirements: components["schemas"]["ProviderRequirements"];
+            model?: components["schemas"]["ModelDefaults"];
+            workspace?: components["schemas"]["WorkspaceDefaults"];
+            /** Skills */
+            skills?: string[];
+            /** Tools */
+            tools?: string[];
+            capture?: components["schemas"]["CaptureDefaults"];
+            rag?: components["schemas"]["RagDefaults"];
+            continuations?: components["schemas"]["ContinuationDefaults"];
+            publish?: components["schemas"]["PublishDefaults"];
+            /** Policyref */
+            policyRef: string;
+        };
+        /** AgentSource */
+        AgentSource: {
+            /** Upstreamid */
+            upstreamId?: string | null;
+            /** Upstreamversion */
+            upstreamVersion?: string | null;
+            /** Bundleartifactref */
+            bundleArtifactRef?: string | null;
+            /** Bundledigest */
+            bundleDigest?: string | null;
+        };
         /** ApprovalPolicy */
         ApprovalPolicy: {
             /** Actions */
@@ -5332,6 +5570,21 @@ export interface components {
              */
             graceful: boolean;
         };
+        /** CaptureDefaults */
+        CaptureDefaults: {
+            /**
+             * Stream
+             * @default true
+             */
+            stream: boolean;
+            /** Retentiondays */
+            retentionDays?: number | null;
+            /**
+             * Evidence
+             * @default true
+             */
+            evidence: boolean;
+        };
         /** CapturePolicy */
         CapturePolicy: {
             /** Required */
@@ -5863,6 +6116,15 @@ export interface components {
             /** Failure Reason */
             failure_reason?: string | null;
         };
+        /** CloneCreate */
+        CloneCreate: {
+            /** Profileid */
+            profileId: string;
+            /** Displayname */
+            displayName: string;
+            /** Version */
+            version?: number | null;
+        };
         /**
          * CodexAuthVolumeStatus
          * @description Health states for persisted Codex authentication volumes.
@@ -6294,6 +6556,24 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+        };
+        /** ContinuationDefaults */
+        ContinuationDefaults: {
+            /**
+             * Checkpoint
+             * @default true
+             */
+            checkpoint: boolean;
+            /**
+             * Branch
+             * @default true
+             */
+            branch: boolean;
+            /**
+             * Remediation
+             * @default true
+             */
+            remediation: boolean;
         };
         /**
          * ContinueRemediationBudgetProposal
@@ -7235,6 +7515,13 @@ export interface components {
              * @default false
              */
             attentionRequired: boolean;
+        };
+        /** ExecutionDefaults */
+        ExecutionDefaults: {
+            /** Defaultexecutionprofileref */
+            defaultExecutionProfileRef: string;
+            /** Allowedlaunchpolicyrefs */
+            allowedLaunchPolicyRefs: string[];
         };
         /**
          * ExecutionDependencyOutcomeModel
@@ -9223,6 +9510,17 @@ export interface components {
              */
             content: string;
         };
+        /** ModelDefaults */
+        ModelDefaults: {
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: ("minimal" | "low" | "medium" | "high" | "xhigh") | null;
+            /** Settings */
+            settings?: {
+                [key: string]: string | number | boolean;
+            };
+        };
         /** MountRule */
         MountRule: {
             /** Sourceref */
@@ -9992,6 +10290,22 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** ProfileCreate */
+        ProfileCreate: {
+            /** Profileid */
+            profileId: string;
+            /** Displayname */
+            displayName: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Visibility
+             * @default private
+             * @enum {string}
+             */
+            visibility: "private" | "workspace" | "public";
+            document: components["schemas"]["AgentProfileDocument"];
+        };
         /** ProviderApiKeySetupRequest */
         ProviderApiKeySetupRequest: {
             /** Api Key */
@@ -10416,6 +10730,17 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** ProviderRequirements */
+        ProviderRequirements: {
+            /** Runtimeid */
+            runtimeId: string;
+            /** Providerids */
+            providerIds?: string[];
+            /** Credentialsource */
+            credentialSource: string;
+            /** Materializationmode */
+            materializationMode: string;
+        };
         /** PublicationRecoveryResponse */
         PublicationRecoveryResponse: {
             /** Sourceworkflowid */
@@ -10430,6 +10755,15 @@ export interface components {
             publicationIdempotencyKey: string;
             /** Rolloutgeneration */
             rolloutGeneration: string;
+        };
+        /** PublishDefaults */
+        PublishDefaults: {
+            /**
+             * Mode
+             * @default none
+             * @enum {string}
+             */
+            mode: "none" | "draft" | "ready" | "auto";
         };
         /**
          * QueueSystemMetadataModel
@@ -10450,6 +10784,21 @@ export interface components {
             requestedAt?: string | null;
             /** Updatedat */
             updatedAt?: string | null;
+        };
+        /** RagDefaults */
+        RagDefaults: {
+            /** Initial */
+            initial?: {
+                [key: string]: unknown;
+            };
+            /** Followup */
+            followUp?: {
+                [key: string]: unknown;
+            };
+            /** Maxtokens */
+            maxTokens?: number | null;
+            /** Maxlatencyms */
+            maxLatencyMs?: number | null;
         };
         /** RagPolicy */
         RagPolicy: {
@@ -11805,6 +12154,22 @@ export interface components {
                 [key: string]: string;
             }[];
         };
+        /** SnapshotCreate */
+        SnapshotCreate: {
+            /**
+             * Consumertype
+             * @enum {string}
+             */
+            consumerType: "workflow" | "schedule" | "checkpoint" | "remediation" | "smoke";
+            /** Consumerid */
+            consumerId: string;
+            /** Version */
+            version?: number | null;
+            /** Overrides */
+            overrides?: {
+                [key: string]: unknown;
+            };
+        };
         /** SourceCorrelation */
         SourceCorrelation: {
             /**
@@ -12670,6 +13035,11 @@ export interface components {
             /** Is Verified */
             is_verified?: boolean | null;
         };
+        /** ValidateCreate */
+        ValidateCreate: {
+            /** Version */
+            version?: number | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -12682,6 +13052,10 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VersionCreate */
+        VersionCreate: {
+            document: components["schemas"]["AgentProfileDocument"];
         };
         /**
          * WorkerOperationCommand
@@ -13197,6 +13571,19 @@ export interface components {
          * @enum {string}
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
+        /** WorkspaceDefaults */
+        WorkspaceDefaults: {
+            /**
+             * Mutation
+             * @default allowed
+             * @enum {string}
+             */
+            mutation: "read_only" | "allowed" | "checkpoint_branch";
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+        } & {
+            [key: string]: unknown;
+        };
         /** WorkspacePolicy */
         WorkspacePolicy: {
             /** Allowedclasses */
@@ -14990,6 +15377,440 @@ export interface operations {
             header?: never;
             path: {
                 profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_profiles_api_omnigent_agent_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    create_profile_api_omnigent_agent_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_profile_api_omnigent_agent_profiles__profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_profile_api_omnigent_agent_profiles__profile_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_version_api_omnigent_agent_profiles__profile_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_profile_api_omnigent_agent_profiles__profile_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_api_omnigent_agent_profiles__profile_id__activate__version__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_profile_api_omnigent_agent_profiles__profile_id__validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    make_default_api_omnigent_agent_profiles__profile_id__default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    audit_history_api_omnigent_agent_profiles__profile_id__audit_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    profile_usage_api_omnigent_agent_profiles__profile_id__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_snapshot_api_omnigent_agent_profiles__profile_id__snapshot_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnapshotCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lifecycle_api_omnigent_agent_profiles__profile_id___action__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+                action: "disable" | "deprecate";
             };
             cookie?: never;
         };
