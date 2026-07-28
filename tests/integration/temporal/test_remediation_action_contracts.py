@@ -64,10 +64,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={
-                "reason": "restart helper",
-                "containerRef": "container-1",
-            },
+            parameters={"reason": "restart helper", "containerRef": "helper-1"},
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -81,10 +78,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={
-                "reason": "restart helper",
-                "containerRef": "container-1",
-            },
+            parameters={"reason": "restart helper", "containerRef": "helper-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -229,10 +223,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={
-                "reason": "restart helper",
-                "containerRef": "container-1",
-            },
+            parameters={"reason": "restart helper", "containerRef": "helper-1"},
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -246,10 +237,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={
-                "reason": "restart helper",
-                "containerRef": "container-1",
-            },
+            parameters={"reason": "restart helper", "containerRef": "helper-1"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )

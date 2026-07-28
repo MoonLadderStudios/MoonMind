@@ -649,6 +649,35 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
+        if effective_launch_snapshot is not None:
+            authority = effective_launch_snapshot.get("policyAuthority")
+            if not isinstance(authority, dict):
+                raise OmnigentIdempotencyError(
+                    "bridge authorization requires policy authority evidence"
+                )
+            required_authority = {
+                "policyId",
+                "policyVersion",
+                "policyRef",
+                "policyDigest",
+                "snapshotRef",
+                "validation",
+            }
+            missing_authority = sorted(
+                key for key in required_authority if not authority.get(key)
+            )
+            if missing_authority:
+                raise OmnigentIdempotencyError(
+                    "bridge authorization policy authority is incomplete: "
+                    + ", ".join(missing_authority)
+                )
+            if effective_launch_snapshot.get("launchPolicyRef") != authority.get(
+                "policyRef"
+            ):
+                raise OmnigentIdempotencyError(
+                    "bridge launch policy does not match persisted policy authority"
+                )
+
         await self.get_or_create(
             request=request,
             endpoint_ref=endpoint_ref,

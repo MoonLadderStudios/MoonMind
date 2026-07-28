@@ -32,6 +32,8 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     ProviderProfileSlotLease,
@@ -443,6 +445,15 @@ async def get_omnigent_codex_catalog_readiness(
     except ContainerBackendConfigError:
         backend_configured = False
     backend_ready = backend_configured and bool(enforced_network_refs)
+    persisted_policies = list((await session.execute(
+        select(OmnigentPolicy, OmnigentPolicyVersion)
+        .join(
+            OmnigentPolicyVersion,
+            (OmnigentPolicyVersion.policy_id == OmnigentPolicy.policy_id)
+            & (OmnigentPolicyVersion.version == OmnigentPolicy.default_version),
+        )
+        .where(OmnigentPolicyVersion.state == "active")
+    )).all())
 
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
@@ -469,6 +480,30 @@ async def get_omnigent_codex_catalog_readiness(
             if not policy_reasons:
                 policy_refs.append(policy.ref)
                 available_modes.append(policy.host_mode)
+            policy_gate_reasons.extend(policy_reasons)
+        for identity, version in persisted_policies:
+            document = version.document_json
+            if document.get("execution", {}).get("profileRef") != profile.ref:
+                continue
+            host = document.get("host", {})
+            network = document.get("network", {})
+            policy_reasons = []
+            if not version.validation_json.get("valid"):
+                policy_reasons.append(_reason("execution_profile_unavailable"))
+            if not all(_DIGEST_IMAGE.fullmatch(str(host.get(field) or "")) for field in ("serverImageRef", "hostImageRef")):
+                policy_reasons.append(_reason("immutable_image_unavailable"))
+            if network.get("egressProfileRef") not in enforced_network_refs:
+                policy_reasons.append(_reason("network_policy_unavailable"))
+            host_mode = str(host.get("mode") or "")
+            if host_mode == "on_demand_docker" and not backend_ready:
+                policy_reasons.append(_reason("on_demand_backend_unavailable"))
+            if host_mode == "static_compose" and not static_ready:
+                policy_reasons.append(_reason("static_host_not_ready"))
+            if not policy_reasons:
+                persisted_ref = f"{identity.policy_id}@{version.version}"
+                if persisted_ref not in policy_refs:
+                    policy_refs.append(persisted_ref)
+                available_modes.append(host_mode)
             policy_gate_reasons.extend(policy_reasons)
         for reason in policy_gate_reasons:
             if reason.code not in {existing.code for existing in profile_reasons}:

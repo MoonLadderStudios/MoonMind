@@ -1,5 +1,8 @@
 # Workflow RAG – Managed Session Retrieval
 
+Omnigent retrieval scope and budgets come from the bound
+[policy snapshot](../Omnigent/PolicyAuthority.md).
+
 **Status:** Implemented
 **Owners:** MoonMind Engineering
 **Last Updated:** 2026-05-05

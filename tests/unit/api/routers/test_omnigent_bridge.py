@@ -994,6 +994,14 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
             "executionProfileRef": "codex-default@2",
             "launchPolicyRef": "restricted@3",
             "snapshotRef": "omnigent-launch:sha256:safe-ref",
+            "policyAuthority": {
+                "policyId": "restricted",
+                "policyVersion": 3,
+                "policyRef": "restricted@3",
+                "policyDigest": "sha256:policy-digest",
+                "snapshotRef": "omnigent-policy:restricted@3:sha256:policy-digest",
+                "validation": {"valid": True, "diagnostics": []},
+            },
         },
     }))
     resp = client.get(
@@ -1009,6 +1017,11 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
         "hostMode": "on_demand_docker",
         "executionProfileRef": "codex-default@2",
         "launchPolicyRef": "restricted@3",
+        "policyId": "restricted",
+        "policyVersion": 3,
+        "policyDigest": "sha256:policy-digest",
+        "policyValidation": {"valid": True, "diagnostics": []},
+        "policySnapshotRef": "omnigent-policy:restricted@3:sha256:policy-digest",
         "effectiveLaunchSnapshotRef": "omnigent-launch:sha256:safe-ref",
         "omnigentHostRef": "host-1",
         "omnigentRunnerRef": "runner-1",

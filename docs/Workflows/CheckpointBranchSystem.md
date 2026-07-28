@@ -1,5 +1,8 @@
 # Checkpoint Branch System
 
+Omnigent checkpoint and branch authority comes from the bound
+[policy snapshot](../Omnigent/PolicyAuthority.md).
+
 Status: Proposed design  
 Owners: MoonMind Platform + Workflow Runtime + Dashboard  
 Last updated: 2026-07-12

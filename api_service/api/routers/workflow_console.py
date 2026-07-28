@@ -1582,6 +1582,7 @@ async def get_dashboard_ui_info(
         and bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
         and build_omnigent_gate().enabled
     )
+    settings_permissions = settings_permissions_for_user(_user)
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
         features={
@@ -1597,9 +1598,7 @@ async def get_dashboard_ui_info(
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
-            # No authorized policy inventory read contract exists yet. Advertising
-            # this explicitly keeps the rail and route free of dead links.
-            "omnigentPolicies": False,
+            "omnigentPolicies": "settings.catalog.read" in settings_permissions,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1618,6 +1617,7 @@ async def get_dashboard_ui_info(
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
+            "omnigentPolicies": "/api/omnigent/policies",
             "manifests": "/api/manifests",
             "remediations": "/api/executions/remediations",
             **(
@@ -1628,7 +1628,7 @@ async def get_dashboard_ui_info(
         },
         destinations=_dashboard_destination_info(),
         dashboardConfig=dashboard_config,
-        settingsPermissions=sorted(settings_permissions_for_user(_user)),
+        settingsPermissions=sorted(settings_permissions),
         workerPause=_worker_pause_sources(),
     )
 

@@ -890,6 +890,11 @@ class BridgeSessionResolution(BaseModel):
     host_mode: str | None = None
     execution_profile_ref: str | None = None
     launch_policy_ref: str | None = None
+    policy_id: str | None = None
+    policy_version: int | None = None
+    policy_digest: str | None = None
+    policy_validation: dict[str, Any] | None = None
+    policy_snapshot_ref: str | None = None
     effective_launch_snapshot_ref: str | None = None
     provider_session_ref: str | None = None
     omnigent_host_ref: str | None = None
@@ -1141,6 +1146,11 @@ async def resolve_omnigent_bridge_session_projection(
         if isinstance(getattr(row, "effective_launch_snapshot_json", None), dict)
         else {}
     )
+    authority = (
+        launch.get("policyAuthority")
+        if isinstance(launch.get("policyAuthority"), dict)
+        else {}
+    )
     return BridgeSessionResolution(
         bridge_session_id=row.bridge_session_id,
         workflow_id=row.moonmind_workflow_id,
@@ -1161,6 +1171,19 @@ async def resolve_omnigent_bridge_session_projection(
         host_mode=str(launch.get("hostMode") or "") or None,
         execution_profile_ref=str(launch.get("executionProfileRef") or "") or None,
         launch_policy_ref=str(launch.get("launchPolicyRef") or "") or None,
+        policy_id=str(authority.get("policyId") or "") or None,
+        policy_version=(
+            int(authority["policyVersion"])
+            if authority.get("policyVersion") is not None
+            else None
+        ),
+        policy_digest=str(authority.get("policyDigest") or "") or None,
+        policy_validation=(
+            dict(authority["validation"])
+            if isinstance(authority.get("validation"), dict)
+            else None
+        ),
+        policy_snapshot_ref=str(authority.get("snapshotRef") or "") or None,
         effective_launch_snapshot_ref=str(launch.get("snapshotRef") or "") or None,
         provider_session_ref=row.omnigent_session_id,
         omnigent_host_ref=getattr(row, "omnigent_host_id", None),

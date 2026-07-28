@@ -1,5 +1,8 @@
 # Omnigent Adapter Design
 
+Adapter enforcement consumes the deterministic snapshot defined by
+[Omnigent Policy Authority](PolicyAuthority.md).
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
