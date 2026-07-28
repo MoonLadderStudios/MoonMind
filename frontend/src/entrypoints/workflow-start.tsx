@@ -608,12 +608,14 @@ interface OmnigentCodexCatalogReadiness {
     profileId: string;
     label: string;
     providerId: string;
+    runtimeId: "codex_cli" | "claude_code";
     busy: boolean;
     queueWhenBusy: boolean;
   }>;
   ineligibleProviderProfiles: Array<{
     profileId: string;
     label: string;
+    runtimeId: "codex_cli" | "claude_code";
     gateReasons: OmnigentCatalogGateReason[];
   }>;
   gateReasons: OmnigentCatalogGateReason[];
@@ -6326,8 +6328,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const selectedOmnigentExecutionProfile = omnigentProfiles.find(
+    (profile) => profile.ref === omnigentExecutionTargetRef,
+  );
+  const selectedOmnigentProviderRuntime =
+    selectedOmnigentExecutionProfile?.providerRuntime || "codex_cli";
   const providerProfileRuntime =
-    runtime === "omnigent" ? "codex_cli" : runtime;
+    runtime === "omnigent" ? selectedOmnigentProviderRuntime : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
     queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
@@ -6377,7 +6384,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
-    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).map((profile) => {
+    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || [])
+      .filter((profile) => profile.runtimeId === selectedOmnigentProviderRuntime)
+      .map((profile) => {
         const capabilityProfile = (providerProfilesQuery.data || []).find(
           (candidate) => candidate.profile_id === profile.profileId,
         );
@@ -6425,6 +6434,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfilesQuery.isLoading,
     omnigentCatalogQuery.data,
     omnigentCatalogQuery.isFetching,
+    selectedOmnigentProviderRuntime,
     runtime,
     configuredDefaultProviderProfileRef,
   ]);
@@ -7944,10 +7954,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedOmnigentReadiness?.policyRefs.includes(String(policy.ref || "")),
   );
   const selectedEligibleOmnigentProfile = (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).find(
-    (profile) => profile.profileId === providerProfile,
+    (profile) =>
+      profile.profileId === providerProfile &&
+      profile.runtimeId === selectedOmnigentProviderRuntime,
   );
   const historicalOmnigentProviderProfile = (omnigentCatalogQuery.data?.ineligibleProviderProfiles || []).find(
-    (profile) => profile.profileId === providerProfile,
+    (profile) =>
+      profile.profileId === providerProfile &&
+      profile.runtimeId === selectedOmnigentProviderRuntime,
   );
   const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
     (policy) => policy.ref === omnigentLaunchPolicyRef,
@@ -7957,7 +7971,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     historicalOmnigentProviderProfile?.gateReasons?.[0]?.message ||
     omnigentCatalogQuery.data?.gateReasons?.[0]?.message ||
     (!selectedEligibleOmnigentProfile
-      ? "Choose an eligible Codex OAuth Provider Profile."
+      ? "Choose an eligible OAuth Provider Profile for the selected execution target."
       : selectedEligibleOmnigentProfile.busy && !selectedEligibleOmnigentProfile.queueWhenBusy
           ? "The selected Provider Profile is busy and does not support queued waiting."
           : !selectedOmnigentPolicyAvailable
@@ -9875,7 +9889,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (normalizedRuntime === "omnigent") {
       const refreshed = await omnigentCatalogQuery.refetch();
       if (refreshed.isError) {
-        setSubmitMessage("Codex via Omnigent readiness could not be verified.");
+        setSubmitMessage("Omnigent readiness could not be verified.");
         clearSubmitBusy();
         return;
       }
@@ -9884,20 +9898,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         (profile) => profile.ref === omnigentExecutionTargetRef,
       );
       const eligibleProfile = catalog?.eligibleProviderProfiles.find(
-        (profile) => profile.profileId === providerProfile,
+        (profile) =>
+          profile.profileId === providerProfile &&
+          profile.runtimeId === selectedOmnigentProviderRuntime,
       );
       if (!catalog?.available || !executionProfile?.available) {
         setSubmitMessage(
           executionProfile?.gateReasons[0]?.message ||
             catalog?.gateReasons[0]?.message ||
-            "Codex via Omnigent readiness could not be verified.",
+            "Omnigent readiness could not be verified.",
         );
         clearSubmitBusy();
         return;
       }
       if (!eligibleProfile) {
         setSubmitMessage(
-          "The selected Codex OAuth Provider Profile is no longer eligible. Choose an eligible profile explicitly.",
+          "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
         );
         clearSubmitBusy();
         return;

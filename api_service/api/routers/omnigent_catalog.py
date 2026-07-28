@@ -69,6 +69,7 @@ class EligibleProviderProfile(BaseModel):
     profile_id: str = Field(alias="profileId")
     label: str
     provider_id: str = Field(alias="providerId")
+    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
     busy: bool = False
     queue_when_busy: bool = Field(alias="queueWhenBusy")
 
@@ -77,6 +78,7 @@ class IneligibleProviderProfile(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     profile_id: str = Field(alias="profileId")
     label: str
+    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
@@ -123,15 +125,15 @@ _REASONS: dict[str, tuple[str, str]] = {
     "bridge_endpoint_unavailable": ("Configure the selected Omnigent endpoint.", "/settings#omnigent"),
     "rollout_gate_disabled": ("Enable the Omnigent runtime rollout gate.", "/settings#omnigent"),
     "host_auth_unavailable": ("Configure or rotate Omnigent bridge credentials.", "/settings#omnigent"),
-    "no_eligible_codex_oauth_profile": ("Connect and validate a compatible OAuth Provider Profile.", "/settings#provider-profiles"),
+    "no_eligible_codex_oauth_profile": ("Connect and validate a compatible OAuth Provider Profile for the selected execution target.", "/settings#provider-profiles"),
     "execution_profile_unavailable": ("Enable a compatible Omnigent execution profile.", "/settings#omnigent"),
     "on_demand_backend_unavailable": ("Enable the trusted container backend and worker route.", "/settings#system"),
-    "static_host_not_ready": ("Start and validate the static Omnigent Codex host.", "/settings#omnigent"),
+    "static_host_not_ready": ("Start and validate the selected static Omnigent host.", "/settings#omnigent"),
     "immutable_image_unavailable": ("Configure immutable Omnigent server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
-    "profile_reconnect_required": ("Reconnect this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
-    "profile_validation_required": ("Validate this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_capacity_unavailable": ("Wait for Provider Profile capacity or enable queued execution.", "/settings#provider-profiles"),
 }
 
@@ -321,6 +323,8 @@ async def get_omnigent_codex_catalog_readiness(
     eligible_by_runtime: dict[str, int] = {}
     ineligible: list[IneligibleProviderProfile] = []
     for row in rows:
+        raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
+        runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
         credential_source = getattr(row.credential_source, "value", row.credential_source)
         materialization = getattr(
             row.runtime_materialization_mode, "value", row.runtime_materialization_mode
@@ -345,14 +349,13 @@ async def get_omnigent_codex_catalog_readiness(
             credential_source == "oauth_volume" and materialization == "oauth_home"
         )
         if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
-            raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
-            runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
                 EligibleProviderProfile(
                     profileId=row.profile_id,
                     label=label,
                     providerId=row.provider_id,
+                    runtimeId=runtime_id,
                     busy=busy,
                     queueWhenBusy=queue_when_busy,
                 )
@@ -369,6 +372,7 @@ async def get_omnigent_codex_catalog_readiness(
                 IneligibleProviderProfile(
                     profileId=row.profile_id,
                     label=label,
+                    runtimeId=runtime_id,
                     gateReasons=[
                         _reason(code)
                         for code in codes or ["profile_validation_required"]

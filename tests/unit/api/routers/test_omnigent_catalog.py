@@ -59,6 +59,7 @@ def _profile(**overrides):
         "account_label": "OpenAI subscription",
         "provider_label": "OpenAI",
         "provider_id": "openai",
+        "runtime_id": "codex_cli",
         "credential_source": SimpleNamespace(value="oauth_volume"),
         "runtime_materialization_mode": SimpleNamespace(value="oauth_home"),
         "rate_limit_policy": SimpleNamespace(value="queue"),
@@ -132,10 +133,36 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
         "profileId": "codex-oauth",
         "label": "OpenAI subscription",
         "providerId": "openai",
+        "runtimeId": "codex_cli",
         "busy": False,
         "queueWhenBusy": True,
     }]
     assert body["ineligibleProviderProfiles"] == []
+
+
+def test_catalog_projects_runtime_identity_for_mixed_provider_profiles(monkeypatch):
+    profiles = [
+        _profile(),
+        _profile(
+            profile_id="claude-oauth",
+            account_label="Anthropic subscription",
+            provider_label="Anthropic",
+            provider_id="anthropic",
+            runtime_id="claude_code",
+        ),
+    ]
+
+    body = TestClient(_app(monkeypatch, session=_Session(profiles))).get(
+        "/api/omnigent/codex-catalog-readiness"
+    ).json()
+
+    assert {
+        item["profileId"]: item["runtimeId"]
+        for item in body["eligibleProviderProfiles"]
+    } == {
+        "codex-oauth": "codex_cli",
+        "claude-oauth": "claude_code",
+    }
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):

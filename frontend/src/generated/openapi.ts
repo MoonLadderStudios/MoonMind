@@ -6779,6 +6779,8 @@ export interface components {
             label: string;
             /** Providerid */
             providerId: string;
+            /** Runtimeid */
+            runtimeId: "codex_cli" | "claude_code";
             /**
              * Busy
              * @default false
@@ -7067,6 +7069,8 @@ export interface components {
             value: string;
             /** Label */
             label: string;
+            /** Runtimeid */
+            runtimeId: "codex_cli" | "claude_code";
             /** Count */
             count: number;
         };
