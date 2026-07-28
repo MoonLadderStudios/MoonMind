@@ -240,6 +240,8 @@ class ContextInjectionService:
         request: AgentExecutionRequest,
     ) -> tuple[ContextPack | None, str | None]:
         settings = RagRuntimeSettings.from_env(self._env)
+        authored_rag = self._authored_rag(request)
+        authorized_collections = self._authorized_collections(authored_rag, settings)
         executable, reason = settings.retrieval_execution_reason(self._env)
         if not executable:
             return None, reason
@@ -252,8 +254,6 @@ class ContextInjectionService:
 
         filters = settings.as_filter_metadata()
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
-        authored_rag = parameters.get("rag")
-        authored_rag = authored_rag if isinstance(authored_rag, dict) else {}
         repo_filter = self._repository_filter_value(
             parameters.get("repository", "")
             or request.workspace_spec.get("repository", "")
@@ -299,7 +299,7 @@ class ContextInjectionService:
                 overlay_policy=self._resolve_rag_overlay_policy(),
                 budgets=self._resolve_rag_budgets(),
                 transport=transport,
-                collections=self._authorized_collections(authored_rag, settings),
+                collections=authorized_collections,
                 initiation_mode="automatic",
                 planning_ref=str(planning_ref) if planning_ref else None,
             ),
@@ -470,7 +470,7 @@ class ContextInjectionService:
             embedding_identity.encode()
         ).hexdigest()
         moonmind_meta["retrievalDurationMs"] = max(0.0, float(duration_ms))
-        moonmind_meta["retrievalFailureClass"] = "degraded" if degraded_reason else None
+        moonmind_meta["retrievalFailureClass"] = None
         moonmind_meta.pop("retrievalDisabledReason", None)
         if normalized_transport == "local_fallback":
             moonmind_meta["retrievalMode"] = "degraded_local_fallback"
