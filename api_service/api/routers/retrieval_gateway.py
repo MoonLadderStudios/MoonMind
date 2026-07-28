@@ -8,13 +8,14 @@ import secrets
 import hashlib
 import time
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.db.base import async_session_maker
 from api_service.db.models import User
 from api_service.retrieval_capabilities import (
     RetrievalBudgetSnapshot,
@@ -24,6 +25,10 @@ from api_service.retrieval_capabilities import (
 )
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +99,102 @@ class RetrievalCapabilityIssue(BaseModel):
     fallback_allowed: bool = False
     retention_days: int = Field(default=30, ge=1, le=365)
     redact_query: bool = True
+
+
+class BridgeRetrievalCapabilityIssue(BaseModel):
+    """Caller narrowing applied to bridge-owned retrieval authority."""
+
+    collections: List[str] = Field(default_factory=list, max_length=16)
+    filters: Dict[str, str] = Field(default_factory=dict)
+    lifetime_seconds: int = Field(default=900, ge=30, le=3600)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    max_context_bytes: int | None = Field(default=None, ge=256, le=262144)
+    max_context_tokens: int | None = Field(default=None, ge=64, le=65536)
+    latency_ms: int | None = Field(default=None, ge=100, le=30000)
+
+
+def get_bridge_session_store() -> OmnigentBridgeSessionStore:
+    return OmnigentBridgeSessionStore(async_session_maker)
+
+
+def _bridge_authoritative_issue(
+    row: Any, payload: BridgeRetrievalCapabilityIssue
+) -> RetrievalCapabilityIssue:
+    """Compile an issue request solely from the durable bridge launch snapshot."""
+    if row.status not in {"creating", "active"}:
+        raise HTTPException(409, detail="Bridge session has no active retrieval authority.")
+    if not row.omnigent_host_id or not row.omnigent_session_id:
+        raise HTTPException(409, detail="Bridge host/session identity is not established.")
+    if not row.moonmind_run_id or not row.step_execution_id or not row.workspace:
+        raise HTTPException(409, detail="Bridge execution scope is incomplete.")
+
+    launch = dict(row.effective_launch_snapshot_json or {})
+    policy = launch.get("followUpRetrieval")
+    if not isinstance(policy, dict) or policy.get("enabled") is not True:
+        raise HTTPException(
+            403, detail="Follow-up retrieval is not enabled by the launch snapshot."
+        )
+    repository = str(policy.get("repository") or "").strip()
+    tenant_id = str(policy.get("tenantId") or "").strip()
+    policy_version = str(policy.get("policyVersion") or "").strip()
+    allowed_collections = tuple(
+        str(value).strip()
+        for value in policy.get("collections", ())
+        if str(value).strip()
+    )
+    if not repository or not tenant_id or not policy_version or not allowed_collections:
+        raise HTTPException(409, detail="Compiled follow-up retrieval policy is incomplete.")
+
+    requested_collections = tuple(payload.collections) or allowed_collections
+    if not set(requested_collections).issubset(allowed_collections):
+        raise HTTPException(403, detail="Requested collections exceed launch policy.")
+    authored_filters = {
+        str(key): str(value) for key, value in dict(policy.get("filters") or {}).items()
+    }
+    for key, value in payload.filters.items():
+        if key not in authored_filters or str(value) != authored_filters[key]:
+            raise HTTPException(403, detail=f"Filter '{key}' exceeds launch policy.")
+
+    def narrowed(name: str, requested: int | None, default: int) -> int:
+        ceiling = int(policy.get(name, default))
+        return ceiling if requested is None else min(requested, ceiling)
+
+    return RetrievalCapabilityIssue(
+        tenant_id=tenant_id,
+        repository=repository,
+        run_id=str(row.moonmind_run_id),
+        workspace_id=str(row.workspace),
+        host_id=str(row.omnigent_host_id),
+        session_id=str(row.omnigent_session_id),
+        step_id=str(row.step_execution_id),
+        policy_version=policy_version,
+        collections=list(requested_collections),
+        filters=authored_filters,
+        lifetime_seconds=min(
+            payload.lifetime_seconds, int(policy.get("maxLifetimeSeconds", 900))
+        ),
+        top_k=narrowed("topK", payload.top_k, 8),
+        max_sources=int(policy.get("maxSources", 8)),
+        max_query_bytes=int(policy.get("maxQueryBytes", 4096)),
+        max_context_bytes=narrowed(
+            "maxContextBytes", payload.max_context_bytes, 32768
+        ),
+        max_context_tokens=narrowed(
+            "maxContextTokens", payload.max_context_tokens, 8192
+        ),
+        max_queries=int(policy.get("maxQueries", 12)),
+        latency_ms=narrowed("latencyMs", payload.latency_ms, 5000),
+        max_concurrency=int(policy.get("maxConcurrency", 1)),
+        max_requests_per_minute=int(policy.get("maxRequestsPerMinute", 12)),
+        embedding_timeout_ms=int(policy.get("embeddingTimeoutMs", 2000)),
+        search_timeout_ms=int(policy.get("searchTimeoutMs", 3000)),
+        overlay_max_age_seconds=int(policy.get("overlayMaxAgeSeconds", 3600)),
+        stale_overlay_allowed=bool(policy.get("staleOverlayAllowed", False)),
+        overlay_policy=str(policy.get("overlayPolicy", "include")),
+        fallback_allowed=bool(policy.get("fallbackAllowed", False)),
+        retention_days=int(policy.get("retentionDays", 30)),
+        redact_query=bool(policy.get("redactQuery", True)),
+    )
 
 
 def _server_policy_snapshot(payload: RetrievalCapabilityIssue) -> RetrievalBudgetSnapshot:
@@ -556,6 +657,53 @@ def issue_retrieval_capability(
         "capability": token,
         "expiresAt": capability.expires_at,
         "budgetSnapshot": asdict(snapshot),
+    }
+
+
+@router.post("/bridge-sessions/{bridge_session_id}/capability")
+async def issue_bridge_retrieval_capability(
+    bridge_session_id: str,
+    payload: BridgeRetrievalCapabilityIssue,
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    _user: User = Depends(get_current_user()),
+) -> Dict[str, object]:
+    """Exchange authoritative Omnigent bridge state for scoped retrieval."""
+    row = await store.get_bridge_session(bridge_session_id)
+    if row is None:
+        raise HTTPException(404, detail="Omnigent bridge session was not found.")
+    issue = _bridge_authoritative_issue(row, payload)
+    snapshot = _server_policy_snapshot(issue)
+    token, capability = registry.issue(
+        snapshot, lifetime_seconds=issue.lifetime_seconds
+    )
+    try:
+        await store.append_events(
+            bridge_session_id,
+            [
+                {
+                    "eventType": "retrieval.capability.issued",
+                    "direction": "moonmind_to_host",
+                    "deduplicationKey": f"retrieval-capability:{capability.capability_id}",
+                    "metadata": {
+                        "capabilityId": capability.capability_id,
+                        "policyVersion": snapshot.policy_version,
+                        "expiresAt": capability.expires_at,
+                    },
+                }
+            ],
+        )
+    except OmnigentIdempotencyError as exc:
+        registry.revoke(capability.capability_id)
+        raise HTTPException(
+            409, detail="Bridge retrieval capability event could not be recorded."
+        ) from exc
+    return {
+        "capabilityId": capability.capability_id,
+        "capability": token,
+        "expiresAt": capability.expires_at,
+        "budgetSnapshot": asdict(snapshot),
+        "bridgeSessionId": bridge_session_id,
     }
 
 

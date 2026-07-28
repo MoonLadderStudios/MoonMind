@@ -7,8 +7,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.retrieval_gateway import (
+    BridgeRetrievalCapabilityIssue,
     RetrievalCapabilityIssue,
     RetrievalAuthContext,
+    _bridge_authoritative_issue,
     _server_policy_snapshot,
     authorize_retrieval_request,
     get_retrieval_service,
@@ -16,6 +18,72 @@ from api_service.api.routers.retrieval_gateway import (
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 from moonmind.rag.qdrant_client import IndexCollectionHealth, IndexHealthSummary
+
+
+def _bridge_row(**overrides):
+    values = {
+        "status": "active",
+        "omnigent_host_id": "host-1",
+        "omnigent_session_id": "session-1",
+        "moonmind_run_id": "run-1",
+        "step_execution_id": "step-1",
+        "workspace": "workspace-1",
+        "effective_launch_snapshot_json": {
+            "followUpRetrieval": {
+                "enabled": True,
+                "tenantId": "tenant-1",
+                "repository": "MoonMind",
+                "policyVersion": "policy-7",
+                "collections": ["repo", "docs"],
+                "filters": {"branch": "main"},
+                "topK": 5,
+                "maxContextTokens": 1000,
+                "maxLifetimeSeconds": 120,
+            }
+        },
+    }
+    values.update(overrides)
+    return type("BridgeRow", (), values)()
+
+
+def test_bridge_capability_derives_identity_and_clamps_narrowing() -> None:
+    issue = _bridge_authoritative_issue(
+        _bridge_row(),
+        BridgeRetrievalCapabilityIssue(
+            collections=["docs"],
+            filters={"branch": "main"},
+            lifetime_seconds=600,
+            top_k=3,
+            max_context_tokens=500,
+        ),
+    )
+
+    assert issue.tenant_id == "tenant-1"
+    assert issue.repository == "MoonMind"
+    assert issue.run_id == "run-1"
+    assert issue.workspace_id == "workspace-1"
+    assert issue.host_id == "host-1"
+    assert issue.session_id == "session-1"
+    assert issue.collections == ["docs"]
+    assert issue.top_k == 3
+    assert issue.max_context_tokens == 500
+    assert issue.lifetime_seconds == 120
+
+
+def test_bridge_capability_rejects_caller_scope_broadening() -> None:
+    with pytest.raises(HTTPException) as denied:
+        _bridge_authoritative_issue(
+            _bridge_row(),
+            BridgeRetrievalCapabilityIssue(collections=["private"]),
+        )
+    assert denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as inactive:
+        _bridge_authoritative_issue(
+            _bridge_row(status="completed"),
+            BridgeRetrievalCapabilityIssue(),
+        )
+    assert inactive.value.status_code == 409
 
 
 class StubSettings:
