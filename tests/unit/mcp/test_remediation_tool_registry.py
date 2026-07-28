@@ -39,6 +39,8 @@ async def test_registry_exposes_and_dispatches_authenticated_bounded_read() -> N
         "remediation.read_cleanup_janitor",
         "remediation.read_branch_publication",
         "remediation.read_policy_approvals",
+        "remediation.read_target_artifact",
+        "remediation.execute_action",
     } <= names
 
     service = _Service()

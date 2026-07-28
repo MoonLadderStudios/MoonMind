@@ -15,6 +15,8 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
+from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
+from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
@@ -304,10 +306,14 @@ async def _dispatch_tool_call(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "backend_unavailable"},
             )
+        log_adapter = ManagedRunRemediationLogAdapter()
         context = RemediationToolExecutionContext(
             service=RemediationEvidenceToolService(
                 session=session,
                 artifact_service=get_temporal_artifact_service(session),
+                log_reader=log_adapter,
+                live_follower=log_adapter,
+                action_executor=build_remediation_action_executor(),
             ),
             principal=str(user.id),
         )

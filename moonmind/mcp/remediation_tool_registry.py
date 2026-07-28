@@ -46,6 +46,23 @@ class RemediationFollowRequest(BaseModel):
     from_sequence: int | None = Field(None, alias="fromSequence")
 
 
+class RemediationArtifactRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    remediation_workflow_id: str = Field(alias="remediationWorkflowId")
+    artifact_ref: str | dict[str, Any] = Field(alias="artifactRef")
+    include_content: bool = Field(False, alias="includeContent")
+    max_content_bytes: int = Field(65_536, alias="maxContentBytes")
+
+
+class RemediationActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    remediation_workflow_id: str = Field(alias="remediationWorkflowId")
+    authority_result: dict[str, Any] = Field(alias="authorityResult")
+    guard_result: dict[str, Any] = Field(alias="guardResult")
+
+
 @dataclass(frozen=True, slots=True)
 class RemediationToolExecutionContext:
     service: RemediationEvidenceToolService
@@ -85,6 +102,18 @@ class RemediationToolRegistry:
             "Read the next bounded live target event page and return its cursor.",
             RemediationFollowRequest,
             self._handle_follow,
+        )
+        self._register(
+            "remediation.read_target_artifact",
+            "Read metadata and optionally bounded, redacted content for a context-linked artifact.",
+            RemediationArtifactRequest,
+            self._handle_artifact,
+        )
+        self._register(
+            "remediation.execute_action",
+            "Execute one pre-authorized and mutation-guarded typed remediation action.",
+            RemediationActionRequest,
+            self._handle_action,
         )
 
     def list_tools(self) -> list[ToolMetadata]:
@@ -154,6 +183,30 @@ class RemediationToolRegistry:
             principal=context.principal,
         )
         return asdict(result) if is_dataclass(result) else result
+
+    async def _handle_artifact(
+        self, request: RemediationArtifactRequest, dispatch: Any
+    ) -> Any:
+        _, context = dispatch
+        result = await context.service.read_target_artifact_bounded(
+            remediation_workflow_id=request.remediation_workflow_id,
+            artifact_ref=request.artifact_ref,
+            include_content=request.include_content,
+            max_content_bytes=request.max_content_bytes,
+            principal=context.principal,
+        )
+        return asdict(result)
+
+    async def _handle_action(
+        self, request: RemediationActionRequest, dispatch: Any
+    ) -> Any:
+        _, context = dispatch
+        return await context.service.execute_action(
+            remediation_workflow_id=request.remediation_workflow_id,
+            authority_result=request.authority_result,
+            guard_result=request.guard_result,
+            principal=context.principal,
+        )
 
 
 __all__ = ["RemediationToolExecutionContext", "RemediationToolRegistry"]

@@ -120,6 +120,17 @@ class RemediationEvidencePage:
     next_cursor: int | None
     degraded_reason: str | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class RemediationArtifactReadResult:
+    """Bounded metadata and optional content for one context-linked artifact."""
+
+    artifact_id: str
+    metadata: dict[str, Any]
+    size_bytes: int
+    content: str | None
+    content_truncated: bool
+
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target agent run."""
 
@@ -216,7 +227,9 @@ class MoonMindControlPlaneRemediationActionExecutor:
         target_health: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
         action_kind = _required_string(action_request.get("actionKind"), "actionKind")
-        parameters = action_request.get("parameters")
+        parameters = action_request.get("params")
+        if not isinstance(parameters, Mapping):
+            parameters = action_request.get("parameters")
         parameters_mapping = parameters if isinstance(parameters, Mapping) else {}
         original_inputs = guard_result.get("originalInputs")
         proposed_inputs = guard_result.get("proposedInputs")
@@ -328,6 +341,48 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         return payload
+
+    async def read_target_artifact_bounded(
+        self,
+        *,
+        remediation_workflow_id: str,
+        artifact_ref: str | Mapping[str, Any],
+        include_content: bool = False,
+        max_content_bytes: int = 65_536,
+        principal: str = "service:remediation-tools",
+    ) -> RemediationArtifactReadResult:
+        """Read metadata and bounded redacted content for a linked artifact."""
+
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        artifact_id = _artifact_id_from_ref(artifact_ref)
+        if not artifact_id:
+            raise RemediationEvidenceToolError("artifactRef must include artifact_id.")
+        if artifact_id not in _collect_context_artifact_ids(context):
+            raise RemediationEvidenceToolError(
+                f"Artifact {artifact_id} is not listed in remediation context."
+            )
+        artifact, payload = await self._artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+        )
+        bound = max(0, min(int(max_content_bytes), 1_048_576))
+        bounded = payload[:bound] if include_content else b""
+        return RemediationArtifactReadResult(
+            artifact_id=artifact_id,
+            metadata=_redact_payload_value(
+                artifact.metadata_json
+                if isinstance(artifact.metadata_json, Mapping)
+                else {}
+            ),
+            size_bytes=len(payload),
+            content=(
+                _redact_text(bounded.decode("utf-8", errors="replace"))
+                if include_content
+                else None
+            ),
+            content_truncated=include_content and len(payload) > len(bounded),
+        )
 
     async def read_evidence_page(
         self,

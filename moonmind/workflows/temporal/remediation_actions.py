@@ -332,6 +332,16 @@ _DEFAULT_AUTO_ALLOWED_RISK = "medium"
 _SUPPORTED_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+
+
+def remediation_action_kinds() -> tuple[str, ...]:
+    """Return the canonical enabled action identities for adapter construction."""
+
+    return tuple(
+        action_kind
+        for action_kind, metadata in _ACTION_CATALOG.items()
+        if metadata.get("enabled") is True
+    )
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )
