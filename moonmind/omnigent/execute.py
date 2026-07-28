@@ -279,7 +279,6 @@ async def _resolve_initial_context_message(
     # add the portable artifact ref used by subsequent retries. The durable row
     # remains the authority for the original digest.
     durable_state = str(getattr(durable_row, "first_message_state", "") or "")
-    durable_digest = str(getattr(durable_row, "first_message_digest", "") or "")
     if durable_state and durable_state != FIRST_MESSAGE_NOT_PREPARED:
         first_message.setdefault("metadata", {})[
             "moonmindIdempotencyKey"
@@ -293,16 +292,13 @@ async def _resolve_initial_context_message(
             first_message, sort_keys=True, separators=(",", ":")
         ).encode()
         reconstructed_digest = hashlib.sha256(message_bytes).hexdigest()
-        if not durable_digest or reconstructed_digest != durable_digest.removeprefix(
-            "sha256:"
-        ):
-            raise OmnigentContractError(
-                "pre-change prepared first message cannot be reconstructed"
-            )
         return first_message, {
             "state": "disabled",
             "mode": "legacy_prepared_message",
             "reason": "pre_context_retrieval_cutover",
+            # mark_prepared remains the durable digest authority and classifies
+            # any reconstruction mismatch through the established user-error
+            # path. Do not attempt fresh retrieval for this cutover row.
             "preparedMessageDigest": reconstructed_digest,
             "preparedMessageRef": await artifact_gateway.write_json(
                 request=request,

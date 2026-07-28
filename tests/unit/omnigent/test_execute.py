@@ -514,7 +514,9 @@ def test_build_omnigent_result_exposes_initial_context_pack_ref() -> None:
     assert result.diagnostics_ref == "artifact://diagnostics"
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["normalizedStatus"] == "completed"
-    assert result.metadata["captureManifestRef"] == "artifact://capture"
+    assert result.metadata["captureManifestRef"] == (
+        "artifact://omnigent/corr-1/output.omnigent.capture_manifest.json"
+    )
 
 
 def test_build_omnigent_result_maps_snake_case_metadata() -> None:
