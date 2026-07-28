@@ -218,7 +218,10 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
 
 
 def test_catalog_summarizes_persisted_stock_host_harnesses(monkeypatch):
-    lease = SimpleNamespace(host_capabilities_json={"harnesses": ["codex-native"]})
+    lease = SimpleNamespace(
+        provider_profile_id="codex-oauth",
+        host_capabilities_json={"harnesses": ["codex-native"]},
+    )
     client = TestClient(_app(
         monkeypatch, session=_Session([_profile()], host_leases=[lease])
     ))
