@@ -85,8 +85,15 @@ class RetrievalCapabilityIssue(BaseModel):
     max_queries: int = Field(default=12, ge=1, le=100)
     latency_ms: int = Field(default=5000, ge=100, le=30000)
     max_concurrency: int = Field(default=1, ge=1, le=8)
+    max_requests_per_minute: int = Field(default=12, ge=1, le=120)
+    embedding_timeout_ms: int = Field(default=2000, ge=100, le=30000)
+    search_timeout_ms: int = Field(default=3000, ge=100, le=30000)
+    overlay_max_age_seconds: int = Field(default=3600, ge=0, le=86400)
+    stale_overlay_allowed: bool = False
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     fallback_allowed: bool = False
+    retention_days: int = Field(default=30, ge=1, le=365)
+    redact_query: bool = True
 
 
 def _server_policy_snapshot(payload: RetrievalCapabilityIssue) -> RetrievalBudgetSnapshot:
@@ -125,10 +132,34 @@ def _server_policy_snapshot(payload: RetrievalCapabilityIssue) -> RetrievalBudge
         max_queries=ceiling("MAX_QUERIES", payload.max_queries, 12),
         latency_ms=ceiling("MAX_LATENCY_MS", payload.latency_ms, 5000),
         max_concurrency=ceiling("MAX_CONCURRENCY", payload.max_concurrency, 1),
+        max_requests_per_minute=ceiling(
+            "MAX_REQUESTS_PER_MINUTE", payload.max_requests_per_minute, 12
+        ),
+        embedding_timeout_ms=ceiling(
+            "EMBEDDING_TIMEOUT_MS", payload.embedding_timeout_ms, 2000
+        ),
+        search_timeout_ms=ceiling(
+            "SEARCH_TIMEOUT_MS", payload.search_timeout_ms, 3000
+        ),
+        overlay_max_age_seconds=ceiling(
+            "OVERLAY_MAX_AGE_SECONDS", payload.overlay_max_age_seconds, 3600
+        ),
+        stale_overlay_allowed=(
+            payload.stale_overlay_allowed
+            and os.getenv(
+                "MOONMIND_FOLLOWUP_RETRIEVAL_STALE_OVERLAY_ALLOWED", "0"
+            )
+            == "1"
+        ),
         overlay_policy=payload.overlay_policy,
         fallback_allowed=(
             payload.fallback_allowed
             and os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_FALLBACK_ALLOWED", "0") == "1"
+        ),
+        retention_days=ceiling("RETENTION_DAYS", payload.retention_days, 30),
+        redact_query=(
+            payload.redact_query
+            or os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_REDACT_QUERY", "1") == "1"
         ),
     )
 
@@ -305,6 +336,12 @@ async def authorize_retrieval_request(
                 host_id=host_id,
                 session_id=session_id,
                 run_id=run_id,
+                denial_context={
+                    "stepId": step_id,
+                    "hostId": host_id,
+                    "sessionId": session_id,
+                    "runId": run_id,
+                },
             )
         except RetrievalCapabilityError as exc:
             raise HTTPException(
@@ -705,7 +742,10 @@ async def retrieve_context_pack(
     except RetrievalCapabilityError as exc:
         record_failure(exc.reason, str(exc))
         raise HTTPException(
-            status_code=429 if exc.reason in {"budget_exhausted", "concurrency_exceeded"} else 403,
+            status_code=429
+            if exc.reason
+            in {"budget_exhausted", "concurrency_exceeded", "rate_exceeded"}
+            else 403,
             detail={"classification": exc.reason, "message": str(exc)},
         ) from exc
     except RetrievalBudgetExceededError as exc:

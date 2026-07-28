@@ -124,6 +124,12 @@ class RetrievalCapabilityRegistry:
                 );
                 CREATE INDEX IF NOT EXISTS ix_retrieval_evidence_capability
                     ON retrieval_evidence(capability_id, created_at);
+                CREATE TABLE IF NOT EXISTS retrieval_rate_windows (
+                    capability_id TEXT NOT NULL,
+                    window_started_at INTEGER NOT NULL,
+                    request_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (capability_id, window_started_at)
+                );
                 """
             )
 
@@ -174,7 +180,13 @@ class RetrievalCapabilityRegistry:
         return token, capability
 
     def resolve(
-        self, token: str, *, host_id: str, session_id: str, run_id: str
+        self,
+        token: str,
+        *,
+        host_id: str,
+        session_id: str,
+        run_id: str,
+        denial_context: dict[str, Any] | None = None,
     ) -> RetrievalCapability:
         with self._lock:
             token_digest = _digest(token)
@@ -193,8 +205,14 @@ class RetrievalCapabilityRegistry:
             if capability is None:
                 raise RetrievalCapabilityError("invalid", "Invalid retrieval capability.")
             if capability.revoked_at is not None:
+                self._record_authorization_denial(
+                    capability, "revoked", denial_context
+                )
                 raise RetrievalCapabilityError("revoked", "Retrieval capability is revoked.")
             if time.time() >= capability.expires_at:
+                self._record_authorization_denial(
+                    capability, "expired", denial_context
+                )
                 raise RetrievalCapabilityError("expired", "Retrieval capability is expired.")
             expected = capability.budget
             if (host_id, session_id, run_id) != (
@@ -202,11 +220,30 @@ class RetrievalCapabilityRegistry:
                 expected.session_id,
                 expected.run_id,
             ):
+                self._record_authorization_denial(
+                    capability, "identity_mismatch", denial_context
+                )
                 raise RetrievalCapabilityError(
                     "identity_mismatch",
                     "Retrieval capability does not belong to this host, session, and run.",
                 )
             return capability
+
+    def _record_authorization_denial(
+        self,
+        capability: RetrievalCapability,
+        classification: str,
+        correlation: dict[str, Any] | None,
+    ) -> None:
+        self.record(
+            capability,
+            {
+                "state": "denied",
+                "classification": classification,
+                "correlation": correlation or {},
+                "delivery": {"state": "not_delivered"},
+            },
+        )
 
     def begin(self, capability: RetrievalCapability, tool_call_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -219,6 +256,17 @@ class RetrievalCapabilityRegistry:
                 ).fetchone()
                 if duplicate is not None:
                     return json.loads(duplicate["response_json"])
+                window_started_at = int(time.time() // 60) * 60
+                rate_row = connection.execute(
+                    """SELECT request_count FROM retrieval_rate_windows
+                       WHERE capability_id = ? AND window_started_at = ?""",
+                    (capability.capability_id, window_started_at),
+                ).fetchone()
+                request_count = rate_row["request_count"] if rate_row else 0
+                if request_count >= capability.budget.max_requests_per_minute:
+                    raise RetrievalCapabilityError(
+                        "rate_exceeded", "Retrieval request-rate budget is exhausted."
+                    )
                 row = connection.execute(
                     "SELECT query_count, active_requests FROM retrieval_capabilities WHERE capability_id = ?",
                     (capability.capability_id,),
@@ -238,6 +286,14 @@ class RetrievalCapabilityRegistry:
                        SET query_count = ?, active_requests = ?
                        WHERE capability_id = ?""",
                     (capability.query_count, capability.active_requests, capability.capability_id),
+                )
+                connection.execute(
+                    """INSERT INTO retrieval_rate_windows
+                       (capability_id, window_started_at, request_count)
+                       VALUES (?, ?, 1)
+                       ON CONFLICT(capability_id, window_started_at)
+                       DO UPDATE SET request_count = request_count + 1""",
+                    (capability.capability_id, window_started_at),
                 )
             return None
 
@@ -293,6 +349,41 @@ class RetrievalCapabilityRegistry:
                 )
             return capability
 
+    def revoke_scope(
+        self,
+        *,
+        run_id: str,
+        host_id: str | None = None,
+        session_id: str | None = None,
+        step_id: str | None = None,
+    ) -> list[str]:
+        """Revoke every live capability owned by a lifecycle boundary."""
+        revoked: list[str] = []
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM retrieval_capabilities WHERE revoked_at IS NULL"
+            ).fetchall()
+            for row in rows:
+                capability = self._from_row(row)
+                budget = capability.budget
+                if budget.run_id != run_id:
+                    continue
+                if host_id is not None and budget.host_id != host_id:
+                    continue
+                if session_id is not None and budget.session_id != session_id:
+                    continue
+                if step_id is not None and budget.step_id != step_id:
+                    continue
+                capability.revoked_at = time.time()
+                connection.execute(
+                    """UPDATE retrieval_capabilities SET revoked_at = ?
+                       WHERE capability_id = ?""",
+                    (capability.revoked_at, capability.capability_id),
+                )
+                self._capabilities[capability.capability_id] = capability
+                revoked.append(capability.capability_id)
+        return revoked
+
     def status(self, capability_id: str) -> dict[str, Any]:
         with self._lock:
             capability = self._capabilities.get(capability_id)
@@ -313,6 +404,13 @@ class RetrievalCapabilityRegistry:
                 if time.time() >= capability.expires_at
                 else "active"
             )
+            window_started_at = int(time.time() // 60) * 60
+            with self._connect() as connection:
+                rate_row = connection.execute(
+                    """SELECT request_count FROM retrieval_rate_windows
+                       WHERE capability_id = ? AND window_started_at = ?""",
+                    (capability_id, window_started_at),
+                ).fetchone()
             return {
                 "capabilityId": capability.capability_id,
                 "state": state,
@@ -320,6 +418,10 @@ class RetrievalCapabilityRegistry:
                 "revokedAt": capability.revoked_at,
                 "queryCount": capability.query_count,
                 "maxQueries": capability.budget.max_queries,
+                "requestsInCurrentMinute": (
+                    rate_row["request_count"] if rate_row is not None else 0
+                ),
+                "maxRequestsPerMinute": capability.budget.max_requests_per_minute,
                 "requests": self._evidence_summaries(capability_id),
             }
 

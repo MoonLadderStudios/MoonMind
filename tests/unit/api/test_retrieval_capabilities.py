@@ -199,3 +199,63 @@ def test_delivery_requires_explicit_bridge_acknowledgement(tmp_path) -> None:
 
     restarted = RetrievalCapabilityRegistry(tmp_path)
     assert restarted.begin(capability, "tool-1")["deliveryState"] == "delivered"
+
+
+def test_per_minute_rate_limit_is_durable_and_deduplicated(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(
+        _budget(max_queries=10, max_requests_per_minute=1), lifetime_seconds=60
+    )
+    registry.begin(capability, "tool-1")
+    registry.finish(capability, "tool-1", {"deliveryState": "delivery_unknown"})
+
+    restarted = RetrievalCapabilityRegistry(tmp_path)
+    restored = restarted.status(capability.capability_id)
+    assert restored["requestsInCurrentMinute"] == 1
+    assert restarted.begin(capability, "tool-1") == {
+        "deliveryState": "delivery_unknown"
+    }
+    with pytest.raises(RetrievalCapabilityError) as limited:
+        restarted.begin(capability, "tool-2")
+    assert limited.value.reason == "rate_exceeded"
+
+
+def test_authorization_denial_is_correlated_without_exposing_token(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    token, capability = registry.issue(_budget(), lifetime_seconds=60)
+
+    with pytest.raises(RetrievalCapabilityError) as mismatch:
+        registry.resolve(
+            token,
+            host_id="other-host",
+            session_id="session-1",
+            run_id="run-1",
+            denial_context={"stepId": "step-1", "toolCallId": "tool-7"},
+        )
+    assert mismatch.value.reason == "identity_mismatch"
+
+    request = registry.status(capability.capability_id)["requests"][0]
+    assert request["state"] == "denied"
+    assert request["classification"] == "identity_mismatch"
+    evidence_path = next(tmp_path.rglob("retrieval_*.json"))
+    assert token not in evidence_path.read_text(encoding="utf-8")
+
+
+def test_revoke_scope_drains_all_matching_session_authority(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    first_token, first = registry.issue(_budget(), lifetime_seconds=60)
+    second_token, second = registry.issue(
+        _budget(session_id="session-2"), lifetime_seconds=60
+    )
+
+    revoked = registry.revoke_scope(run_id="run-1", host_id="host-1")
+    assert set(revoked) == {first.capability_id, second.capability_id}
+    for token, session_id in (
+        (first_token, "session-1"),
+        (second_token, "session-2"),
+    ):
+        with pytest.raises(RetrievalCapabilityError) as drained:
+            registry.resolve(
+                token, host_id="host-1", session_id=session_id, run_id="run-1"
+            )
+        assert drained.value.reason == "revoked"

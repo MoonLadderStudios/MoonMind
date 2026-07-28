@@ -128,6 +128,11 @@ def test_capability_budget_is_compiled_against_server_policy(
 ) -> None:
     monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs")
     monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_QUERIES", "3")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_MAX_REQUESTS_PER_MINUTE", "2")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_EMBEDDING_TIMEOUT_MS", "700")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_SEARCH_TIMEOUT_MS", "900")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_OVERLAY_MAX_AGE_SECONDS", "120")
+    monkeypatch.setenv("MOONMIND_FOLLOWUP_RETRIEVAL_RETENTION_DAYS", "7")
     snapshot = _server_policy_snapshot(
         RetrievalCapabilityIssue(
             tenant_id="tenant-1",
@@ -145,6 +150,11 @@ def test_capability_budget_is_compiled_against_server_policy(
     )
     assert snapshot.collections == ("docs",)
     assert snapshot.max_queries == 3
+    assert snapshot.max_requests_per_minute == 2
+    assert snapshot.embedding_timeout_ms == 700
+    assert snapshot.search_timeout_ms == 900
+    assert snapshot.overlay_max_age_seconds == 120
+    assert snapshot.retention_days == 7
     assert snapshot.fallback_allowed is False
 
 
