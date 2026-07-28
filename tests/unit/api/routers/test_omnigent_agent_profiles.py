@@ -1,8 +1,15 @@
 """Contract tests for MoonLadderStudios/MoonMind#3517 agent profiles."""
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
-from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument, _digest, _normalized
+from api_service.api.routers.omnigent_agent_profiles import (
+    AgentProfileDocument,
+    _digest,
+    _normalized,
+    _response,
+)
 
 def document(**source):
     return AgentProfileDocument.model_validate({
@@ -21,6 +28,49 @@ def test_normalization_and_digest_are_stable():
     second = dict(reversed(list(first.items())))
     assert _digest(first) == _digest(second)
     assert _digest(first).startswith("sha256:")
+
+
+def test_list_response_contract_includes_ordered_versions_and_default_state():
+    profile = SimpleNamespace(
+        profile_id="codex-team",
+        display_name="Team Codex",
+        description=None,
+        visibility="workspace",
+        state="active",
+        active_version=2,
+        default_for_runtime=True,
+    )
+    versions = [
+        SimpleNamespace(
+            version=2,
+            digest="sha256:" + "a" * 64,
+            document={"schemaVersion": "moonmind.omnigent-agent-profile.v1"},
+            parent_version=1,
+            cloned_from_profile_id=None,
+            cloned_from_version=None,
+            upstream_snapshot={"upstreamId": "codex"},
+            validation_result={"ready": True},
+            created_at=None,
+        ),
+        SimpleNamespace(
+            version=1,
+            digest="sha256:" + "b" * 64,
+            document={"schemaVersion": "moonmind.omnigent-agent-profile.v1"},
+            parent_version=None,
+            cloned_from_profile_id=None,
+            cloned_from_version=None,
+            upstream_snapshot=None,
+            validation_result=None,
+            created_at=None,
+        ),
+    ]
+
+    response = _response(profile, versions)
+
+    assert response["defaultForRuntime"] is True
+    assert "default" not in response
+    assert [version["version"] for version in response["versions"]] == [2, 1]
+    assert response["versions"][0]["validationResult"] == {"ready": True}
 
 def test_source_requires_stable_identity_or_immutable_bundle():
     with pytest.raises(ValidationError, match="exactly one"):

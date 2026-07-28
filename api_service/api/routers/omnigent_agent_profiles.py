@@ -205,7 +205,7 @@ def _digest(document: dict[str, Any]) -> str:
 def _response(profile: OmnigentAgentProfile, versions: list[OmnigentAgentProfileVersion]) -> dict[str, Any]:
     return {"profileId": profile.profile_id, "displayName": profile.display_name, "description": profile.description,
             "visibility": profile.visibility, "state": profile.state, "activeVersion": profile.active_version,
-            "default": profile.default_for_runtime, "versions": [{"version": v.version, "digest": v.digest, "document": v.document,
+            "defaultForRuntime": profile.default_for_runtime, "versions": [{"version": v.version, "digest": v.digest, "document": v.document,
             "parentVersion": v.parent_version, "clonedFromProfileId": v.cloned_from_profile_id,
             "clonedFromVersion": v.cloned_from_version, "upstreamSnapshot": v.upstream_snapshot,
             "validationResult": v.validation_result, "createdAt": v.created_at} for v in versions]}
@@ -220,7 +220,29 @@ async def _load(session: AsyncSession, profile_id: str) -> tuple[OmnigentAgentPr
 async def list_profiles(session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profiles = list((await session.execute(select(OmnigentAgentProfile).order_by(OmnigentAgentProfile.display_name))).scalars())
-    return [_response(p, []) for p in profiles if p.visibility != "private" or p.owner_id == current_user.id]
+    visible_profiles = [
+        profile for profile in profiles
+        if profile.visibility != "private" or profile.owner_id == current_user.id
+    ]
+    visible_ids = [profile.profile_id for profile in visible_profiles]
+    versions_by_profile: dict[str, list[OmnigentAgentProfileVersion]] = {
+        profile_id: [] for profile_id in visible_ids
+    }
+    if visible_ids:
+        versions = list((await session.execute(
+            select(OmnigentAgentProfileVersion)
+            .where(OmnigentAgentProfileVersion.profile_id.in_(visible_ids))
+            .order_by(
+                OmnigentAgentProfileVersion.profile_id,
+                OmnigentAgentProfileVersion.version.desc(),
+            )
+        )).scalars())
+        for version in versions:
+            versions_by_profile[version.profile_id].append(version)
+    return [
+        _response(profile, versions_by_profile[profile.profile_id])
+        for profile in visible_profiles
+    ]
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_profile(body: ProfileCreate, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:

@@ -6,6 +6,22 @@ import { renderWithClient } from '../utils/test-utils';
 import OmnigentInventoryPage from './omnigent-inventory';
 
 describe('OmnigentInventoryPage', () => {
+  const listResponse = [{
+    profileId: 'codex-team',
+    displayName: 'Team Codex',
+    state: 'active',
+    activeVersion: 2,
+    defaultForRuntime: true,
+    versions: [{
+      version: 2,
+      digest: `sha256:${'a'.repeat(64)}`,
+      validationResult: { ready: true },
+    }, {
+      version: 1,
+      digest: `sha256:${'b'.repeat(64)}`,
+      validationResult: null,
+    }],
+  }];
   const renderPage = (payload: Parameters<typeof OmnigentInventoryPage>[0]['payload']) =>
     renderWithClient(<BrowserRouter><OmnigentInventoryPage payload={payload} /></BrowserRouter>);
   beforeEach(() => {
@@ -14,18 +30,7 @@ describe('OmnigentInventoryPage', () => {
       if (String(input) === '/api/omnigent/agent-profiles') {
         return {
           ok: true,
-          json: async () => [{
-            profileId: 'codex-team',
-            displayName: 'Team Codex',
-            state: 'active',
-            activeVersion: 2,
-            defaultForRuntime: true,
-            versions: [{
-              version: 2,
-              digest: `sha256:${'a'.repeat(64)}`,
-              validationResult: { ready: true },
-            }],
-          }],
+          json: async () => listResponse,
         };
       }
       return {
@@ -52,6 +57,8 @@ describe('OmnigentInventoryPage', () => {
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
     expect(screen.getByText('Team Codex')).toBeTruthy();
     expect(screen.getByText('Version 2')).toBeTruthy();
+    expect(screen.getByText('2 immutable versions')).toBeTruthy();
+    expect(screen.getByText('active · Default')).toBeTruthy();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'missing' } });
     expect(await screen.findByText('No agents match this filter.')).toBeTruthy();
     expect(window.location.search).toContain('omnigent_agents_q=missing');
