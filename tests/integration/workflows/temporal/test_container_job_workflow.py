@@ -12,6 +12,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
 )
@@ -131,3 +132,42 @@ async def test_container_job_executes_on_test_server_and_replays() -> None:
         workflows=[MoonMindContainerJobWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+async def test_closed_container_job_replay_attaches_without_new_execution() -> None:
+    adapter_job_id = "container-job:" + uuid4().hex
+    payload = _input()
+    payload["jobId"] = adapter_job_id
+    payload["request"]["idempotencyKey"] = f"closed-replay:{adapter_job_id}"
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        adapter = TemporalClientAdapter(client=env.client)
+        workflow_queue = adapter.resolve_workflow_task_queue("MoonMind.ContainerJob")
+        activity_queue = settings.temporal.activity_agent_runtime_task_queue
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                    workflows=[MoonMindContainerJobWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=activity_queue,
+                    activities=_activities(),
+                )
+            )
+            first = await adapter.start_container_job(payload)
+            first_handle = env.client.get_workflow_handle(
+                first.workflow_id,
+                run_id=first.run_id,
+            )
+            assert (await first_handle.result())["state"] == "succeeded"
+
+            replay = await adapter.start_container_job(payload)
+
+    assert replay.workflow_id == first.workflow_id
+    assert replay.run_id == first.run_id
