@@ -1,7 +1,7 @@
 """Extend OAuth-home exclusive capacity to Claude.
 
-Revision ID: 348_claude_oauth_capacity
-Revises: 347_control_stop_continuations
+Revision ID: 351_claude_oauth_capacity
+Revises: 350_agent_profile_lifecycle
 Create Date: 2026-07-28
 """
 
@@ -10,8 +10,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "348_claude_oauth_capacity"
-down_revision = "347_control_stop_continuations"
+revision = "351_claude_oauth_capacity"
+down_revision = "350_agent_profile_lifecycle"
 branch_labels = None
 depends_on = None
 

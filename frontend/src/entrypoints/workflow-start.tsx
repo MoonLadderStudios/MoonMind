@@ -390,7 +390,12 @@ interface DashboardConfig {
       defaultProfileRef?: string | null;
     };
     omnigentExecutionCatalog?: {
-      profiles?: Array<{ ref?: string; displayName?: string; defaultPolicyRef?: string }>;
+      profiles?: Array<{
+        ref?: string;
+        displayName?: string;
+        defaultPolicyRef?: string;
+        providerRuntime?: string;
+      }>;
       policies?: Array<{ ref?: string; hostMode?: string }>;
     };
     presetCatalog?: {

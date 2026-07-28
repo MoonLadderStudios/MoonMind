@@ -684,7 +684,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
   it("filters mixed Provider Profiles by execution target and resets an incompatible selection", async () => {
     const payload = omnigentPayload();
-    payload.initialData.dashboardConfig.system.omnigentExecutionCatalog = {
+    const initialData = payload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    initialData.dashboardConfig.system.omnigentExecutionCatalog = {
       profiles: [
         { ref: "omnigent-codex@1", displayName: "Omnigent Codex", defaultPolicyRef: "codex-static@1", providerRuntime: "codex_cli" },
         { ref: "omnigent-claude@1", displayName: "Omnigent Claude", defaultPolicyRef: "claude-static@1", providerRuntime: "claude_code" },
