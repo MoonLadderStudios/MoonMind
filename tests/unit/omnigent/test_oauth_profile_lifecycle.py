@@ -36,7 +36,10 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
-from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.execution_profiles import (
+    compile_effective_launch,
+    validate_effective_launch_snapshot,
+)
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
@@ -113,6 +116,7 @@ def test_persisted_policy_snapshot_is_complete_launch_authority():
     assert realized["boundaries"] == snapshot["boundaries"]
     assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
     assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
+    validate_effective_launch_snapshot(realized)
 
 
 @pytest.mark.parametrize(
