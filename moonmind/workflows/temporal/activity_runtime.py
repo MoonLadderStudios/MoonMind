@@ -14007,6 +14007,12 @@ class TemporalAgentRuntimeActivities:
             target_branch_name = (
                 target_branch.strip() if isinstance(target_branch, str) else ""
             )
+            if target_branch_name.startswith("refs/remotes/origin/"):
+                target_branch_name = target_branch_name.removeprefix(
+                    "refs/remotes/origin/"
+                )
+            elif target_branch_name.startswith("refs/heads/"):
+                target_branch_name = target_branch_name.removeprefix("refs/heads/")
             head_branch_name = (
                 head_branch.strip() if isinstance(head_branch, str) else ""
             )
@@ -14091,11 +14097,6 @@ class TemporalAgentRuntimeActivities:
                 commit_info.setdefault("push_branch", current_branch)
                 return commit_info
 
-            same_branch_publish = (
-                target_branch_push_allowed
-                and bool(target_branch_name)
-                and current_branch == target_branch_name
-            )
             base_branch_name = (
                 target_branch_name
                 or await self._resolve_workspace_default_branch(
@@ -14105,12 +14106,32 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             base_ref = f"origin/{base_branch_name}"
-            if not await self._refresh_workspace_remote_base_ref(
+            base_ref_refreshed = await self._refresh_workspace_remote_base_ref(
                 workspace=workspace,
                 base_branch=base_branch_name,
                 run_id=run_id,
                 env=auth_command_env,
-            ):
+            )
+            if not base_ref_refreshed and base_branch_name.startswith("origin/"):
+                # ``origin/release`` can be a literal remote branch name. Try
+                # that exact authored identity first, then interpret the short
+                # form as a remote-tracking ref only when the literal branch is
+                # absent. This repairs legacy ``origin/main`` inputs without
+                # silently publishing against the wrong branch when both names
+                # are meaningful.
+                remote_tracking_branch = base_branch_name.removeprefix("origin/")
+                if remote_tracking_branch:
+                    base_branch_name = remote_tracking_branch
+                    base_ref = f"origin/{base_branch_name}"
+                    base_ref_refreshed = (
+                        await self._refresh_workspace_remote_base_ref(
+                            workspace=workspace,
+                            base_branch=base_branch_name,
+                            run_id=run_id,
+                            env=auth_command_env,
+                        )
+                    )
+            if not base_ref_refreshed:
                 return {
                     "push_status": "failed",
                     "push_branch": current_branch,
@@ -14120,6 +14141,11 @@ class TemporalAgentRuntimeActivities:
                         f"could not refresh authoritative publish base '{base_ref}'"
                     ),
                 }
+            same_branch_publish = (
+                target_branch_push_allowed
+                and bool(base_branch_name)
+                and current_branch == base_branch_name
+            )
             commit_count: int | None = None
             if same_branch_publish:
                 commit_count = await self._count_branch_commits_ahead(

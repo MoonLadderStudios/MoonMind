@@ -766,6 +766,13 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
 )
+# Cumulative checkpoint tracking is optional. Admit a headless remediation pair
+# against the live cumulative workspace when capture produced no canonical head.
+# Histories that already evaluated the old mandatory-head guard retain the prior
+# failure branch during replay.
+RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH = (
+    "run-workflow-headless-remediation-v1"
+)
 RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
     "run-managed-session-checkpoint-locator-v1"
 )
@@ -4168,6 +4175,7 @@ class MoonMindRunWorkflow:
             workflow_owned_head_enabled
             and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
             and self._remediation_workspace_head is None
+            and not workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
         ):
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,

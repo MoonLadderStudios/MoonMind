@@ -33,6 +33,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
 )
@@ -4049,6 +4050,94 @@ async def test_dynamic_verifier_runs_when_no_checkpoint_head_was_captured(
     assert verification_inputs["remediationWorkspaceHeadRef"] is None
     assert verification_inputs["readOnlyWorkspaceHead"] is True
     assert "remediationWorkspaceHead" not in verification_inputs
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_admits_headless_attempt_without_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the 2026-07-29 Claude remediation failures."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "initial-verification",
+            "status": "completed",
+            "attempt": 1,
+        }
+    ]
+    mock_run_workflow._rebuild_step_ledger_index()
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+        },
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        logical_step_id="initial-verification",
+    )
+
+    assert admitted is True
+    assert mock_run_workflow._remediation_workspace_head is None
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.phase.value == "remediation_running"
+    assert state.continuation_reason == "verification_requested_remediation"
+    remediation, verification = ordered_nodes
+    assert remediation["inputs"]["remediationWorkspaceHeadRef"] is None
+    assert verification["inputs"]["remediationWorkspaceHeadRef"] is None
+    decision_payload = mock_run_workflow._write_json_artifact.await_args.kwargs[
+        "payload"
+    ]
+    assert decision_payload["continueLoop"] is True
+    assert decision_payload["reason"] == "verification_requested_remediation"
+    assert decision_payload["nextAttempt"] == 1
+    assert decision_payload["nextPhase"] == "remediation_pending"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_replays_prior_missing_checkpoint_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    )
+
+    with pytest.raises(
+        RemediationHeadError,
+        match="dynamic remediation admission has no canonical workspace checkpoint",
+    ):
+        await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=[],
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
 
 
 @pytest.mark.asyncio
