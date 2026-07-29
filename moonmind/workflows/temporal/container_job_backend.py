@@ -1395,9 +1395,10 @@ class DockerContainerJobBackend:
         self._enforce_resource_ceilings(request)
         spec = request.request.spec
         name = self._name(request)
-        await self._reject_ownership_collision(request, name)
         if spec.network_mode not in {"none", "bridge"}:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
+        # Prove network-layer egress enforcement before probing container state
+        # or reserving a name; an unattested launch must fail closed first.
         egress_attestation = None
         network_mode = spec.network_mode
         if spec.network_mode == "bridge":
@@ -1407,6 +1408,7 @@ class DockerContainerJobBackend:
                 backend_ref=self._backend_ref,
             )
             network_mode = egress_attestation.network_ref
+        await self._reject_ownership_collision(request, name)
         volume_name = request.resolved_workspace_volume_name
         volume_subpath = request.resolved_workspace_volume_subpath
         if (
