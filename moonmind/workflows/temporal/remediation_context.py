@@ -33,6 +33,7 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.decision_log",
         "remediation.action_request",
         "remediation.action_result",
+        "remediation.approval_request",
         "remediation.audit_event",
         "remediation.target_annotation",
         "remediation.verification",
@@ -94,6 +95,45 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
 )
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
+)
+# Deterministic verification-phase resolutions (issue #3512, Area 3). A delivered
+# action is not itself a successful remediation: verification is the authority for
+# whether the target actually changed, and this is the single bounded vocabulary.
+REMEDIATION_VERIFICATION_RESOLUTIONS = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+        "evidence_unavailable",
+        "approval_required",
+        "verification_failed",
+    }
+)
+# Verification of an immediate repair against the target vs. a separate
+# verification of a long-term prevention change (issue #3512, Area 3f). Prevention
+# verification is never allowed to stand in for immediate-repair verification.
+REMEDIATION_VERIFICATION_SCOPES = frozenset({"immediate_repair", "prevention"})
+# How a remediation Workflow Execution was created; the `policy` origin (or any
+# non-manual origin under an autonomous policy) is what operators must be able to
+# see explicitly (issue #3512, Area 7/AC11).
+REMEDIATION_TRIGGER_ORIGINS = frozenset(
+    {
+        "manual",
+        "on_failed",
+        "on_attention_required",
+        "on_stuck",
+        "policy",
+        "proposal_promoted",
+    }
+)
+REMEDIATION_JANITOR_STATUSES = frozenset(
+    {"not_required", "pending", "running", "completed", "failed"}
+)
+# Verification resolutions that assert the target actually changed and therefore
+# require a link to the exact action result they verify.
+_ACTION_LINKED_VERIFICATION_RESOLUTIONS = frozenset(
+    {"verified_resolved", "verified_no_change", "still_failed", "regressed"}
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS = 20
@@ -931,6 +971,20 @@ def normalize_remediation_resolution(value: Any) -> str:
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_RESOLUTIONS else "failed"
 
+def normalize_remediation_verification_resolution(value: Any) -> str:
+    """Return a bounded verification resolution value (issue #3512, Area 3).
+
+    Unknown or blank verifier output degrades to ``verification_failed`` rather
+    than silently asserting the target was repaired.
+    """
+
+    normalized = str(value or "").strip()
+    return (
+        normalized
+        if normalized in REMEDIATION_VERIFICATION_RESOLUTIONS
+        else "verification_failed"
+    )
+
 def build_remediation_summary_block(
     *,
     target_workflow_id: str,
@@ -1263,6 +1317,166 @@ def build_remediation_prevention_outcome(
         payload["metadata"] = safe_metadata
     return payload
 
+def build_remediation_verification(
+    *,
+    remediation_workflow_id: str,
+    remediation_run_id: str,
+    target_workflow_id: str,
+    target_run_id: str,
+    resolution: str,
+    scope: str = "immediate_repair",
+    verifies_action_result_ref: str | None = None,
+    verification_hint: str | None = None,
+    target_agent_run_id: str | None = None,
+    target_logical_step_id: str | None = None,
+    target_session_id: str | None = None,
+    target_state_before: str | None = None,
+    target_state_after_action: str | None = None,
+    target_state_after_stabilization: str | None = None,
+    evidence_refs: Mapping[str, Any] | None = None,
+    prevention_change_ref: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one first-class verification-phase result (issue #3512, Area 3).
+
+    Verification is the completion authority: a successfully *delivered* action is
+    not itself a successful remediation. The result records the deterministic
+    resolution, the exact action result it verifies, the target run/session/step
+    identity, and the target state observed before the action, immediately after
+    the action, and after bounded stabilization. ``scope`` distinguishes an
+    immediate-repair verification against the target from a *separate* prevention
+    verification of a reviewable MoonMind/Skill change; prevention verification is
+    never allowed to stand in for immediate-repair verification.
+    """
+
+    normalized_resolution = _validated_choice(
+        resolution, REMEDIATION_VERIFICATION_RESOLUTIONS, "resolution"
+    )
+    normalized_scope = _validated_choice(
+        scope, REMEDIATION_VERIFICATION_SCOPES, "scope"
+    )
+    action_result_ref = _artifact_ref_string(
+        verifies_action_result_ref, "verifies_action_result_ref"
+    )
+    prevention_ref = _artifact_ref_string(
+        prevention_change_ref, "prevention_change_ref"
+    )
+    if normalized_scope == "immediate_repair":
+        if prevention_ref is not None:
+            raise ValueError(
+                "immediate_repair verification must not carry prevention_change_ref"
+            )
+        if (
+            normalized_resolution in _ACTION_LINKED_VERIFICATION_RESOLUTIONS
+            and action_result_ref is None
+        ):
+            raise ValueError(
+                f"{normalized_resolution} verification must link the exact "
+                "action result via verifies_action_result_ref"
+            )
+    else:  # prevention scope
+        if action_result_ref is not None:
+            raise ValueError(
+                "prevention verification must not link a target action result"
+            )
+        if normalized_resolution in _ACTION_LINKED_VERIFICATION_RESOLUTIONS and (
+            prevention_ref is None and not _artifact_refs_mapping(evidence_refs)
+        ):
+            raise ValueError(
+                "prevention verification requires prevention_change_ref or evidence"
+            )
+
+    payload: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "kind": "remediation.verification",
+        "scope": normalized_scope,
+        "resolution": normalized_resolution,
+        "remediationWorkflowId": _required_lifecycle_string(
+            remediation_workflow_id, "remediation_workflow_id"
+        ),
+        "remediationRunId": _required_lifecycle_string(
+            remediation_run_id, "remediation_run_id"
+        ),
+        "target": {
+            "workflowId": _required_lifecycle_string(
+                target_workflow_id, "target_workflow_id"
+            ),
+            "runId": _required_lifecycle_string(target_run_id, "target_run_id"),
+        },
+    }
+    if agent_run_id := _safe_identifier_string(target_agent_run_id):
+        payload["target"]["agentRunId"] = agent_run_id
+    if logical_step_id := _safe_identifier_string(target_logical_step_id):
+        payload["target"]["logicalStepId"] = logical_step_id
+    if session_id := _safe_identifier_string(target_session_id):
+        payload["target"]["sessionId"] = session_id
+    target_state = {
+        key: value
+        for key, value in (
+            ("before", _redacted_optional_text(target_state_before)),
+            ("afterAction", _redacted_optional_text(target_state_after_action)),
+            (
+                "afterStabilization",
+                _redacted_optional_text(target_state_after_stabilization),
+            ),
+        )
+        if value is not None
+    }
+    if target_state:
+        payload["targetState"] = target_state
+    if action_result_ref is not None:
+        payload["verifiesActionResultRef"] = action_result_ref
+    if prevention_ref is not None:
+        payload["preventionChangeRef"] = prevention_ref
+    if hint := _redacted_optional_text(verification_hint):
+        payload["verificationHint"] = hint
+    if refs := _artifact_refs_mapping(evidence_refs):
+        payload["evidenceRefs"] = refs
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def derive_remediation_resolution(
+    *,
+    repair: Mapping[str, Any],
+    prevention: Mapping[str, Any] | None = None,
+    lock_conflict: bool = False,
+    evidence_unavailable: bool = False,
+) -> str:
+    """Derive the target-level remediation resolution from repair evidence only.
+
+    Issue #3512, Area 5 safeguard: the *prevention* outcome (for example a
+    reviewable prevention PR) is deliberately ignored when deciding whether the
+    target itself was repaired. ``resolved_after_action`` is returned only when an
+    immediate repair was attempted and its verification proved the target was
+    repaired, so a prevention PR can never relabel the target as successfully
+    repaired.
+    """
+
+    _validate_repair_payload(repair)
+    if prevention is not None:
+        _validate_prevention_payload(prevention)
+    decision = str(repair.get("decision") or "").strip()
+    outcome = str(repair.get("repairOutcome") or "").strip()
+    if lock_conflict:
+        return "lock_conflict"
+    if outcome == "repaired":
+        return "resolved_after_action"
+    if evidence_unavailable:
+        return "evidence_unavailable"
+    if outcome == "unsafe" or decision == "unsafe":
+        return "unsafe_to_act"
+    if outcome in {"still_failed", "escalated"} or decision == "escalated":
+        return "escalated"
+    if outcome == "approval_required" or decision in {
+        "approval_required",
+        "denied",
+    }:
+        return "escalated"
+    if outcome == "not_attempted" and decision == "skipped":
+        return "no_action_needed"
+    return "failed"
+
 def build_remediation_decision_log(
     *,
     entries: Sequence[Mapping[str, Any]],
@@ -1313,10 +1527,18 @@ def build_remediation_final_summary(
     ops_diagnostic_artifact_refs: Mapping[str, Any] | None = None,
     decision_log_ref: str | None = None,
     final_audit_ref: str | None = None,
+    prevention_verification_ref: str | None = None,
     lock_release: str,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Attach repair/prevention lifecycle output to a remediation summary."""
+    """Attach repair/prevention lifecycle output to a remediation summary.
+
+    Enforces the issue #3512 Area 5 safeguard: the target may only be reported as
+    ``resolved_after_action`` when the immediate repair itself was proven, so a
+    long-term prevention PR can never relabel the target as successfully repaired.
+    Any prevention verification is recorded as its own scoped reference, separate
+    from the immediate-repair verification.
+    """
 
     if not isinstance(summary, Mapping):
         raise ValueError("summary must be an object")
@@ -1326,8 +1548,22 @@ def build_remediation_final_summary(
         lock_release, REMEDIATION_LOCK_RELEASE_STATUSES, "lock_release"
     )
     payload = _safe_lifecycle_payload(summary)
+    resolution = _string_or_none(payload.get("resolution"))
+    if resolution == "resolved_after_action" and (
+        _string_or_none(repair.get("repairOutcome")) != "repaired"
+    ):
+        raise ValueError(
+            "resolution resolved_after_action requires an immediate repair with "
+            "repairOutcome 'repaired'; a prevention change must not relabel the "
+            "target as successfully repaired"
+        )
     payload["repair"] = _safe_lifecycle_payload(repair)
-    payload["prevention"] = _safe_lifecycle_payload(prevention)
+    prevention_payload = _safe_lifecycle_payload(prevention)
+    if ref := _artifact_ref_string(
+        prevention_verification_ref, "prevention_verification_ref"
+    ):
+        prevention_payload["verificationRef"] = ref
+    payload["prevention"] = prevention_payload
     if refs := _artifact_refs_mapping(ops_diagnostic_artifact_refs):
         payload["opsDiagnosticArtifactRefs"] = refs
     if ref := _artifact_ref_string(decision_log_ref, "decision_log_ref"):
@@ -1402,6 +1638,191 @@ def build_target_remediation_linkage_summary(
     if last_updated_at is not None:
         summary["lastUpdatedAt"] = _timestamp_string(last_updated_at)
     return summary
+
+def build_remediation_autonomous_origin(
+    *,
+    trigger_origin: str,
+    autonomous: bool = False,
+    policy_ref: str | None = None,
+    created_by_workflow_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the operator-visible autonomous-origin block (issue #3512, AC11).
+
+    Operators must always be able to see whether a remediation Workflow Execution
+    was created manually or autonomously, and under which policy, even before
+    autonomous remediation is generally enabled.
+    """
+
+    origin = _validated_choice(
+        trigger_origin, REMEDIATION_TRIGGER_ORIGINS, "trigger_origin"
+    )
+    block: dict[str, Any] = {
+        "triggerOrigin": origin,
+        "autonomous": bool(autonomous),
+    }
+    if ref := _safe_optional_string(policy_ref):
+        block["policyRef"] = ref
+    if creator := _safe_identifier_string(created_by_workflow_id):
+        block["createdByWorkflowId"] = creator
+    return block
+
+def build_remediation_operator_takeover(
+    *,
+    available: bool = True,
+    requested: bool = False,
+    actor: str | None = None,
+    requested_at: datetime | str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Build the operator takeover/cancellation surface (issue #3512, AC11).
+
+    Operators must always retain an explicit takeover/cancel affordance over an
+    autonomous remediation. This bounded block reports whether takeover is
+    available and whether one has been requested; the actual cancellation is
+    delivered through the existing execution cancel/pause control plane.
+    """
+
+    block: dict[str, Any] = {
+        "available": bool(available),
+        "requested": bool(requested),
+    }
+    if takeover_actor := _safe_optional_string(actor):
+        block["actor"] = takeover_actor
+    if requested_at is not None:
+        block["requestedAt"] = _timestamp_string(requested_at)
+    if takeover_reason := _redacted_optional_text(reason):
+        block["reason"] = takeover_reason
+    return block
+
+def build_remediation_action_detail(
+    *,
+    action_kind: str,
+    risk_tier: str | None = None,
+    policy_decision: str | None = None,
+    status: str | None = None,
+    expected_state: str | None = None,
+    idempotency_key: str | None = None,
+    decision_actor: str | None = None,
+    verification_required: bool | None = None,
+    verification_resolution: str | None = None,
+    before_evidence_refs: Sequence[Any] = (),
+    after_evidence_refs: Sequence[Any] = (),
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one bounded, inline action request/result detail (issue #3512, AC1).
+
+    This renders the action's authority-relevant fields directly rather than
+    forcing operators to download the raw action artifacts.
+    """
+
+    detail: dict[str, Any] = {
+        "actionKind": _required_redacted_text(action_kind, "action_kind"),
+    }
+    if risk := _safe_optional_string(risk_tier):
+        detail["riskTier"] = risk
+    if decision := _safe_optional_string(policy_decision):
+        detail["policyDecision"] = decision
+    if action_status := _safe_optional_string(status):
+        detail["status"] = action_status
+    if expected := _redacted_optional_text(expected_state):
+        detail["expectedState"] = expected
+    if key := _safe_identifier_string(idempotency_key):
+        detail["idempotencyKey"] = key
+    if actor := _safe_optional_string(decision_actor):
+        detail["decisionActor"] = actor
+    if verification_required is not None:
+        detail["verificationRequired"] = bool(verification_required)
+    if resolution := _safe_optional_string(verification_resolution):
+        detail["verificationResolution"] = (
+            normalize_remediation_verification_resolution(resolution)
+        )
+    if before := _safe_string_list(before_evidence_refs):
+        detail["beforeEvidenceRefs"] = before
+    if after := _safe_string_list(after_evidence_refs):
+        detail["afterEvidenceRefs"] = after
+    if safe_metadata := _safe_policy_mapping(metadata):
+        detail["metadata"] = safe_metadata
+    return detail
+
+def build_remediation_relationship_panel(
+    *,
+    remediation_workflow_id: str,
+    target_workflow_id: str,
+    target_run_id: str,
+    current_phase: str,
+    mode: str,
+    authority_mode: str,
+    instructions_summary: str | None = None,
+    runtime: Mapping[str, Any] | None = None,
+    provider_profile: Mapping[str, Any] | None = None,
+    launch_policy: Mapping[str, Any] | None = None,
+    evidence_policy: Mapping[str, Any] | None = None,
+    autonomous_origin: Mapping[str, Any] | None = None,
+    operator_takeover: Mapping[str, Any] | None = None,
+    janitor_status: str | None = None,
+    janitor_refs: Mapping[str, Any] | None = None,
+    lease_released: bool | None = None,
+    action_details: Sequence[Mapping[str, Any]] = (),
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the consistent remediation relationship panel projection (AC1/AC11).
+
+    Assembles, from canonical bounded inputs, the fields the operator product
+    surface must show for both target and remediation execution: current phase,
+    remediation instructions summary, runtime, Provider Profile, launch policy,
+    evidence policy, autonomous origin, operator takeover, inline action detail,
+    and cleanup/janitor state. It never carries raw logs or secrets.
+    """
+
+    panel: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "remediationWorkflowId": _required_lifecycle_string(
+            remediation_workflow_id, "remediation_workflow_id"
+        ),
+        "target": {
+            "workflowId": _required_lifecycle_string(
+                target_workflow_id, "target_workflow_id"
+            ),
+            "runId": _required_lifecycle_string(target_run_id, "target_run_id"),
+        },
+        "currentPhase": normalize_remediation_phase(current_phase),
+        "mode": _required_string(mode, "mode"),
+        "authorityMode": _required_string(authority_mode, "authority_mode"),
+    }
+    if summary := _redacted_optional_text(instructions_summary):
+        panel["instructionsSummary"] = summary
+    if runtime_block := _safe_policy_mapping(runtime):
+        panel["runtime"] = runtime_block
+    if profile := _safe_policy_mapping(provider_profile):
+        panel["providerProfile"] = profile
+    if policy := _safe_policy_mapping(launch_policy):
+        panel["launchPolicy"] = policy
+    if evidence := _safe_policy_mapping(evidence_policy):
+        panel["evidencePolicy"] = evidence
+    if origin := _safe_policy_mapping(autonomous_origin):
+        panel["autonomousOrigin"] = origin
+    if takeover := _safe_policy_mapping(operator_takeover):
+        panel["operatorTakeover"] = takeover
+    janitor: dict[str, Any] = {}
+    if status := janitor_status:
+        janitor["status"] = _validated_choice(
+            status, REMEDIATION_JANITOR_STATUSES, "janitor_status"
+        )
+    if refs := _artifact_refs_mapping(janitor_refs):
+        janitor["refs"] = refs
+    if lease_released is not None:
+        janitor["leaseReleased"] = bool(lease_released)
+    if janitor:
+        panel["janitorState"] = janitor
+    details: list[dict[str, Any]] = []
+    for item in list(action_details)[:50]:
+        if isinstance(item, Mapping) and item.get("actionKind"):
+            details.append(_safe_lifecycle_payload(item))
+    if details:
+        panel["actionDetails"] = details
+    if safe_metadata := _safe_policy_mapping(metadata):
+        panel["metadata"] = safe_metadata
+    return panel
 
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:
     source_kind = kind

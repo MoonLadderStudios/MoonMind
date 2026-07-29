@@ -1036,6 +1036,27 @@ const RemediationLinkSchema = z
     mode: z.string(),
     authorityMode: z.string(),
     status: z.string(),
+    currentPhase: z.string().nullable().optional(),
+    autonomousOrigin: z
+      .object({
+        triggerOrigin: z.string(),
+        autonomous: z.boolean().default(false),
+        policyRef: z.string().nullable().optional(),
+        createdByWorkflowId: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    operatorTakeover: z
+      .object({
+        available: z.boolean().default(true),
+        requested: z.boolean().default(false),
+        actor: z.string().nullable().optional(),
+        requestedAt: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     activeLockScope: z.string().nullable().optional(),
     activeLockHolder: z.string().nullable().optional(),
     latestActionSummary: z.string().nullable().optional(),
@@ -7467,6 +7488,11 @@ function RemediationRelationshipsPanel({
                 <div className="grid-2">
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Origin">
+                    {item.autonomousOrigin
+                      ? `${item.autonomousOrigin.triggerOrigin}${item.autonomousOrigin.autonomous ? ' · autonomous' : ' · manual'}`
+                      : '—'}
+                  </Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
@@ -7518,6 +7544,21 @@ function RemediationRelationshipsPanel({
                   <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
+                  <Card label="Current Phase">{item.currentPhase ? formatStatusLabel(item.currentPhase) : '—'}</Card>
+                  <Card label="Origin">
+                    {item.autonomousOrigin
+                      ? `${item.autonomousOrigin.triggerOrigin}${item.autonomousOrigin.autonomous ? ' · autonomous' : ' · manual'}`
+                      : '—'}
+                  </Card>
+                  <Card label="Operator Takeover">
+                    {item.operatorTakeover
+                      ? item.operatorTakeover.requested
+                        ? 'requested'
+                        : item.operatorTakeover.available
+                          ? 'available'
+                          : 'closed'
+                      : '—'}
+                  </Card>
                   <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>

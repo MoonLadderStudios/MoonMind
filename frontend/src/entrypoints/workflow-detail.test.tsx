@@ -385,6 +385,16 @@ describe('Workflow Detail Entrypoint', () => {
       mode: 'snapshot_then_follow',
       authorityMode: 'approval_gated',
       status: 'awaiting_approval',
+      currentPhase: 'awaiting_approval',
+      autonomousOrigin: {
+        triggerOrigin: 'on_failed',
+        autonomous: false,
+        policyRef: 'admin_healer_default',
+      },
+      operatorTakeover: {
+        available: true,
+        requested: false,
+      },
       activeLockScope: 'target_execution',
       activeLockHolder: 'test-remediation-rich',
       latestActionSummary: 'Proposed session interrupt',
@@ -7006,6 +7016,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('run-target-rich:2')).toBeTruthy();
     expect(screen.getByText('conflict')).toBeTruthy();
     expect(screen.getAllByText('test-remediation-rich').length).toBeGreaterThan(0);
+    // Issue #3512 AC11: autonomous origin and operator takeover are visible.
+    expect(screen.getByText('on_failed · manual')).toBeTruthy();
+    expect(screen.getByText('available')).toBeTruthy();
     expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
   });
 

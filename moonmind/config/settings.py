@@ -2388,6 +2388,20 @@ class FeatureFlagsSettings(BaseSettings):
             "CONTROL_STOP_CONTINUATION_GENERATION",
         ),
     )
+    remediation_autonomous_rollout_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__REMEDIATION_AUTONOMOUS_ROLLOUT_ENABLED",
+            "REMEDIATION_AUTONOMOUS_ROLLOUT_ENABLED",
+        ),
+        description=(
+            "Deployment-level rollout gate for autonomous (admin_auto) remediation "
+            "mutation (issue #3512, Area 7). Fail-closed: autonomous remediation "
+            "actions are refused unless this is explicitly enabled, even when a "
+            "remediation link is authored with admin_auto authority. Per-link "
+            "authority, approvals, locks, and verification still apply on top."
+        ),
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",

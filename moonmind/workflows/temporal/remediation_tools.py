@@ -35,6 +35,9 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationSecurityProfile,
     remediation_changes_require_checkpoint_branch,
 )
+from moonmind.workflows.temporal.remediation_rollout import (
+    autonomous_remediation_rollout_enabled,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
@@ -675,6 +678,11 @@ class RemediationEvidenceToolService:
             if link.authority_mode != "admin_auto":
                 raise RemediationEvidenceToolError(
                     "Persisted remediation authority does not permit automatic mutation."
+                )
+            if not autonomous_remediation_rollout_enabled():
+                raise RemediationEvidenceToolError(
+                    "Autonomous remediation mutation is disabled by the deployment "
+                    "rollout gate (FEATURE_FLAGS__REMEDIATION_AUTONOMOUS_ROLLOUT_ENABLED)."
                 )
             normalized_action_kind = _required_string(action_kind, "actionKind")
             normalized_idempotency_key = _required_string(

@@ -67,6 +67,9 @@ class RemediationLoopBudgets(_Contract):
     max_wall_clock_seconds: int | None = Field(
         default=None, alias="maxWallClockSeconds", ge=1
     )
+    # Distinct branch cap: bounds Checkpoint Branches a loop may create,
+    # independent of the attempt budget (issue #3512, Area 4/AC7).
+    max_branches: int | None = Field(default=None, alias="maxBranches", ge=1)
     provider_budget: int | None = Field(default=None, alias="providerBudget", ge=0)
     token_budget: int | None = Field(default=None, alias="tokenBudget", ge=0)
     cost_budget: int | None = Field(default=None, alias="costBudget", ge=0)
@@ -145,6 +148,7 @@ class ConsumedRemediationBudgets(_Contract):
     repeated_failure_signature: int = Field(
         default=0, alias="repeatedFailureSignature", ge=0
     )
+    branches: int = Field(default=0, ge=0)
 
 
 class RemediationLoopState(_Contract):
@@ -330,6 +334,21 @@ def record_semantic_progress(
     )
 
 
+def record_branch_created(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState
+) -> RemediationLoopState:
+    """Consume one branch from the distinct branch budget, rejecting overflow."""
+
+    next_branches = state.consumed_budgets.branches + 1
+    if (
+        spec.budgets.max_branches is not None
+        and next_branches > spec.budgets.max_branches
+    ):
+        raise ValueError("remediation branch budget exhausted")
+    consumed = state.consumed_budgets.model_copy(update={"branches": next_branches})
+    return state.model_copy(update={"consumed_budgets": consumed})
+
+
 def apply_continuation_decision(
     state: RemediationLoopState,
     *,
@@ -508,8 +527,15 @@ def decide_remediation_continuation(
     budget_ref: str | None = None,
     progress_ref: str | None = None,
     recoverable_evidence: bool = False,
+    elapsed_seconds: float | None = None,
 ) -> RemediationContinuationDecision:
-    """Return the one deterministic routing decision for verifier evidence."""
+    """Return the one deterministic routing decision for verifier evidence.
+
+    ``elapsed_seconds`` is the workflow-deterministic elapsed wall-clock time for
+    the loop. When it reaches ``spec.budgets.max_wall_clock_seconds`` a further
+    ``ADDITIONAL_WORK_NEEDED`` verdict stops with remaining work instead of
+    admitting another unbounded attempt (issue #3512, Area 4/AC7).
+    """
 
     if state.loop_id != spec.loop_id:
         raise ValueError("loop state does not belong to loop specification")
@@ -564,6 +590,15 @@ def decide_remediation_continuation(
         raise ValueError(f"unsupported verifier verdict: {verdict}")
 
     consumed = state.consumed_budgets
+    wall_clock_exhausted = (
+        spec.budgets.max_wall_clock_seconds is not None
+        and elapsed_seconds is not None
+        and elapsed_seconds >= spec.budgets.max_wall_clock_seconds
+    )
+    branch_budget_exhausted = (
+        spec.budgets.max_branches is not None
+        and consumed.branches >= spec.budgets.max_branches
+    )
     allowed = (
         spec.terminal_policy.additional_work_needed == "continue_when_allowed"
         and consumed.attempts < spec.budgets.hard_max_attempts
@@ -571,8 +606,17 @@ def decide_remediation_continuation(
         < spec.budgets.max_consecutive_semantic_no_progress
         and consumed.repeated_failure_signature
         < spec.budgets.max_repeated_failure_signature
+        and not wall_clock_exhausted
+        and not branch_budget_exhausted
     )
-    reason = "verification_requested_remediation" if allowed else "remediation_budget_or_progress_exhausted"
+    if allowed:
+        reason = "verification_requested_remediation"
+    elif wall_clock_exhausted:
+        reason = "wall_clock_budget_exhausted"
+    elif branch_budget_exhausted:
+        reason = "branch_budget_exhausted"
+    else:
+        reason = "remediation_budget_or_progress_exhausted"
     return RemediationContinuationDecision.model_validate(
         {
             **common,

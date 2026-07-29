@@ -4133,6 +4133,12 @@ class MoonMindRunWorkflow:
             state,
             progress_ref=remaining_work_ref,
         )
+        loop_elapsed_seconds: float | None = None
+        loop_start_time = getattr(workflow.info(), "start_time", None)
+        if loop_start_time is not None:
+            loop_elapsed_seconds = max(
+                (workflow.now() - loop_start_time).total_seconds(), 0.0
+            )
         decision = decide_remediation_continuation(
             spec=spec,
             state=state,
@@ -4141,6 +4147,7 @@ class MoonMindRunWorkflow:
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
+            elapsed_seconds=loop_elapsed_seconds,
         )
         decision_ref = await self._write_json_artifact(
             name=(

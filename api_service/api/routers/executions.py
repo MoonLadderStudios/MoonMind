@@ -596,6 +596,24 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
             raise ValueError("next action baseline must match the persisted head")
         return self
 
+class RemediationAutonomousOriginModel(BaseModel):
+    """Operator-visible autonomous origin of a remediation (issue #3512, AC11)."""
+
+    triggerOrigin: str
+    autonomous: bool = False
+    policyRef: str | None = None
+    createdByWorkflowId: str | None = None
+
+
+class RemediationOperatorTakeoverModel(BaseModel):
+    """Operator takeover/cancel affordance surface (issue #3512, AC11)."""
+
+    available: bool = True
+    requested: bool = False
+    actor: str | None = None
+    requestedAt: datetime | None = None
+
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -604,6 +622,9 @@ class RemediationLinkSummaryModel(BaseModel):
     mode: str
     authorityMode: str
     status: str
+    currentPhase: str | None = None
+    autonomousOrigin: RemediationAutonomousOriginModel | None = None
+    operatorTakeover: RemediationOperatorTakeoverModel | None = None
     activeLockScope: str | None = None
     activeLockHolder: str | None = None
     latestActionSummary: str | None = None
@@ -11350,6 +11371,19 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         authority_mode=authority_mode,
         status_value=status_value,
     )
+    autonomous_origin = RemediationAutonomousOriginModel(
+        triggerOrigin=str(getattr(link, "trigger_type", "") or "manual"),
+        autonomous=authority_mode == "admin_auto",
+        policyRef=getattr(link, "action_policy_ref", None),
+        createdByWorkflowId=getattr(link, "created_by_workflow_id", None),
+    )
+    operator_takeover = RemediationOperatorTakeoverModel(
+        available=status_value
+        not in {"resolved", "escalated", "failed", "canceled", "completed"},
+        requested=bool(getattr(link, "operator_takeover_requested", False)),
+        actor=getattr(link, "operator_takeover_actor", None),
+        requestedAt=getattr(link, "operator_takeover_requested_at", None),
+    )
 
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
@@ -11359,6 +11393,9 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         mode=str(getattr(link, "mode", "")),
         authorityMode=authority_mode,
         status=status_value,
+        currentPhase=getattr(link, "remediation_phase", None),
+        autonomousOrigin=autonomous_origin,
+        operatorTakeover=operator_takeover,
         activeLockScope=getattr(link, "active_lock_scope", None),
         activeLockHolder=getattr(link, "active_lock_holder", None),
         latestActionSummary=getattr(link, "latest_action_summary", None),
