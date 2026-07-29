@@ -231,6 +231,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/retrieval/bridge-sessions/{bridge_session_id}/capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Bridge Retrieval Capability
+         * @description Exchange authoritative Omnigent bridge state for scoped retrieval.
+         */
+        post: operations["issue_bridge_retrieval_capability_retrieval_bridge_sessions__bridge_session_id__capability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/retrieval/bridge-sessions/{bridge_session_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Bridge Retrieval Capabilities
+         * @description Revoke authority at cancellation, drain, replacement, or cleanup boundaries.
+         */
+        delete: operations["revoke_bridge_retrieval_capabilities_retrieval_bridge_sessions__bridge_session_id__capabilities_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/retrieval/capabilities/{capability_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieval Capability Diagnostics
+         * @description Return bounded Workflow Detail data, never capability or result bodies.
+         */
+        get: operations["retrieval_capability_diagnostics_retrieval_capabilities__capability_id__get"];
+        put?: never;
+        post?: never;
+        /** Revoke Retrieval Capability */
+        delete: operations["revoke_retrieval_capability_retrieval_capabilities__capability_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/retrieval/capabilities/{capability_id}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Retrieval Delivery
+         * @description Accept the host/bridge delivery outcome; HTTP return is not delivery proof.
+         */
+        post: operations["acknowledge_retrieval_delivery_retrieval_capabilities__capability_id__delivery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/retrieval/index-health": {
         parameters: {
             query?: never;
@@ -5385,6 +5466,31 @@ export interface components {
             requestedAfter: number;
             /** Earliestavailable */
             earliestAvailable: number;
+        };
+        /**
+         * BridgeRetrievalCapabilityIssue
+         * @description Caller narrowing applied to bridge-owned retrieval authority.
+         */
+        BridgeRetrievalCapabilityIssue: {
+            /** Collections */
+            collections?: string[];
+            /** Filters */
+            filters?: {
+                [key: string]: string;
+            };
+            /**
+             * Lifetime Seconds
+             * @default 900
+             */
+            lifetime_seconds: number;
+            /** Top K */
+            top_k?: number | null;
+            /** Max Context Bytes */
+            max_context_bytes?: number | null;
+            /** Max Context Tokens */
+            max_context_tokens?: number | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
         };
         /**
          * BridgeSessionCreateRequest
@@ -11779,6 +11885,28 @@ export interface components {
              */
             deletion: "after-expiry" | "manual";
         };
+        /** RetrievalCorrelation */
+        RetrievalCorrelation: {
+            /** Workflow Id */
+            workflow_id: string;
+            /** Step Id */
+            step_id: string;
+            /** Bridge Session Id */
+            bridge_session_id: string;
+            /** Omnigent Session Id */
+            omnigent_session_id: string;
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+        };
+        /** RetrievalDeliveryAcknowledgement */
+        RetrievalDeliveryAcknowledgement: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** State */
+            state: string;
+        };
         /** RetrievalQuery */
         RetrievalQuery: {
             /** Query */
@@ -11802,6 +11930,17 @@ export interface components {
             };
             /** Planning Ref */
             planning_ref?: string | null;
+            /**
+             * Result Format
+             * @default both
+             */
+            result_format: string;
+            /**
+             * Persist
+             * @default true
+             */
+            persist: boolean;
+            correlation?: components["schemas"]["RetrievalCorrelation"] | null;
         };
         /** RollbackEligibilityModel */
         RollbackEligibilityModel: {
@@ -14008,6 +14147,179 @@ export interface operations {
             };
         };
     };
+    issue_bridge_retrieval_capability_retrieval_bridge_sessions__bridge_session_id__capability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bridge_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeRetrievalCapabilityIssue"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_bridge_retrieval_capabilities_retrieval_bridge_sessions__bridge_session_id__capabilities_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bridge_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retrieval_capability_diagnostics_retrieval_capabilities__capability_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_retrieval_capability_retrieval_capabilities__capability_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_retrieval_delivery_retrieval_capabilities__capability_id__delivery_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetrievalDeliveryAcknowledgement"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     index_health_retrieval_index_health_get: {
         parameters: {
             query?: never;
@@ -14035,6 +14347,10 @@ export interface operations {
                 "X-MoonMind-Worker-Token"?: string | null;
                 "X-MoonMind-Retrieval-Token"?: string | null;
                 Authorization?: string | null;
+                "X-MoonMind-Host-Id"?: string | null;
+                "X-MoonMind-Session-Id"?: string | null;
+                "X-MoonMind-Run-Id"?: string | null;
+                "X-MoonMind-Step-Id"?: string | null;
             };
             path?: never;
             cookie?: never;
