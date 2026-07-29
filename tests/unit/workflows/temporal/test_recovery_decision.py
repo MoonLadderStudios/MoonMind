@@ -45,10 +45,12 @@ def test_typed_recovery_admission_fails_before_side_effects_with_stable_reasons(
         match="RECOVERY_SIDE_EFFECT_UNSAFE,RECOVERY_BUDGET_GRANT_REQUIRED",
     ):
         require_admitted_recovery_target(payload)
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.workflows.temporal.recovery_decision import (
     admit_recovery_target,
     decide_checkpoint_recovery,
     decide_same_session_recovery,
+    orchestrate_checkpoint_recovery,
     require_admitted_recovery_target,
     validate_recovery_contract,
 )
@@ -262,3 +264,166 @@ def test_workflow_preflight_rejects_contradictory_restore_proof(field, value, re
 
     with pytest.raises(ValueError, match=reason):
         validate_recovery_contract(contract)
+
+
+# --- Four-outcome production recovery orchestration (issue #3510, work #1) ---
+
+
+def _checkpoint(**overrides) -> OmnigentCheckpointIdentity:
+    values = {
+        "providerProfileId": "pp-1",
+        "credentialGeneration": 3,
+        "providerLeaseRef": "lease-1",
+        "hostBindingRef": "hb-1",
+        "hostLeaseRef": "hl-1",
+        "endpointRef": "ep-1",
+        "omnigentHostId": "host-1",
+        "omnigentSessionId": "sess-1",
+        "bridgeSessionId": "bridge-1",
+        "externalStateRef": "artifact://ext/1",
+        "idempotencyKey": "idem-1",
+        "effectiveLaunchRef": "omnigent-launch:sha256:" + "a" * 64,
+    }
+    values.update(overrides)
+    return OmnigentCheckpointIdentity(**values)
+
+
+def _active_authority():
+    return {
+        "provider_lease": {"active": True, "lease_id": "lease-1"},
+        "host_lease": {
+            "status": "ready",
+            "lease_id": "hl-1",
+            "credential_generation": 3,
+        },
+        "host_registered": True,
+        "session_valid": True,
+        "first_message_consistent": True,
+    }
+
+
+def test_orchestrate_resume_unavailable_carries_bounded_reason() -> None:
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(artifact_valid=False),
+        checkpoint=_checkpoint(),
+        original_inputs={},
+        requested_inputs={},
+        provider_lease=None,
+        host_lease=None,
+        host_registered=False,
+        session_valid=False,
+        first_message_consistent=False,
+    )
+
+    assert decision.mode == "resume_unavailable"
+    assert decision.reason_code == "CHECKPOINT_ARTIFACT_INVALID"
+    assert decision.changed_inputs == ()
+
+
+def test_orchestrate_resume_unavailable_wins_over_input_change() -> None:
+    # An invalid checkpoint gate blocks even a branch, which must validate the
+    # source checkpoint; the evidence gate takes precedence over divergence.
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(side_effect_safe=False),
+        checkpoint=_checkpoint(),
+        original_inputs={"model": "opus"},
+        requested_inputs={"model": "sonnet"},
+        **_active_authority(),
+    )
+
+    assert decision.mode == "resume_unavailable"
+    assert decision.reason_code == "CHECKPOINT_SIDE_EFFECT_UNSAFE"
+
+
+@pytest.mark.parametrize(
+    ("key", "reason"),
+    [
+        ("instructions", "BRANCH_REQUIRED_INSTRUCTIONS_CHANGED"),
+        ("runtime", "BRANCH_REQUIRED_RUNTIME_CHANGED"),
+        ("model", "BRANCH_REQUIRED_MODEL_CHANGED"),
+        ("profile", "BRANCH_REQUIRED_PROFILE_CHANGED"),
+        ("policy", "BRANCH_REQUIRED_POLICY_CHANGED"),
+        ("branch", "BRANCH_REQUIRED_BRANCH_CHANGED"),
+        ("publish_mode", "BRANCH_REQUIRED_PUBLISH_MODE_CHANGED"),
+    ],
+)
+def test_orchestrate_branch_required_per_changed_input(key, reason) -> None:
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(),
+        checkpoint=_checkpoint(),
+        original_inputs={key: "original"},
+        requested_inputs={key: "changed"},
+        **_active_authority(),
+    )
+
+    assert decision.mode == "branch_required"
+    assert decision.reason_code == reason
+    assert decision.changed_inputs == (key,)
+
+
+def test_orchestrate_branch_required_uses_first_changed_input_in_order() -> None:
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(),
+        checkpoint=_checkpoint(),
+        original_inputs={"model": "opus", "publish_mode": "none"},
+        requested_inputs={"model": "sonnet", "publish_mode": "pull_request"},
+        **_active_authority(),
+    )
+
+    assert decision.mode == "branch_required"
+    # "model" precedes "publish_mode" in RECOVERY_BRANCH_INPUT_REASONS.
+    assert decision.reason_code == "BRANCH_REQUIRED_MODEL_CHANGED"
+    assert decision.changed_inputs == ("model", "publish_mode")
+
+
+def test_orchestrate_unchanged_input_does_not_branch() -> None:
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(),
+        checkpoint=_checkpoint(),
+        original_inputs={"model": "opus", "instructions": "same"},
+        # Requested omits keys / repeats identical values -> not a change.
+        requested_inputs={"model": "opus"},
+        **_active_authority(),
+    )
+
+    assert decision.mode in {"live_reattach", "cold_restore"}
+    assert decision.changed_inputs == ()
+
+
+def test_orchestrate_live_reattach_when_all_authority_valid() -> None:
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(),
+        checkpoint=_checkpoint(),
+        original_inputs={"model": "opus"},
+        requested_inputs={"model": "opus"},
+        **_active_authority(),
+    )
+
+    assert decision.mode == "live_reattach"
+    assert decision.reason_code is None
+
+
+@pytest.mark.parametrize(
+    "authority_override",
+    [
+        {"host_registered": False},
+        {"session_valid": False},
+        {"first_message_consistent": False},
+        {"provider_lease": {"active": False, "lease_id": "lease-1"}},
+        {"host_lease": {"status": "expired", "lease_id": "hl-1", "credential_generation": 3}},
+        {"host_lease": {"status": "ready", "lease_id": "hl-1", "credential_generation": 9}},
+    ],
+)
+def test_orchestrate_cold_restore_when_any_authority_stale(authority_override) -> None:
+    authority = _active_authority()
+    authority.update(authority_override)
+    decision = orchestrate_checkpoint_recovery(
+        eligibility=_decision(),
+        checkpoint=_checkpoint(),
+        original_inputs={},
+        requested_inputs={},
+        **authority,
+    )
+
+    assert decision.mode == "cold_restore"
+    assert decision.reason_code is None

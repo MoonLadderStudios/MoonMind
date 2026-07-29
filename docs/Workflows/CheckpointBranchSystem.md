@@ -1091,6 +1091,50 @@ Even in v2, Omnigent session ids remain runtime bindings and diagnostics metadat
 
 If Omnigent returns a verified provider-native branch or PR, MoonMind may adopt it as `outputBranch`. If it returns only artifacts or a provider session id, MoonMind may not claim a Saved Work Branch unless a validated MoonMind checkpoint or provider workspace binding can reproduce and verify the repository head.
 
+### 12.4 Production recovery orchestration and coordinator routing
+
+Recovery and branch turns are the same profile-bound coordinator
+(`OmnigentProfileBoundExecutionCoordinator`) reached through the existing
+`integration.omnigent.execute` activity — not a second execution model. Two
+contracts wire the coordinator's `recover_from_checkpoint()` /
+`branch_from_checkpoint()` methods into production (issue #3510):
+
+**Four-outcome recovery decision.** `orchestrate_checkpoint_recovery()`
+(`moonmind/workflows/temporal/recovery_decision.py`) resolves exactly one
+outcome, fail-closed and in this precedence:
+
+```text
+resume_unavailable  # checkpoint evidence gate ineligible; bounded reasonCode
+branch_required     # requested instructions/runtime/model/profile/policy/branch/publish differ
+live_reattach       # every original authority still valid
+cold_restore        # otherwise, reacquire profile + fresh host/session, retain lineage
+```
+
+An ineligible checkpoint gate blocks every path because even a branch must
+validate the source checkpoint. `branch_required` never mutates the original
+workflow input; it forces a Checkpoint Branch turn. `live_reattach` versus
+`cold_restore` reuses the fail-closed Omnigent authority evaluation
+(`omnigent.checkpoints.recovery_mode`). `resume_unavailable` and
+`branch_required` always carry a bounded, machine-readable `reasonCode`; the two
+actionable modes never carry one.
+
+**Coordinator routing directive.** A run advertises a resume or branch turn by
+placing an `OmnigentRecoveryDirective` (encoded as a compact JSON string) on
+`AgentExecutionRequest.parameters["omnigentRecoveryDirective"]`. The activity
+routes `kind: recover` to `recover_from_checkpoint()` (which internally selects
+live reattach vs cold restore and never reposts the first message on reattach)
+and `kind: branch` to `branch_from_checkpoint()` (which always acquires a new
+capacity-gated host lease and fresh session). An absent directive runs a fresh
+`execute()`, preserving in-flight compatibility. The directive is refs-only and
+carries no credential data; it is a JSON string rather than a nested mapping so
+the request's credential-key scan does not reject the checkpoint's
+`credentialGeneration` field.
+
+Every recovery attempt records a bounded, server-authoritative operator audit
+(`actor` + `requestedAction`) on the recovery execution's `recovery`/`resume`
+params so a failed recovery never erases who requested it or the original
+failure.
+
 ---
 
 ## 13. Branch comparison

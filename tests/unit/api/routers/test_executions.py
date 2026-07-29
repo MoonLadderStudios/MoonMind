@@ -14279,6 +14279,126 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
         == "artifact://recovery/manifest"
     )
     assert call_kwargs["recovery_checkpoint_ref"] is None
+    # Per-attempt actor + requested action audit is forwarded to the service
+    # (issue #3510, required work #6).
+    operator_audit = call_kwargs["operator_audit"]
+    assert operator_audit.actor == "executions@example.com"
+    assert operator_audit.requested_action == "recover_from_failed_step"
+
+
+def test_failed_step_recovery_forwards_and_redacts_operator_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "recovery_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "failed_run_recovery_manifest_ref": "artifact://recovery/manifest",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_recovery_execution.return_value = {
+        "accepted": True,
+        "applied": "created_resumed_execution",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "execution": {
+            "workflowId": "mm:resumed",
+            "runId": "run-resumed",
+            "detailHref": "/workflows/mm:resumed",
+        },
+        "relationship": "Recovered from failed step",
+        "recoveryCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "operatorAudit": {
+            "actor": "executions@example.com",
+            "requestedAction": "recover_from_failed_step",
+            "operatorMetadata": {"reason": "provider outage recovered"},
+        },
+    }
+
+    checkpoint_payload = {
+        "schemaVersion": "v1",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "taskInputSnapshotRef": "artifact://snapshot/source",
+        "planRef": "artifact://plan/source",
+        "planDigest": "sha256:resume-plan",
+        "failedStep": {"logicalStepId": "implement", "order": 2, "attempt": 1},
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "completed",
+                "sourceExecutionOrdinal": 1,
+                "artifacts": {"summary": "artifact://completed/plan"},
+                "stateCheckpointRef": "artifact://workspace/before-implement",
+            }
+        ],
+        "recoveryWorkspace": {
+            "branch": "feature/resume",
+            "commit": "abc123",
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
+        },
+    }
+    manifest_payload = _valid_failed_run_recovery_manifest_payload(
+        canonical,
+        checkpoint_ref="artifact://resume-checkpoints/source/checkpoint-v1",
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            side_effect=[
+                (SimpleNamespace(), json.dumps(manifest_payload).encode()),
+                (SimpleNamespace(), json.dumps(checkpoint_payload).encode()),
+            ]
+        )
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/recover-from-failed-step",
+            json={
+                "idempotencyKey": "resume-1",
+                "operatorMetadata": {
+                    "reason": "provider outage recovered",
+                    "leaked": "Bearer super-secret-token",
+                    "blank": "   ",
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    operator_audit = (
+        mock_service.create_failed_step_recovery_execution.await_args.kwargs[
+            "operator_audit"
+        ]
+    )
+    assert operator_audit.actor == "executions@example.com"
+    assert operator_audit.requested_action == "recover_from_failed_step"
+    # Secret-like and blank operator metadata values are dropped before persist.
+    assert operator_audit.operator_metadata == {"reason": "provider outage recovered"}
+    # The recorded audit is surfaced back on the response.
+    assert response.json()["operatorAudit"]["actor"] == "executions@example.com"
 
 
 def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(

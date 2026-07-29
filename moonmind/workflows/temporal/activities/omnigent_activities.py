@@ -2,12 +2,92 @@
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+# Compact, evidence-only routing directive carried on the request parameters.
+# When absent the request runs a fresh ``execute()``, preserving in-flight
+# compatibility for runs launched before this wiring (issue #3510).
+#
+# The directive is carried as an opaque JSON *string* rather than a nested
+# mapping: ``AgentExecutionRequest`` rejects any nested parameter key that looks
+# credential-bearing (e.g. the checkpoint's ``credentialGeneration``), and it
+# only recurses into dict/list values. The directive itself remains refs-only.
+OMNIGENT_RECOVERY_DIRECTIVE_PARAM = "omnigentRecoveryDirective"
+
+
+def encode_omnigent_recovery_directive(directive: object) -> str:
+    """Encode an :class:`OmnigentRecoveryDirective` for request parameters.
+
+    Callers set ``request.parameters[OMNIGENT_RECOVERY_DIRECTIVE_PARAM]`` to the
+    returned JSON string so the credential-key scan on ``AgentExecutionRequest``
+    does not reject the checkpoint's ``credentialGeneration`` field.
+    """
+
+    from moonmind.omnigent.checkpoints import OmnigentRecoveryDirective
+
+    if not isinstance(directive, OmnigentRecoveryDirective):
+        directive = OmnigentRecoveryDirective.model_validate(directive)
+    return json.dumps(directive.model_dump(by_alias=True, mode="json"))
+
+
+async def _dispatch_omnigent_execution(
+    coordinator: object,
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    """Route one profile-bound run to the coordinator recovery/branch entrypoint.
+
+    The production workflow path advertises a resume or branch turn by placing
+    an :class:`OmnigentRecoveryDirective` on ``request.parameters`` under
+    ``omnigentRecoveryDirective`` (encoded as a compact JSON string). This is
+    the sole production caller of the coordinator's
+    ``recover_from_checkpoint()`` / ``branch_from_checkpoint()`` methods;
+    without a directive a fresh ``execute()`` runs unchanged.
+    """
+
+    from moonmind.omnigent.checkpoints import (
+        OmnigentRecoveryDirective,
+        OmnigentRecoveryDirectiveKind,
+    )
+
+    raw_directive = (request.parameters or {}).get(
+        OMNIGENT_RECOVERY_DIRECTIVE_PARAM
+    )
+    if not raw_directive:
+        return await coordinator.execute(request)
+
+    if isinstance(raw_directive, str):
+        raw_directive = json.loads(raw_directive)
+    elif not isinstance(raw_directive, Mapping):
+        raise ValueError(
+            "omnigentRecoveryDirective must be a JSON string or mapping"
+        )
+
+    directive = OmnigentRecoveryDirective.model_validate(raw_directive)
+    if directive.kind is OmnigentRecoveryDirectiveKind.RECOVER:
+        return await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=directive.checkpoint,
+            provider_lease=directive.provider_lease,
+            host_lease=directive.host_lease,
+            host_registered=directive.host_registered,
+            session_valid=directive.session_valid,
+            first_message_consistent=directive.first_message_consistent,
+            current_credential_generation=directive.current_credential_generation,
+            candidate_workspace=directive.candidate_workspace,
+        )
+    return await coordinator.branch_from_checkpoint(
+        request=request,
+        checkpoint=directive.checkpoint,
+        current_credential_generation=directive.current_credential_generation,
+        candidate_workspace=directive.candidate_workspace,
+    )
 
 
 @activity.defn(name="integration.omnigent.execute")
@@ -113,7 +193,7 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
-        return await coordinator.execute(request)
+        return await _dispatch_omnigent_execution(coordinator, request)
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")
@@ -179,6 +259,8 @@ async def omnigent_oauth_host_janitor_activity(
 
 
 __all__ = [
+    "OMNIGENT_RECOVERY_DIRECTIVE_PARAM",
+    "encode_omnigent_recovery_directive",
     "omnigent_execute_activity",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",

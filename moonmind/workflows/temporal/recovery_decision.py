@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from moonmind.schemas.temporal_models import RecoveryEligibilityDiagnosticModel
+from moonmind.omnigent.checkpoints import (
+    OmnigentCheckpointIdentity,
+    OmnigentRecoveryMode,
+    recovery_mode,
+)
+from moonmind.schemas.temporal_models import (
+    RECOVERY_BRANCH_INPUT_REASONS,
+    RecoveryEligibilityDiagnosticModel,
+    RecoveryOrchestrationDecisionModel,
+)
 from moonmind.schemas.workflow_recovery_models import (
     RecoveryAdmissionDimensionModel,
     WorkflowRecoveryTargetModel,
@@ -13,6 +22,12 @@ from moonmind.schemas.workflow_recovery_models import (
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeExecutionCapabilities,
 )
+
+
+def _normalize_input(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 BOUNDARY_RESUME_PHASE = {
     "before_execution": "rerun_failed_step",
@@ -186,6 +201,77 @@ def decide_checkpoint_recovery(
             "resume_from_workspace_checkpoint" if eligible else "full_retry"
         ),
         evidence=list(evidence),
+    )
+
+
+def orchestrate_checkpoint_recovery(
+    *,
+    eligibility: RecoveryEligibilityDiagnosticModel,
+    checkpoint: OmnigentCheckpointIdentity,
+    original_inputs: Mapping[str, Any],
+    requested_inputs: Mapping[str, Any],
+    provider_lease: Mapping[str, Any] | None,
+    host_lease: Mapping[str, Any] | None,
+    host_registered: bool,
+    session_valid: bool,
+    first_message_consistent: bool,
+) -> RecoveryOrchestrationDecisionModel:
+    """Resolve the four-outcome production recovery decision (issue #3510 #1).
+
+    Precedence is fail-closed: an ineligible checkpoint gate blocks every path
+    (``resume_unavailable``) because even a branch must validate the source
+    checkpoint; a requested input divergence forces ``branch_required`` rather
+    than mutating the original run; otherwise the fail-closed Omnigent authority
+    evaluation selects ``live_reattach`` versus ``cold_restore``.
+    """
+
+    if not eligibility.eligible:
+        reason = eligibility.disabled_reason_code
+        if not reason:
+            raise ValueError(
+                "ineligible checkpoint recovery must carry disabledReasonCode"
+            )
+        return RecoveryOrchestrationDecisionModel(
+            mode="resume_unavailable",
+            reasonCode=reason,
+            changedInputs=(),
+            eligibility=eligibility,
+        )
+
+    changed = tuple(
+        key
+        for key, _reason in RECOVERY_BRANCH_INPUT_REASONS
+        if key in requested_inputs
+        and _normalize_input(requested_inputs.get(key))
+        != _normalize_input(original_inputs.get(key))
+    )
+    if changed:
+        reason_by_key = dict(RECOVERY_BRANCH_INPUT_REASONS)
+        return RecoveryOrchestrationDecisionModel(
+            mode="branch_required",
+            reasonCode=reason_by_key[changed[0]],
+            changedInputs=changed,
+            eligibility=eligibility,
+        )
+
+    omnigent_mode = recovery_mode(
+        checkpoint,
+        provider_lease=provider_lease,
+        host_lease=host_lease,
+        host_registered=host_registered,
+        session_valid=session_valid,
+        first_message_consistent=first_message_consistent,
+    )
+    mode = (
+        "live_reattach"
+        if omnigent_mode is OmnigentRecoveryMode.LIVE_REATTACH
+        else "cold_restore"
+    )
+    return RecoveryOrchestrationDecisionModel(
+        mode=mode,
+        reasonCode=None,
+        changedInputs=(),
+        eligibility=eligibility,
     )
 
 

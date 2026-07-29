@@ -149,6 +149,33 @@ RecoveryOperatorGuidance = Literal[
     "fix_environment",
     "manual_intervention",
 ]
+# Four-outcome production recovery orchestration (issue MoonLadderStudios/MoonMind#3510).
+RecoveryOrchestrationMode = Literal[
+    "live_reattach",
+    "cold_restore",
+    "branch_required",
+    "resume_unavailable",
+]
+RecoveryBranchRequiredReason = Literal[
+    "BRANCH_REQUIRED_INSTRUCTIONS_CHANGED",
+    "BRANCH_REQUIRED_RUNTIME_CHANGED",
+    "BRANCH_REQUIRED_MODEL_CHANGED",
+    "BRANCH_REQUIRED_PROFILE_CHANGED",
+    "BRANCH_REQUIRED_POLICY_CHANGED",
+    "BRANCH_REQUIRED_BRANCH_CHANGED",
+    "BRANCH_REQUIRED_PUBLISH_MODE_CHANGED",
+]
+RecoveryOrchestrationReason = RecoveryDisabledReason | RecoveryBranchRequiredReason
+# Ordered original-vs-requested input comparison keys → branch-required reason codes.
+RECOVERY_BRANCH_INPUT_REASONS: tuple[tuple[str, str], ...] = (
+    ("instructions", "BRANCH_REQUIRED_INSTRUCTIONS_CHANGED"),
+    ("runtime", "BRANCH_REQUIRED_RUNTIME_CHANGED"),
+    ("model", "BRANCH_REQUIRED_MODEL_CHANGED"),
+    ("profile", "BRANCH_REQUIRED_PROFILE_CHANGED"),
+    ("policy", "BRANCH_REQUIRED_POLICY_CHANGED"),
+    ("branch", "BRANCH_REQUIRED_BRANCH_CHANGED"),
+    ("publish_mode", "BRANCH_REQUIRED_PUBLISH_MODE_CHANGED"),
+)
 EnvironmentDiagnosticKind = Literal[
     "environment",
     "sidecar",
@@ -451,6 +478,53 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
                 raise ValueError("ineligible checkpoint recovery cannot default to resume")
         if self.default_action == "fix_environment" and self.operator_guidance != "fix_environment":
             raise ValueError("environment recovery requires fix_environment guidance")
+        return self
+
+
+class RecoveryOrchestrationDecisionModel(BaseModel):
+    """Four-outcome production recovery decision (issue #3510, required work #1).
+
+    Consumes the checkpoint-recovery eligibility gate, the requested-vs-original
+    input comparison, and the fail-closed Omnigent authority evaluation to
+    resolve exactly one of ``live_reattach``, ``cold_restore``,
+    ``branch_required``, or ``resume_unavailable`` with a bounded,
+    machine-readable ``reasonCode`` on the two non-actionable outcomes.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: RecoveryOrchestrationMode = Field(..., alias="mode")
+    reason_code: RecoveryOrchestrationReason | None = Field(
+        None, alias="reasonCode", max_length=120
+    )
+    changed_inputs: tuple[str, ...] = Field(default=(), alias="changedInputs")
+    eligibility: RecoveryEligibilityDiagnosticModel = Field(..., alias="eligibility")
+
+    @model_validator(mode="after")
+    def _validate_outcome_contract(self) -> "RecoveryOrchestrationDecisionModel":
+        if self.mode in ("live_reattach", "cold_restore"):
+            if self.reason_code is not None:
+                raise ValueError(
+                    "actionable recovery modes must not carry a blocking reasonCode"
+                )
+            if not self.eligibility.eligible:
+                raise ValueError(
+                    "live_reattach/cold_restore require an eligible checkpoint decision"
+                )
+        else:
+            if not self.reason_code:
+                raise ValueError(
+                    f"{self.mode} requires a machine-readable reasonCode"
+                )
+        if self.mode == "branch_required":
+            if not str(self.reason_code or "").startswith("BRANCH_REQUIRED_"):
+                raise ValueError(
+                    "branch_required reasonCode must identify the changed input"
+                )
+            if not self.changed_inputs:
+                raise ValueError(
+                    "branch_required must enumerate the changed inputs"
+                )
         return self
 
 
@@ -2727,6 +2801,25 @@ class ResumeExecutionRefModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     detail_href: Optional[str] = Field(None, alias="detailHref")
 
+class RecoveryOperatorAuditModel(BaseModel):
+    """Bounded per-attempt audit of who requested a recovery and which action.
+
+    The actor and requested action are server-authoritative; the operator
+    metadata is a bounded, string-coerced snapshot of client-supplied context
+    (issue #3510, required work #6).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    actor: str | None = Field(None, alias="actor", max_length=320)
+    requested_action: Literal[
+        "recover_from_failed_step", "recover_from_selected_step"
+    ] = Field(..., alias="requestedAction")
+    operator_metadata: dict[str, str] = Field(
+        default_factory=dict, alias="operatorMetadata"
+    )
+
+
 class RecoverFromFailedStepResponse(BaseModel):
     """Response from the failed-step recovery command."""
 
@@ -2742,6 +2835,9 @@ class RecoverFromFailedStepResponse(BaseModel):
         "Recovered from failed step", "Recovered from selected step"
     ] = Field("Recovered from failed step", alias="relationship")
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
+    operator_audit: RecoveryOperatorAuditModel | None = Field(
+        None, alias="operatorAudit"
+    )
 
 
 class RecoverExecutionResponse(BaseModel):

@@ -13,6 +13,13 @@ class OmnigentRecoveryMode(str, Enum):
     COLD_RESTORE = "cold_restore"
 
 
+class OmnigentRecoveryDirectiveKind(str, Enum):
+    """Which coordinator entrypoint a production request routes to."""
+
+    RECOVER = "recover"
+    BRANCH = "branch"
+
+
 class CandidateWorkspaceAuthority(BaseModel):
     """MoonMind-owned repository checkpoint selected for continuation."""
 
@@ -149,9 +156,60 @@ def validate_branch_identity(
         raise ValueError("checkpoint branch requires a new Omnigent session")
 
 
+class OmnigentRecoveryDirective(BaseModel):
+    """Compact, evidence-only instruction to route one production run through
+    the profile-bound coordinator's recovery or branch entrypoint.
+
+    Carried on ``AgentExecutionRequest.parameters`` under the
+    ``omnigentRecoveryDirective`` key. Absent directive means a fresh
+    ``execute()`` run, preserving in-flight compatibility. The directive only
+    carries refs and non-sensitive authority-validity flags; the coordinator
+    re-evaluates live-vs-cold with :func:`recovery_mode` and fails closed.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: OmnigentRecoveryDirectiveKind = Field(..., alias="kind")
+    checkpoint: OmnigentCheckpointIdentity = Field(..., alias="checkpoint")
+    candidate_workspace: CandidateWorkspaceAuthority = Field(
+        ..., alias="candidateWorkspace"
+    )
+    current_credential_generation: int = Field(
+        ..., alias="currentCredentialGeneration", ge=1
+    )
+    provider_lease: dict[str, Any] | None = Field(None, alias="providerLease")
+    host_lease: dict[str, Any] | None = Field(None, alias="hostLease")
+    host_registered: bool = Field(False, alias="hostRegistered")
+    session_valid: bool = Field(False, alias="sessionValid")
+    first_message_consistent: bool = Field(False, alias="firstMessageConsistent")
+
+    @model_validator(mode="after")
+    def _reject_credential_like_lease_values(self) -> "OmnigentRecoveryDirective":
+        for name, lease in (
+            ("providerLease", self.provider_lease),
+            ("hostLease", self.host_lease),
+        ):
+            if not lease:
+                continue
+            for value in lease.values():
+                if not isinstance(value, str):
+                    continue
+                lowered = value.lower()
+                if any(
+                    marker in lowered
+                    for marker in ("bearer ", "token=", "password=")
+                ):
+                    raise ValueError(
+                        f"{name} must carry references, not credential data"
+                    )
+        return self
+
+
 __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
+    "OmnigentRecoveryDirective",
+    "OmnigentRecoveryDirectiveKind",
     "OmnigentRecoveryMode",
     "recovery_mode",
     "validate_branch_identity",

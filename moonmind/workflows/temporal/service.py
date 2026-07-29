@@ -63,6 +63,7 @@ from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     FailedRunRecoveryManifestModel,
     RecoveryCheckpointModel,
+    RecoveryOperatorAuditModel,
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
@@ -3617,6 +3618,7 @@ class TemporalExecutionService:
         failed_run_recovery_manifest: Mapping[str, Any] | None = None,
         selected_start_step_id: str | None = None,
         admitted_checkpoint_resume_decision: AdmittedCheckpointResumeDecision | None = None,
+        operator_audit: RecoveryOperatorAuditModel | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
@@ -3931,6 +3933,16 @@ class TemporalExecutionService:
             recovery_source_payload.pop("selectedStartStepExecution", None)
         params["recoverySource"] = recovery_source_payload
 
+        operator_audit_payload: dict[str, Any] | None = None
+        if operator_audit is not None:
+            audit_model = (
+                operator_audit
+                if isinstance(operator_audit, RecoveryOperatorAuditModel)
+                else RecoveryOperatorAuditModel.model_validate(operator_audit)
+            )
+            operator_audit_payload = audit_model.model_dump(
+                by_alias=True, mode="json"
+            )
         workflow_payload = _workflow_payload(params)
         workflow_params = dict(workflow_payload)
         workflow_params["recovery"] = {
@@ -3938,6 +3950,8 @@ class TemporalExecutionService:
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
         }
+        if operator_audit_payload is not None:
+            workflow_params["recovery"]["operatorAudit"] = operator_audit_payload
         preserved_step_refs: list[str] = []
         for preserved_step in preserved_steps:
             for candidate in (
@@ -3981,6 +3995,8 @@ class TemporalExecutionService:
                 admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
             )
         recover_ref["failedRunRecoveryManifestRef"] = manifest_ref
+        if operator_audit_payload is not None:
+            recover_ref["operatorAudit"] = operator_audit_payload
         if recovery_mode == "selected_step":
             recover_ref["recoveryMode"] = recovery_mode
             recover_ref["selectedStartStepId"] = failed_step_id
@@ -4021,7 +4037,7 @@ class TemporalExecutionService:
                 else f"Recovered from failed step of {record.workflow_id}."
             ),
         )
-        return {
+        result: dict[str, Any] = {
             "accepted": True,
             "applied": "created_resumed_execution",
             "source": {
@@ -4040,6 +4056,9 @@ class TemporalExecutionService:
             ),
             "recoveryCheckpointRef": checkpoint_ref,
         }
+        if operator_audit_payload is not None:
+            result["operatorAudit"] = operator_audit_payload
+        return result
 
     @staticmethod
     def _rerun_create_idempotency_key(

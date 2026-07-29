@@ -125,6 +125,7 @@ from moonmind.schemas.temporal_models import (
     RecoverFromFailedStepResponse,
     RecoverFromSelectedStepRequest,
     RecoveryEligibilityDiagnosticModel,
+    RecoveryOperatorAuditModel,
     WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -15338,6 +15339,40 @@ async def recover_execution(
     return RecoverExecutionResponse.model_validate(result)
 
 
+def _recovery_operator_audit(
+    *,
+    user: User,
+    request: RecoverFromFailedStepRequest,
+    action: str,
+) -> RecoveryOperatorAuditModel:
+    """Build a bounded, server-authoritative per-attempt recovery audit entry.
+
+    Records who requested the recovery (authenticated actor) and the requested
+    action, plus a bounded, string-coerced snapshot of client operator metadata
+    (issue #3510, required work #6).
+    """
+
+    actor = getattr(user, "email", None) or _owner_id(user) or None
+    sanitized: dict[str, str] = {}
+    raw_metadata = request.operator_metadata or {}
+    for key, value in list(raw_metadata.items())[:20]:
+        text = str(value).strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if any(
+            marker in lowered
+            for marker in ("bearer ", "token=", "password=", "ghp_", "akia")
+        ):
+            continue
+        sanitized[str(key)[:80]] = text[:500]
+    return RecoveryOperatorAuditModel(
+        actor=actor,
+        requestedAction=action,
+        operatorMetadata=sanitized,
+    )
+
+
 @router.post(
     "/{workflow_id}/recover-from-failed-step",
     response_model=RecoverFromFailedStepResponse,
@@ -15412,6 +15447,11 @@ async def recover_execution_from_failed_step(
             failed_run_recovery_manifest_ref=manifest_ref,
             failed_run_recovery_manifest=manifest_payload,
             admitted_checkpoint_resume_decision=admission,
+            operator_audit=_recovery_operator_audit(
+                user=user,
+                request=request,
+                action="recover_from_failed_step",
+            ),
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
@@ -15529,6 +15569,11 @@ async def recover_execution_from_selected_step(
             failed_run_recovery_manifest=manifest_payload,
             selected_start_step_id=request.selected_start_step_id,
             admitted_checkpoint_resume_decision=admission,
+            operator_audit=_recovery_operator_audit(
+                user=user,
+                request=request,
+                action="recover_from_selected_step",
+            ),
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(

@@ -52,6 +52,7 @@ from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
     FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
     RecoveryCheckpointModel,
+    RecoveryOperatorAuditModel,
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
@@ -3882,6 +3883,75 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             "failedRunRecoveryManifestRef": "artifact://recovery/manifest",
         }
         assert "agentRunId" not in resumed.parameters
+
+
+@pytest.mark.asyncio
+async def test_failed_step_recovery_records_operator_actor_and_action(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="recover source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "agentRunId": "old-agent-run",
+                "workflow": {"title": "recovery source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "recovery_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        result = await service.create_failed_step_recovery_execution(
+            created,
+            recovery_checkpoint_ref=None,
+            idempotency_key="recover-audit-1",
+            checkpoint_payload=_valid_recovery_checkpoint_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+                snapshot_ref="artifact://snapshot/source",
+            ),
+            failed_run_recovery_manifest_ref="artifact://recovery/manifest",
+            failed_run_recovery_manifest=_valid_failed_run_recovery_manifest_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+            ),
+            operator_audit=RecoveryOperatorAuditModel(
+                actor="alice@example.com",
+                requestedAction="recover_from_failed_step",
+                operatorMetadata={"reason": "provider outage recovered"},
+            ),
+        )
+
+        # The attempt actor + requested action are surfaced in the response...
+        assert result["operatorAudit"]["actor"] == "alice@example.com"
+        assert result["operatorAudit"]["requestedAction"] == "recover_from_failed_step"
+        assert result["operatorAudit"]["operatorMetadata"] == {
+            "reason": "provider outage recovered"
+        }
+
+        # ...and persisted as durable evidence on the recovery execution params.
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        workflow_params = resumed.parameters["workflow"]
+        assert workflow_params["recovery"]["operatorAudit"]["actor"] == "alice@example.com"
+        assert (
+            workflow_params["resume"]["operatorAudit"]["requestedAction"]
+            == "recover_from_failed_step"
+        )
 
 
 @pytest.mark.asyncio
