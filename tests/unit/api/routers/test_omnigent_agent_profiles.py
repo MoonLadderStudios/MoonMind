@@ -47,6 +47,22 @@ def test_fixed_post_routes_precede_lifecycle_catch_all():
 
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/default") < catch_all
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/snapshot") < catch_all
+    # The literal upstream-sync journey must resolve before the lifecycle
+    # catch-all so "upstream" is never captured as a profile id.
+    assert post_paths.index("/api/omnigent/agent-profiles/upstream/sync") < catch_all
+
+
+def test_literal_upstream_listing_precedes_profile_id_capture():
+    get_paths = [
+        route.path
+        for route in router.routes
+        if "GET" in getattr(route, "methods", set())
+    ]
+
+    assert (
+        get_paths.index("/api/omnigent/agent-profiles/upstream")
+        < get_paths.index("/api/omnigent/agent-profiles/{profile_id}")
+    )
 
 
 def test_list_response_contract_includes_ordered_versions_and_default_state():

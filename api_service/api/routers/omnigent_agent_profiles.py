@@ -36,7 +36,7 @@ from api_service.db.models import (
 from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
-    synchronize_upstream_inventory,
+    synchronize_endpoint_inventory,
 )
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.services.omnigent_agent_bundle_service import (
@@ -50,7 +50,6 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 from moonmind.omnigent.bridge_proxy import (
-    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 
@@ -235,13 +234,12 @@ async def _load(session: AsyncSession, profile_id: str) -> tuple[OmnigentAgentPr
     versions = list((await session.execute(select(OmnigentAgentProfileVersion).where(OmnigentAgentProfileVersion.profile_id == profile_id).order_by(OmnigentAgentProfileVersion.version.desc()))).scalars())
     return profile, versions
 
-async def _refresh_upstream_projection(
-    session: AsyncSession,
-    *,
+def _resolve_inventory_facade(
     config: OmnigentBridgeConfig,
     proxy: OmnigentBridgeSessionProxy | None,
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
-) -> None:
+) -> OmnigentBridgeSessionProxy | OmnigentEmbeddedHostProtocolFacade:
+    """Select the configured inventory facade or fail on a hard config error."""
     facade = (
         embedded_facade
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
@@ -249,15 +247,28 @@ async def _refresh_upstream_projection(
     )
     if facade is None:
         raise HTTPException(503, "Omnigent inventory bridge is unavailable")
-    try:
-        inventory = await facade.list_agents()
-    except OmnigentBridgeError as exc:
-        raise HTTPException(409, f"could not refresh upstream inventory: {exc}") from exc
-    await synchronize_upstream_inventory(
+    return facade
+
+
+async def _refresh_upstream_projection(
+    session: AsyncSession,
+    *,
+    config: OmnigentBridgeConfig,
+    proxy: OmnigentBridgeSessionProxy | None,
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
+) -> dict[str, Any]:
+    """Refresh the bounded projection, degrading safely on a transient outage.
+
+    A bridge outage no longer aborts the caller: the failure is recorded and the
+    last-known projection is retained as stale, so ``projection_readiness`` blocks
+    new launches without erasing historical evidence.
+    """
+    facade = _resolve_inventory_facade(config, proxy, embedded_facade)
+    return await synchronize_endpoint_inventory(
         session,
         endpoint_ref="default",
         bridge_mode=str(config.host_protocol_mode),
-        inventory=inventory,
+        list_agents=facade.list_agents,
     )
 
 @router.get("")
@@ -304,6 +315,60 @@ async def create_profile(body: ProfileCreate, session: AsyncSession = Depends(ge
         raise HTTPException(409, "agent profile already exists") from exc
     await session.refresh(version)
     return _response(profile, [version])
+
+@router.get("/upstream")
+async def list_upstream_projections(
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> list[dict[str, Any]]:
+    """Report bounded last-known upstream projections with explicit freshness."""
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    bridge_mode = str(bridge_config.host_protocol_mode)
+    rows = list((await session.execute(
+        select(OmnigentUpstreamAgentProjection)
+        .where(
+            OmnigentUpstreamAgentProjection.endpoint_ref == "default",
+            OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
+        )
+        .order_by(OmnigentUpstreamAgentProjection.upstream_id)
+    )).scalars())
+    return [
+        {
+            "projectionId": row.projection_id,
+            "upstreamId": row.upstream_id,
+            "upstreamVersion": row.upstream_version,
+            "bridgeMode": row.bridge_mode,
+            "available": row.available,
+            "compatible": row.compatible,
+            "metadata": row.metadata_snapshot,
+            "error": row.error,
+            "readiness": projection_readiness(row, bridge_mode=bridge_mode),
+        }
+        for row in rows
+    ]
+
+
+@router.post("/upstream/sync")
+async def sync_upstream_projections(
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
+) -> dict[str, Any]:
+    """Trigger one bounded, retry-safe, observable upstream synchronization."""
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    facade = _resolve_inventory_facade(bridge_config, bridge_proxy, embedded_facade)
+    return await synchronize_endpoint_inventory(
+        session,
+        endpoint_ref="default",
+        bridge_mode=str(bridge_config.host_protocol_mode),
+        list_agents=facade.list_agents,
+    )
+
 
 @router.get("/{profile_id}")
 async def get_profile(profile_id: str, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:

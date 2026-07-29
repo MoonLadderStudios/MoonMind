@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
@@ -196,8 +196,12 @@ async def record_upstream_sync_failure(
     bridge_mode: str,
     error: str,
     now: datetime | None = None,
-) -> None:
-    """Retain last-known metadata while explicitly recording stale error state."""
+) -> int:
+    """Retain last-known metadata while explicitly recording stale error state.
+
+    Returns the number of retained projections marked with the failure so the
+    caller can report a bounded, observable degraded outcome.
+    """
     attempted_at = now or datetime.now(timezone.utc)
     safe_error = error.replace("\n", " ")[:512]
     rows = list((await session.execute(
@@ -210,3 +214,71 @@ async def record_upstream_sync_failure(
         projection.last_attempt_at = attempted_at
         projection.error = safe_error
     await session.commit()
+    return len(rows)
+
+
+async def _count_projections(
+    session: AsyncSession, endpoint_ref: str, bridge_mode: str
+) -> int:
+    return int((await session.scalar(
+        select(func.count())
+        .select_from(OmnigentUpstreamAgentProjection)
+        .where(
+            OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
+            OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
+        )
+    )) or 0)
+
+
+async def synchronize_endpoint_inventory(
+    session: AsyncSession,
+    *,
+    endpoint_ref: str,
+    bridge_mode: str,
+    list_agents: Callable[[], Awaitable[Sequence[Mapping[str, Any]]]],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Run one bounded, retry-safe, observable upstream synchronization.
+
+    A successful list upserts the last-known projection and marks disappearances
+    unavailable. A transient outage records an explicit failure while retaining
+    prior metadata as stale, so ``projection_readiness`` blocks new launches
+    without erasing historical evidence. Both outcomes commit an idempotent
+    result that is safe to retry, and both return a compact observable summary.
+    """
+    observed_at = now or datetime.now(timezone.utc)
+    try:
+        inventory = await list_agents()
+    except Exception as exc:  # bounded transient failure -> degrade safely
+        safe_error = str(exc).replace("\n", " ")[:512] or exc.__class__.__name__
+        retained = await record_upstream_sync_failure(
+            session,
+            endpoint_ref=endpoint_ref,
+            bridge_mode=bridge_mode,
+            error=safe_error,
+            now=observed_at,
+        )
+        return {
+            "status": "degraded",
+            "endpointRef": endpoint_ref,
+            "bridgeMode": bridge_mode,
+            "attemptedAt": observed_at.isoformat(),
+            "error": safe_error,
+            "retainedStaleProjections": retained,
+        }
+    synced = await synchronize_upstream_inventory(
+        session,
+        endpoint_ref=endpoint_ref,
+        bridge_mode=bridge_mode,
+        inventory=inventory,
+        now=observed_at,
+    )
+    total = await _count_projections(session, endpoint_ref, bridge_mode)
+    return {
+        "status": "synced",
+        "endpointRef": endpoint_ref,
+        "bridgeMode": bridge_mode,
+        "syncedAt": observed_at.isoformat(),
+        "syncedCount": synced,
+        "projectionCount": total,
+    }
