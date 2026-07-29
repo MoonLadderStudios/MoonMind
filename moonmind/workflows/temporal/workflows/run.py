@@ -766,13 +766,12 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
     "run-workflow-owned-remediation-head-v1"
 )
-# A runtime without canonical checkpoint evidence cannot safely materialize the
-# cumulative workspace required by a semantic remediation attempt. Persist a
-# terminal remaining-work decision instead of admitting the attempt and then
-# failing outside the workflow gate. The patch preserves command history for
-# runs that already evaluated a verifier result under the prior behavior.
-RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH = (
-    "run-remediation-checkpoint-unavailable-stop-v1"
+# Cumulative checkpoint tracking is optional. Admit a headless remediation pair
+# against the live cumulative workspace when capture produced no canonical head.
+# Histories that already evaluated the old mandatory-head guard retain the prior
+# failure branch during replay.
+RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH = (
+    "run-workflow-headless-remediation-v1"
 )
 RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
     "run-managed-session-checkpoint-locator-v1"
@@ -4150,23 +4149,6 @@ class MoonMindRunWorkflow:
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
         )
-        if (
-            workflow_owned_head_enabled
-            and workflow.patched(
-                RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH
-            )
-            and decision.next_phase == RemediationLoopPhase.REMEDIATION_PENDING
-            and self._remediation_workspace_head is None
-        ):
-            decision = decision.model_copy(
-                update={
-                    "continue_loop": False,
-                    "reason": "workspace_checkpoint_unavailable",
-                    "next_attempt": None,
-                    "next_phase": RemediationLoopPhase.STOPPED_REMAINING_WORK,
-                    "retry_kind": None,
-                }
-            )
         decision_ref = await self._write_json_artifact(
             name=(
                 "reports/remediation_decision_"
@@ -4193,6 +4175,7 @@ class MoonMindRunWorkflow:
             workflow_owned_head_enabled
             and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
             and self._remediation_workspace_head is None
+            and not workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
         ):
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,
@@ -12398,12 +12381,6 @@ class MoonMindRunWorkflow:
                             else None
                         )
                         if (
-                            loop_state is not None
-                            and loop_state.continuation_reason
-                            == "workspace_checkpoint_unavailable"
-                        ):
-                            transition_reason = "workspace_checkpoint_unavailable"
-                        elif (
                             isinstance(consumed_payload, Mapping)
                             and int(
                                 consumed_payload.get(

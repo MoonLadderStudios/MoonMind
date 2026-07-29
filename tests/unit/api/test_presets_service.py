@@ -754,22 +754,24 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 "number"
             ] == 3514
 
-            with pytest.raises(PresetValidationError, match="secret-like"):
-                await service.expand_template(
-                    slug="github-issue-input",
-                    scope="global",
-                    scope_ref=None,
-                    inputs={
-                        "github_issue": {
-                            "number": 3514,
-                            "body": (
-                                "Authorization: Bearer "
-                                "fake-credential-1234567890"
-                            ),
-                        }
-                    },
-                    context={},
-                )
+            for unsafe_body in (
+                "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+                "Authorization: Bearer short",
+                "Bearer short",
+            ):
+                with pytest.raises(PresetValidationError, match="secret-like"):
+                    await service.expand_template(
+                        slug="github-issue-input",
+                        scope="global",
+                        scope_ref=None,
+                        inputs={
+                            "github_issue": {
+                                "number": 3514,
+                                "body": unsafe_body,
+                            }
+                        },
+                        context={},
+                    )
 
 async def test_expand_schema_capability_reports_field_addressable_errors(tmp_path):
     user_id = uuid4()

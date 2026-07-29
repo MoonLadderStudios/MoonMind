@@ -984,7 +984,7 @@ class TestPushWorkspaceBranch:
         assert not any("push" in call for call in recorded_calls)
 
     @pytest.mark.asyncio
-    async def test_push_normalizes_remote_tracking_target_before_base_refresh(self):
+    async def test_push_falls_back_from_missing_origin_prefixed_base(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
 
@@ -1000,8 +1000,20 @@ class TestPushWorkspaceBranch:
                 activities,
                 "_refresh_workspace_remote_base_ref",
                 new_callable=AsyncMock,
-                return_value=False,
+                side_effect=[False, True],
             ) as refresh_base,
+            patch.object(
+                activities,
+                "_resolve_workspace_remote_branch_sha",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_scan_workspace_push_range",
+                new_callable=AsyncMock,
+                return_value={"push_status": "blocked-for-test"},
+            ) as scan_range,
         ):
             proc = AsyncMock()
             proc.communicate = AsyncMock(
@@ -1015,16 +1027,63 @@ class TestPushWorkspaceBranch:
                 target_branch="origin/main",
             )
 
+        assert refresh_base.await_count == 2
+        assert [
+            call.kwargs["base_branch"] for call in refresh_base.await_args_list
+        ] == ["origin/main", "main"]
+        scan_range.assert_awaited_once()
+        assert scan_range.await_args.kwargs["base_ref"] == "origin/main"
+        assert result["push_status"] == "blocked-for-test"
+
+    @pytest.mark.asyncio
+    async def test_push_preserves_existing_origin_prefixed_base(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch.object(
+                activities,
+                "_commit_workspace_changes_if_needed",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch.object(
+                activities,
+                "_refresh_workspace_remote_base_ref",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as refresh_base,
+            patch.object(
+                activities,
+                "_resolve_workspace_remote_branch_sha",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_scan_workspace_push_range",
+                new_callable=AsyncMock,
+                return_value={"push_status": "blocked-for-test"},
+            ) as scan_range,
+        ):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(
+                return_value=(b"feature/literal-origin-branch\n", b"")
+            )
+            proc.returncode = 0
+            mock_exec.return_value = proc
+
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="origin/release",
+            )
+
         refresh_base.assert_awaited_once()
-        assert refresh_base.await_args.kwargs["workspace"] == (
-            "/work/agent_jobs/run-1/repo"
-        )
-        assert refresh_base.await_args.kwargs["base_branch"] == "main"
-        assert refresh_base.await_args.kwargs["run_id"] == "run-1"
-        assert result["push_status"] == "failed"
-        assert result["push_base_branch"] == "main"
-        assert result["push_base_ref"] == "origin/main"
-        assert "origin/origin" not in result["push_error"]
+        assert refresh_base.await_args.kwargs["base_branch"] == "origin/release"
+        scan_range.assert_awaited_once()
+        assert scan_range.await_args.kwargs["base_ref"] == "origin/origin/release"
+        assert result["push_status"] == "blocked-for-test"
 
     @pytest.mark.asyncio
     async def test_push_blocks_when_live_remote_head_does_not_match(self):

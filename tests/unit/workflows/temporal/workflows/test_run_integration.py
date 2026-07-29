@@ -26,7 +26,6 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
-    RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
@@ -34,6 +33,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
 )
@@ -3693,7 +3693,6 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
         lambda patch_id: patch_id
         in {
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
-            RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
             RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
         },
     )
@@ -4054,7 +4053,7 @@ async def test_dynamic_verifier_runs_when_no_checkpoint_head_was_captured(
 
 
 @pytest.mark.asyncio
-async def test_dynamic_verifier_stops_with_remaining_work_without_checkpoint(
+async def test_dynamic_verifier_admits_headless_attempt_without_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4080,7 +4079,7 @@ async def test_dynamic_verifier_stops_with_remaining_work_without_checkpoint(
         lambda patch_id: patch_id
         in {
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
-            RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
         },
     )
     ordered_nodes: list[dict[str, Any]] = []
@@ -4093,20 +4092,22 @@ async def test_dynamic_verifier_stops_with_remaining_work_without_checkpoint(
         logical_step_id="initial-verification",
     )
 
-    assert admitted is False
-    assert ordered_nodes == []
+    assert admitted is True
     assert mock_run_workflow._remediation_workspace_head is None
     state = mock_run_workflow._remediation_loop_state
     assert state is not None
-    assert state.phase.value == "stopped_remaining_work"
-    assert state.continuation_reason == "workspace_checkpoint_unavailable"
+    assert state.phase.value == "remediation_running"
+    assert state.continuation_reason == "verification_requested_remediation"
+    remediation, verification = ordered_nodes
+    assert remediation["inputs"]["remediationWorkspaceHeadRef"] is None
+    assert verification["inputs"]["remediationWorkspaceHeadRef"] is None
     decision_payload = mock_run_workflow._write_json_artifact.await_args.kwargs[
         "payload"
     ]
-    assert decision_payload["continueLoop"] is False
-    assert decision_payload["reason"] == "workspace_checkpoint_unavailable"
-    assert decision_payload["nextAttempt"] is None
-    assert decision_payload["nextPhase"] == "stopped_remaining_work"
+    assert decision_payload["continueLoop"] is True
+    assert decision_payload["reason"] == "verification_requested_remediation"
+    assert decision_payload["nextAttempt"] == 1
+    assert decision_payload["nextPhase"] == "remediation_pending"
 
 
 @pytest.mark.asyncio

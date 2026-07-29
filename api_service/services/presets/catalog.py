@@ -124,8 +124,8 @@ _SECRET_LIKE_KEY_PATTERN = re.compile(
 )
 _SECRET_LIKE_VALUE_PATTERN = re.compile(
     r"(token=|password=|"
-    r"bearer\s+(?=[a-z0-9._~+/=-]{16,}(?![a-z0-9._~+/=-]))"
-    r"(?=[a-z0-9._~+/=-]*[0-9._~+/=-])[a-z0-9._~+/=-]+|"
+    r"authorization\s*:\s*bearer\s+\S+|"
+    r"(?:^|[\r\n])\s*bearer\s+\S+\s*(?:$|[\r\n])|"
     r"ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|"
     r"-----begin [a-z ]*private key)",
     re.IGNORECASE,
