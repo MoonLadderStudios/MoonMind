@@ -90,6 +90,10 @@ services:
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
+      # Live retrieval capability authority, accounting, and bounded evidence.
+      # Must outlive container recreation or an update would invalidate
+      # still-live capabilities and discard durable retrieval records.
+      - moonmind_retrieval_state:/app/var/retrieval-follow-up
       - agent_workspaces:/work/agent_jobs:ro
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
@@ -1220,6 +1224,8 @@ volumes:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   moonmind_secrets:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
+  moonmind_retrieval_state:
+    name: ${MOONMIND_RETRIEVAL_STATE_VOLUME_NAME:-moonmind_retrieval_state}
   unreal_ccache_volume:
     name: unreal_ccache_volume
   omnigent-host-artifacts:

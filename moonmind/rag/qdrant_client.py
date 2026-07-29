@@ -216,6 +216,40 @@ class RagQdrantClient:
             return None
         return qmodels.Filter(must=must)
 
+    def collection_freshness_at(
+        self, collection_name: str, *, sample_limit: int = 64
+    ) -> datetime | None:
+        """Return the newest payload timestamp from one bounded sample page.
+
+        Used to apply an overlay freshness policy on the retrieval hot path, so
+        it samples a single page instead of scrolling the whole collection.
+        """
+        if sample_limit <= 0 or not hasattr(self._client, "scroll"):
+            return None
+        try:
+            points, _ = self._client.scroll(
+                collection_name=collection_name,
+                limit=sample_limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            logger.debug(
+                "Unable to sample freshness for collection %s",
+                collection_name,
+                exc_info=True,
+            )
+            return None
+        latest: datetime | None = None
+        for point in points or ():
+            payload = getattr(point, "payload", None) or {}
+            if not isinstance(payload, Mapping):
+                continue
+            timestamp, _source = self._payload_freshness(payload)
+            if timestamp is not None and (latest is None or timestamp > latest):
+                latest = timestamp
+        return latest
+
     def _collection_freshness(
         self, *, collection_name: str, limit: int
     ) -> tuple[str | None, str | None]:
