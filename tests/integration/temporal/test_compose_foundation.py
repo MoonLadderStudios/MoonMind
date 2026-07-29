@@ -634,6 +634,15 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
+        # Restricted-egress enforcement (MoonLadderStudios/MoonMind#3516): the
+        # static Codex host is routed through the trusted proxy on the internal
+        # network. NO_PROXY is pinned empty so no destination bypasses it.
+        "HTTP_PROXY": "http://sandbox-egress-proxy:3128",
+        "HTTPS_PROXY": "http://sandbox-egress-proxy:3128",
+        "http_proxy": "http://sandbox-egress-proxy:3128",
+        "https_proxy": "http://sandbox-egress-proxy:3128",
+        "NO_PROXY": "",
+        "no_proxy": "",
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "HOME": "/home/app",
         "PATH": MOUNTED_TOOL_PATH,
@@ -697,7 +706,10 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert init_service["entrypoint"] == [
         "/opt/moonmind/init-codex-oauth-host.sh"
     ]
-    assert _network_names(host_service) == {"local-network"}
+    # Restricted egress: the host attaches only to the internal enforcing
+    # network (MoonLadderStudios/MoonMind#3516), never the routable
+    # local-network.
+    assert _network_names(host_service) == {"restricted-egress-network"}
 
 
 def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
