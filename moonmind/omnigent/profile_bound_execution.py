@@ -29,6 +29,7 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.workspace_materialization import WorkspaceMaterializationSpec
 from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceBinding,
     RemediationWorkspaceOwner,
@@ -678,6 +679,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
+                workspace_materialization=(
+                    None
+                    if remediation_resolution is not None
+                    else self._workspace_materialization(request)
+                ),
             )
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")
@@ -1150,6 +1156,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code="WORKSPACE_LOCATOR_REQUIRED",
             )
         return dict(locator)
+
+    @staticmethod
+    def _workspace_materialization(
+        request: AgentExecutionRequest,
+    ) -> Mapping[str, Any] | None:
+        """Compile the path-free workspace materialization intent, if any.
+
+        Returns ``None`` for non-repository work so the owner preserves the
+        resolve-only contract for already-materialized locators.
+        """
+
+        spec = WorkspaceMaterializationSpec.from_request_payload(
+            workspace_spec=request.workspace_spec,
+            parameters=request.parameters,
+            input_refs=request.input_refs,
+        )
+        if spec is None:
+            return None
+        return spec.model_dump(by_alias=True, mode="json")
 
     @staticmethod
     def _remediation_workspace(

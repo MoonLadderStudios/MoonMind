@@ -28,6 +28,10 @@ from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WORKSPACE_LOCATOR_ADAPTER,
 )
+from moonmind.omnigent.workspace_materialization import (
+    WorkspaceMaterializationSpec,
+    materialize_workspace,
+)
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -154,6 +158,7 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
+        workspace_materialization: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -175,10 +180,13 @@ class OmnigentOAuthHostRuntime:
             resolved_skillset_ref=resolved_skillset_ref,
             artifact_gateway=artifact_gateway,
         )
-        workspace_source = await self._prepare_workspace(
+        workspace_source, materialization_evidence = await self._prepare_workspace(
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
+            materialization=workspace_materialization,
+            artifact_gateway=artifact_gateway,
+            github_token=github_token,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -252,6 +260,8 @@ class OmnigentOAuthHostRuntime:
         validated["workspacePath"] = result["workspacePath"]
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
+        if materialization_evidence is not None:
+            validated["workspaceMaterialization"] = materialization_evidence
         return validated
 
     @staticmethod
@@ -816,23 +826,34 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
-    ) -> Path:
+        materialization: Mapping[str, Any] | None = None,
+        artifact_gateway: Any | None = None,
+        github_token: str | None = None,
+    ) -> tuple[Path, dict[str, Any] | None]:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
             raise OmnigentOAuthHostError(
                 "Omnigent repository work requires a sandbox WorkspaceLocator",
                 code="WORKSPACE_LOCATOR_UNSUPPORTED",
             )
+        spec = (
+            WorkspaceMaterializationSpec.model_validate(materialization)
+            if isinstance(materialization, Mapping) and materialization
+            else None
+        )
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
-        # Validate the workflow-derived identity and containment before writing
-        # even the owner record.
+        # When the owner is responsible for materialization it must not require a
+        # pre-existing directory; identity and containment are still validated
+        # before any host mutation.  When no materialization intent is carried,
+        # the resolve-only contract holds and a missing workspace fails closed.
+        must_exist = spec is None
         resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
-            must_exist=True,
+            must_exist=must_exist,
         )
         record_store = SandboxWorkspaceRecordStore(self._workspace_root)
         authoritative_record = record_store.load(locator.workspace_id)
@@ -851,9 +872,53 @@ class OmnigentOAuthHostRuntime:
             owner_record=authoritative_record,
             expected_workflow_id=current_workflow_id,
             expected_step_execution_id=current_step_execution_id,
+            must_exist=must_exist,
+        )
+        if spec is None:
+            return workspace, None
+
+        # Only after ownership and containment are proven does the worker
+        # materialize the authored repository/branch/attachment/restore state.
+        authority = (self._workspace_root / "temporal_sandbox").resolve()
+        owned_root = (authority / locator.workspace_id).resolve()
+        evidence = await materialize_workspace(
+            spec=spec,
+            owned_root=owned_root,
+            repo_path=workspace,
+            run_command=self._run,
+            artifact_reader=self._workspace_artifact_reader(artifact_gateway),
+            github_token=github_token,
+        )
+        # Re-resolve with the strict existence contract to prove the authorized
+        # workspace was actually materialized before the host is launched.
+        materialized = resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            owner_record=authoritative_record,
+            expected_workflow_id=current_workflow_id,
+            expected_step_execution_id=current_step_execution_id,
             must_exist=True,
         )
-        return workspace
+        return materialized, evidence
+
+    @staticmethod
+    def _workspace_artifact_reader(artifact_gateway: Any | None) -> Any | None:
+        if artifact_gateway is None:
+            return None
+        if hasattr(artifact_gateway, "read_bytes"):
+            return artifact_gateway
+
+        class _ArtifactReader:
+            async def read_bytes(self, artifact_ref: str) -> bytes:
+                _artifact, payload = await artifact_gateway.read(
+                    artifact_id=artifact_ref.removeprefix("artifact://"),
+                    principal="service:workspace_materialization",
+                    allow_restricted_raw=True,
+                )
+                return payload
+
+        return _ArtifactReader()
 
     async def _initialize_required_tools(self) -> None:
         await self._run(

@@ -809,13 +809,14 @@ async def test_host_preparation_resolves_pre_materialized_workspace_without_git(
         SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
     )
 
-    resolved = await runtime._prepare_workspace(
+    resolved, evidence = await runtime._prepare_workspace(
         workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
         current_workflow_id="workflow-1",
         current_step_execution_id="step-1",
     )
 
     assert resolved == workspace
+    assert evidence is None
     runtime._run.assert_not_awaited()
 
 
@@ -829,13 +830,14 @@ async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> N
     workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
     workspace.mkdir(parents=True)
 
-    resolved = await runtime._prepare_workspace(
+    resolved, evidence = await runtime._prepare_workspace(
         workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
         current_workflow_id="workflow-1",
         current_step_execution_id="step-1",
     )
 
     assert resolved == workspace
+    assert evidence is None
     assert SandboxWorkspaceRecordStore(workspace_root).load(workspace_id) == (
         SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
     )
@@ -1981,7 +1983,7 @@ async def _run_coordinator_failure_case(
         return_value=Path("/tmp/skills")
     )
     runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
-        return_value=Path("/tmp/workspace")
+        return_value=(Path("/tmp/workspace"), None)
     )
     runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
     runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
