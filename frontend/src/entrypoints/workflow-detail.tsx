@@ -2608,6 +2608,8 @@ type BridgeSessionProjection = {
   omnigentHostRef?: string | undefined;
   omnigentRunnerRef?: string | undefined;
   firstMessageState?: string | undefined;
+  compatibilityDiagnostics?: Record<string, unknown> | undefined;
+  initialRetrieval?: Record<string, unknown> | undefined;
   capabilities: Record<string, boolean>;
 };
 
@@ -2775,6 +2777,12 @@ async function resolveBridgeSessionProjection({
     omnigentHostRef: typeof body.omnigentHostRef === 'string' ? body.omnigentHostRef : undefined,
     omnigentRunnerRef: typeof body.omnigentRunnerRef === 'string' ? body.omnigentRunnerRef : undefined,
     firstMessageState: typeof body.firstMessageState === 'string' ? body.firstMessageState : undefined,
+    compatibilityDiagnostics: body.compatibilityDiagnostics && typeof body.compatibilityDiagnostics === 'object'
+      ? body.compatibilityDiagnostics as Record<string, unknown>
+      : undefined,
+    initialRetrieval: body.initialRetrieval && typeof body.initialRetrieval === 'object'
+      ? body.initialRetrieval as Record<string, unknown>
+      : undefined,
     capabilities: body.capabilities && typeof body.capabilities === 'object'
       ? Object.fromEntries(Object.entries(body.capabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
       : {},
@@ -6224,6 +6232,30 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {projection.initialRetrieval ? (
+        <div className="small stack" data-testid="omnigent-initial-retrieval">
+          <p>
+            Initial context: {String(projection.initialRetrieval.state ?? 'unknown')}
+            {' · '}{Number(projection.initialRetrieval.resultCount ?? 0)} sources
+            {projection.initialRetrieval.truncated ? ' · truncated' : ''}
+            {projection.initialRetrieval.reason ? ` · ${String(projection.initialRetrieval.reason)}` : ''}
+          </p>
+          {Array.isArray(projection.initialRetrieval.collections) && projection.initialRetrieval.collections.length
+            ? <p>Collections: {projection.initialRetrieval.collections.map(String).join(', ')}</p> : null}
+          {projection.initialRetrieval.scope && typeof projection.initialRetrieval.scope === 'object'
+            ? <p>Scope: {Object.entries(projection.initialRetrieval.scope as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          {projection.initialRetrieval.budgets && typeof projection.initialRetrieval.budgets === 'object'
+            ? <p>Budgets: {Object.entries(projection.initialRetrieval.budgets as Record<string, unknown>).map(([key, value]) => `${key}=${String(value)}`).join(', ')}</p> : null}
+          <p>
+            Context consumed: {projection.initialRetrieval.firstMessageConsumedContextRef ? 'yes' : 'no'}
+            {projection.initialRetrieval.firstMessageDigest ? <> · first message <code className="text-xs">{String(projection.initialRetrieval.firstMessageDigest)}</code></> : null}
+            {projection.initialRetrieval.contextPackDigest ? <> · pack <code className="text-xs">{String(projection.initialRetrieval.contextPackDigest)}</code></> : null}
+          </p>
+          {projection.initialRetrieval.contextPackRef ? (
+            <p>ContextPack artifact: <code className="text-xs break-all">{String(projection.initialRetrieval.contextPackRef)}</code></p>
+          ) : null}
+        </div>
+      ) : null}
       <section className="card stack" aria-label="Omnigent runtime identity">
         <h3>Codex via Omnigent</h3>
         <dl className="details-grid">
@@ -6249,6 +6281,21 @@ function BridgeSessionLogsPanel({
           ))}
         </dl>
       </section>
+      {projection.compatibilityDiagnostics ? (
+        <section className="card stack" aria-label="Omnigent compatibility diagnostics">
+          <h3>Compatibility diagnostics</h3>
+          <dl className="details-grid">
+            {Object.entries(projection.compatibilityDiagnostics)
+              .filter(([, value]) => value !== undefined && value !== null && value !== '')
+              .map(([key, value]) => (
+                <div key={key}>
+                  <dt>{formatStatusLabel(key.replace(/([A-Z])/g, '_$1'))}</dt>
+                  <dd><code className="text-xs break-all">{Array.isArray(value) ? value.join(', ') || 'none' : String(value)}</code></dd>
+                </div>
+              ))}
+          </dl>
+        </section>
+      ) : null}
       {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
         ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
         : null}

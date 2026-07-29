@@ -244,12 +244,30 @@ def test_host_protocol_mode_accepts_embedded() -> None:
     }
 
     validation = {
-        key: {"status": "passed"}
+        key: {
+            "status": "passed",
+            "supportedHostModes": ["static_compose", "on_demand_docker"],
+        }
         for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
     }
     assert (
         config.readiness(evidence_validation=validation)["conformanceState"] == "ready"
     )
+    mode_validation = {
+        key: {"status": "passed", "supportedHostModes": ["static_compose"]}
+        for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+    }
+    assert config.readiness(
+        evidence_validation=mode_validation, host_mode="static_compose"
+    )["conformanceState"] == "ready"
+    unsupported = config.readiness(
+        evidence_validation=mode_validation, host_mode="on_demand_docker"
+    )
+    assert unsupported["conformanceState"] == "gated"
+    assert unsupported["gateReason"] == "embedded_host_mode_evidence_required"
+    assert config.readiness(
+        evidence_validation=mode_validation
+    )["conformanceState"] == "gated"
 
 
 def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(

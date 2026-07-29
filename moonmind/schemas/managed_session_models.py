@@ -1212,6 +1212,7 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
     thread_id: NonBlankStr = Field(..., alias="threadId")
+    replace_existing: bool = Field(False, alias="replaceExisting")
     workspace_path: NonBlankStr = Field(..., alias="workspacePath")
     session_workspace_path: NonBlankStr = Field(
         ..., alias="sessionWorkspacePath"

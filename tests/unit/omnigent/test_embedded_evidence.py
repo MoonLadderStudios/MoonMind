@@ -28,6 +28,8 @@ def _claim(**overrides):
         "bridgeConfigSha256": SHA,
         "omnigentSourceCommit": PINNED_OMNIGENT_COMMIT,
         "protocolProfile": EMBEDDED_PROTOCOL_PROFILE,
+        "supportedHostModes": ["static_compose", "on_demand_docker"],
+        "hostArchitecture": "linux/amd64",
         "images": {
             "server": f"ghcr.io/omnigent/server@sha256:{'1' * 64}",
             "host": f"ghcr.io/omnigent/host@sha256:{'2' * 64}",
@@ -56,10 +58,13 @@ def test_accepts_current_passing_policy_bound_claim() -> None:
         expected_claim_type="live_smoke",
         moonmind_build_identity="build-3425",
         bridge_config_sha256=SHA,
+        expected_host_architecture="linux/amd64",
+        expected_images=_claim()["images"],
         now=NOW,
     )
 
     assert result.status == "passed"
+    assert result.supported_host_modes == ("static_compose", "on_demand_docker")
 
 
 @pytest.mark.parametrize(
@@ -71,6 +76,7 @@ def test_accepts_current_passing_policy_bound_claim() -> None:
         ({"secretScan": "failed"}, "malformed"),
         ({"cleanup": "failed"}, "malformed"),
         ({"images": {}}, "images"),
+        ({"supportedHostModes": []}, "supportedHostModes"),
     ],
 )
 def test_rejects_failed_revoked_or_incomplete_claims(override, match) -> None:
@@ -80,6 +86,8 @@ def test_rejects_failed_revoked_or_incomplete_claims(override, match) -> None:
             expected_claim_type="live_smoke",
             moonmind_build_identity="build-3425",
             bridge_config_sha256=SHA,
+            expected_host_architecture="linux/amd64",
+            expected_images=_claim()["images"],
             now=NOW,
         )
 
@@ -98,6 +106,8 @@ def test_rejects_stale_or_incompatible_policy(kwargs, match) -> None:
         "expected_claim_type": "live_smoke",
         "moonmind_build_identity": "build-3425",
         "bridge_config_sha256": SHA,
+        "expected_host_architecture": "linux/amd64",
+        "expected_images": _claim()["images"],
         "now": NOW,
     }
     arguments.update(kwargs)
@@ -115,5 +125,31 @@ def test_rejects_not_yet_valid_claim() -> None:
             expected_claim_type="live_smoke",
             moonmind_build_identity="build-3425",
             bridge_config_sha256=SHA,
+            expected_host_architecture="linux/amd64",
+            expected_images=_claim()["images"],
             now=NOW,
         )
+
+
+@pytest.mark.parametrize(
+    ("claim_override", "argument_override", "match"),
+    [
+        ({"hostArchitecture": "linux/arm64"}, {}, "host architecture"),
+        ({}, {"expected_images": {"server": "other", "host": "other"}}, "runtime images"),
+        ({"images": {**_claim()["images"], "debug": "private"}}, {}, "server and host roles"),
+    ],
+)
+def test_rejects_evidence_for_another_deployment_or_unknown_image_roles(
+    claim_override, argument_override, match
+) -> None:
+    arguments = {
+        "expected_claim_type": "live_smoke",
+        "moonmind_build_identity": "build-3425",
+        "bridge_config_sha256": SHA,
+        "expected_host_architecture": "linux/amd64",
+        "expected_images": _claim()["images"],
+        "now": NOW,
+    }
+    arguments.update(argument_override)
+    with pytest.raises(EmbeddedEvidenceError, match=match):
+        validate_embedded_evidence(_claim(**claim_override), **arguments)

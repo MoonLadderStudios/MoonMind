@@ -22,7 +22,10 @@ from api_service.db.models import (
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
 )
-from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
+from moonmind.provider_profiles.oauth_policy import (
+    is_claude_oauth_profile,
+    is_codex_oauth_profile,
+)
 from moonmind.schemas.agent_runtime_models import (
     AuthVolumeRef,
     CredentialMountRef,
@@ -89,38 +92,57 @@ class OmnigentOAuthHostRepository:
     def _mount_from_profile(
         profile: ManagedAgentProviderProfile,
     ) -> CredentialMountRef:
-        if not is_codex_oauth_profile(
-            runtime_id=profile.runtime_id,
-            credential_source=profile.credential_source,
-            materialization_mode=profile.runtime_materialization_mode,
-        ):
+        identity = {
+            "runtime_id": profile.runtime_id,
+            "credential_source": profile.credential_source,
+            "materialization_mode": profile.runtime_materialization_mode,
+        }
+        if is_codex_oauth_profile(**identity):
+            provider_id = "openai"
+            target_path = "/home/app/.codex"
+        elif is_claude_oauth_profile(**identity):
+            provider_id = "anthropic"
+            target_path = "/home/app/.claude"
+        else:
             raise OmnigentOAuthHostError(
-                "profile is not a Codex OAuth profile",
+                "profile is not a supported Omnigent OAuth profile",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
             )
-        if profile.provider_id != "openai":
+        if profile.provider_id != provider_id:
             raise OmnigentOAuthHostError(
-                "Codex OAuth host requires provider_id=openai",
+                f"{profile.runtime_id} OAuth host requires provider_id={provider_id}",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
             )
-        if profile.volume_mount_path != "/home/app/.codex" or not profile.volume_ref:
+        if profile.volume_mount_path != target_path or not profile.volume_ref:
             raise OmnigentOAuthHostError(
-                "Codex OAuth profile mount contract is invalid",
+                f"{profile.runtime_id} OAuth profile mount contract is invalid",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
             )
         return CredentialMountRef(
             authVolumeRef=AuthVolumeRef(
                 providerProfileId=profile.profile_id,
-                runtimeId="codex_cli",
-                providerId="openai",
+                runtimeId=profile.runtime_id,
+                providerId=provider_id,
                 volumeRef=profile.volume_ref,
                 credentialGeneration=profile.credential_generation,
                 ownerUserId=str(profile.owner_user_id or "system"),
             ),
-            targetPath="/home/app/.codex",
+            targetPath=target_path,
             accessMode="read_write",
             runtimeUid=1000,
             runtimeGid=1000,
+        )
+
+    @staticmethod
+    def _harness_for_mount(mount: CredentialMountRef) -> str:
+        runtime_id = mount.auth_volume_ref.runtime_id
+        if runtime_id == "codex_cli":
+            return "codex-native"
+        if runtime_id == "claude_code":
+            return "claude-native"
+        raise OmnigentOAuthHostError(
+            "credential mount runtime is not supported by Omnigent",
+            code=HostPreflightFailure.BINDING_MISMATCH.value,
         )
 
     @classmethod
@@ -136,9 +158,10 @@ class OmnigentOAuthHostRepository:
                 "host binding credential mount differs from the Provider Profile",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
             )
-        if record.harness != "codex-native":
+        expected_harness = cls._harness_for_mount(mount)
+        if record.harness != expected_harness:
             raise OmnigentOAuthHostError(
-                "host binding does not advertise codex-native",
+                f"host binding does not advertise {expected_harness}",
                 code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
             )
         return OmnigentOAuthHostBinding(
@@ -192,6 +215,7 @@ class OmnigentOAuthHostRepository:
             if profile is None:
                 raise OmnigentOAuthHostError("Provider Profile does not exist")
             mount = self._mount_from_profile(profile)
+            harness = self._harness_for_mount(mount)
             result = await session.execute(
                 select(OmnigentOAuthHostBindingRecord).where(
                     OmnigentOAuthHostBindingRecord.provider_profile_id == profile_id
@@ -203,7 +227,7 @@ class OmnigentOAuthHostRepository:
                     binding_ref=f"omnigent-oauth:{profile_id}",
                     provider_profile_id=profile_id,
                     endpoint_ref=endpoint_ref,
-                    harness="codex-native",
+                    harness=harness,
                     credential_mount_template_json=mount.model_dump(
                         by_alias=True, mode="json"
                     ),
@@ -216,7 +240,7 @@ class OmnigentOAuthHostRepository:
                 session.add(record)
             else:
                 record.endpoint_ref = endpoint_ref
-                record.harness = "codex-native"
+                record.harness = harness
                 record.credential_mount_template_json = mount.model_dump(
                     by_alias=True, mode="json"
                 )
@@ -368,6 +392,13 @@ class OmnigentOAuthHostRepository:
             lastHeartbeatAt=record.last_heartbeat_at,
             expiresAt=record.expires_at,
         )
+
+    async def get_host_lease(self, lease_id: str) -> OmnigentHostLease | None:
+        """Load one authoritative lease by its stable ownership identity."""
+
+        async with self._session_factory() as session:
+            record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
+            return None if record is None else self._lease_model(record)
 
     async def transition_host_lease(
         self,
@@ -558,15 +589,20 @@ def validate_preflight_result(
     """Fail closed unless destination-host evidence matches the exact binding."""
 
     expected = binding.credential_mount_ref.auth_volume_ref
+    runtime_id = expected.runtime_id
+    provider_id = expected.provider_id
+    harness = OmnigentOAuthHostRepository._harness_for_mount(
+        binding.credential_mount_ref
+    )
     checks = {
         "providerProfileId": binding.provider_profile_id,
-        "runtimeId": "codex_cli",
-        "providerId": "openai",
+        "runtimeId": runtime_id,
+        "providerId": provider_id,
         "credentialGeneration": host_lease.credential_generation,
-        "mountPath": "/home/app/.codex",
+        "mountPath": binding.credential_mount_ref.target_path,
         "runtimeUid": 1000,
         "runtimeGid": 1000,
-        "harness": "codex-native",
+        "harness": harness,
         "competingCredentialsPresent": False,
         "loginStatus": "authenticated",
     }

@@ -473,6 +473,72 @@ class OmnigentBridgeSession(Base):
     )
 
 
+class OmnigentPolicy(Base):
+    """Stable operator-owned policy identity."""
+
+    __tablename__ = "omnigent_policies"
+
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id"), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    default_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class OmnigentPolicyVersion(Base):
+    """Immutable normalized authority and complete lifecycle audit lineage."""
+
+    __tablename__ = "omnigent_policy_versions"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "version", name="uq_omnigent_policy_version"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("omnigent_policies.policy_id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    # Deliberately not MutableDict: document authority is append-only. Lifecycle
+    # changes are recorded separately and never dirty this JSON value in place.
+    document_json: Mapped[dict[str, Any]] = mapped_column(_json_variant(), nullable=False)
+    digest: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    parent_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    clone_source_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    supersedes_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    activated_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    disabled_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    validation_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    compatibility_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    rollout_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    env_fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class OmnigentPolicyEvent(Base):
+    """Append-only audit event for lifecycle and default-selection changes."""
+
+    __tablename__ = "omnigent_policy_events"
+    __table_args__ = (
+        Index("ix_omnigent_policy_events_policy_created", "policy_id", "created_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("omnigent_policies.policy_id"), nullable=False
+    )
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(_json_variant(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class OmnigentBridgeSessionEvent(Base):
     """Durable index over the Omnigent bridge session event stream.
 
@@ -2522,9 +2588,10 @@ class ManagedAgentProviderProfile(Base):
             name="ck_provider_profiles_default_model_tier_positive",
         ),
         CheckConstraint(
-            "NOT (runtime_id = 'codex_cli' AND credential_source = 'oauth_volume' "
+            "NOT (runtime_id IN ('codex_cli', 'claude_code') "
+            "AND credential_source = 'oauth_volume' "
             "AND runtime_materialization_mode = 'oauth_home') OR max_parallel_runs = 1",
-            name="ck_provider_profiles_codex_oauth_exclusive_capacity",
+            name="ck_provider_profiles_oauth_home_exclusive_capacity",
         ),
         CheckConstraint(
             "credential_generation >= 1",
@@ -2568,7 +2635,6 @@ class ManagedAgentProviderProfile(Base):
                 self.default_model,
                 self.default_effort,
             )
-
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(
             ProviderCredentialSource,
@@ -2687,6 +2753,109 @@ class ManagedAgentProviderProfile(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+
+class OmnigentAgentProfile(Base):
+    """Stable MoonMind-owned identity for an Omnigent agent configuration."""
+    __tablename__ = "omnigent_agent_profiles"
+    __table_args__ = (Index("ix_omnigent_agent_profiles_state", "state"), Index("ix_omnigent_agent_profiles_owner", "owner_id"))
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    active_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    default_for_runtime: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+
+class OmnigentAgentProfileVersion(Base):
+    """Immutable normalized profile document and its audit evidence."""
+    __tablename__ = "omnigent_agent_profile_versions"
+    __table_args__ = (UniqueConstraint("profile_id", "version", name="uq_omnigent_agent_profile_version"), UniqueConstraint("profile_id", "digest", name="uq_omnigent_agent_profile_digest"))
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    profile_id: Mapped[str] = mapped_column(String(128), ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    document: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cloned_from_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    cloned_from_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    upstream_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    validation_result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    rollout_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OmnigentAgentProfileAuditEvent(Base):
+    """Immutable lifecycle evidence for a MoonMind-owned agent profile."""
+    __tablename__ = "omnigent_agent_profile_audit_events"
+    __table_args__ = (
+        Index("ix_omnigent_agent_profile_audit_profile", "profile_id", "created_at"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    actor_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentAgentProfileUsage(Base):
+    """Exact immutable profile selection retained by an authoring surface."""
+    __tablename__ = "omnigent_agent_profile_usage"
+    __table_args__ = (
+        UniqueConstraint("consumer_type", "consumer_id", name="uq_omnigent_profile_consumer"),
+        Index("ix_omnigent_profile_usage_profile", "profile_id", "version"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    consumer_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    consumer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("omnigent_agent_profiles.profile_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    effective_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+
+class OmnigentUpstreamAgentProjection(Base):
+    """Last-known bounded projection of one stable upstream identity."""
+    __tablename__ = "omnigent_upstream_agent_projections"
+    __table_args__ = (Index("ix_omnigent_upstream_agents_endpoint", "endpoint_ref"),)
+    projection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    endpoint_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    bridge_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    upstream_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    upstream_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    metadata_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    compatible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_successful_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 
 class OAuthSessionStatus(str, enum.Enum):
     """Lifecycle status for a managed agent OAuth session."""

@@ -390,7 +390,12 @@ interface DashboardConfig {
       defaultProfileRef?: string | null;
     };
     omnigentExecutionCatalog?: {
-      profiles?: Array<{ ref?: string; displayName?: string; defaultPolicyRef?: string }>;
+      profiles?: Array<{
+        ref?: string;
+        displayName?: string;
+        defaultPolicyRef?: string;
+        providerRuntime?: string;
+      }>;
       policies?: Array<{ ref?: string; hostMode?: string }>;
     };
     presetCatalog?: {
@@ -608,12 +613,14 @@ interface OmnigentCodexCatalogReadiness {
     profileId: string;
     label: string;
     providerId: string;
+    runtimeId: "codex_cli" | "claude_code";
     busy: boolean;
     queueWhenBusy: boolean;
   }>;
   ineligibleProviderProfiles: Array<{
     profileId: string;
     label: string;
+    runtimeId: "codex_cli" | "claude_code";
     gateReasons: OmnigentCatalogGateReason[];
   }>;
   gateReasons: OmnigentCatalogGateReason[];
@@ -5949,6 +5956,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => readDashboardPreferences().createExpertMode,
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
+  const [runtimeAuthored, setRuntimeAuthored] = useState(false);
   const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
   const omnigentProfiles = omnigentCatalog?.profiles || [];
   const omnigentPolicies = omnigentCatalog?.policies || [];
@@ -6326,8 +6334,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const selectedOmnigentExecutionProfile = omnigentProfiles.find(
+    (profile) => profile.ref === omnigentExecutionTargetRef,
+  );
+  const selectedOmnigentProviderRuntime =
+    selectedOmnigentExecutionProfile?.providerRuntime || "codex_cli";
   const providerProfileRuntime =
-    runtime === "omnigent" ? "codex_cli" : runtime;
+    runtime === "omnigent" ? selectedOmnigentProviderRuntime : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
     queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
@@ -6377,7 +6390,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
-    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).map((profile) => {
+    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || [])
+      .filter((profile) => profile.runtimeId === selectedOmnigentProviderRuntime)
+      .map((profile) => {
         const capabilityProfile = (providerProfilesQuery.data || []).find(
           (candidate) => candidate.profile_id === profile.profileId,
         );
@@ -6425,6 +6440,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfilesQuery.isLoading,
     omnigentCatalogQuery.data,
     omnigentCatalogQuery.isFetching,
+    selectedOmnigentProviderRuntime,
     runtime,
     configuredDefaultProviderProfileRef,
   ]);
@@ -6524,6 +6540,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime) {
       prevRuntimeRef.current = draft.runtime;
       setRuntime(draft.runtime);
+      setRuntimeAuthored(true);
     }
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
@@ -6630,6 +6647,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
       setRuntime(draft.runtime.mode);
+      setRuntimeAuthored(true);
     }
     if (draft.runtime?.profileId) {
       prevProviderProfileRef.current = draft.runtime.profileId;
@@ -7944,10 +7962,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedOmnigentReadiness?.policyRefs.includes(String(policy.ref || "")),
   );
   const selectedEligibleOmnigentProfile = (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).find(
-    (profile) => profile.profileId === providerProfile,
+    (profile) =>
+      profile.profileId === providerProfile &&
+      profile.runtimeId === selectedOmnigentProviderRuntime,
   );
   const historicalOmnigentProviderProfile = (omnigentCatalogQuery.data?.ineligibleProviderProfiles || []).find(
-    (profile) => profile.profileId === providerProfile,
+    (profile) =>
+      profile.profileId === providerProfile &&
+      profile.runtimeId === selectedOmnigentProviderRuntime,
   );
   const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
     (policy) => policy.ref === omnigentLaunchPolicyRef,
@@ -7957,7 +7979,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     historicalOmnigentProviderProfile?.gateReasons?.[0]?.message ||
     omnigentCatalogQuery.data?.gateReasons?.[0]?.message ||
     (!selectedEligibleOmnigentProfile
-      ? "Choose an eligible Codex OAuth Provider Profile."
+      ? "Choose an eligible OAuth Provider Profile for the selected execution target."
       : selectedEligibleOmnigentProfile.busy && !selectedEligibleOmnigentProfile.queueWhenBusy
           ? "The selected Provider Profile is busy and does not support queued waiting."
           : !selectedOmnigentPolicyAvailable
@@ -9875,7 +9897,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (normalizedRuntime === "omnigent") {
       const refreshed = await omnigentCatalogQuery.refetch();
       if (refreshed.isError) {
-        setSubmitMessage("Codex via Omnigent readiness could not be verified.");
+        setSubmitMessage("Omnigent readiness could not be verified.");
         clearSubmitBusy();
         return;
       }
@@ -9884,20 +9906,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         (profile) => profile.ref === omnigentExecutionTargetRef,
       );
       const eligibleProfile = catalog?.eligibleProviderProfiles.find(
-        (profile) => profile.profileId === providerProfile,
+        (profile) =>
+          profile.profileId === providerProfile &&
+          profile.runtimeId === selectedOmnigentProviderRuntime,
       );
       if (!catalog?.available || !executionProfile?.available) {
         setSubmitMessage(
           executionProfile?.gateReasons[0]?.message ||
             catalog?.gateReasons[0]?.message ||
-            "Codex via Omnigent readiness could not be verified.",
+            "Omnigent readiness could not be verified.",
         );
         clearSubmitBusy();
         return;
       }
       if (!eligibleProfile) {
         setSubmitMessage(
-          "The selected Codex OAuth Provider Profile is no longer eligible. Choose an eligible profile explicitly.",
+          "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
         );
         clearSubmitBusy();
         return;
@@ -10922,6 +10946,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
+        authored: runtimeAuthored,
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
         ...(selectedProfileSupportsModelControls &&
         (hasSubmittedModelTier || tierFallback === "strict")
@@ -11694,27 +11719,194 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </label>
               <label>
                 Remediation mode
-                <input value={remediationDraft.remediation.mode} readOnly />
+                <select
+                  value={remediationDraft.remediation.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as RemediationCreateDraft["remediation"]["mode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, mode },
+                    } : current);
+                  }}
+                >
+                  <option value="snapshot">Snapshot</option>
+                  <option value="live_follow">Live follow</option>
+                  <option value="snapshot_then_follow">Snapshot then follow</option>
+                </select>
               </label>
               <label>
                 Authority
-                <input value={remediationDraft.remediation.authorityMode} readOnly />
+                <select
+                  value={remediationDraft.remediation.authorityMode}
+                  onChange={(event) => {
+                    const authorityMode = event.target.value as RemediationCreateDraft["remediation"]["authorityMode"];
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, authorityMode },
+                    } : current);
+                  }}
+                >
+                  <option value="observe_only">Observe only</option>
+                  <option value="approval_gated">Approval gated</option>
+                  <option value="admin_auto">Administrator automatic</option>
+                </select>
               </label>
               <label>
                 Action policy
-                <input value={remediationDraft.remediation.actionPolicyRef || ""} readOnly />
+                <input
+                  value={remediationDraft.remediation.actionPolicyRef || ""}
+                  onChange={(event) => {
+                    const actionPolicyRef = event.target.value;
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: { ...current.remediation, actionPolicyRef },
+                    } : current);
+                  }}
+                />
               </label>
               <label>
-                Checkpoint refs
-                <input
-                  value={String(remediationDraft.target.stepSelectors?.length || 0)}
-                  readOnly
-                />
+                Checkpoint
+                <select
+                  value={String(
+                    remediationDraft.remediation.target.stepSelectors?.[0]?.checkpointRef || "",
+                  )}
+                  onChange={(event) => {
+                    const selected = remediationDraft.target.stepSelectors?.find(
+                      (item) => String(item.checkpointRef || "") === event.target.value,
+                    );
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      remediation: {
+                        ...current.remediation,
+                        target: {
+                          ...current.remediation.target,
+                          stepSelectors: selected ? [selected] : [],
+                        },
+                      },
+                    } : current);
+                  }}
+                >
+                  <option value="">No checkpoint selected</option>
+                  {(remediationDraft.target.stepSelectors || []).map((selector, index) => (
+                    <option
+                      key={`${String(selector.checkpointRef || "")}:${index}`}
+                      value={String(selector.checkpointRef || "")}
+                    >
+                      {String(selector.logicalStepId || selector.source || `Checkpoint ${index + 1}`)}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <p className="small">
               Evidence preview: recovery, incident, step ledger, checkpoint branch, adapter, diagnostics, and linked artifact refs.
             </p>
+            <div className="grid-2" aria-label="Remediation evidence controls">
+              {([
+                ["includeStepLedger", "Step execution ledger"],
+                ["includeDiagnostics", "Diagnostics"],
+                ["includeRecovery", "Recovery evidence"],
+                ["includeIncident", "Incident evidence"],
+                ["includeCheckpointBranches", "Checkpoint branches"],
+                ["includeAdapterRefs", "Runtime adapter evidence"],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={remediationDraft.remediation.evidencePolicy?.[key] !== false}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setRemediationDraft((current) => current ? {
+                        ...current,
+                        remediation: {
+                          ...current.remediation,
+                          evidencePolicy: {
+                            ...current.remediation.evidencePolicy,
+                            [key]: checked,
+                          },
+                        },
+                      } : current);
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div className="grid-2" aria-label="Remediation action controls">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.approvalPolicy?.requiredForHighRisk !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      approvalPolicy: {
+                        ...current.remediation.approvalPolicy,
+                        requiredForHighRisk: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Require approval for high-risk actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.lockPolicy?.targetMutationLock !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      lockPolicy: {
+                        ...current.remediation.lockPolicy,
+                        targetMutationLock: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Hold target mutation lock
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.verificationPolicy?.verifyAppliedActions !== false}
+                  onChange={(event) => setRemediationDraft((current) => current ? {
+                    ...current,
+                    remediation: {
+                      ...current.remediation,
+                      verificationPolicy: {
+                        ...current.remediation.verificationPolicy,
+                        verifyAppliedActions: event.target.checked,
+                      },
+                    },
+                  } : current)}
+                />
+                Verify applied actions
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={remediationDraft.remediation.checkpointBranchPolicy?.runtimeContextPolicy === "fresh_agent_run"}
+                  onChange={(event) => setRemediationDraft((current) => {
+                    if (!current) return current;
+                    const { checkpointBranchPolicy: _disabledPolicy, ...remediation } = current.remediation;
+                    return {
+                      ...current,
+                      remediation: event.target.checked ? {
+                        ...remediation,
+                        checkpointBranchPolicy: {
+                          ...current.remediation.checkpointBranchPolicy,
+                          actionKind: "checkpoint_branch.create_from_remediation_context",
+                          runtimeContextPolicy: "fresh_agent_run",
+                        },
+                      } : remediation,
+                    };
+                  })}
+                />
+                Create branch for corrected inputs
+              </label>
+            </div>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">
                 {remediationTargetFreshnessWarning}
@@ -13131,7 +13323,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <select
               name="runtime"
               value={runtime}
-              onChange={(event) => setRuntime(event.target.value)}
+              onChange={(event) => {
+                setRuntime(event.target.value);
+                setRuntimeAuthored(true);
+              }}
             >
               {runtimeOptions.map((runtimeOption) => (
                 <option

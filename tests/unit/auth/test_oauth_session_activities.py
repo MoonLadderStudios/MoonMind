@@ -282,7 +282,7 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
 
 
 @pytest.mark.asyncio
-async def test_register_profile_activity_preserves_non_codex_oauth_capacity(
+async def test_register_profile_activity_normalizes_claude_oauth_capacity(
     _oauth_activity_session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,11 +319,11 @@ async def test_register_profile_activity_preserves_non_codex_oauth_capacity(
 
     result = await oauth_session_register_profile({"session_id": session_id})
 
-    assert result["capacity_normalized_to_exclusive"] is False
+    assert result["capacity_normalized_to_exclusive"] is True
     async with _oauth_activity_session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
         assert profile is not None
-        assert profile.max_parallel_runs == 3
+        assert profile.max_parallel_runs == 1
 
 
 @pytest.mark.asyncio

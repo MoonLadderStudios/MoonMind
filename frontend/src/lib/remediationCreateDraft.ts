@@ -41,6 +41,9 @@ export type RemediationCreateDraft = {
     authorityMode: 'observe_only' | 'approval_gated' | 'admin_auto';
     actionPolicyRef?: string;
     evidencePolicy?: Record<string, unknown>;
+    approvalPolicy?: Record<string, unknown>;
+    lockPolicy?: Record<string, unknown>;
+    verificationPolicy?: Record<string, unknown>;
     checkpointBranchPolicy?: Record<string, unknown>;
     trigger: { type: 'manual' };
   };
@@ -220,6 +223,15 @@ export function buildRemediationCreateDraft(
         includeCheckpointBranches: true,
         includeAdapterRefs: true,
         tailLines: 2000,
+      },
+      approvalPolicy: {
+        requiredForHighRisk: true,
+      },
+      lockPolicy: {
+        targetMutationLock: true,
+      },
+      verificationPolicy: {
+        verifyAppliedActions: true,
       },
       checkpointBranchPolicy: {
         actionKind: 'checkpoint_branch.create_from_remediation_context',

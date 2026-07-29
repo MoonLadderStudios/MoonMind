@@ -99,6 +99,62 @@ def _request():
     )
 
 
+def _policy_launch_snapshot() -> dict[str, object]:
+    return {
+        "launchPolicyRef": "restricted@3",
+        "snapshotRef": "omnigent-launch:sha256:launch",
+        "policyAuthority": {
+            "policyId": "restricted",
+            "policyVersion": 3,
+            "policyRef": "restricted@3",
+            "policyDigest": "sha256:policy",
+            "snapshotRef": "omnigent-policy:restricted@3:sha256:policy",
+            "validation": {"valid": True, "diagnostics": []},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_profile_authorization_persists_complete_policy_authority(store) -> None:
+    snapshot = _policy_launch_snapshot()
+
+    row = await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=snapshot,
+    )
+
+    assert row.effective_launch_snapshot_json == snapshot
+
+
+@pytest.mark.asyncio
+async def test_profile_authorization_rejects_incomplete_policy_authority(store) -> None:
+    snapshot = _policy_launch_snapshot()
+    del snapshot["policyAuthority"]["policyDigest"]  # type: ignore[index]
+
+    with pytest.raises(
+        OmnigentIdempotencyError,
+        match="policy authority is incomplete: policyDigest",
+    ):
+        await store.bind_profile_authorization(
+            request=_request(),
+            endpoint_ref="embedded",
+            provider_profile_id="profile-1",
+            provider_lease_id="provider-lease-1",
+            credential_generation=1,
+            host_binding_ref="binding-1",
+            host_lease_ref="host-lease-1",
+            omnigent_host_id="host-1",
+            effective_launch_snapshot=snapshot,
+        )
+
+
 async def _bind_active_host(store, *, host_id: str = "runner-1") -> None:
     now = datetime.now(UTC)
     async with store._session_factory() as session:

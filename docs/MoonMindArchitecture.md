@@ -1,5 +1,11 @@
 # MoonMind Architecture
 
+Codex managed-runtime support is governed by the versioned
+[`CodexSupportAndCutover`](./Omnigent/CodexSupportAndCutover.md) contract.
+Codex-through-Omnigent is currently opt-in pending complete protected-live
+evidence; direct Codex remains a truthfully labeled migration and historical
+compatibility path. Claude-through-Omnigent parity is deferred.
+
 **Status:** Current architecture and near-term direction  
 **Updated:** 2026-07-13  
 **Audience:** Contributors, operators, runtime authors, integration authors, and dashboard developers  

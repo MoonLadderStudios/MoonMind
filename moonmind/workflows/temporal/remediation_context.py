@@ -105,6 +105,20 @@ TARGET_EVIDENCE_CLASSES = (
     ("provider_snapshot", "providerSnapshotRef"),
     ("continuity", "continuityRefs"),
 )
+OMNIGENT_EVIDENCE_INDEX_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("execution_and_steps", ("executionDetailRef", "stepExecutionDetailRefs", "failureTaxonomyRef")),
+    ("bridge_events", ("bridgeEventPageRefs", "normalizedEventJournalRef", "rawEventJournalRef")),
+    ("capture", ("initialSnapshotRef", "finalSnapshotRef", "captureManifestRef", "resourceManifestRef")),
+    ("workspace", ("changedFilesRef", "workspaceFilesRef", "sessionFilesRef", "diffRef", "childSessionRefs")),
+    ("host_and_session", ("hostRef", "sessionRef", "agentRef", "hostBindingRef", "endpointRef")),
+    ("provider_and_leases", ("providerProfileRef", "providerLeaseRef", "hostLeaseRef", "credentialGenerationRef")),
+    ("launch", ("executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef")),
+    ("checkpoint_and_recovery", ("checkpointManifestRefs", "externalStateRefs", "workspaceAuthorityRef", "recoveryDecisionRef")),
+    ("checkpoint_branches", ("checkpointBranchRefs", "branchTurnRefs", "gitRef", "comparisonRef", "promotionRef")),
+    ("lifecycle", ("incidentManifestRef", "recoveryManifestRef", "cleanupManifestRef", "janitorManifestRef", "terminalPublicationManifestRef")),
+    ("policy", ("policySnapshotRef", "approvalSnapshotRef", "lockSnapshotRef", "capturePolicyRef", "retentionPolicyRef", "redactionPolicyRef")),
+    ("prior_remediation", ("priorAttemptRefs", "cumulativeWorkspaceHeadRef", "verificationResultRefs", "preventionOutputRefs")),
+)
 SECRET_LIKE_POLICY_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -265,12 +279,21 @@ class RemediationContextBuilder:
             agent_runs=agent_runs,
             live_follow=live_follow,
         )
-        unavailable_classes = [
-            item["class"]
-            for item in availability
-            if item.get("status")
-            in {"missing", "partial", "denied", "unavailable", "unsupported"}
-        ]
+        omnigent_evidence_index = self._omnigent_evidence_index(target_evidence)
+        degraded_statuses = {
+            "missing",
+            "partial",
+            "denied",
+            "unavailable",
+            "unsupported",
+        }
+        unavailable_classes = list(
+            dict.fromkeys(
+                item["class"]
+                for item in (*availability, *omnigent_evidence_index)
+                if item.get("status") in degraded_statuses
+            )
+        )
 
         return {
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
@@ -285,6 +308,7 @@ class RemediationContextBuilder:
                 "targetArtifactRefs": self._target_artifact_refs(target_record),
                 "agentRuns": agent_runs,
                 "availability": availability,
+                "omnigentIndex": omnigent_evidence_index,
                 "evidenceDegraded": bool(unavailable_classes),
                 "unavailableEvidenceClasses": unavailable_classes,
                 **self._diagnosis_hints_payload(target_evidence),
@@ -333,7 +357,11 @@ class RemediationContextBuilder:
     def _target_evidence_payload(
         record: db_models.TemporalExecutionCanonicalRecord,
     ) -> Mapping[str, Any]:
-        for source in (record.memo, record.parameters, record.integration_state):
+        for source in (
+            record.memo,
+            record.parameters,
+            getattr(record, "integration_state", None),
+        ):
             if not isinstance(source, Mapping):
                 continue
             evidence = source.get("remediationEvidence") or source.get(
@@ -509,6 +537,48 @@ class RemediationContextBuilder:
         return availability
 
     @staticmethod
+    def _omnigent_evidence_index(
+        target_evidence: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Project the full host-backed evidence ledger without embedding bodies."""
+
+        generated_at = _safe_optional_string(
+            target_evidence.get("observedAt") or target_evidence.get("generatedAt")
+        )
+        index: list[dict[str, Any]] = []
+        for class_name, fields in OMNIGENT_EVIDENCE_INDEX_FIELDS:
+            refs: list[dict[str, str]] = []
+            seen: set[tuple[str, str | None]] = set()
+            for field_name in fields:
+                raw_value = target_evidence.get(field_name)
+                values = raw_value if isinstance(raw_value, list) else [raw_value]
+                for value in values:
+                    ref = _artifact_ref_payload(value, kind=field_name)
+                    if ref is None:
+                        continue
+                    key = (ref.get("artifact_id") or ref.get("ref") or "", ref.get("kind"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    refs.append(ref)
+            record: dict[str, Any] = {
+                "class": class_name,
+                "status": "available" if refs else "missing",
+                "bounded": True,
+                "contentsIncluded": False,
+                "refs": refs,
+            }
+            if generated_at:
+                record["observedAt"] = generated_at
+                record["freshness"] = "source_reported"
+            else:
+                record["freshness"] = "unknown"
+            if not refs:
+                record["degradedReason"] = "historical evidence was not recorded"
+            index.append(record)
+        return index
+
+    @staticmethod
     def _live_follow_payload(
         *,
         link: db_models.TemporalExecutionRemediationLink,
@@ -612,9 +682,9 @@ class RemediationContextBuilder:
                     refs.append(ref)
 
         for kind, raw_ref in (
-            ("input", record.input_ref),
-            ("plan", record.plan_ref),
-            ("manifest", record.manifest_ref),
+            ("input", getattr(record, "input_ref", None)),
+            ("plan", getattr(record, "plan_ref", None)),
+            ("manifest", getattr(record, "manifest_ref", None)),
         ):
             ref = _artifact_ref_payload(raw_ref, kind=kind)
             if ref is not None:

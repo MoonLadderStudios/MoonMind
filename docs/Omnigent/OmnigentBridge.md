@@ -134,6 +134,13 @@ This mode is recommended for the first production slice.
 
 ### 3.2 Embedded compatibility mode
 
+The exact version, route, authentication, lifecycle, evidence, failure,
+upgrade, and rollback contract is authoritative in
+[Embedded host authentication compatibility](EmbeddedHostAuthCompatibility.md).
+This mode is an Omnigent-compatible adapter boundary and remains experimental
+until its credentialed stock-host support rows pass; it is not a new MoonMind
+host protocol.
+
 ```text
 MoonMind UI / API
   -> MoonMind Omnigent Bridge
@@ -159,7 +166,7 @@ MoonMind UI / API
           -> Codex managed runtime
 ```
 
-This is a temporary migration path. The direct Codex adapter can emit Omnigent-shaped session events while MoonMind continues to support current managed-session execution. Once Codex execution moves behind Omnigent, this compatibility producer can be retired.
+This is a temporary migration path. The direct Codex adapter can emit Omnigent-shaped session events while MoonMind continues to support current managed-session execution. It is retired only under the evidence and history gates in [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md); an Omnigent default by itself is not sufficient.
 
 ---
 

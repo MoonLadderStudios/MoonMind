@@ -48,6 +48,9 @@ services:
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
+      - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
@@ -84,6 +87,7 @@ services:
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
+      - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs:ro
@@ -864,7 +868,14 @@ services:
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
-    entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
@@ -873,6 +884,7 @@ services:
       CLAUDE_HOME: /home/app/.claude
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
+      CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
       ANTHROPIC_API_KEY: ""
       ANTHROPIC_AUTH_TOKEN: ""
       CLAUDE_API_KEY: ""
@@ -881,31 +893,54 @@ services:
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
     volumes:
+      - omnigent-host-claude-home:/home/app
       - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - claude_auth_volume:/home/app/.claude
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
-      claude-auth-init:
+      omnigent-host-claude-init:
         condition: service_completed_successfully
       omnigent-tools-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/moonmind/check-claude-oauth-host.sh && /opt/moonmind/check-runner-projections.sh",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     networks:
       - local-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+  omnigent-host-claude-init:
+    profiles: ["omnigent-host-claude"]
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
+    user: "0:0"
+    entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
+    environment:
+      OMNIGENT_STATE_PATH: /home/app/.omnigent
+      OAUTH_HOME: /home/app/.claude
+    volumes:
+      - omnigent-host-claude-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
+      - claude_auth_volume:/home/app/.claude
+      - ./services/omnigent/scripts:/opt/moonmind:ro
+    depends_on:
+      claude-auth-init:
+        condition: service_completed_successfully
+    restart: "no"
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
@@ -1174,6 +1209,7 @@ volumes:
   qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
+  omnigent-host-claude-home:
   omnigent-host-codex-state:
   omnigent-tools:
     name: moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}
