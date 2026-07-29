@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -331,6 +332,32 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     workspace_authority: str | None = Field(None, alias="workspaceAuthority", max_length=100)
     session_recoverable: bool | None = Field(None, alias="sessionRecoverable")
     workspace_recoverable: bool | None = Field(None, alias="workspaceRecoverable")
+    branch_creation_available: bool | None = Field(
+        None, alias="branchCreationAvailable"
+    )
+    live_reattach_reason: str | None = Field(
+        None, alias="liveReattachReason", max_length=120
+    )
+    workspace_restore_reason: str | None = Field(
+        None, alias="workspaceRestoreReason", max_length=120
+    )
+    branch_creation_reason: str | None = Field(
+        None, alias="branchCreationReason", max_length=120
+    )
+    required_profile_ref: str | None = Field(
+        None, alias="requiredProfileRef", max_length=500
+    )
+    required_policy_ref: str | None = Field(
+        None, alias="requiredPolicyRef", max_length=500
+    )
+    capacity_blocked: bool | None = Field(None, alias="capacityBlocked")
+    readiness_blocked: bool | None = Field(None, alias="readinessBlocked")
+    checkpoint_digests: dict[str, str] = Field(
+        default_factory=dict, alias="checkpointDigests"
+    )
+    checkpoint_validation_status: str | None = Field(
+        None, alias="checkpointValidationStatus", max_length=80
+    )
     authoritative_workspace_checkpoint_kind: str | None = Field(
         None, alias="authoritativeWorkspaceCheckpointKind", max_length=100
     )
@@ -1276,6 +1303,9 @@ class StepExecutionCheckpointModel(BaseModel):
         default_factory=list, alias="preparedInputRefs"
     )
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    omnigent: OmnigentCheckpointIdentity | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
     validation: StepCheckpointValidationResultModel | None = Field(
         None, alias="validation"
@@ -1510,6 +1540,9 @@ class StepCheckpointCreateInput(BaseModel):
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
     workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    omnigent: OmnigentCheckpointIdentity | None = Field(
+        None, alias="omnigentCheckpoint"
+    )
     created_at: datetime = Field(..., alias="createdAt")
     plan_ref: str | None = Field(None, alias="planRef")
     plan_digest: str | None = Field(None, alias="planDigest")

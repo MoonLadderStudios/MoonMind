@@ -25,6 +25,7 @@ from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
+    materialize_cold_restore_inputs,
     recovery_mode,
     validate_cold_restore_target,
 )
@@ -1033,10 +1034,16 @@ class OmnigentProfileBoundExecutionCoordinator:
             idempotency_key=f"{checkpoint.idempotency_key}:cold:{request.idempotency_key}",
         )
         parameters = dict(request.parameters or {})
+        restore_material = materialize_cold_restore_inputs(
+            checkpoint, checkpoint.validation
+        )
         parameters["checkpointRestore"] = {
             "mode": "cold_restore",
             "externalStateRef": checkpoint.external_state_ref,
             "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "restoreMaterial": restore_material.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
             "candidateWorkspace": candidate_workspace.model_dump(
                 by_alias=True, mode="json"
             ),
@@ -1078,10 +1085,16 @@ class OmnigentProfileBoundExecutionCoordinator:
         if request.idempotency_key == checkpoint.idempotency_key:
             raise ValueError("checkpoint branch requires a new idempotency key")
         parameters = dict(request.parameters or {})
+        restore_material = materialize_cold_restore_inputs(
+            checkpoint, checkpoint.validation
+        )
         parameters["checkpointRestore"] = {
             "mode": "branch",
             "externalStateRef": checkpoint.external_state_ref,
             "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "restoreMaterial": restore_material.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
             "candidateWorkspace": candidate_workspace.model_dump(
                 by_alias=True, mode="json"
             ),

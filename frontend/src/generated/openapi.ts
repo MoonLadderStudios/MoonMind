@@ -11211,6 +11211,28 @@ export interface components {
             sessionRecoverable?: boolean | null;
             /** Workspacerecoverable */
             workspaceRecoverable?: boolean | null;
+            /** Branchcreationavailable */
+            branchCreationAvailable?: boolean | null;
+            /** Livereattachreason */
+            liveReattachReason?: string | null;
+            /** Workspacerestorereason */
+            workspaceRestoreReason?: string | null;
+            /** Branchcreationreason */
+            branchCreationReason?: string | null;
+            /** Requiredprofileref */
+            requiredProfileRef?: string | null;
+            /** Requiredpolicyref */
+            requiredPolicyRef?: string | null;
+            /** Capacityblocked */
+            capacityBlocked?: boolean | null;
+            /** Readinessblocked */
+            readinessBlocked?: boolean | null;
+            /** Checkpointdigests */
+            checkpointDigests?: {
+                [key: string]: string;
+            };
+            /** Checkpointvalidationstatus */
+            checkpointValidationStatus?: string | null;
             /** Authoritativeworkspacecheckpointkind */
             authoritativeWorkspaceCheckpointKind?: string | null;
             /** Partialrecoveryreason */

@@ -351,7 +351,19 @@ Typed product controls for interrupt, stop, terminate, harvest, remove, generati
 
 ## 12. Recovery and checkpoints
 
-Omnigent checkpoints use the `external_state_ref` lane. Durable checkpoint identity may include profile, provider-lease, binding, host-lease, credential-generation, host, bridge-session, Omnigent-session, first-message, workspace-locator, diagnostics, terminal, and artifact refs, but never credentials or daemon paths.
+Omnigent checkpoints use the canonical Step Execution writer and its
+`external_state_ref` session lane. The attached v2 Omnigent manifest is complete
+only when it pins lineage; external state and digest; bridge cursor and
+first-message identity; profile, policy, effective launch, binding and lease
+refs; credential generation; resource/capture manifests; workspace locator,
+baseline, head/diff/checkpoint refs and digests; immutable inputs; branch and
+publication evidence; terminal/diagnostic refs; capture time; producer version;
+and a per-capability validation result.
+
+Session state, MoonMind-owned repository/workspace state, and host realization
+remain distinct. Credential fields are references and generations only. A
+container, mutable OAuth home, provider URL/id, or raw daemon/workspace path is
+never durable restore authority.
 
 Recovery chooses between:
 
@@ -359,6 +371,15 @@ Recovery chooses between:
 - **cold restore**, which reacquires the same profile, creates a new host lease, materializes validated artifact-backed state, and starts a fresh session.
 
 A branch always obtains independent host/session authority and does not concurrently reuse the original OAuth lease.
+
+Cold restore checks out the pinned baseline in a clean authorized workspace,
+applies the validated checkpoint/diff/head artifact, restores immutable
+instruction/context refs, and passes `externalStateRef` to a fresh Omnigent
+session. It reacquires the same Provider Profile under current capacity and
+credential-generation policy and may compile a new effective launch while
+retaining the source launch-policy evidence. Workflow Detail and APIs project
+live reattach, cold restore, and branch availability separately with reason
+codes, readiness/capacity blocks, artifact refs/digests, and validation status.
 
 ---
 
