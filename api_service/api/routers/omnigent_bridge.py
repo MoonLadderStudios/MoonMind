@@ -957,6 +957,17 @@ async def _authorize_session_control(
         )
 
 
+def _retrieval_lifecycle_scope(row: Any) -> dict[str, str]:
+    """Compile the exact retrieval scope owned by one bridge session row."""
+
+    return {
+        "run_id": str(getattr(row, "moonmind_run_id", "") or ""),
+        "host_id": str(getattr(row, "omnigent_host_id", "") or ""),
+        "session_id": str(getattr(row, "omnigent_session_id", "") or ""),
+        "step_id": str(getattr(row, "step_execution_id", "") or ""),
+    }
+
+
 async def _revoke_session_retrieval_authority(
     *,
     session_id: str,
@@ -964,35 +975,61 @@ async def _revoke_session_retrieval_authority(
     store: OmnigentBridgeSessionStore,
     reason: str,
 ) -> list[str]:
-    """Close scoped retrieval authority before a destructive host boundary."""
+    """Close scoped retrieval authority before a destructive host boundary.
+
+    When the session cannot be scoped precisely — no bridge row, or a partially
+    established one — the outcome depends on whether live authority still names
+    it.  Live-but-unscopable authority fails closed so the host is not mutated
+    behind an open capability; a session that provably owns no capability is a
+    no-op so cleanup is never blocked.  Either way the scope is never widened to
+    a run-wide wildcard, and a store failure propagates rather than silently
+    skipping revocation.
+    """
 
     row = await store.get_session_by_provider_session_id(session_id)
     if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "omnigent_retrieval_authority_unresolved",
-                "message": "The bridge session retrieval authority could not be resolved.",
-            },
+        if registry.has_live_session_authority(session_id=session_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "omnigent_retrieval_authority_unresolved",
+                    "message": (
+                        "The bridge session retrieval authority could not be resolved."
+                    ),
+                },
+            )
+        logger.info(
+            "No bridge row resolves Omnigent session %s; no retrieval "
+            "authority to close for %s.",
+            session_id,
+            reason,
         )
-    revoked = registry.revoke_scope(
-        run_id=str(row.moonmind_run_id),
-        host_id=(
-            str(row.omnigent_host_id)
-            if getattr(row, "omnigent_host_id", None)
-            else None
-        ),
-        session_id=(
-            str(row.omnigent_session_id)
-            if getattr(row, "omnigent_session_id", None)
-            else None
-        ),
-        step_id=(
-            str(row.step_execution_id)
-            if getattr(row, "step_execution_id", None)
-            else None
-        ),
-    )
+        return []
+    scope = _retrieval_lifecycle_scope(row)
+    if not all(scope.values()):
+        if registry.has_live_session_authority(
+            session_id=scope["session_id"] or session_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "omnigent_retrieval_scope_incomplete",
+                    "message": (
+                        "Live retrieval authority cannot be bounded to this "
+                        "session because its bridge scope is incomplete."
+                    ),
+                },
+            )
+        logger.info(
+            "Bridge session %s has an incomplete retrieval scope and owns no "
+            "live capability; nothing to close for %s.",
+            session_id,
+            reason,
+        )
+        return []
+    revoked = registry.revoke_scope(**scope)
+    if not revoked:
+        return []
     await store.append_events(
         row.bridge_session_id,
         [
@@ -1648,6 +1685,16 @@ async def post_omnigent_session_event(
     )
     try:
         if payload.type in {"clear_session", "reset_session"}:
+            # Embedded mode rejects clear/reset without replacing or stopping the
+            # session, so revoking first would permanently disable retrieval for
+            # a session that keeps running.  Reject before mutating authority.
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                raise OmnigentBridgeError(
+                    "Embedded clear/reset requires a new session and idempotency key.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="omnigent_embedded_new_session_required",
+                )
             await _revoke_session_retrieval_authority(
                 session_id=session_id,
                 registry=registry,
@@ -1695,13 +1742,6 @@ async def post_omnigent_session_event(
                     session_id,
                     payload=payload.model_dump(by_alias=True, exclude_none=True),
                     actor=str(user.id),
-                )
-            if payload.type in {"clear_session", "reset_session"}:
-                raise OmnigentBridgeError(
-                    "Embedded clear/reset requires a new session and idempotency key.",
-                    failure_class="user_error",
-                    status_code=status.HTTP_409_CONFLICT,
-                    code="omnigent_embedded_new_session_required",
                 )
             if payload.type == "interrupt":
                 raise OmnigentBridgeError(

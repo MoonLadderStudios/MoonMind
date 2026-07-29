@@ -375,6 +375,7 @@ class _FakeStore:
             compatibility_profile="omnigent.server.v1",
             provider_profile_id="profile-1",
             host_binding_ref="host-ref",
+            omnigent_host_id="host-ref",
             omnigent_session_id="session-ref",
             terminal_refs={},
             metadata_={},
@@ -659,13 +660,19 @@ def test_attach_reconciles_existing_provider_session() -> None:
 
 
 def test_delete_authorizes_and_delegates() -> None:
-    registry = SimpleNamespace(revoke_scope=Mock(return_value=["cap-1"]))
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
     client, proxy, store = _build(registry=registry)
     resp = client.delete(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 200
     assert proxy.deleted == ["sess-77"]
     registry.revoke_scope.assert_called_once_with(
-        run_id="run-1", host_id=None, session_id="session-ref", step_id="step-1"
+        run_id="run-1",
+        host_id="host-ref",
+        session_id="session-ref",
+        step_id="step-1",
     )
     assert store.appended_events[0]["metadata"] == {
         "revokedCount": 1,
@@ -676,10 +683,11 @@ def test_delete_authorizes_and_delegates() -> None:
 def test_delete_blocks_host_mutation_when_retrieval_authority_is_unresolved() -> None:
     store = _FakeStore()
     store.get_session_by_provider_session_id = AsyncMock(return_value=None)
-    client, proxy, _ = _build(
-        store=store,
-        registry=SimpleNamespace(revoke_scope=Mock(return_value=[])),
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=[]),
+        has_live_session_authority=Mock(return_value=True),
     )
+    client, proxy, _ = _build(store=store, registry=registry)
 
     response = client.delete(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
 
@@ -688,6 +696,24 @@ def test_delete_blocks_host_mutation_when_retrieval_authority_is_unresolved() ->
         "omnigent_retrieval_authority_unresolved"
     )
     assert proxy.deleted == []
+    registry.revoke_scope.assert_not_called()
+
+
+def test_delete_proceeds_when_session_owns_no_live_retrieval_authority() -> None:
+    """An unscopable session with no live capability must not block cleanup."""
+    store = _FakeStore()
+    store.get_session_by_provider_session_id = AsyncMock(return_value=None)
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=[]),
+        has_live_session_authority=Mock(return_value=False),
+    )
+    client, proxy, _ = _build(store=store, registry=registry)
+
+    response = client.delete(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
+
+    assert response.status_code == 200
+    assert proxy.deleted == ["sess-77"]
+    registry.revoke_scope.assert_not_called()
 
 
 def test_provider_stream_authorizes_and_proxies_sse() -> None:
@@ -751,6 +777,13 @@ def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
+    # Bind an instance: FastAPI would otherwise introspect ``__init__`` and
+    # deep-copy the sentinel default, breaking the owner identity check.
+    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[get_capability_registry] = lambda: SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
     client = TestClient(app)
     base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77"
 
@@ -1537,6 +1570,13 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    store = _FakeStore()
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+    app.dependency_overrides[get_capability_registry] = lambda: registry
     client = TestClient(app)
 
     response = client.post(_EVENTS_PATH, json={
@@ -1555,6 +1595,13 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     assert facade.stopped == ["sess-77"]
     assert facade.control_payloads[0]["idempotencyKey"] == "stop-1"
     assert facade.control_payloads[0]["expectedBridgeSessionId"] == "brs-1"
+    # Stopping is a destructive boundary: scoped retrieval authority closes first.
+    registry.revoke_scope.assert_called_once_with(
+        run_id="run-1",
+        host_id="host-ref",
+        session_id="session-ref",
+        step_id="step-1",
+    )
 
 
 def test_cleanup_session_event_uses_typed_embedded_control() -> None:
@@ -1574,12 +1621,20 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    store = _FakeStore()
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+    app.dependency_overrides[get_capability_registry] = lambda: registry
     response = TestClient(app).post(_EVENTS_PATH, json={
         "type": "cleanup_session", "idempotencyKey": "cleanup-1",
         "expectedBridgeSessionId": "brs-1", "expectedSessionId": "sess-77",
     })
     assert response.status_code == 200
     assert facade.control_payloads[0]["idempotencyKey"] == "cleanup-1"
+    registry.revoke_scope.assert_called_once()
 
 
 def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
@@ -1735,3 +1790,65 @@ def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> Non
                 == expected_status
             )
             assert proxy_response.json() == embedded_response.json()
+
+
+def test_embedded_clear_rejection_preserves_retrieval_authority() -> None:
+    """An unsupported control must not disable a still-running session's retrieval."""
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[get_capability_registry] = lambda: registry
+
+    response = TestClient(app).post(
+        _EVENTS_PATH, json={"type": "clear_session", "idempotencyKey": "clear-1"}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "omnigent_embedded_new_session_required"
+    )
+    # The session keeps running, so its retrieval authority must survive.
+    registry.revoke_scope.assert_not_called()
+
+
+def test_proxy_clear_still_revokes_retrieval_authority_before_replacement() -> None:
+    """Proxy mode does replace the session, so pre-revocation still applies."""
+    registry = SimpleNamespace(
+        revoke_scope=Mock(return_value=["cap-1"]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+    client, _proxy, _store = _build(registry=registry)
+
+    response = client.post(
+        _EVENTS_PATH, json={"type": "clear_session", "idempotencyKey": "clear-1"}
+    )
+
+    assert response.status_code == 200, response.text
+    registry.revoke_scope.assert_called_once_with(
+        run_id="run-1",
+        host_id="host-ref",
+        session_id="session-ref",
+        step_id="step-1",
+    )

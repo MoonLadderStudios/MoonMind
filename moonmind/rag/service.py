@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 import logging
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence
 
 import httpx
@@ -109,6 +110,11 @@ class ContextRetrievalService:
         collections: Sequence[str] | None = None,
         initiation_mode: str = "automatic",
         planning_ref: str | None = None,
+        run_id: str | None = None,
+        overlay_max_age_seconds: int | None = None,
+        stale_overlay_allowed: bool = False,
+        embedding_timeout_ms: int | None = None,
+        search_timeout_ms: int | None = None,
     ) -> ContextPack:
         normalized_budgets = self._normalize_budgets(budgets)
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
@@ -129,17 +135,34 @@ class ContextRetrievalService:
             if collection_name not in self._verified_collections:
                 self._qdrant.ensure_collection_ready(collection_name)
                 self._verified_collections.add(collection_name)
+        embedding_started = time.perf_counter()
         with self._telemetry.timer("embedding"):
             vector = self.embedding_client.embed(query)
+        self._enforce_stage_deadline(
+            stage="embedding",
+            started=embedding_started,
+            timeout_ms=embedding_timeout_ms,
+        )
+        # The caller's immutable run identity wins over the environment-derived
+        # one: the API process has no RUN_ID, so a session capability would
+        # otherwise silently omit its run overlay.
+        effective_run_id = run_id or self._settings.run_id
         overlay_collection = None
         if (
             overlay_policy == "include"
-            and self._settings.run_id
+            and effective_run_id
             and self._settings.overlay_mode == "collection"
         ):
             overlay_collection = self._settings.overlay_collection_name(
-                self._settings.run_id
+                effective_run_id
             )
+            if not self._overlay_is_fresh(
+                overlay_collection,
+                max_age_seconds=overlay_max_age_seconds,
+                stale_overlay_allowed=stale_overlay_allowed,
+            ):
+                overlay_collection = None
+        search_started = time.perf_counter()
         with self._telemetry.timer("search"):
             result = self._qdrant.search(
                 query_vector=vector,
@@ -150,6 +173,9 @@ class ContextRetrievalService:
                 overlay_collection=overlay_collection,
                 trust_overrides=None,
             )
+        self._enforce_stage_deadline(
+            stage="search", started=search_started, timeout_ms=search_timeout_ms
+        )
         planning_items = self._prefetch_planning_context(planning_ref)
         memory_items, memory_latency_ms = self._retrieve_long_term_memory_items(
             query=query,
@@ -404,6 +430,49 @@ class ContextRetrievalService:
                 "budgets.tokens.",
                 budget_type="tokens",
             )
+
+    @staticmethod
+    def _enforce_stage_deadline(
+        *, stage: str, started: float, timeout_ms: int | None
+    ) -> None:
+        """Attribute a blown deadline to the stage that consumed it."""
+        if not timeout_ms:
+            return
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms > timeout_ms:
+            raise RetrievalBudgetExceededError(
+                f"{stage} stage budget exceeded "
+                f"({round(elapsed_ms, 2)}ms>{timeout_ms}ms).",
+                budget_type=f"{stage}_timeout_ms",
+            )
+
+    def _overlay_is_fresh(
+        self,
+        overlay_collection: str,
+        *,
+        max_age_seconds: int | None,
+        stale_overlay_allowed: bool,
+    ) -> bool:
+        """Apply the caller's overlay freshness policy before including it.
+
+        A missing or unreadable overlay is treated as stale so an ``include``
+        request degrades to canonical collections instead of failing.
+        """
+        if stale_overlay_allowed or not max_age_seconds:
+            return True
+        try:
+            freshness_at = self._qdrant.collection_freshness_at(overlay_collection)
+        except Exception:  # pragma: no cover - defensive runtime probe
+            logger.warning(
+                "Overlay freshness probe failed for %s; excluding overlay.",
+                overlay_collection,
+            )
+            return False
+        if freshness_at is None:
+            return False
+        return (
+            datetime.now(timezone.utc) - freshness_at
+        ).total_seconds() <= max_age_seconds
 
     @staticmethod
     def _enforce_latency_budget(

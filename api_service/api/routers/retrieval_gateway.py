@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import secrets
@@ -15,6 +17,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from api_service.api.execution_principal import resolve_execution_principal
+from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import async_session_maker
 from api_service.db.models import User
@@ -53,6 +57,11 @@ SESSION_SCOPE_FILTER_KEYS = frozenset(
 )
 SESSION_SCOPE_FILTER_KEYS_MESSAGE = ", ".join(sorted(SESSION_SCOPE_FILTER_KEYS))
 
+#: Shortest capability lifetime the issue contract accepts.  Compiled bridge
+#: authority with less remaining time is refused with an actionable conflict
+#: instead of failing internal model validation.
+MIN_CAPABILITY_LIFETIME_SECONDS = 30
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievalAuthContext:
@@ -79,10 +88,14 @@ class RetrievalCapabilityIssue(BaseModel):
     host_id: str = Field(..., min_length=1)
     session_id: str = Field(..., min_length=1)
     step_id: str = Field(..., min_length=1)
+    workflow_id: str = Field(..., min_length=1)
+    bridge_session_id: str = Field(..., min_length=1)
     policy_version: str = Field(..., min_length=1)
     collections: List[str] = Field(..., min_length=1, max_length=16)
     filters: Dict[str, str] = Field(default_factory=dict)
-    lifetime_seconds: int = Field(default=900, ge=30, le=3600)
+    lifetime_seconds: int = Field(
+        default=900, ge=MIN_CAPABILITY_LIFETIME_SECONDS, le=3600
+    )
     top_k: int = Field(default=8, ge=1, le=50)
     max_sources: int = Field(default=8, ge=1, le=50)
     max_query_bytes: int = Field(default=4096, ge=64, le=32768)
@@ -131,6 +144,8 @@ def _bridge_authoritative_issue(
         raise HTTPException(409, detail="Bridge host/session identity is not established.")
     if not row.moonmind_run_id or not row.step_execution_id or not row.workspace:
         raise HTTPException(409, detail="Bridge execution scope is incomplete.")
+    if not row.moonmind_workflow_id or not row.bridge_session_id:
+        raise HTTPException(409, detail="Bridge correlation identity is incomplete.")
 
     launch = dict(row.effective_launch_snapshot_json or {})
     policy = launch.get("followUpRetrieval")
@@ -184,6 +199,17 @@ def _bridge_authoritative_issue(
             raise HTTPException(
                 409, detail="Compiled follow-up retrieval authority has expired."
             )
+        # Below the contract minimum the authority is unusable: clamping here
+        # would only raise an untranslated internal validation error.
+        if remaining_seconds < MIN_CAPABILITY_LIFETIME_SECONDS:
+            raise HTTPException(
+                409,
+                detail=(
+                    "Compiled follow-up retrieval authority has less than "
+                    f"{MIN_CAPABILITY_LIFETIME_SECONDS}s remaining; issue a new "
+                    "capability after the authority is renewed."
+                ),
+            )
         lifetime_seconds = min(lifetime_seconds, remaining_seconds)
 
     return RetrievalCapabilityIssue(
@@ -194,6 +220,8 @@ def _bridge_authoritative_issue(
         host_id=str(row.omnigent_host_id),
         session_id=str(row.omnigent_session_id),
         step_id=str(row.step_execution_id),
+        workflow_id=str(row.moonmind_workflow_id),
+        bridge_session_id=str(row.bridge_session_id),
         policy_version=policy_version,
         collections=list(requested_collections),
         filters=authored_filters,
@@ -247,6 +275,8 @@ def _server_policy_snapshot(payload: RetrievalCapabilityIssue) -> RetrievalBudge
         host_id=payload.host_id,
         session_id=payload.session_id,
         step_id=payload.step_id,
+        workflow_id=payload.workflow_id,
+        bridge_session_id=payload.bridge_session_id,
         policy_version=payload.policy_version,
         collections=requested_collections,
         filters=tuple(sorted(payload.filters.items())),
@@ -564,9 +594,14 @@ def _effective_session_request(
     if payload.correlation is None:
         raise HTTPException(422, detail="Session retrieval requires correlation identity.")
     correlation = payload.correlation
+    # Every identifier written into authoritative evidence must be bound to the
+    # capability, not accepted verbatim: otherwise a compromised host could
+    # attribute retrieval to a different workflow or bridge session.
     if (
         correlation.step_id != budget.step_id
         or correlation.omnigent_session_id != budget.session_id
+        or correlation.workflow_id != budget.workflow_id
+        or correlation.bridge_session_id != budget.bridge_session_id
     ):
         raise HTTPException(403, detail="Correlation identity exceeds capability scope.")
     if len(payload.query.encode("utf-8")) > budget.max_query_bytes:
@@ -627,6 +662,7 @@ def _enforce_session_result_budget(
     capability: RetrievalCapability,
     *,
     elapsed_ms: int,
+    stored_payload: Dict[str, Any] | None = None,
 ) -> tuple[int, int]:
     """Reject provider output that broadens an immutable session budget."""
     budget = capability.budget
@@ -635,7 +671,15 @@ def _enforce_session_result_budget(
             "source_budget_exhausted",
             "Retrieved source count exceeds the capability ceiling.",
         )
-    context_bytes = len(pack.context_text.encode("utf-8"))
+    # Measure what is actually stored and delivered.  ``context_text`` omits
+    # each item's full text and payload metadata, so a provider could otherwise
+    # serialize a pack far larger than the declared byte ceiling.
+    if stored_payload is None:
+        context_bytes = len(pack.context_text.encode("utf-8"))
+    else:
+        context_bytes = len(
+            json.dumps(stored_payload, sort_keys=True).encode("utf-8")
+        )
     if context_bytes > budget.max_context_bytes:
         raise RetrievalCapabilityError(
             "byte_budget_exhausted",
@@ -655,6 +699,91 @@ def _enforce_session_result_budget(
     return context_bytes, context_tokens
 
 
+async def _authorize_bridge_row(row: Any, *, user: User, service: Any) -> None:
+    """Require the caller to own the workflow that owns this bridge session.
+
+    Authentication alone is not authorization: without this check any
+    authenticated user holding a bridge session id could mint, inspect, revoke,
+    or acknowledge retrieval authority scoped to another user's repository.
+    """
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        workflow_id_header=getattr(row, "moonmind_workflow_id", None),
+        agent_run_id_header=getattr(row, "moonmind_agent_run_id", None),
+    )
+    if not principal.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "workflow_ownership_denied",
+                "message": (
+                    "The authenticated principal does not own the workflow that "
+                    "owns this retrieval authority."
+                ),
+            },
+        )
+
+
+async def _authorized_bridge_row(
+    bridge_session_id: str,
+    *,
+    store: OmnigentBridgeSessionStore,
+    user: User,
+    service: Any,
+) -> Any:
+    row = await store.get_bridge_session(bridge_session_id)
+    if row is None:
+        raise HTTPException(404, detail="Omnigent bridge session was not found.")
+    await _authorize_bridge_row(row, user=user, service=service)
+    return row
+
+
+async def _authorized_capability(
+    capability_id: str,
+    *,
+    registry: RetrievalCapabilityRegistry,
+    store: OmnigentBridgeSessionStore,
+    user: User,
+    service: Any,
+) -> RetrievalCapability:
+    """Resolve a capability only for a caller who owns its owning workflow."""
+    try:
+        capability = registry.get(capability_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail="Retrieval capability was not found.") from exc
+    await _authorized_bridge_row(
+        capability.budget.bridge_session_id,
+        store=store,
+        user=user,
+        service=service,
+    )
+    return capability
+
+
+def _lifecycle_scope(row: Any) -> Dict[str, str]:
+    """Compile the exact revocation scope, refusing partial identity."""
+    scope = {
+        "run_id": str(row.moonmind_run_id or ""),
+        "host_id": str(row.omnigent_host_id or ""),
+        "session_id": str(row.omnigent_session_id or ""),
+        "step_id": str(row.step_execution_id or ""),
+    }
+    missing = sorted(name for name, value in scope.items() if not value.strip())
+    if missing:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "retrieval_lifecycle_scope_incomplete",
+                "message": (
+                    "Bridge retrieval scope is incomplete, so revocation cannot "
+                    "be bounded to this session: missing " + ", ".join(missing) + "."
+                ),
+            },
+        )
+    return scope
+
+
 @router.get("/health")
 def health(
     service: ContextRetrievalService = Depends(get_retrieval_service),
@@ -672,14 +801,37 @@ async def issue_bridge_retrieval_capability(
     payload: BridgeRetrievalCapabilityIssue,
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
     store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
 ) -> Dict[str, object]:
     """Exchange authoritative Omnigent bridge state for scoped retrieval."""
-    row = await store.get_bridge_session(bridge_session_id)
-    if row is None:
-        raise HTTPException(404, detail="Omnigent bridge session was not found.")
+    row = await _authorized_bridge_row(
+        bridge_session_id, store=store, user=user, service=service
+    )
     issue = _bridge_authoritative_issue(row, payload)
     snapshot = _server_policy_snapshot(issue)
+    # Budgets are accounted across the owning bridge scope, so a retried or
+    # repeated POST cannot mint a fresh query and rate allowance on top of the
+    # allowance already live for this session.
+    existing = registry.live_scope_capability(
+        run_id=snapshot.run_id,
+        host_id=snapshot.host_id,
+        session_id=snapshot.session_id,
+        step_id=snapshot.step_id,
+    )
+    if existing is not None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "retrieval_capability_already_active",
+                "message": (
+                    "This bridge session already holds live retrieval authority; "
+                    "revoke it before issuing a replacement."
+                ),
+                "capabilityId": existing.capability_id,
+                "expiresAt": existing.expires_at,
+            },
+        )
     token, capability = registry.issue(
         snapshot, lifetime_seconds=issue.lifetime_seconds
     )
@@ -718,20 +870,14 @@ async def revoke_bridge_retrieval_capabilities(
     bridge_session_id: str,
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
     store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
-    _user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
 ) -> Dict[str, object]:
     """Revoke authority at cancellation, drain, replacement, or cleanup boundaries."""
-    row = await store.get_bridge_session(bridge_session_id)
-    if row is None:
-        raise HTTPException(404, detail="Omnigent bridge session was not found.")
-    if not row.moonmind_run_id:
-        raise HTTPException(409, detail="Bridge execution scope is incomplete.")
-    revoked = registry.revoke_scope(
-        run_id=str(row.moonmind_run_id),
-        host_id=str(row.omnigent_host_id) if row.omnigent_host_id else None,
-        session_id=str(row.omnigent_session_id) if row.omnigent_session_id else None,
-        step_id=str(row.step_execution_id) if row.step_execution_id else None,
+    row = await _authorized_bridge_row(
+        bridge_session_id, store=store, user=user, service=service
     )
+    revoked = registry.revoke_scope(**_lifecycle_scope(row))
     await store.append_events(
         bridge_session_id,
         [
@@ -757,39 +903,76 @@ async def revoke_bridge_retrieval_capabilities(
 
 
 @router.delete("/capabilities/{capability_id}")
-def revoke_retrieval_capability(
+async def revoke_retrieval_capability(
     capability_id: str,
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
-    _user: User = Depends(get_current_user()),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
 ) -> Dict[str, object]:
-    try:
-        capability = registry.revoke(capability_id)
-    except KeyError as exc:
-        raise HTTPException(404, detail="Retrieval capability was not found.") from exc
+    await _authorized_capability(
+        capability_id, registry=registry, store=store, user=user, service=service
+    )
+    capability = registry.revoke(capability_id)
     return {"capabilityId": capability_id, "state": "revoked", "revokedAt": capability.revoked_at}
 
 
 @router.get("/capabilities/{capability_id}")
-def retrieval_capability_diagnostics(
+async def retrieval_capability_diagnostics(
     capability_id: str,
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
-    _user: User = Depends(get_current_user()),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
 ) -> Dict[str, object]:
     """Return bounded Workflow Detail data, never capability or result bodies."""
+    await _authorized_capability(
+        capability_id, registry=registry, store=store, user=user, service=service
+    )
+    return registry.status(capability_id)
+
+
+@router.get("/capabilities/{capability_id}/results/{tool_call_id}")
+def read_retrieval_result(
+    capability_id: str,
+    tool_call_id: str,
+    auth: RetrievalAuthContext = Depends(authorize_retrieval_request),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+) -> Dict[str, object]:
+    """Dereference the ``contextPackRef`` returned to the issuing session.
+
+    Authorized by the session capability itself so the host that performed the
+    retrieval — and only that host — can read the pack it was promised.
+    """
+    capability = auth.session_capability
+    if capability is None or capability.capability_id != capability_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "classification": "identity_mismatch",
+                "message": "Retrieval results are readable only by their own capability.",
+            },
+        )
+    registry.assert_active(capability_id)
     try:
-        return registry.status(capability_id)
+        return registry.read_result(capability, tool_call_id)
     except KeyError as exc:
-        raise HTTPException(404, detail="Retrieval capability was not found.") from exc
+        raise HTTPException(404, detail="Retrieval result was not found.") from exc
 
 
 @router.post("/capabilities/{capability_id}/delivery")
-def acknowledge_retrieval_delivery(
+async def acknowledge_retrieval_delivery(
     capability_id: str,
     payload: RetrievalDeliveryAcknowledgement,
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
-    _user: User = Depends(get_current_user()),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
 ) -> Dict[str, object]:
     """Accept the host/bridge delivery outcome; HTTP return is not delivery proof."""
+    capability = await _authorized_capability(
+        capability_id, registry=registry, store=store, user=user, service=service
+    )
     try:
         response = registry.acknowledge_delivery(
             capability_id, payload.tool_call_id, state=payload.state
@@ -797,7 +980,6 @@ def acknowledge_retrieval_delivery(
         status_payload = registry.status(capability_id)
     except KeyError as exc:
         raise HTTPException(404, detail="Retrieval tool result was not found.") from exc
-    capability = registry._capabilities[capability_id]
     evidence_ref = registry.record(
         capability,
         {
@@ -892,7 +1074,19 @@ async def retrieve_context_pack(
         top_k = payload.top_k or service.settings.similarity_top_k
         budgets = payload.budgets
         collections = payload.collections or None
+        run_id: str | None = None
+        overlay_max_age_seconds: int | None = None
+        stale_overlay_allowed = False
+        stage_deadline_seconds: float | None = None
         if capability is not None:
+            if not payload.persist:
+                raise HTTPException(
+                    422,
+                    detail=(
+                        "Session-issued retrieval delivers its context pack by "
+                        "reference and cannot honour persist=false."
+                    ),
+                )
             duplicate = registry.begin(capability, tool_call_id)
             if duplicate is not None:
                 return duplicate
@@ -901,8 +1095,17 @@ async def retrieve_context_pack(
                 payload, capability
             )
             collections = effective_collections
+            # Overlay selection must follow the capability's immutable run
+            # identity, not the API process environment, which has no run id.
+            run_id = capability.budget.run_id
+            overlay_max_age_seconds = capability.budget.overlay_max_age_seconds
+            stale_overlay_allowed = capability.budget.stale_overlay_allowed
+            stage_deadline_seconds = (
+                capability.budget.embedding_timeout_ms
+                + capability.budget.search_timeout_ms
+            ) / 1000
         _enforce_retrieval_available(service)
-        pack = await run_in_threadpool(
+        retrieval = run_in_threadpool(
             service.retrieve,
             query=payload.query,
             filters=payload.filters,
@@ -913,14 +1116,39 @@ async def retrieve_context_pack(
             transport="direct",
             initiation_mode="session",
             planning_ref=payload.planning_ref,
+            run_id=run_id,
+            overlay_max_age_seconds=overlay_max_age_seconds,
+            stale_overlay_allowed=stale_overlay_allowed,
+            embedding_timeout_ms=(
+                capability.budget.embedding_timeout_ms if capability else None
+            ),
+            search_timeout_ms=(
+                capability.budget.search_timeout_ms if capability else None
+            ),
         )
+        if stage_deadline_seconds is None:
+            pack = await retrieval
+        else:
+            # Bound the wall clock so a stalled embedding or Qdrant call cannot
+            # hold the capability's concurrency slot past its stage budgets.
+            try:
+                pack = await asyncio.wait_for(retrieval, timeout=stage_deadline_seconds)
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                raise RetrievalCapabilityError(
+                    "stage_deadline_exhausted",
+                    "Retrieval exceeded its embedding and search stage budgets.",
+                ) from exc
         pack.transport = "gateway"
         result = pack.to_dict()
         if capability is not None:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             context_bytes, context_tokens = _enforce_session_result_budget(
-                pack, capability, elapsed_ms=elapsed_ms
+                pack, capability, elapsed_ms=elapsed_ms, stored_payload=result
             )
+            # Revocation, stop, delete, or cleanup may have landed while this
+            # request was in flight; re-read the durable authority before the
+            # pack is persisted or published.
+            registry.assert_active(capability.capability_id)
             context_pack_ref = registry.store_result(capability, tool_call_id, result)
             evidence_ref = registry.record(
                 capability,
@@ -983,8 +1211,11 @@ async def retrieve_context_pack(
                 "source_budget_exhausted",
                 "token_budget_exhausted",
             }
+            else status.HTTP_409_CONFLICT
+            if exc.reason == "duplicate_in_flight"
             else status.HTTP_408_REQUEST_TIMEOUT
-            if exc.reason == "latency_budget_exhausted"
+            if exc.reason
+            in {"latency_budget_exhausted", "stage_deadline_exhausted"}
             else 403,
             detail={"classification": exc.reason, "message": str(exc)},
         ) from exc
@@ -1005,4 +1236,4 @@ async def retrieve_context_pack(
         ) from exc
     finally:
         if capability is not None and began:
-            registry.abort(capability)
+            registry.abort(capability, tool_call_id)

@@ -292,6 +292,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/retrieval/capabilities/{capability_id}/results/{tool_call_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Retrieval Result
+         * @description Dereference the ``contextPackRef`` returned to the issuing session.
+         *
+         *     Authorized by the session capability itself so the host that performed the
+         *     retrieval — and only that host — can read the pack it was promised.
+         */
+        get: operations["read_retrieval_result_retrieval_capabilities__capability_id__results__tool_call_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/retrieval/capabilities/{capability_id}/delivery": {
         parameters: {
             query?: never;
@@ -14256,6 +14279,48 @@ export interface operations {
             header?: never;
             path: {
                 capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_retrieval_result_retrieval_capabilities__capability_id__results__tool_call_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-MoonMind-Worker-Token"?: string | null;
+                "X-MoonMind-Retrieval-Token"?: string | null;
+                Authorization?: string | null;
+                "X-MoonMind-Host-Id"?: string | null;
+                "X-MoonMind-Session-Id"?: string | null;
+                "X-MoonMind-Run-Id"?: string | null;
+                "X-MoonMind-Step-Id"?: string | null;
+            };
+            path: {
+                capability_id: string;
+                tool_call_id: string;
             };
             cookie?: never;
         };
