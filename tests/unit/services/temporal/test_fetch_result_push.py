@@ -984,6 +984,49 @@ class TestPushWorkspaceBranch:
         assert not any("push" in call for call in recorded_calls)
 
     @pytest.mark.asyncio
+    async def test_push_normalizes_remote_tracking_target_before_base_refresh(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch.object(
+                activities,
+                "_commit_workspace_changes_if_needed",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch.object(
+                activities,
+                "_refresh_workspace_remote_base_ref",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as refresh_base,
+        ):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(
+                return_value=(b"feature/base-normalization\n", b"")
+            )
+            proc.returncode = 0
+            mock_exec.return_value = proc
+
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="origin/main",
+            )
+
+        refresh_base.assert_awaited_once()
+        assert refresh_base.await_args.kwargs["workspace"] == (
+            "/work/agent_jobs/run-1/repo"
+        )
+        assert refresh_base.await_args.kwargs["base_branch"] == "main"
+        assert refresh_base.await_args.kwargs["run_id"] == "run-1"
+        assert result["push_status"] == "failed"
+        assert result["push_base_branch"] == "main"
+        assert result["push_base_ref"] == "origin/main"
+        assert "origin/origin" not in result["push_error"]
+
+    @pytest.mark.asyncio
     async def test_push_blocks_when_live_remote_head_does_not_match(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

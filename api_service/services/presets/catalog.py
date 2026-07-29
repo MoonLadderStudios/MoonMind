@@ -123,7 +123,11 @@ _SECRET_LIKE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SECRET_LIKE_VALUE_PATTERN = re.compile(
-    r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
+    r"(token=|password=|"
+    r"bearer\s+(?=[a-z0-9._~+/=-]{16,}(?![a-z0-9._~+/=-]))"
+    r"(?=[a-z0-9._~+/=-]*[0-9._~+/=-])[a-z0-9._~+/=-]+|"
+    r"ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|"
+    r"-----begin [a-z ]*private key)",
     re.IGNORECASE,
 )
 _STEP_RESERVED_KEYS = frozenset(

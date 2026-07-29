@@ -14007,6 +14007,18 @@ class TemporalAgentRuntimeActivities:
             target_branch_name = (
                 target_branch.strip() if isinstance(target_branch, str) else ""
             )
+            while target_branch_name:
+                prior_target_branch_name = target_branch_name
+                if target_branch_name.startswith("refs/remotes/origin/"):
+                    target_branch_name = target_branch_name.removeprefix(
+                        "refs/remotes/origin/"
+                    )
+                if target_branch_name.startswith("refs/heads/"):
+                    target_branch_name = target_branch_name.removeprefix("refs/heads/")
+                if target_branch_name.startswith("origin/"):
+                    target_branch_name = target_branch_name.removeprefix("origin/")
+                if target_branch_name == prior_target_branch_name:
+                    break
             head_branch_name = (
                 head_branch.strip() if isinstance(head_branch, str) else ""
             )

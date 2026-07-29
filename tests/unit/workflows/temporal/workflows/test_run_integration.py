@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
@@ -3692,6 +3693,7 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
         lambda patch_id: patch_id
         in {
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
             RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
         },
     )
@@ -4049,6 +4051,92 @@ async def test_dynamic_verifier_runs_when_no_checkpoint_head_was_captured(
     assert verification_inputs["remediationWorkspaceHeadRef"] is None
     assert verification_inputs["readOnlyWorkspaceHead"] is True
     assert "remediationWorkspaceHead" not in verification_inputs
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_stops_with_remaining_work_without_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the 2026-07-29 Claude remediation failures."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "initial-verification",
+            "status": "completed",
+            "attempt": 1,
+        }
+    ]
+    mock_run_workflow._rebuild_step_ledger_index()
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_REMEDIATION_CHECKPOINT_UNAVAILABLE_STOP_PATCH,
+        },
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        logical_step_id="initial-verification",
+    )
+
+    assert admitted is False
+    assert ordered_nodes == []
+    assert mock_run_workflow._remediation_workspace_head is None
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.phase.value == "stopped_remaining_work"
+    assert state.continuation_reason == "workspace_checkpoint_unavailable"
+    decision_payload = mock_run_workflow._write_json_artifact.await_args.kwargs[
+        "payload"
+    ]
+    assert decision_payload["continueLoop"] is False
+    assert decision_payload["reason"] == "workspace_checkpoint_unavailable"
+    assert decision_payload["nextAttempt"] is None
+    assert decision_payload["nextPhase"] == "stopped_remaining_work"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_replays_prior_missing_checkpoint_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    )
+
+    with pytest.raises(
+        RemediationHeadError,
+        match="dynamic remediation admission has no canonical workspace checkpoint",
+    ):
+        await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=[],
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
 
 
 @pytest.mark.asyncio

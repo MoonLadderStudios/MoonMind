@@ -696,6 +696,81 @@ async def test_template_rejects_secret_like_schema_defaults(tmp_path):
                     created_by=user_id,
                 )
 
+async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
+    tmp_path,
+):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="github-issue-input",
+                title="GitHub issue input",
+                description="Schema-driven issue input",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[
+                    {
+                        "name": "github_issue",
+                        "label": "GitHub issue",
+                        "type": "text",
+                        "required": True,
+                        "schema": {
+                            "type": "object",
+                            "required": ["number"],
+                            "properties": {
+                                "number": {"type": "integer"},
+                                "body": {"type": "string"},
+                            },
+                        },
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Use issue",
+                        "instructions": "Issue {{ inputs.github_issue.number }}",
+                    }
+                ],
+                annotations={},
+                required_capabilities=["github"],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="github-issue-input",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "number": 3514,
+                        "body": "Document the long-lived bearer credential policy.",
+                    }
+                },
+                context={},
+            )
+
+            assert expanded["appliedTemplate"]["inputs"]["github_issue"][
+                "number"
+            ] == 3514
+
+            with pytest.raises(PresetValidationError, match="secret-like"):
+                await service.expand_template(
+                    slug="github-issue-input",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={
+                        "github_issue": {
+                            "number": 3514,
+                            "body": (
+                                "Authorization: Bearer "
+                                "fake-credential-1234567890"
+                            ),
+                        }
+                    },
+                    context={},
+                )
+
 async def test_expand_schema_capability_reports_field_addressable_errors(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
