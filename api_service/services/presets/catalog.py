@@ -124,8 +124,7 @@ _SECRET_LIKE_KEY_PATTERN = re.compile(
 )
 _SECRET_LIKE_VALUE_PATTERN = re.compile(
     r"(token=|password=|"
-    r"authorization\s*:\s*bearer\s+\S+|"
-    r"(?:^|[\r\n])\s*bearer\s+\S+\s*(?:$|[\r\n])|"
+    r"authorization[ \t]*:[ \t]*bearer[ \t]+\S+|"
     r"ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|"
     r"-----begin [a-z ]*private key)",
     re.IGNORECASE,
@@ -1159,7 +1158,14 @@ def _contains_secret_like_value(value: Any) -> bool:
         return False
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_secret_like_value(item) for item in value)
-    return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
+    text = str(value or "")
+    if _SECRET_LIKE_VALUE_PATTERN.search(text):
+        return True
+    return any(
+        len(parts) == 2 and parts[0].casefold() == "bearer" and bool(parts[1])
+        for line in text.splitlines()
+        if (parts := line.strip().split())
+    )
 
 def _capability_contract_from_inputs(
     *,

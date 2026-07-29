@@ -758,6 +758,7 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
                 "Authorization: Bearer short",
                 "Bearer short",
+                "Notes before the credential.\nBearer short\nNotes after it.",
             ):
                 with pytest.raises(PresetValidationError, match="secret-like"):
                     await service.expand_template(
