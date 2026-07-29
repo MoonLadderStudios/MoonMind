@@ -191,6 +191,15 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
     assert all(row["supported"] is False for row in diagnostics["supportMatrix"])
 
 
+def _fake_store_dependency() -> "_FakeStore":
+    """Return a store instance for ``dependency_overrides``.
+
+    Binding ``_FakeStore`` itself would let FastAPI introspect ``__init__`` and
+    deep-copy the sentinel ``owner`` default, breaking the owner identity check.
+    """
+    return _FakeStore()
+
+
 def _mock_user():
     return SimpleNamespace(id=_USER_ID, email="bridge@example.com", is_superuser=False)
 
@@ -777,9 +786,7 @@ def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
-    # Bind an instance: FastAPI would otherwise introspect ``__init__`` and
-    # deep-copy the sentinel default, breaking the owner identity check.
-    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     app.dependency_overrides[get_capability_registry] = lambda: SimpleNamespace(
         revoke_scope=Mock(return_value=["cap-1"]),
         has_live_session_authority=Mock(return_value=True),
@@ -1818,7 +1825,7 @@ def test_embedded_clear_rejection_preserves_retrieval_authority() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     app.dependency_overrides[get_capability_registry] = lambda: registry
 
     response = TestClient(app).post(
