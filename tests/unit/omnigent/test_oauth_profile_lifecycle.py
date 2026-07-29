@@ -27,9 +27,11 @@ from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
+    materialize_cold_restore_inputs,
     recovery_mode,
     validate_branch_identity,
     validate_cold_restore_target,
+    validate_restore_material,
 )
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
@@ -412,7 +414,14 @@ def test_claude_preflight_requires_exact_profile_generation_and_harness() -> Non
 
 def _checkpoint() -> OmnigentCheckpointIdentity:
     return OmnigentCheckpointIdentity(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="step-1",
+        stepExecutionId="step-execution-1",
+        attemptOrdinal=1,
+        boundary="after_execution",
         providerProfileId="codex",
+        credentialRef="credential://codex",
         credentialGeneration=3,
         providerLeaseRef="provider-lease-1",
         hostBindingRef="omnigent-oauth:codex",
@@ -421,9 +430,38 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
         omnigentHostId="host-1",
         omnigentSessionId="session-1",
         bridgeSessionId="bridge-1",
-        externalStateRef="artifact-external-state",
+        externalStateRef="artifact://external-state",
+        externalStateDigest="sha256:" + "0" * 64,
         idempotencyKey="idem-1",
         effectiveLaunchRef="omnigent-launch:sha256:" + "0" * 64,
+        executionProfileRef="profile://codex",
+        launchPolicyRef="policy://default",
+        lastBridgeEventCursor="event-4",
+        firstMessageId="message-1",
+        firstMessageDigest="sha256:" + "1" * 64,
+        workspaceLocator={
+            "kind": "sandbox",
+            "workspaceId": "workspace-1",
+            "relativePath": "repo",
+        },
+        baselineCommit="abc123",
+        headCommit="def456",
+        headRef="artifact://head",
+        headDigest="sha256:" + "2" * 64,
+        workspaceCheckpointRef="artifact://workspace-checkpoint",
+        workspaceCheckpointDigest="sha256:" + "3" * 64,
+        instructionRefs=["artifact://instructions"],
+        contextRefs=["artifact://context"],
+        sourceBranch="main",
+        publicationState="unpublished",
+        capturedAt=datetime(2026, 7, 12, tzinfo=UTC),
+        producerVersion="moonmind-test",
+        validation={
+            "valid": True,
+            "liveReattachAvailable": True,
+            "workspaceColdRestoreAvailable": True,
+            "branchCreationAvailable": True,
+        },
     )
 
 
@@ -434,6 +472,73 @@ def test_legacy_checkpoint_without_effective_launch_ref_remains_loadable() -> No
     checkpoint = OmnigentCheckpointIdentity.model_validate(payload)
 
     assert checkpoint.effective_launch_ref is None
+
+
+def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> None:
+    payloads = {
+        "artifact://external-state": b"external",
+        "artifact://head": b"head",
+        "artifact://workspace-checkpoint": b"workspace",
+    }
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "external_state_digest": "sha256:" + hashlib.sha256(b"external").hexdigest(),
+            "head_digest": "sha256:" + hashlib.sha256(b"head").hexdigest(),
+            "workspace_checkpoint_digest": (
+                "sha256:" + hashlib.sha256(b"workspace").hexdigest()
+            ),
+        }
+    )
+
+    validation = validate_restore_material(
+        checkpoint,
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        provider_profile_id="codex",
+        credential_generation=3,
+        repository_baseline="abc123",
+        repository_head="def456",
+        artifact_reader=payloads.__getitem__,
+    )
+    material = materialize_cold_restore_inputs(checkpoint, validation)
+
+    assert validation.workspace_cold_restore_available is True
+    assert validation.live_reattach_available is True
+    assert material.external_state_ref == "artifact://external-state"
+    assert material.immutable_input_refs == [
+        "artifact://instructions",
+        "artifact://context",
+    ]
+
+
+def test_restore_validation_reports_bounded_independent_denial_reasons() -> None:
+    checkpoint = _checkpoint()
+
+    validation = validate_restore_material(
+        checkpoint,
+        workflow_id="other-workflow",
+        run_id="run-1",
+        logical_step_id="step-1",
+        provider_profile_id="other-profile",
+        credential_generation=4,
+        repository_baseline="different",
+        repository_head="different",
+        artifact_reader=lambda _ref: b"wrong",
+    )
+
+    assert validation.valid is False
+    assert validation.live_reattach_available is False
+    assert validation.workspace_cold_restore_available is False
+    assert validation.branch_creation_available is False
+    assert {
+        "lineage_mismatch",
+        "repository_baseline_mismatch",
+        "repository_head_mismatch",
+        "provider_profile_mismatch",
+        "credential_generation_mismatch",
+        "artifact_digest_mismatch",
+    }.issubset(validation.reasons)
 
 
 def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
@@ -1381,7 +1486,7 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
         "artifact://context-pack/claude",
         "artifact://candidate-head/claude-2",
         "artifact://workspace-checkpoint/claude-2",
-        "artifact-external-state",
+        "artifact://external-state",
     ]
 
 

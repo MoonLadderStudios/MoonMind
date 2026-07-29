@@ -5447,6 +5447,7 @@ class MoonMindRunWorkflow:
         prepared_input_refs: Sequence[str] = (),
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
+        omnigent_checkpoint: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -5467,6 +5468,9 @@ class MoonMindRunWorkflow:
             "preparedInputRefs": list(prepared_input_refs),
             "stepOutputs": dict(step_outputs or {}),
             "diagnosticRefs": list(diagnostic_refs),
+            "omnigentCheckpoint": (
+                dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
+            ),
             "idempotencyKey": checkpoint_id,
         }
         result = await workflow.execute_activity(
@@ -5649,6 +5653,11 @@ class MoonMindRunWorkflow:
         ):
             capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            omnigent_checkpoint = candidate.get("omnigentCheckpoint") or candidate.get(
+                "omnigent_checkpoint"
+            )
+            if isinstance(omnigent_checkpoint, Mapping):
+                capture_input["omnigentCheckpoint"] = dict(omnigent_checkpoint)
             workspace_locator = candidate.get("workspaceLocator") or candidate.get(
                 "workspace_locator"
             )
@@ -5967,6 +5976,18 @@ class MoonMindRunWorkflow:
                 logical_step_id
             ),
             diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
+            omnigent_checkpoint=(
+                self._step_workspace_capture_inputs.get(logical_step_id, {}).get(
+                    "omnigentCheckpoint"
+                )
+                if isinstance(
+                    self._step_workspace_capture_inputs.get(logical_step_id, {}).get(
+                        "omnigentCheckpoint"
+                    ),
+                    Mapping,
+                )
+                else None
+            ),
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:

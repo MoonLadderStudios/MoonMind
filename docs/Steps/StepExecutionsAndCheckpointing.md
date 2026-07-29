@@ -623,6 +623,29 @@ MoonMind creates or updates checkpoint evidence at these canonical boundaries (`
 
 Checkpoint writes must be idempotent because Activities and workflow tasks may retry.
 
+For Omnigent, the canonical writer attaches one versioned `omnigentCheckpoint`
+object to this Step Execution checkpoint. Capture occurs after workspace
+preparation and before the first message, after each completed turn or logical
+step, before controlled drain/reset, before recovery or Checkpoint Branch
+creation, and during terminal harvest when recoverable state remains. These are
+logical lifecycle triggers mapped to the nearest canonical boundary above; they
+do not create an adapter-owned checkpoint lane.
+
+The Omnigent object preserves four separate authority planes:
+
+| Plane | Required evidence |
+| --- | --- |
+| Session | `externalStateRef` and digest, bridge/session/host ids, idempotency key, last committed bridge cursor, first-message id and digest, terminal and diagnostics refs |
+| Workspace | `WorkspaceLocator`, baseline commit, head/diff/checkpoint refs and digests, source/output branch and publication state |
+| Host realization | endpoint, execution profile, launch policy, effective-launch snapshot, Provider Profile, provider/host lease and binding refs, resource/capture manifests and patch capability |
+| Credentials | credential reference and generation only; never a credential body, OAuth home, or copied volume content |
+
+The object also pins workflow, run, logical-step, Step Execution, attempt and
+boundary lineage, immutable instruction/context refs, capture time, producer
+version, and its validation projection. A capability is `true` only when every
+evidence class it requires is independently resolvable. Partial capture records
+bounded reason codes and leaves the affected capability false.
+
 ### 9.2 Workspace checkpoint kinds
 
 Supported checkpoint kinds should be explicit.
@@ -673,6 +696,14 @@ Before a checkpoint can be used to start a new attempt or Resume execution, Moon
 7. workspace, branch, and commit consistency;
 8. checkpoint kind compatibility with the selected workspace policy;
 9. policy eligibility for replaying or preserving side effects.
+
+Omnigent restore validation additionally dereferences and digest-checks each
+required artifact, checks requested workflow/run/step lineage and repository
+baseline/head compatibility, and requires the current Provider Profile and
+credential generation to match. Provider URLs, raw local paths, container ids,
+OAuth volume contents, and provider-native ids are never artifact authority.
+Live session reattach, workspace cold restore, and branch creation are evaluated
+independently and return bounded machine-readable denial reasons.
 
 Validation failures must be typed, not prose. Canonical failure codes (`StepCheckpointValidationFailureCode`):
 

@@ -91,6 +91,14 @@ def decide_same_session_recovery(
         workspaceAuthority=capability_dump.get("workspaceAuthority"),
         sessionRecoverable=eligible,
         workspaceRecoverable=workspace_checkpoint_valid,
+        branchCreationAvailable=workspace_checkpoint_valid,
+        liveReattachReason=None if eligible else reason,
+        workspaceRestoreReason=(
+            None if workspace_checkpoint_valid else "WORKSPACE_CHECKPOINT_UNAVAILABLE"
+        ),
+        branchCreationReason=(
+            None if workspace_checkpoint_valid else "WORKSPACE_CHECKPOINT_UNAVAILABLE"
+        ),
         authoritativeWorkspaceCheckpointKind=(
             capabilities.checkpoint_restore_kinds[0]
             if workspace_checkpoint_valid and capabilities
@@ -171,8 +179,20 @@ def decide_checkpoint_recovery(
             and capabilities.session_state.supports_live_reattach
         ),
         workspaceRecoverable=eligible,
+        branchCreationAvailable=eligible,
+        liveReattachReason=(
+            None
+            if live_session_id and session_reachable
+            else "SAME_SESSION_UNREACHABLE"
+        ),
+        workspaceRestoreReason=reason,
+        branchCreationReason=reason,
+        checkpointValidationStatus="valid" if artifact_valid else "invalid",
         authoritativeWorkspaceCheckpointKind=(
-            checkpoint_kind if checkpoint_kind in tuple(capability_dump.get("checkpointRestoreKinds", ())) else None
+            checkpoint_kind
+            if checkpoint_kind
+            in tuple(capability_dump.get("checkpointRestoreKinds", ()))
+            else None
         ),
         partialRecoveryReason=(
             "Session state is recoverable, but authoritative workspace checkpoint evidence is unavailable."

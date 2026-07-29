@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -391,14 +391,42 @@ async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) ->
     # The Temporal-facing checkpoint contract rejects credential material.
     with pytest.raises(ValueError, match="reference, not credential data"):
         OmnigentCheckpointIdentity(
+            workflowId="workflow",
+            runId="run",
+            logicalStepId="step",
+            stepExecutionId="execution",
+            attemptOrdinal=1,
+            boundary="after_execution",
             providerProfileId="provider",
+            credentialRef="credential://provider",
             credentialGeneration=9,
             hostBindingRef="binding",
             endpointRef=f"token={token}",
             bridgeSessionId="bridge",
             externalStateRef="artifact://external",
+            externalStateDigest="sha256:" + "0" * 64,
             idempotencyKey="idem",
             effectiveLaunchRef="omnigent-launch:sha256:" + "0" * 64,
+            executionProfileRef="profile://provider",
+            launchPolicyRef="policy://default",
+            workspaceLocator={"kind": "sandbox", "workspaceId": "workspace"},
+            baselineCommit="abc",
+            headCommit="def",
+            headRef="artifact://head",
+            headDigest="sha256:" + "1" * 64,
+            workspaceCheckpointRef="artifact://workspace",
+            workspaceCheckpointDigest="sha256:" + "2" * 64,
+            sourceBranch="main",
+            publicationState="unpublished",
+            capturedAt=datetime(2026, 7, 12, tzinfo=UTC),
+            producerVersion="test",
+            validation={
+                "valid": False,
+                "liveReattachAvailable": False,
+                "workspaceColdRestoreAvailable": False,
+                "branchCreationAvailable": False,
+                "reasons": ["credential_reference_rejected"],
+            },
         )
 
     # The actual artifact gateway boundary redacts structured diagnostics.
