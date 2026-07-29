@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from moonmind.schemas.workspace_locator_models import WorkspaceLocator
 
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
+# Bound each manifest string so a structurally valid checkpoint cannot inflate the
+# Temporal ``step_checkpoint.create`` activity payload past the compact-history policy.
+_MAX_MANIFEST_FIELD_LENGTH = 4096
 _ARTIFACT_FIELDS = {
     "externalStateRef",
     "terminalRef",
@@ -95,7 +98,12 @@ class OmnigentCheckpointIdentity(BaseModel):
     attempt_ordinal: int = Field(..., alias="attemptOrdinal", ge=1)
     boundary: str = Field(..., min_length=1)
     provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
-    credential_ref: str = Field(..., alias="credentialRef", min_length=1)
+    credential_ref: str = Field(
+        ...,
+        alias="credentialRef",
+        min_length=1,
+        pattern=r"^(credential|secret)://\S+$",
+    )
     credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
     provider_lease_ref: str | None = Field(None, alias="providerLeaseRef")
     host_binding_ref: str = Field(..., alias="hostBindingRef", min_length=1)
@@ -135,8 +143,12 @@ class OmnigentCheckpointIdentity(BaseModel):
     workspace_checkpoint_digest: str = Field(
         ..., alias="workspaceCheckpointDigest", pattern=_DIGEST
     )
-    instruction_refs: list[str] = Field(default_factory=list, alias="instructionRefs")
-    context_refs: list[str] = Field(default_factory=list, alias="contextRefs")
+    instruction_refs: list[str] = Field(
+        default_factory=list, alias="instructionRefs", max_length=64
+    )
+    context_refs: list[str] = Field(
+        default_factory=list, alias="contextRefs", max_length=64
+    )
     source_branch: str = Field(..., alias="sourceBranch", min_length=1)
     output_branch: str | None = Field(None, alias="outputBranch")
     publication_state: str = Field(..., alias="publicationState", min_length=1)
@@ -152,6 +164,10 @@ class OmnigentCheckpointIdentity(BaseModel):
             raise ValueError("effectiveLaunchRef must identify an effective launch snapshot")
         dumped = self.model_dump(by_alias=True, mode="json", exclude_none=True)
         for field, value in _string_leaves(dumped):
+            if len(value) > _MAX_MANIFEST_FIELD_LENGTH:
+                raise ValueError(
+                    f"{field} exceeds the compact checkpoint field bound"
+                )
             lowered = value.lower()
             if any(marker in lowered for marker in ("bearer ", "token=", "password=")):
                 raise ValueError(f"{field} must be a reference, not credential data")
@@ -202,9 +218,12 @@ class OmnigentRestoreMaterial(BaseModel):
     workspace_checkpoint_ref: str = Field(alias="workspaceCheckpointRef")
     workspace_checkpoint_digest: str = Field(alias="workspaceCheckpointDigest")
     head_ref: str = Field(alias="headRef")
+    head_digest: str = Field(alias="headDigest")
     diff_ref: str | None = Field(None, alias="diffRef")
+    diff_digest: str | None = Field(None, alias="diffDigest")
     immutable_input_refs: list[str] = Field(alias="immutableInputRefs")
     external_state_ref: str = Field(alias="externalStateRef")
+    external_state_digest: str = Field(alias="externalStateDigest")
     provider_profile_id: str = Field(alias="providerProfileId")
     credential_generation: int = Field(alias="credentialGeneration")
     source_effective_launch_ref: str | None = Field(
@@ -241,6 +260,9 @@ def validate_restore_material(
     workflow_id: str,
     run_id: str,
     logical_step_id: str,
+    step_execution_id: str,
+    attempt_ordinal: int,
+    boundary: str,
     provider_profile_id: str,
     credential_generation: int,
     repository_baseline: str,
@@ -256,6 +278,15 @@ def validate_restore_material(
         logical_step_id,
     ):
         reasons.append("lineage_mismatch")
+    # A logical step can have multiple attempts and checkpoint boundaries; evidence
+    # from a different attempt must not restore an obsolete workspace state, so the
+    # complete Step Execution identity is validated, not just the logical lineage.
+    if (
+        checkpoint.step_execution_id,
+        checkpoint.attempt_ordinal,
+        checkpoint.boundary,
+    ) != (step_execution_id, attempt_ordinal, boundary):
+        reasons.append("step_execution_lineage_mismatch")
     if checkpoint.baseline_commit != repository_baseline:
         reasons.append("repository_baseline_mismatch")
     if checkpoint.head_commit != repository_head:
@@ -289,6 +320,14 @@ def validate_restore_material(
         actual = "sha256:" + hashlib.sha256(payload).hexdigest()
         if actual != expected_digest:
             reasons.append("artifact_digest_mismatch")
+    # The immutable instruction/context inputs carry no digests in the manifest, so
+    # confirm each one is at least dereferenceable before declaring the checkpoint
+    # restorable; otherwise the new session launches with missing immutable inputs.
+    for ref in (*checkpoint.instruction_refs, *checkpoint.context_refs):
+        try:
+            artifact_reader(ref)
+        except Exception:
+            reasons.append("immutable_input_unavailable")
     reasons = list(dict.fromkeys(reasons))[:20]
     cold = not reasons
     live = cold and all(
@@ -326,9 +365,12 @@ def materialize_cold_restore_inputs(
         workspaceCheckpointRef=checkpoint.workspace_checkpoint_ref,
         workspaceCheckpointDigest=checkpoint.workspace_checkpoint_digest,
         headRef=checkpoint.head_ref,
+        headDigest=checkpoint.head_digest,
         diffRef=checkpoint.diff_ref,
+        diffDigest=checkpoint.diff_digest,
         immutableInputRefs=[*checkpoint.instruction_refs, *checkpoint.context_refs],
         externalStateRef=checkpoint.external_state_ref,
+        externalStateDigest=checkpoint.external_state_digest,
         providerProfileId=checkpoint.provider_profile_id,
         credentialGeneration=checkpoint.credential_generation,
         sourceEffectiveLaunchRef=checkpoint.effective_launch_ref,

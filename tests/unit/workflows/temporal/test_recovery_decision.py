@@ -174,6 +174,58 @@ def test_same_session_decision_does_not_infer_workspace_evidence_from_capability
     assert decision.workspace_recoverable is False
 
 
+def test_branch_availability_requires_runtime_restore_capability() -> None:
+    # A valid workspace checkpoint on a runtime with a restore kind and route can branch.
+    supported = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        workspace_checkpoint_valid=True,
+        capabilities=resolve_runtime_execution_capabilities("omnigent"),
+    )
+    # claude_code advertises no checkpoint restore kind, so branching is unavailable
+    # even though the workspace checkpoint itself is valid.
+    unsupported = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        workspace_checkpoint_valid=True,
+        capabilities=resolve_runtime_execution_capabilities("claude_code"),
+    )
+    missing_caps = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        workspace_checkpoint_valid=True,
+        capabilities=None,
+    )
+
+    assert supported.branch_creation_available is True
+    assert supported.branch_creation_reason is None
+    assert unsupported.branch_creation_available is False
+    assert unsupported.branch_creation_reason == "CHECKPOINT_RESTORE_UNSUPPORTED"
+    assert missing_caps.branch_creation_available is False
+    assert missing_caps.branch_creation_reason == "CHECKPOINT_RESTORE_UNSUPPORTED"
+
+
+def test_checkpoint_decision_reports_unsupported_live_reattach_explicitly() -> None:
+    # A reachable live session on a runtime that cannot live-reattach must surface the
+    # machine-readable unsupported-capability reason, not a null or unreachable reason.
+    decision = _decision(
+        capabilities=resolve_runtime_execution_capabilities("claude_code"),
+        checkpoint_kind="worktree_archive",
+        live_session_id="session-1",
+        session_reachable=True,
+    )
+
+    assert decision.session_recoverable is False
+    assert decision.live_reattach_reason == "SAME_SESSION_CONTINUATION_UNSUPPORTED"
+
+    unreachable = _decision(
+        live_session_id=None,
+        session_reachable=False,
+    )
+
+    assert unreachable.live_reattach_reason == "SAME_SESSION_UNREACHABLE"
+
+
 def test_restore_kinds_without_activity_are_rejected_by_capability_schema() -> None:
     with pytest.raises(ValueError, match="declared together"):
         RuntimeExecutionCapabilities(

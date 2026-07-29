@@ -77,6 +77,18 @@ def decide_same_session_recovery(
     elif not live_session_id or not session_reachable:
         reason = "SAME_SESSION_UNREACHABLE"
     eligible = reason is None
+    # Branch creation must not be advertised on workspace validity alone: the selected
+    # runtime must also expose a checkpoint restore kind and a registered branch/restore
+    # route, or the API/Workflow Detail panel offers a branch that cannot be launched.
+    if not workspace_checkpoint_valid:
+        branch_reason = "WORKSPACE_CHECKPOINT_UNAVAILABLE"
+    elif not (capabilities and capabilities.checkpoint_restore_kinds):
+        branch_reason = "CHECKPOINT_RESTORE_UNSUPPORTED"
+    elif not capabilities.checkpoint_restore_activity:
+        branch_reason = "CHECKPOINT_RESTORE_ROUTE_MISSING"
+    else:
+        branch_reason = None
+    branch_available = branch_reason is None
     capability_dump = (
         capabilities.model_dump(by_alias=True, mode="json") if capabilities else {}
     )
@@ -91,14 +103,12 @@ def decide_same_session_recovery(
         workspaceAuthority=capability_dump.get("workspaceAuthority"),
         sessionRecoverable=eligible,
         workspaceRecoverable=workspace_checkpoint_valid,
-        branchCreationAvailable=workspace_checkpoint_valid,
+        branchCreationAvailable=branch_available,
         liveReattachReason=None if eligible else reason,
         workspaceRestoreReason=(
             None if workspace_checkpoint_valid else "WORKSPACE_CHECKPOINT_UNAVAILABLE"
         ),
-        branchCreationReason=(
-            None if workspace_checkpoint_valid else "WORKSPACE_CHECKPOINT_UNAVAILABLE"
-        ),
+        branchCreationReason=branch_reason,
         authoritativeWorkspaceCheckpointKind=(
             capabilities.checkpoint_restore_kinds[0]
             if workspace_checkpoint_valid and capabilities
@@ -158,6 +168,14 @@ def decide_checkpoint_recovery(
         capabilities.model_dump(by_alias=True, mode="json") if capabilities else {}
     )
     eligible = reason is None
+    live_reattach_supported = bool(
+        capabilities
+        and capabilities.session_state
+        and capabilities.session_state.supports_live_reattach
+    )
+    session_recoverable = bool(
+        live_session_id and session_reachable and live_reattach_supported
+    )
     return RecoveryEligibilityDiagnosticModel(
         eligible=eligible,
         requestedAction="resume_from_workspace_checkpoint",
@@ -173,15 +191,13 @@ def decide_checkpoint_recovery(
         checkpointRestoreKinds=capability_dump.get("checkpointRestoreKinds", ()),
         restoreActivity=capability_dump.get("checkpointRestoreActivity"),
         workspaceAuthority=capability_dump.get("workspaceAuthority"),
-        sessionRecoverable=bool(
-            live_session_id and session_reachable and capabilities
-            and capabilities.session_state
-            and capabilities.session_state.supports_live_reattach
-        ),
+        sessionRecoverable=session_recoverable,
         workspaceRecoverable=eligible,
         branchCreationAvailable=eligible,
         liveReattachReason=(
             None
+            if session_recoverable
+            else "SAME_SESSION_CONTINUATION_UNSUPPORTED"
             if live_session_id and session_reachable
             else "SAME_SESSION_UNREACHABLE"
         ),
@@ -196,9 +212,7 @@ def decide_checkpoint_recovery(
         ),
         partialRecoveryReason=(
             "Session state is recoverable, but authoritative workspace checkpoint evidence is unavailable."
-            if not eligible and live_session_id and session_reachable
-            and capabilities and capabilities.session_state
-            and capabilities.session_state.supports_live_reattach else None
+            if not eligible and session_recoverable else None
         ),
         sourceWorkflowId=source_workflow_id,
         sourceRunId=source_run_id,

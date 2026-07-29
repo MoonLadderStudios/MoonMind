@@ -479,6 +479,8 @@ def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> N
         "artifact://external-state": b"external",
         "artifact://head": b"head",
         "artifact://workspace-checkpoint": b"workspace",
+        "artifact://instructions": b"instructions",
+        "artifact://context": b"context",
     }
     checkpoint = _checkpoint().model_copy(
         update={
@@ -495,6 +497,9 @@ def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> N
         workflow_id="workflow-1",
         run_id="run-1",
         logical_step_id="step-1",
+        step_execution_id="step-execution-1",
+        attempt_ordinal=1,
+        boundary="after_execution",
         provider_profile_id="codex",
         credential_generation=3,
         repository_baseline="abc123",
@@ -506,6 +511,8 @@ def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> N
     assert validation.workspace_cold_restore_available is True
     assert validation.live_reattach_available is True
     assert material.external_state_ref == "artifact://external-state"
+    assert material.external_state_digest == checkpoint.external_state_digest
+    assert material.head_digest == checkpoint.head_digest
     assert material.immutable_input_refs == [
         "artifact://instructions",
         "artifact://context",
@@ -520,6 +527,9 @@ def test_restore_validation_reports_bounded_independent_denial_reasons() -> None
         workflow_id="other-workflow",
         run_id="run-1",
         logical_step_id="step-1",
+        step_execution_id="other-step-execution",
+        attempt_ordinal=2,
+        boundary="before_execution",
         provider_profile_id="other-profile",
         credential_generation=4,
         repository_baseline="different",
@@ -533,6 +543,7 @@ def test_restore_validation_reports_bounded_independent_denial_reasons() -> None
     assert validation.branch_creation_available is False
     assert {
         "lineage_mismatch",
+        "step_execution_lineage_mismatch",
         "repository_baseline_mismatch",
         "repository_head_mismatch",
         "provider_profile_mismatch",
