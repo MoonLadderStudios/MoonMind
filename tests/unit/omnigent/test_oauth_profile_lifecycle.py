@@ -2389,3 +2389,632 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
 def immutable_bootstrap_images(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3507 — normal-workflow workspace materialization
+# and single-boundary locator resolution.
+# ---------------------------------------------------------------------------
+
+
+def _init_source_repo(path: Path) -> None:
+    """Create a small git source repo with a `main` and a `feature` branch."""
+
+    path.mkdir(parents=True, exist_ok=True)
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=test@moonmind.test",
+                "-c",
+                "user.name=MoonMind Test",
+                "-c",
+                "init.defaultBranch=main",
+                *args,
+            ],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+
+    _git("init")
+    _git("checkout", "-B", "main")
+    (path / "README.md").write_text("main-content\n", encoding="utf-8")
+    _git("add", "README.md")
+    _git("commit", "-m", "initial")
+    _git("checkout", "-B", "feature")
+    (path / "feature.txt").write_text("feature-content\n", encoding="utf-8")
+    _git("add", "feature.txt")
+    _git("commit", "-m", "feature work")
+    _git("checkout", "main")
+
+
+def _current_branch(repo: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _sandbox_id() -> str:
+    return hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+
+
+def _runtime_for(tmp_path: Path) -> OmnigentOAuthHostRuntime:
+    # ``tmp_path`` is the authorized per-run source root, so local test source
+    # repositories created under it are clonable while arbitrary host paths are
+    # rejected.
+    return OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+        repository_source_root=tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_materializes_repository_and_branch(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="feature",
+    )
+
+    expected = (
+        tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    )
+    assert resolved == expected
+    assert (resolved / ".git").is_dir()
+    assert (resolved / "feature.txt").is_file()
+    assert _current_branch(resolved) == "feature"
+    evidence = runtime._last_workspace_evidence
+    assert evidence["locatorKind"] == "sandbox"
+    assert evidence["identityVerified"] is True
+    assert evidence["materialization"]["action"] == "materialized"
+    assert evidence["materialization"]["checkedOut"] == "feature"
+    # Bounded evidence never leaks a raw worker/daemon path.
+    assert str(resolved) not in json.dumps(evidence)
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_materialization_is_idempotent(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    kwargs = dict(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+    )
+
+    first = await runtime._prepare_workspace(**kwargs)
+    marker = first / "retry-marker.txt"
+    marker.write_text("preserved", encoding="utf-8")
+
+    second = await runtime._prepare_workspace(**kwargs)
+
+    assert first == second
+    # A retry must not re-clone or discard existing working-tree state.
+    assert marker.read_text(encoding="utf-8") == "preserved"
+    assert runtime._last_workspace_evidence["materialization"]["action"] == (
+        "reused_pre_materialized"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_honors_authored_output_branch(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+        target_branch="agent/work",
+    )
+
+    assert _current_branch(resolved) == "agent/work"
+    assert (resolved / "README.md").is_file()
+    assert runtime._last_workspace_evidence["materialization"]["outputBranch"] == (
+        "agent/work"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_external_state_locator(tmp_path) -> None:
+    runtime = _runtime_for(tmp_path)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={
+                "kind": "external_state",
+                "artifactRef": "artifact://checkpoint/123",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+        )
+
+    assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
+    runtime._run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_managed_runtime_locator(tmp_path) -> None:
+    runtime = _runtime_for(tmp_path)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={
+                "kind": "managed_runtime",
+                "runtimeId": "codex_cli",
+                "agentRunId": "run-1",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+        )
+
+    assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
+    runtime._run.assert_not_awaited()
+
+
+class _FakeArtifactService:
+    """Durable-service fake keyed by scheme-stripped artifact id.
+
+    Mirrors ``TemporalArtifactService``: reads address artifacts by id (never the
+    ``artifact://`` scheme) and require a ``principal``; the recorded calls let
+    tests assert the real read contract is honored.
+    """
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+        self.read_calls: list[dict] = []
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str | None = None,
+        allow_restricted_raw: bool = False,
+        **_kwargs,
+    ):
+        self.read_calls.append(
+            {
+                "artifact_id": artifact_id,
+                "principal": principal,
+                "allow_restricted_raw": allow_restricted_raw,
+            }
+        )
+        return {}, self._payloads[artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_materializes_restore_inputs_as_refs(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    ref = "artifact://checkpoint/workspace-archive"
+    # The durable service is addressed by the scheme-stripped id, not the ref.
+    service = _FakeArtifactService({"checkpoint/workspace-archive": b"restore-bytes"})
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+        restore_input_refs=(ref,),
+        artifact_gateway=service,
+    )
+
+    restore_dir = resolved / ".moonmind" / "restore"
+    written = list(restore_dir.iterdir())
+    assert len(written) == 1
+    assert written[0].read_bytes() == b"restore-bytes"
+    restore_evidence = runtime._last_workspace_evidence["materialization"][
+        "restoreInputs"
+    ]
+    assert restore_evidence == [{"ref": ref, "bytes": len(b"restore-bytes")}]
+    # The read went through the durable service contract: scheme-stripped id,
+    # dedicated restore principal, and raw-access authorization.
+    assert service.read_calls == [
+        {
+            "artifact_id": "checkpoint/workspace-archive",
+            "principal": "service:omnigent_workspace_restore",
+            "allow_restricted_raw": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_local_path_restore_input(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    service = _FakeArtifactService({})
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+            restore_input_refs=("/etc/passwd",),
+            artifact_gateway=service,
+        )
+
+    # A restore input that is a local path must never be conflated with an
+    # artifact ref.
+    assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
+
+
+class _StreamingArtifactService:
+    """Durable-service fake that supports metadata + chunked reads."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+        self.metadata_calls: list[str] = []
+        self.chunk_calls: list[str] = []
+
+    async def get_metadata(self, *, artifact_id: str, principal: str, **_kwargs):
+        self.metadata_calls.append(artifact_id)
+        payload = self._payloads[artifact_id]
+        artifact = SimpleNamespace(size_bytes=len(payload))
+        return artifact, [], False, None
+
+    async def read_chunks(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+        chunk_size: int = 1024,
+    ):
+        assert allow_restricted_raw is True
+        assert principal == "service:omnigent_workspace_restore"
+        self.chunk_calls.append(artifact_id)
+        payload = self._payloads[artifact_id]
+        chunks = [
+            payload[index : index + chunk_size]
+            for index in range(0, len(payload), chunk_size)
+        ] or [b""]
+        return SimpleNamespace(size_bytes=len(payload)), chunks
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_streams_restore_inputs_when_supported(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    ref = "artifact://checkpoint/big-archive"
+    payload = b"x" * (3 * 1024 * 1024)
+    service = _StreamingArtifactService({"checkpoint/big-archive": payload})
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+        restore_input_refs=(ref,),
+        artifact_gateway=service,
+    )
+
+    restore_dir = resolved / ".moonmind" / "restore"
+    written = list(restore_dir.iterdir())
+    assert len(written) == 1
+    assert written[0].read_bytes() == payload
+    # The payload was pre-checked from metadata and streamed via chunked reads.
+    assert service.metadata_calls == ["checkpoint/big-archive"]
+    assert service.chunk_calls == ["checkpoint/big-archive"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_oversized_restore_from_metadata(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_INPUT_BYTES", 16
+    )
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    ref = "artifact://checkpoint/too-big"
+    service = _StreamingArtifactService({"checkpoint/too-big": b"y" * 64})
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+            restore_input_refs=(ref,),
+            artifact_gateway=service,
+        )
+
+    assert exc.value.code == "OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+    # Rejected before any bytes were streamed.
+    assert service.chunk_calls == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_enforces_cumulative_restore_budget(
+    tmp_path, monkeypatch
+) -> None:
+    # Each ref is individually legal, but together they exceed the cumulative
+    # budget, so the second ref is rejected.
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_INPUT_BYTES", 1024
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_TOTAL_BYTES", 1024
+    )
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    payloads = {
+        "checkpoint/a": b"a" * 800,
+        "checkpoint/b": b"b" * 800,
+    }
+    service = _FakeArtifactService(payloads)
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+            restore_input_refs=(
+                "artifact://checkpoint/a",
+                "artifact://checkpoint/b",
+            ),
+            artifact_gateway=service,
+        )
+
+    assert exc.value.code == "OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_local_source_outside_authorized_root(
+    tmp_path,
+) -> None:
+    # A source outside the authorized per-run root cannot be cloned even though
+    # it is a readable git repository on the worker.
+    outside = tmp_path.parent / "outside-source"
+    _init_source_repo(outside)
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+        repository_source_root=tmp_path / "authorized",
+    )
+    workspace_id = _sandbox_id()
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(outside),
+            starting_branch="main",
+        )
+
+    assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rebuilds_incomplete_workspace_on_retry(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    locator = {"kind": "sandbox", "workspaceId": workspace_id}
+
+    # Simulate a prior attempt that created the workspace directory but crashed
+    # before writing durable completion evidence.
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+    )
+
+    partial = (
+        tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    )
+    partial.mkdir(parents=True, exist_ok=True)
+    (partial / "partial-clone.txt").write_text("incomplete", encoding="utf-8")
+    assert not SandboxWorkspaceRecordStore(
+        tmp_path / "workspaces"
+    ).is_materialized(workspace_id)
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator=locator,
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="feature",
+    )
+
+    # The incomplete directory was torn down and rebuilt from the authored state.
+    assert not (resolved / "partial-clone.txt").exists()
+    assert (resolved / ".git").is_dir()
+    assert _current_branch(resolved) == "feature"
+    assert runtime._last_workspace_evidence["materialization"]["action"] == (
+        "materialized"
+    )
+    assert SandboxWorkspaceRecordStore(
+        tmp_path / "workspaces"
+    ).is_materialized(workspace_id)
+
+
+def test_normalize_repository_source_rejects_spoofed_github_host() -> None:
+    normalize = OmnigentOAuthHostRuntime._normalize_repository_source
+    # Real GitHub host injects credentials.
+    assert normalize("https://github.com/org/repo.git") == (
+        "https://github.com/org/repo.git",
+        "github_https",
+    )
+    # Hosts that merely contain the substring "github.com" must be classified as
+    # untrusted remotes so the GitHub token is never injected into them.
+    for spoof in (
+        "https://github.com.evil.com/org/repo.git",
+        "https://evil.com/github.com/org/repo.git",
+        "https://evilgithub.com/org/repo.git",
+    ):
+        assert normalize(spoof) == (spoof, "remote")
+
+
+def _execution_request(**overrides) -> AgentExecutionRequest:
+    payload = dict(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile:test",
+        correlationId="corr-3507",
+        idempotencyKey="idem-3507",
+        parameters={"repository": "org/repo"},
+    )
+    payload.update(overrides)
+    return AgentExecutionRequest(**payload)
+
+
+def test_coordinator_reads_repository_and_branch_intent_from_workspace_spec() -> None:
+    request = _execution_request(
+        workspaceSpec={
+            "repository": "org/repo",
+            "startingBranch": "release",
+            "targetBranch": "agent/work",
+            "baseCommit": "abc123",
+            "restoreInputRefs": ["artifact://a", "artifact://a", "artifact://b"],
+        }
+    )
+
+    assert OmnigentProfileBoundExecutionCoordinator._repository_source(request) == (
+        "org/repo"
+    )
+    assert OmnigentProfileBoundExecutionCoordinator._starting_branch(request) == (
+        "release"
+    )
+    assert OmnigentProfileBoundExecutionCoordinator._target_branch(request) == (
+        "agent/work"
+    )
+    assert OmnigentProfileBoundExecutionCoordinator._checkout_commit(request) == (
+        "abc123"
+    )
+    # De-duplicated, order-preserving durable refs only.
+    assert OmnigentProfileBoundExecutionCoordinator._restore_input_refs(request) == (
+        ("artifact://a", "artifact://b")
+    )
+
+
+def test_coordinator_repository_intent_defaults_are_empty() -> None:
+    request = _execution_request(parameters={})
+
+    assert OmnigentProfileBoundExecutionCoordinator._repository_source(request) == ""
+    assert OmnigentProfileBoundExecutionCoordinator._starting_branch(request) is None
+    assert OmnigentProfileBoundExecutionCoordinator._target_branch(request) is None
+    assert OmnigentProfileBoundExecutionCoordinator._checkout_commit(request) is None
+    assert OmnigentProfileBoundExecutionCoordinator._restore_input_refs(request) == ()
+
+
+@pytest.mark.asyncio
+async def test_github_token_resolves_clone_credential_without_gh_capability(
+    monkeypatch,
+) -> None:
+    # publishMode=none read-only work derives `git` but not `gh`; a private
+    # GitHub source must still resolve a clone credential.
+    import moonmind.auth.github_credentials as github_credentials
+
+    resolve = AsyncMock(
+        return_value=SimpleNamespace(token="clone-token")
+    )
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git"]}
+    )
+
+    token = await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+
+    assert token == "clone-token"
+    resolve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_github_token_public_clone_tolerates_missing_credential(
+    monkeypatch,
+) -> None:
+    import moonmind.auth.github_credentials as github_credentials
+
+    resolve = AsyncMock(return_value=SimpleNamespace(token=""))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git"]}
+    )
+
+    # No mounted-gh requirement, so a missing credential is not fatal: a public
+    # clone can proceed unauthenticated (a private clone fails later at git).
+    assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
+
+
+@pytest.mark.asyncio
+async def test_github_token_requires_credential_when_gh_capability_declared(
+    monkeypatch,
+) -> None:
+    import moonmind.auth.github_credentials as github_credentials
+
+    resolve = AsyncMock(return_value=SimpleNamespace(token=""))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git", "gh"]}
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+    assert exc.value.code == "github_auth_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
+    import moonmind.auth.github_credentials as github_credentials
+
+    resolve = AsyncMock(return_value=SimpleNamespace(token="unused"))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+
+    # A non-GitHub remote with no gh capability needs no GitHub clone credential.
+    request = _execution_request(
+        parameters={"requiredCapabilities": ["git"]},
+        workspaceSpec={"repository": "https://gitlab.com/org/repo.git"},
+    )
+
+    assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
+    resolve.assert_not_awaited()
