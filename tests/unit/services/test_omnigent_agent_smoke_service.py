@@ -1,0 +1,276 @@
+"""Bounded smoke validation for Omnigent agent profiles (MoonLadderStudios/MoonMind#3517 §7)."""
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    OmnigentUpstreamAgentProjection,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
+from api_service.services.omnigent_agent_profile_service import projection_identity
+from api_service.services.omnigent_agent_smoke_service import (
+    ReadinessOutcome,
+    run_profile_readiness_checks,
+    run_smoke_validation,
+    scrub_diagnostics,
+)
+
+pytestmark = [pytest.mark.asyncio]
+
+
+# --------------------------------------------------------------------------
+# Orchestration: timeout budget, guaranteed cleanup, secret-scanned diagnostics
+# --------------------------------------------------------------------------
+
+
+def _ready_outcome():
+    return ReadinessOutcome(
+        checks=[{"name": "provider_profile", "ready": True, "reason": None}],
+        upstream_snapshot={"id": "agent-1"},
+    )
+
+
+async def _ok_probe():
+    return {"ready": True, "reason": None}
+
+
+class _FakeClock:
+    def __init__(self):
+        self._t = 0.0
+
+    def __call__(self):
+        self._t += 0.25
+        return self._t
+
+
+async def test_smoke_pass_appends_session_start_and_is_ready():
+    async def preflight():
+        return _ready_outcome()
+
+    result = await run_smoke_validation(
+        preflight=preflight,
+        session_start_probe=_ok_probe,
+        monotonic=_FakeClock(),
+        profile_id="codex",
+        version=3,
+    )
+    assert result["ready"] is True
+    assert result["timedOut"] is False
+    assert result["version"] == 3
+    names = [check["name"] for check in result["checks"]]
+    assert names == ["provider_profile", "session_start"]
+    assert result["durationMs"] >= 0
+
+
+async def test_failing_check_marks_not_ready():
+    async def preflight():
+        return ReadinessOutcome(
+            checks=[{"name": "provider_profile", "ready": False, "reason": "no provider"}]
+        )
+
+    result = await run_smoke_validation(
+        preflight=preflight,
+        session_start_probe=_ok_probe,
+        profile_id="codex",
+        version=1,
+    )
+    assert result["ready"] is False
+
+
+async def test_timeout_releases_leases_and_reports_timed_out():
+    released = {"value": False}
+
+    async def slow_preflight():
+        await asyncio.sleep(5)
+        return _ready_outcome()
+
+    async def cleanup():
+        released["value"] = True
+
+    result = await run_smoke_validation(
+        preflight=slow_preflight,
+        session_start_probe=_ok_probe,
+        cleanup=cleanup,
+        timeout_seconds=0.05,
+        profile_id="codex",
+        version=1,
+    )
+    assert result["timedOut"] is True
+    assert result["ready"] is False
+    assert result["checks"][0]["name"] == "smoke_timeout"
+    assert released["value"] is True
+
+
+async def test_cleanup_runs_when_preflight_errors():
+    released = {"value": False}
+
+    async def broken_preflight():
+        raise RuntimeError("boom")
+
+    async def cleanup():
+        released["value"] = True
+
+    result = await run_smoke_validation(
+        preflight=broken_preflight,
+        session_start_probe=_ok_probe,
+        cleanup=cleanup,
+        profile_id="codex",
+        version=1,
+    )
+    assert result["ready"] is False
+    assert result["checks"][0]["name"] == "smoke_error"
+    assert released["value"] is True
+
+
+async def test_probe_diagnostics_are_secret_scanned():
+    diagnostics: list[str] = []
+
+    async def preflight():
+        return _ready_outcome()
+
+    async def leaky_probe():
+        diagnostics.append("session-start probe failed: token=ghp_" + "a" * 36)
+        return {"ready": False, "reason": "endpoint unreachable"}
+
+    result = await run_smoke_validation(
+        preflight=preflight,
+        session_start_probe=leaky_probe,
+        diagnostics=diagnostics,
+        profile_id="codex",
+        version=1,
+    )
+    assert result["ready"] is False
+    joined = " ".join(result["diagnostics"])
+    assert "ghp_" not in joined
+    assert "redacted smoke diagnostic" in joined
+
+
+async def test_scrub_diagnostics_bounds_and_redacts():
+    lines = [f"line {i}" for i in range(100)]
+    lines.append("password: hunter2secretvalue")
+    scrubbed = scrub_diagnostics(lines)
+    assert len(scrubbed) <= 32
+    long_line = scrub_diagnostics(["x" * 5000])[0]
+    assert len(long_line) <= 512
+
+
+# --------------------------------------------------------------------------
+# Shared readiness-check core
+# --------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture()
+async def session(tmp_path) -> AsyncSession:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/smoke.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with maker() as db:
+        yield db
+    await engine.dispose()
+
+
+def _document():
+    return {
+        "endpointRef": "default",
+        "bridgeMode": "proxy",
+        "harness": "codex-native",
+        "requiredCapabilities": ["session.start"],
+        "source": {"upstreamId": "agent-1", "upstreamVersion": "v1"},
+        "providerRequirements": {
+            "runtimeId": "codex_cli",
+            "credentialSource": "secret_ref",
+            "materializationMode": "api_key_env",
+            "providerIds": [],
+        },
+    }
+
+
+async def _noop_refresh():
+    return None
+
+
+async def _unused_bundle_reader(artifact_id):  # pragma: no cover - not reached
+    raise AssertionError("bundle reader should not run for an upstream source")
+
+
+async def test_readiness_upstream_missing_and_no_provider(session):
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=_document(),
+        refresh_upstream=_noop_refresh,
+        read_bundle_bytes=_unused_bundle_reader,
+    )
+    assert outcome.ready is False
+    by_name = {check["name"]: check for check in outcome.checks}
+    assert by_name["upstream_identity"]["ready"] is False
+    assert by_name["provider_profile"]["ready"] is False
+
+
+async def test_readiness_ready_when_projection_fresh_and_provider_compatible(session):
+    now = datetime.now(timezone.utc)
+    session.add(
+        OmnigentUpstreamAgentProjection(
+            projection_id=projection_identity("default", "agent-1", "v1"),
+            endpoint_ref="default",
+            bridge_mode="proxy",
+            upstream_id="agent-1",
+            upstream_version="v1",
+            metadata_snapshot={
+                "harness": "codex-native",
+                "capabilities": ["session.start"],
+                "name": "Codex",
+            },
+            available=True,
+            compatible=True,
+            last_successful_sync_at=now,
+            last_attempt_at=now,
+        )
+    )
+    session.add(
+        ManagedAgentProviderProfile(
+            profile_id="prov-1",
+            runtime_id="codex_cli",
+            provider_id="prov",
+            credential_source=ProviderCredentialSource.SECRET_REF,
+            runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+            enabled=True,
+        )
+    )
+    await session.commit()
+
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=_document(),
+        refresh_upstream=_noop_refresh,
+        read_bundle_bytes=_unused_bundle_reader,
+    )
+    assert outcome.ready is True
+    assert outcome.upstream_snapshot["name"] == "Codex"
+
+
+async def test_readiness_bundle_provenance_fails_for_missing_artifact(session):
+    document = _document()
+    document["source"] = {
+        "bundleArtifactRef": "artifact:missing",
+        "bundleDigest": "sha256:" + "a" * 64,
+    }
+
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=document,
+        refresh_upstream=_noop_refresh,
+        read_bundle_bytes=_unused_bundle_reader,
+    )
+    by_name = {check["name"]: check for check in outcome.checks}
+    assert by_name["bundle_provenance"]["ready"] is False
+    assert "bundle_contents" not in by_name

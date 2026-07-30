@@ -299,6 +299,38 @@ async def _sync_env_managed_secrets() -> int:
         )
         return 0
 
+
+async def _sync_omnigent_bootstrap_agent_profile() -> str | None:
+    """Materialize OMNIGENT_DEFAULT_AGENT_NAME as a durable bootstrap profile.
+
+    Section 8 of MoonLadderStudios/MoonMind#3517: when no durable Omnigent
+    agent-profile state exists yet, the environment default is materialized as
+    an explicit draft bootstrap profile version so operators can validate and
+    promote it. Durable state always wins; this is idempotent and skipped once
+    any profile exists. Kept resilient so it never blocks startup.
+    """
+
+    try:
+        from api_service.services.omnigent_agent_bootstrap_service import (
+            seed_bootstrap_agent_profile,
+        )
+
+        async with get_async_session_context() as session:
+            return await seed_bootstrap_agent_profile(session)
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "Omnigent bootstrap agent profile seeding skipped until schema is ready: %s",
+            exc,
+        )
+        return None
+    except Exception as exc:  # pragma: no cover - convenience seeding, never fatal
+        logger.warning(
+            "Failed to materialize Omnigent bootstrap agent profile during startup: %s",
+            exc,
+        )
+        return None
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
@@ -1653,6 +1685,7 @@ async def startup_event():
             await seed_bootstrap_policies(session)
     except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
         logger.warning("Omnigent policy bootstrap skipped until schema is ready: %s", exc)
+    await _sync_omnigent_bootstrap_agent_profile()
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence
     # refs cannot make it ready when its pinned verifier or SecretRef fails.

@@ -47,6 +47,7 @@ def test_fixed_post_routes_precede_lifecycle_catch_all():
 
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/default") < catch_all
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/snapshot") < catch_all
+    assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/smoke") < catch_all
 
 
 def test_list_response_contract_includes_ordered_versions_and_default_state():

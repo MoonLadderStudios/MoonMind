@@ -263,8 +263,15 @@ class OmnigentBridgeSessionProxy:
         *,
         request: BridgeSessionCreateRequest,
         binding: BridgePrincipalBinding,
+        default_agent_name_override: str | None = None,
     ) -> dict[str, Any]:
-        """Create or reuse a proxy-mode Omnigent session (OB-§8.2)."""
+        """Create or reuse a proxy-mode Omnigent session (OB-§8.2).
+
+        ``default_agent_name_override`` lets the launch boundary supply the
+        durable default agent selection resolved from an active default agent
+        profile (MoonLadderStudios/MoonMind#3517 §8); when unset the
+        configured environment fallback is used.
+        """
 
         self._require_proxy_mode()
         # OB-§8.3 host validation exposed through the facade.
@@ -300,12 +307,15 @@ class OmnigentBridgeSessionProxy:
         async def _list_agents() -> list[dict[str, Any]]:
             return await self._list_agents_raw()
 
+        effective_default_agent_name = (
+            (default_agent_name_override or "").strip() or self._default_agent_name
+        )
         try:
             target = await resolve_omnigent_target(
                 selection,
                 list_agents=_list_agents,
                 upload_agent_bundle=_unsupported_bundle_upload,
-                default_agent_name=self._default_agent_name,
+                default_agent_name=effective_default_agent_name,
             )
         except OmnigentAdapterError as exc:
             raise OmnigentBridgeError(

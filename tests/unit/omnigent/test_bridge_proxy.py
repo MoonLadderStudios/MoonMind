@@ -854,3 +854,40 @@ async def test_stop_session_preserves_stock_control_event_type() -> None:
     await _proxy(_FakeStore(), client).stop_session("sess-9")
 
     assert client.posted_events == [("sess-9", {"type": "stop_session"})]
+
+
+async def test_default_agent_name_override_takes_precedence() -> None:
+    # MoonLadderStudios/MoonMind#3517 §8: the launch boundary supplies the
+    # durable default agent selection, which must win over the env-derived
+    # baked-in fallback when the request carries no explicit agent.
+    store, client = _FakeStore(), _FakeClient()
+    proxy = OmnigentBridgeSessionProxy(
+        run_store=store, client=client, default_agent_name="does-not-exist"
+    )
+    req = BridgeSessionCreateRequest(
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(
+        request=req, binding=_binding(), default_agent_name_override="codex"
+    )
+
+    assert response["id"] == "sess-9"
+    assert client.created_payloads[0]["agent_id"] == "agent-1"
+
+
+async def test_baked_in_default_used_when_override_absent() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    proxy = _proxy(store, client)  # baked-in default_agent_name="codex"
+    req = BridgeSessionCreateRequest(
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(
+        request=req, binding=_binding(), default_agent_name_override=None
+    )
+
+    assert client.created_payloads[0]["agent_id"] == "agent-1"
+    assert response["id"] == "sess-9"

@@ -1,0 +1,192 @@
+"""Durable bootstrap default resolution + seeding (MoonLadderStudios/MoonMind#3517 §8)."""
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.api.routers.omnigent_agent_profiles import (
+    AgentProfileDocument,
+    _digest as router_digest,
+    _normalized,
+)
+from api_service.db.models import (
+    Base,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileAuditEvent,
+    OmnigentAgentProfileVersion,
+)
+from api_service.services.omnigent_agent_bootstrap_service import (
+    BOOTSTRAP_PROFILE_ID,
+    BootstrapDefaultConflictError,
+    build_bootstrap_document,
+    resolve_default_agent_selection,
+    seed_bootstrap_agent_profile,
+)
+
+pytestmark = [pytest.mark.asyncio]
+
+
+@pytest_asyncio.fixture()
+async def session(tmp_path) -> AsyncSession:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bootstrap.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with maker() as db:
+        yield db
+    await engine.dispose()
+
+
+async def _add_default_profile(
+    session: AsyncSession,
+    *,
+    state: str = "active",
+    active_version: int | None = 1,
+    upstream_id: str = "codex-prod",
+    upstream_name: str | None = "Codex Production",
+) -> None:
+    document = build_bootstrap_document(upstream_id)
+    profile = OmnigentAgentProfile(
+        profile_id="codex-team",
+        display_name="Codex Team",
+        visibility="workspace",
+        state=state,
+        active_version=active_version,
+        default_for_runtime=True,
+    )
+    version = OmnigentAgentProfileVersion(
+        profile_id="codex-team",
+        version=1,
+        digest=router_digest(document),
+        document=document,
+        upstream_snapshot={"id": upstream_id, "name": upstream_name}
+        if upstream_name
+        else {"id": upstream_id},
+    )
+    session.add_all([profile, version])
+    await session.commit()
+
+
+async def test_bootstrap_document_matches_router_normalized_form():
+    document = build_bootstrap_document("codex-default")
+    normalized = _normalized(AgentProfileDocument.model_validate(document))
+    assert normalized == document
+    assert router_digest(document) == router_digest(normalized)
+
+
+async def test_resolves_env_fallback_and_records_use(session):
+    resolution = await resolve_default_agent_selection(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    assert resolution.source == "env_fallback"
+    assert resolution.used_env_fallback is True
+    assert resolution.default_agent_name == "codex-default"
+    assert resolution.profile_id is None
+
+
+async def test_resolves_none_when_no_durable_state_and_no_env(session):
+    resolution = await resolve_default_agent_selection(session, env={})
+    assert resolution.source == "none"
+    assert resolution.default_agent_name == ""
+    assert resolution.used_env_fallback is False
+
+
+async def test_durable_active_default_wins_over_env(session):
+    await _add_default_profile(session, upstream_id="codex-prod", upstream_name="Codex")
+    resolution = await resolve_default_agent_selection(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "env-ignored"}
+    )
+    assert resolution.source == "durable_profile"
+    assert resolution.used_env_fallback is False
+    assert resolution.agent_id == "codex-prod"
+    # The name-based fallback slot prefers the resolved upstream name snapshot.
+    assert resolution.default_agent_name == "Codex"
+    assert resolution.profile_id == "codex-team"
+    assert resolution.version == 1
+
+
+async def test_durable_default_without_snapshot_name_falls_back_to_stable_id(session):
+    await _add_default_profile(session, upstream_id="codex-prod", upstream_name=None)
+    resolution = await resolve_default_agent_selection(session, env={})
+    assert resolution.agent_id == "codex-prod"
+    assert resolution.default_agent_name == "codex-prod"
+
+
+async def test_default_marked_but_not_active_fails_closed(session):
+    await _add_default_profile(session, state="draft", active_version=None)
+    with pytest.raises(BootstrapDefaultConflictError):
+        await resolve_default_agent_selection(
+            session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "env-ignored"}
+        )
+
+
+async def test_seed_materializes_draft_bootstrap_profile(session):
+    seeded = await seed_bootstrap_agent_profile(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    assert seeded == BOOTSTRAP_PROFILE_ID
+
+    profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert profile is not None
+    assert profile.state == "draft"
+    assert profile.default_for_runtime is False
+    assert profile.active_version is None
+
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
+        )
+    )
+    assert version.version == 1
+    assert version.document["source"]["upstreamId"] == "codex-default"
+    assert version.digest == router_digest(build_bootstrap_document("codex-default"))
+    assert version.rollout_metadata["origin"] == "env_bootstrap"
+
+    audit = await session.scalar(
+        select(OmnigentAgentProfileAuditEvent).where(
+            OmnigentAgentProfileAuditEvent.profile_id == BOOTSTRAP_PROFILE_ID
+        )
+    )
+    assert audit.action == "bootstrap_materialized"
+
+    # A seeded draft is not active, so the env fallback still governs and is
+    # recorded until an operator validates and promotes the version.
+    resolution = await resolve_default_agent_selection(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    assert resolution.source == "env_fallback"
+
+
+async def test_seed_is_idempotent(session):
+    first = await seed_bootstrap_agent_profile(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    second = await seed_bootstrap_agent_profile(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    assert first == BOOTSTRAP_PROFILE_ID
+    assert second is None
+    count = await session.scalar(
+        select(func.count()).select_from(OmnigentAgentProfile)
+    )
+    assert count == 1
+
+
+async def test_seed_skipped_when_durable_state_exists(session):
+    await _add_default_profile(session)
+    seeded = await seed_bootstrap_agent_profile(
+        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    )
+    assert seeded is None
+    assert await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID) is None
+
+
+async def test_seed_skipped_when_env_absent(session):
+    assert await seed_bootstrap_agent_profile(session, env={}) is None
+    count = await session.scalar(
+        select(func.count()).select_from(OmnigentAgentProfile)
+    )
+    assert count == 0
