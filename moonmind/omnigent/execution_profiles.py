@@ -56,6 +56,9 @@ class OmnigentLaunchPolicy(BaseModel):
     require_immutable_images: bool = Field(True, alias="requireImmutableImages")
     network_ref: str = Field(alias="networkRef")
     enforced_egress: bool = Field(alias="enforcedEgress")
+    egress_profile_ref: str = Field(
+        "egress-omnigent-baseline@1", alias="egressProfileRef"
+    )
     limits: dict[str, int]
     mount_classes: tuple[str, ...] = Field(alias="mountClasses")
     runtime_uid: int = Field(1000, alias="runtimeUid")
@@ -117,6 +120,21 @@ class OmnigentLaunchPolicy(BaseModel):
             raise ValueError("Omnigent hosts require UID/GID 1000 and a read-only root")
         if not self.enforced_egress:
             raise ValueError("Omnigent launch policy must enforce egress")
+        # A declared/reflected network is not proof of restricted egress: the
+        # policy must reference an immutable, validated egress profile whose
+        # compiled rule set is attestable at launch (MoonMind#3516).
+        from moonmind.omnigent.egress_profiles import get_egress_profile
+
+        egress_profile = get_egress_profile(self.egress_profile_ref)
+        if egress_profile is None:
+            raise ValueError(
+                f"egressProfileRef {self.egress_profile_ref!r} is not a known "
+                "egress profile"
+            )
+        if egress_profile.validation_state != "validated":
+            raise ValueError(
+                f"egressProfileRef {self.egress_profile_ref!r} is not validated"
+            )
         return self
 
 
@@ -130,6 +148,7 @@ _COMMON = dict(
     hostImageRef=_IMAGE,
     networkRef="local-network",
     enforcedEgress=True,
+    egressProfileRef="egress-omnigent-baseline@1",
     limits={
         "cpuMillis": 2000,
         "memoryMiB": 4096,

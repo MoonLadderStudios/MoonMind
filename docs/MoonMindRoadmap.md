@@ -119,7 +119,7 @@ These exact identifiers are pinned by `tests/unit/docs/test_final_docs_cleanup_p
 - [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps** — tracked by #3510 in Milestone 2.
 - [ ] **6.2 Omnigent remediation context enrichment** — tracked by #3511 in Milestone 3.
 - [ ] **7.1 Initial context injection for Omnigent** — tracked by #3513 in Milestone 4.
-- [ ] **11.1 Restricted egress boundary for PentestGPT external targets** — tracked by #3516 in Milestone 5 and retained as a cross-project safety gate.
+- [x] **11.1 Restricted egress boundary for PentestGPT external targets** — implemented by #3516: immutable, versioned egress profiles (`moonmind/omnigent/egress_profiles.py`) compiled into a default-deny rule set with a negative conformance probe and evidence-backed attestation (`moonmind/omnigent/egress_enforcement.py`); `enforcedNetworkRefs` are now reported only for attested profiles, and external PentestGPT targets fail closed by default. Canonical design: `docs/Omnigent/RestrictedEgressEnforcement.md`.
 
 Changing an identifier above is a deliberate owner-approved invariant change. Update the pinning contract tests in the same change rather than deleting an identifier to make a roadmap edit pass.
 
@@ -255,9 +255,9 @@ Pentest remains de-scoped as a first-class product area. Any retained capability
 That disposition is a target state, not the current tree, so two concrete items stay open and must not be treated as closed by roadmap editing alone:
 
 - [ ] **Superseded Pentest stack disposition** — `moonmind/integrations/pentest/`, `moonmind/workflows/temporal/activities/pentest_activities.py`, `PentestSettings`, Pentest submission validation, and Pentest provider-lease machinery are still first-class surfaces. Replace them with a thin skill or preset over the generic workload path, or remove them cohesively with their docs and tests.
-- [ ] **External-target enablement fail-fast** — `PentestSettings.allow_external_targets` defaults to `True`, and an `external_authorized` scope is rejected only when that setting is false, so a manually approved external target can still launch on unrestricted Docker `bridge`. Make external-target enablement fail closed until #3516 attests validated restricted egress.
+- [x] **External-target enablement fail-fast** — `PentestSettings.allow_external_targets` now defaults to `False` (#3516). An `external_authorized` scope is rejected unless an operator explicitly enables it *and* an attested restricted-egress profile exists, so a manually approved external target can no longer launch on unrestricted Docker `bridge` by default.
 
-The cross-project dependency retained in this roadmap is #3516: Docker `bridge` or a declared network ref is not restricted egress, and external targets stay gated until enforcement exists. That states the required target state rather than current runtime behavior; the fail-fast item above is the work that makes the gate real. Even after enforcement exists, external-target work requires an explicit reviewed egress profile, target scope, approval evidence, and operator-visible diagnostics.
+The cross-project dependency retained in this roadmap is #3516: Docker `bridge` or a declared network ref is not restricted egress, and external targets stay gated until enforcement exists. Restricted-egress enforcement now exists as an attestable substrate (`moonmind/omnigent/egress_enforcement.py`); external-target work still additionally requires an explicit reviewed egress profile, target scope, approval evidence, and operator-visible diagnostics.
 
 ---
 

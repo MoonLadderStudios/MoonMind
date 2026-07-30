@@ -2639,6 +2639,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     resources = AsyncExitStack()
     container_job_backend = None
     enforced_network_refs: list[str] = []
+    enforced_egress_evidence: list[dict] = []
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
@@ -2760,19 +2761,41 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
-                from moonmind.omnigent.execution_profiles import POLICIES
+                from datetime import datetime, timezone
 
+                from moonmind.omnigent.execution_profiles import POLICIES
+                from moonmind.omnigent.egress_enforcement import (
+                    attest_enforced_networks,
+                )
+
+                # Evidence-backed readiness: a network ref is reported as
+                # enforced only when its policy references a validated,
+                # immutable egress profile whose compiled rule set passes the
+                # negative conformance probe and whose enforcing network is
+                # live. Declarative flags alone never yield an enforced ref
+                # (MoonMind#3516). Fails closed on any gap.
+                attestations = await attest_enforced_networks(
+                    POLICIES.values(),
+                    network_ready=container_job_backend.network_ready,
+                    backend_ref=container_backend_settings.default_backend_ref,
+                    now=datetime.now(timezone.utc).isoformat(),
+                )
                 enforced_network_refs = []
-                for policy in POLICIES.values():
-                    if (
-                        policy.enabled
-                        and policy.enforced_egress
-                        and await container_job_backend.network_ready(policy.network_ref)
-                    ):
-                        enforced_network_refs.append(policy.network_ref)
+                enforced_egress_evidence = []
+                for attestation in attestations:
+                    enforced_egress_evidence.append(attestation.to_evidence())
+                    if attestation.attested:
+                        enforced_network_refs.append(attestation.network_ref)
+                    else:
+                        logger.warning(
+                            "Egress attestation failed for network %s: %s",
+                            attestation.network_ref,
+                            ", ".join(attestation.reasons),
+                        )
             else:
                 container_job_backend = None
                 enforced_network_refs = []
+                enforced_egress_evidence = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2835,6 +2858,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         )
         resources.container_job_backend = container_job_backend  # type: ignore[attr-defined]
         resources.enforced_network_refs = tuple(enforced_network_refs)  # type: ignore[attr-defined]
+        resources.enforced_egress_evidence = tuple(enforced_egress_evidence)  # type: ignore[attr-defined]
         return resources, [
             binding.handler for binding in bindings
         ] + [
@@ -2999,9 +3023,13 @@ async def main_async() -> None:
             enforced_network_refs = getattr(
                 runtime_resources, "enforced_network_refs", ()
             )
+            enforced_egress_evidence = getattr(
+                runtime_resources, "enforced_egress_evidence", ()
+            )
             health_state.readiness_metadata["containerBackend"] = {
                 "ready": container_job_backend is not None,
                 "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+                "enforcedEgressEvidence": list(enforced_egress_evidence),
             }
 
         logger.info(

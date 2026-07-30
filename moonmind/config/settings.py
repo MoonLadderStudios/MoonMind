@@ -1602,8 +1602,12 @@ class PentestSettings(BaseSettings):
             "MOONMIND_PENTEST_REQUIRE_MANUAL_APPROVAL_FOR_FULL_AUTHORIZED"
         ),
     )
+    # Fail closed: external targets stay disabled until a reviewed egress
+    # profile and attested restricted-egress enforcement exist (MoonMind#3516).
+    # A declared network ref or Docker bridge is not an enforced egress
+    # boundary, so an external target must not launch by default.
     allow_external_targets: bool = Field(
-        True,
+        False,
         validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_EXTERNAL_TARGETS"),
     )
     telemetry_enabled: bool = Field(
