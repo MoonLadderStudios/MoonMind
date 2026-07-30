@@ -1,9 +1,76 @@
+from datetime import timedelta
+
+import pytest
+
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunStatus
+from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
+    MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID,
     MoonMindAgentRun,
     RunStatus,
     _request_reserves_slot_for_immediate_followup,
 )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rollout_patch_enabled", "expected_schedule_to_close"),
+    [(False, timedelta(seconds=180)), (True, timedelta(seconds=600))],
+)
+async def test_managed_status_poll_timeout_is_replay_safe_and_rollout_tolerant(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout_patch_enabled: bool,
+    expected_schedule_to_close: timedelta,
+) -> None:
+    """Regression for the 2026-07-30 PR resolver worker-rollout failure."""
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            rollout_patch_enabled
+            and patch_id == MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_execute_typed_activity(
+        activity_name: str,
+        payload: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        captured.update(kwargs)
+        assert activity_name == "agent_runtime.status"
+        return {
+            "runId": "managed-run-1",
+            "agentKind": "managed",
+            "agentId": "claude_code",
+            "status": "running",
+        }
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    workflow_instance = MoonMindAgentRun()
+    workflow_instance.run_id = "managed-run-1"
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        correlationId="resolver-run-1",
+        idempotencyKey="resolver-run-1:node-1",
+    )
+
+    status = await workflow_instance._poll_managed_status(
+        request=request,
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+    )
+
+    assert status.status == RunStatus.running
+    assert captured["start_to_close_timeout"] == timedelta(seconds=60)
+    assert captured["schedule_to_close_timeout"] == expected_schedule_to_close
 
 def test_coerce_external_status_payload_accepts_canonical_shape() -> None:
     workflow_instance = MoonMindAgentRun()

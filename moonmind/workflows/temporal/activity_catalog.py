@@ -1314,7 +1314,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            # Status is short once started, but the queue budget must cover a
+            # complete agent-runtime fleet restart and cold initialization.
+            timeouts=TemporalActivityTimeouts(60, 600, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
             heartbeat_required=True,
         ),

@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopState,
     apply_continuation_decision,
 )
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import (
     GateTransitionDecision,
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
@@ -28,6 +29,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -170,6 +172,48 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
                 "headWorkspaceDigest": "sha256:c1",
             }
         return continuation
+
+
+@workflow.defn(name="MMHeadlessRemediationExecutionReplayFixture")
+class _LegacyHeadlessRemediationExecutionReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+        workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
+        return True
+
+
+@workflow.defn(name="MMHeadlessRemediationExecutionReplayFixture")
+class _CurrentHeadlessRemediationExecutionReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+        workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
+        workflow_instance = MoonMindRunWorkflow()
+        workflow_instance._remediation_workspace_head = None
+        return workflow_instance._remediation_workspace_materialization_required(
+            {
+                "id": "remediation-1",
+                "annotations": {
+                    "issueImplementRole": "moonspec-remediation",
+                },
+            }
+        )
+
+
+@workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
+class _LegacyManagedStatusRolloutTimeoutReplayFixture:
+    @workflow.run
+    async def run(self) -> int:
+        return 180
+
+
+@workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
+class _CurrentManagedStatusRolloutTimeoutReplayFixture:
+    @workflow.run
+    async def run(self) -> int:
+        override = MoonMindAgentRun._managed_status_schedule_to_close_override()
+        return int(override.total_seconds()) if override is not None else 600
 
 
 @workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
@@ -640,6 +684,84 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     )
     replayer = Replayer(
         workflows=[_CurrentWorkflowOwnedRemediationHeadReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_headless_remediation_execution_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-headless-remediation-legacy-replay",
+            workflows=[_LegacyHeadlessRemediationExecutionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyHeadlessRemediationExecutionReplayFixture.run,
+                id="test-headless-remediation-legacy",
+                task_queue="test-headless-remediation-legacy-replay",
+            )
+            assert await legacy.result() is True
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-headless-remediation-current-replay",
+            workflows=[_CurrentHeadlessRemediationExecutionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentHeadlessRemediationExecutionReplayFixture.run,
+                id="test-headless-remediation-current",
+                task_queue="test-headless-remediation-current-replay",
+            )
+            assert await current.result() is False
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentHeadlessRemediationExecutionReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_managed_status_rollout_timeout_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-managed-status-timeout-legacy-replay",
+            workflows=[_LegacyManagedStatusRolloutTimeoutReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyManagedStatusRolloutTimeoutReplayFixture.run,
+                id="test-managed-status-timeout-legacy",
+                task_queue="test-managed-status-timeout-legacy-replay",
+            )
+            assert await legacy.result() == 180
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-managed-status-timeout-current-replay",
+            workflows=[_CurrentManagedStatusRolloutTimeoutReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentManagedStatusRolloutTimeoutReplayFixture.run,
+                id="test-managed-status-timeout-current",
+                task_queue="test-managed-status-timeout-current-replay",
+            )
+            assert await current.result() == 600
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentManagedStatusRolloutTimeoutReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

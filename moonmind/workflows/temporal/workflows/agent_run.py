@@ -313,6 +313,9 @@ OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
     "agent-run-omnigent-profile-bound-execution-v1"
 )
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
+MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
+    "agent-run-managed-status-rollout-tolerance-v1"
+)
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
@@ -2426,6 +2429,9 @@ class MoonMindAgentRun:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
         if use_managed_status_activity:
+            schedule_to_close_override = (
+                self._managed_status_schedule_to_close_override()
+            )
             status_payload = await self._execute_routed_activity(
                 "agent_runtime.status",
                 AgentRuntimeStatusInput(
@@ -2433,6 +2439,11 @@ class MoonMindAgentRun:
                     agentId=request.agent_id,
                 ),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **(
+                    {"schedule_to_close_timeout": schedule_to_close_override}
+                    if schedule_to_close_override is not None
+                    else {}
+                ),
             )
             return self._coerce_managed_status_payload(
                 status_payload=status_payload,
@@ -2448,6 +2459,14 @@ class MoonMindAgentRun:
             agentId=request.agent_id,
             status=RunStatus.running,
         )
+
+    @staticmethod
+    def _managed_status_schedule_to_close_override() -> timedelta | None:
+        """Preserve the former timeout for histories without the rollout patch."""
+
+        if workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
+            return None
+        return timedelta(seconds=180)
 
     async def _reconcile_managed_no_progress(
         self,
