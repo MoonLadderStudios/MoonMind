@@ -44,6 +44,22 @@ class OmnigentRecoveryMode(str, Enum):
     COLD_RESTORE = "cold_restore"
 
 
+class OmnigentRecoveryOutcome(str, Enum):
+    """Production recovery-orchestrator decision space.
+
+    Extends the live/cold host-selection modes with the two operator-visible
+    terminal outcomes the Workflow/Step-Execution boundary must be able to
+    report: a Checkpoint Branch is required because a runtime/input choice
+    changed, or resume is unavailable because required evidence is missing,
+    stale, unsupported, or policy-denied.
+    """
+
+    LIVE_REATTACH = "live_reattach"
+    COLD_RESTORE = "cold_restore"
+    BRANCH_REQUIRED = "branch_required"
+    RESUME_UNAVAILABLE = "resume_unavailable"
+
+
 class OmnigentCheckpointValidation(BaseModel):
     """Truthful, independently evaluated recovery projections."""
 
@@ -430,6 +446,125 @@ def recovery_mode(
     return OmnigentRecoveryMode.COLD_RESTORE
 
 
+class OmnigentRecoveryDecision(BaseModel):
+    """Truthful, operator-visible recovery-orchestrator outcome.
+
+    ``reason`` is a bounded machine-readable token so the Workflow Detail
+    surface can explain exactly why the original host was reattached,
+    replaced, or rejected without inferring success from host existence.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    outcome: OmnigentRecoveryOutcome
+    reason: str | None = Field(None, max_length=64)
+    recovery_mode: OmnigentRecoveryMode | None = Field(None, alias="recoveryMode")
+    live_reattach_available: bool = Field(False, alias="liveReattachAvailable")
+    cold_restore_available: bool = Field(False, alias="coldRestoreAvailable")
+    branch_available: bool = Field(False, alias="branchAvailable")
+
+
+def decide_recovery_outcome(
+    checkpoint: OmnigentCheckpointIdentity,
+    validation: OmnigentCheckpointValidation,
+    *,
+    requested_input_changed: bool,
+    change_reason: str | None = None,
+    provider_lease: Mapping[str, Any] | None,
+    host_lease: Mapping[str, Any] | None,
+    host_registered: bool,
+    session_valid: bool,
+    first_message_consistent: bool,
+) -> OmnigentRecoveryDecision:
+    """Select one of the four production recovery outcomes.
+
+    Precedence is fail-closed: invalid/insufficient evidence yields
+    ``resume_unavailable`` before any host reuse is considered; a changed
+    runtime/input choice yields ``branch_required`` before an implicit
+    same-input resume; otherwise the live/cold host selector decides between
+    reattaching the original session and cold-restoring onto a new host.
+    """
+
+    branch_available = bool(validation.branch_creation_available)
+    cold_available = bool(validation.workspace_cold_restore_available)
+    live_available = bool(validation.live_reattach_available)
+
+    def _first_reason(default: str) -> str:
+        for candidate in validation.reasons:
+            if candidate:
+                return str(candidate)[:64]
+        return default
+
+    # 1. resume_unavailable — no validated continuation path exists at all.
+    if not validation.valid or not (cold_available or branch_available):
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+            reason=_first_reason("evidence_invalid"),
+            recoveryMode=None,
+            liveReattachAvailable=live_available,
+            coldRestoreAvailable=cold_available,
+            branchAvailable=branch_available,
+        )
+
+    # 2. branch_required — the requested runtime/input choice differs from the
+    #    original immutable input, so a Checkpoint Branch turn must run rather
+    #    than mutating or resuming the original workflow input.
+    if requested_input_changed:
+        if not branch_available:
+            return OmnigentRecoveryDecision(
+                outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+                reason=_first_reason("branch_unavailable"),
+                recoveryMode=None,
+                liveReattachAvailable=live_available,
+                coldRestoreAvailable=cold_available,
+                branchAvailable=branch_available,
+            )
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.BRANCH_REQUIRED,
+            reason=(str(change_reason)[:64] if change_reason else "input_changed"),
+            recoveryMode=None,
+            liveReattachAvailable=live_available,
+            coldRestoreAvailable=cold_available,
+            branchAvailable=branch_available,
+        )
+
+    # 3/4. live_reattach vs cold_restore — reuse the fail-closed host selector.
+    mode = recovery_mode(
+        checkpoint,
+        provider_lease=provider_lease,
+        host_lease=host_lease,
+        host_registered=host_registered,
+        session_valid=session_valid,
+        first_message_consistent=first_message_consistent,
+    )
+    if mode == OmnigentRecoveryMode.LIVE_REATTACH and live_available:
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.LIVE_REATTACH,
+            reason=None,
+            recoveryMode=OmnigentRecoveryMode.LIVE_REATTACH,
+            liveReattachAvailable=live_available,
+            coldRestoreAvailable=cold_available,
+            branchAvailable=branch_available,
+        )
+    if not cold_available:
+        return OmnigentRecoveryDecision(
+            outcome=OmnigentRecoveryOutcome.RESUME_UNAVAILABLE,
+            reason=_first_reason("cold_restore_unavailable"),
+            recoveryMode=None,
+            liveReattachAvailable=live_available,
+            coldRestoreAvailable=cold_available,
+            branchAvailable=branch_available,
+        )
+    return OmnigentRecoveryDecision(
+        outcome=OmnigentRecoveryOutcome.COLD_RESTORE,
+        reason=("host_authority_replaced" if live_available else "session_authority_absent"),
+        recoveryMode=OmnigentRecoveryMode.COLD_RESTORE,
+        liveReattachAvailable=live_available,
+        coldRestoreAvailable=cold_available,
+        branchAvailable=branch_available,
+    )
+
+
 def validate_cold_restore_target(
     checkpoint: OmnigentCheckpointIdentity,
     *,
@@ -470,8 +605,11 @@ __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
     "OmnigentCheckpointValidation",
+    "OmnigentRecoveryDecision",
     "OmnigentRecoveryMode",
+    "OmnigentRecoveryOutcome",
     "OmnigentRestoreMaterial",
+    "decide_recovery_outcome",
     "materialize_cold_restore_inputs",
     "recovery_mode",
     "validate_restore_material",
