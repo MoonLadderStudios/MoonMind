@@ -679,8 +679,46 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
+                # A remediation workspace is already materialized and authorized by
+                # the remediation owner, so never re-clone it here. Fresh normal
+                # runs carry authored repository/branch intent that must be
+                # materialized into the authoritative sandbox workspace.
+                repository_source=(
+                    ""
+                    if remediation_resolution is not None
+                    else self._repository_source(request)
+                ),
+                starting_branch=(
+                    None
+                    if remediation_resolution is not None
+                    else self._starting_branch(request)
+                ),
+                target_branch=(
+                    None
+                    if remediation_resolution is not None
+                    else self._target_branch(request)
+                ),
+                checkout_commit=(
+                    None
+                    if remediation_resolution is not None
+                    else self._checkout_commit(request)
+                ),
+                restore_input_refs=(
+                    ()
+                    if remediation_resolution is not None
+                    else self._restore_input_refs(request)
+                ),
             )
             await emit(current_stage, "completed")
+            workspace_resolution = preflight.get("workspaceResolution")
+            if isinstance(workspace_resolution, Mapping) and workspace_resolution:
+                # Durable, bounded, credential-free evidence of which workspace was
+                # resolved and how it was materialized, for Workflow Detail.
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="workspace_resolution",
+                    metadata=dict(workspace_resolution),
+                )
             await emit("credential_mount", "started")
             await emit(
                 "credential_mount",
@@ -1165,6 +1203,63 @@ class OmnigentProfileBoundExecutionCoordinator:
         return dict(locator)
 
     @staticmethod
+    def _workspace_spec(request: AgentExecutionRequest) -> Mapping[str, Any]:
+        spec = request.workspace_spec
+        return spec if isinstance(spec, Mapping) else {}
+
+    @classmethod
+    def _repository_source(cls, request: AgentExecutionRequest) -> str:
+        spec = cls._workspace_spec(request)
+        parameters = request.parameters or {}
+        for candidate in (
+            spec.get("repository"),
+            spec.get("repo"),
+            parameters.get("repository"),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
+    @classmethod
+    def _starting_branch(cls, request: AgentExecutionRequest) -> str | None:
+        spec = cls._workspace_spec(request)
+        for candidate in (
+            spec.get("startingBranch"),
+            spec.get("branch"),
+            spec.get("baseBranch"),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _target_branch(cls, request: AgentExecutionRequest) -> str | None:
+        value = str(cls._workspace_spec(request).get("targetBranch") or "").strip()
+        return value or None
+
+    @classmethod
+    def _checkout_commit(cls, request: AgentExecutionRequest) -> str | None:
+        spec = cls._workspace_spec(request)
+        for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _restore_input_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
+        raw = cls._workspace_spec(request).get("restoreInputRefs")
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        return tuple(
+            dict.fromkeys(
+                str(value).strip() for value in raw if str(value).strip()
+            )
+        )
+
+    @staticmethod
     def _remediation_workspace(
         request: AgentExecutionRequest,
     ) -> RemediationWorkspaceBinding | None:
@@ -1185,11 +1280,18 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         )
 
-    @staticmethod
-    async def _github_token(request: AgentExecutionRequest) -> str | None:
-        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
-            request
-        ):
+    @classmethod
+    async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
+        gh_required = "gh" in cls._required_capabilities(request)
+        # A GitHub repository source must be cloned into the sandbox before the
+        # host launches. Private repositories require a credential for that clone
+        # even when mounted `gh` readiness is not a declared capability — for
+        # example read-only or publishMode=none work derives `git` but not `gh`.
+        # Resolve the clone credential from the authored GitHub repository source
+        # independently of mounted-`gh` readiness so private materialization does
+        # not silently fall back to an unauthenticated clone.
+        clone_needs_credential = cls._github_repository_source(request) is not None
+        if not gh_required and not clone_needs_credential:
             return None
         from moonmind.auth.github_credentials import resolve_github_credential
 
@@ -1197,11 +1299,35 @@ class OmnigentProfileBoundExecutionCoordinator:
         resolved = await resolve_github_credential(repo=repository or None)
         token = str(resolved.token or "").strip() if resolved else ""
         if not token:
-            raise OmnigentOAuthHostError(
-                "GitHub credential is required for mounted gh readiness",
-                code="github_auth_unavailable",
-            )
+            if gh_required:
+                raise OmnigentOAuthHostError(
+                    "GitHub credential is required for mounted gh readiness",
+                    code="github_auth_unavailable",
+                )
+            # A public GitHub clone can proceed unauthenticated; a private clone
+            # fails fast with an actionable error at materialization.
+            return None
         return token
+
+    @classmethod
+    def _github_repository_source(cls, request: AgentExecutionRequest) -> str | None:
+        """Return the authored GitHub HTTPS clone source, if any.
+
+        Reuses the single canonical repository-source classifier so GitHub
+        detection cannot drift between credential resolution and materialization.
+        """
+        source = cls._repository_source(request)
+        if not source:
+            return None
+        from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+
+        try:
+            normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
+                source
+            )
+        except OmnigentOAuthHostError:
+            return None
+        return normalized if kind == "github_https" else None
 
     @staticmethod
     def _github_mutation_required(request: AgentExecutionRequest) -> bool:
