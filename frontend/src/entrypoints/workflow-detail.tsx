@@ -6709,6 +6709,42 @@ function RecoveryEvidencePanel({
     }
   })();
 
+  // AC1: consume the backend's evidence-gated default so resume is the primary
+  // affordance only when checkpoint validation recommends it. When the backend
+  // fails closed (defaultAction/operatorGuidance falls back to a retry/fix), the
+  // resume control is demoted and "Retry from source" becomes primary.
+  const resumeEligible = Boolean(taskEditingOn && recovery?.eligible);
+  // The backend's evidence-gated default is carried by `defaultAction` /
+  // `operatorGuidance`; `requestedAction` is only the action being evaluated and
+  // must not drive the recommendation, so a fail-closed default (full_retry /
+  // fix_environment) correctly demotes resume even though resume was requested.
+  const resumeRecommended =
+    resumeEligible &&
+    (recovery?.defaultAction === 'resume_from_workspace_checkpoint' ||
+      recovery?.defaultAction === 'resume_from_checkpoint' ||
+      recovery?.operatorGuidance === 'resume' ||
+      recovery?.operatorGuidance === 'resume_from_workspace_checkpoint');
+
+  // AC9: a first-class narrative explaining whether the original host/session is
+  // reattached, replaced with a cold restore, or rejected — rather than only raw
+  // reason codes.
+  const hostRecoveryNarrative = (() => {
+    if (!recovery) return null;
+    if (recovery.sessionRecoverable) {
+      return 'Original host and Omnigent session will be reattached — every original lease, credential generation, and first-message identity remains valid.';
+    }
+    const reattachReason = recovery.liveReattachReason
+      ? formatStatusLabel(recovery.liveReattachReason)
+      : 'the original session authority is no longer valid';
+    if (recovery.workspaceRecoverable) {
+      return `Original host/session cannot be reattached (${reattachReason}); a replacement host will cold-restore the validated workspace checkpoint on a fresh lease and session.`;
+    }
+    const restoreReason = recovery.workspaceRestoreReason
+      ? formatStatusLabel(recovery.workspaceRestoreReason)
+      : 'the workspace checkpoint is unavailable';
+    return `Original host/session was rejected (${reattachReason}) and the workspace cannot be restored (${restoreReason}); resume is unavailable.`;
+  })();
+
   return (
     <section className="detail-section">
       <h3>Recovery evidence</h3>
@@ -6726,13 +6762,26 @@ function RecoveryEvidencePanel({
       ) : null}
 
       <div className="action-row">
-        {taskEditingOn && recovery?.eligible ? (
-          <button type="button" className="queue-action" disabled={busy} onClick={onResumeFromFailedStep}>
-            Resume from checkpoint
+        {resumeEligible ? (
+          <button
+            type="button"
+            className={resumeRecommended ? 'queue-action' : 'secondary'}
+            disabled={busy}
+            onClick={onResumeFromFailedStep}
+            data-testid="recovery-resume-action"
+            data-recommended={resumeRecommended ? 'true' : 'false'}
+          >
+            {resumeRecommended ? 'Resume from checkpoint (recommended)' : 'Resume from checkpoint'}
           </button>
         ) : null}
         {taskEditingOn ? (
-          <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
+          <button
+            type="button"
+            className={resumeRecommended ? 'secondary' : 'queue-action'}
+            disabled={busy}
+            onClick={onRerun}
+            data-testid="recovery-retry-action"
+          >
             Retry from source
           </button>
         ) : null}
@@ -6762,6 +6811,9 @@ function RecoveryEvidencePanel({
         ) : null}
         {recovery?.branchCreationAvailable != null ? (
           <li><strong>Checkpoint branch:</strong> {recovery.branchCreationAvailable ? 'supported' : `unavailable${recovery.branchCreationReason ? ` — ${formatStatusLabel(recovery.branchCreationReason)}` : ''}`}</li>
+        ) : null}
+        {hostRecoveryNarrative ? (
+          <li data-testid="host-recovery-decision"><strong>Host recovery decision:</strong> {hostRecoveryNarrative}</li>
         ) : null}
         {recovery?.checkpointValidationStatus ? (
           <li><strong>Checkpoint validation:</strong> {formatStatusLabel(recovery.checkpointValidationStatus)}</li>

@@ -2453,10 +2453,190 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('Checkpoint validation:').parentElement?.textContent).toContain('valid');
     expect(screen.getByText('Required profile:').parentElement?.textContent).toContain('profile://codex');
     expect(screen.getByText('Authoritative workspace checkpoint:').parentElement?.textContent).toContain('worktree archive');
+    // AC9 (MoonLadderStudios/MoonMind#3510): first-class host recovery decision narrative.
+    const hostDecision = screen.getByTestId('host-recovery-decision');
+    expect(hostDecision.textContent).toContain('cannot be reattached');
+    expect(hostDecision.textContent).toContain('host lease expired');
+    expect(hostDecision.textContent).toContain('replacement host will cold-restore');
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',
       { credentials: 'include' },
     );
+  });
+
+  it('makes evidence-gated resume the primary recommended action when the backend recommends resume (MoonLadderStudios/MoonMind#3510)', async () => {
+    window.history.pushState({}, 'Resume Default Test', '/workflows/test-123/steps?source=temporal');
+    const editingPayload: BootPayload = {
+      ...stepsPayload,
+      initialData: {
+        ...(stepsPayload.initialData as Record<string, unknown>),
+        dashboardConfig: {
+          ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+          features: {
+            temporalDashboard: { actionsEnabled: true, temporalTaskEditing: true },
+          },
+        },
+      },
+    };
+    const failedStepsSnapshot = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) =>
+        step.logicalStepId === 'apply'
+          ? { ...step, status: 'failed', executionOrdinal: 2 }
+          : step,
+      ),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Recovery task',
+      summary: 'Needs recovery',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      resume: { available: true, failedStepId: 'apply' },
+      actions: { canResumeFromFailedStep: true, canRerun: true },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            recoveryEligibility: {
+              eligible: true,
+              defaultAction: 'resume_from_workspace_checkpoint',
+              requestedAction: 'resume_from_workspace_checkpoint',
+              requiredBoundary: 'before_execution',
+              checkpointRef: 'artifact://checkpoint/before',
+              sessionRecoverable: true,
+              workspaceRecoverable: true,
+              checkpointValidationStatus: 'valid',
+              operatorGuidance: 'resume',
+              evidence: [],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => failedStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={editingPayload} />);
+
+    await screen.findByRole('heading', { name: 'Recovery evidence' });
+    const resumeAction = await screen.findByTestId('recovery-resume-action');
+    expect(resumeAction.getAttribute('data-recommended')).toBe('true');
+    expect(resumeAction.className).toContain('queue-action');
+    expect(resumeAction.textContent).toContain('recommended');
+    const retryAction = screen.getByTestId('recovery-retry-action');
+    expect(retryAction.className).toContain('secondary');
+  });
+
+  it('demotes resume and keeps retry primary when recovery fails closed (MoonLadderStudios/MoonMind#3510)', async () => {
+    window.history.pushState({}, 'Resume FailClosed Test', '/workflows/test-123/steps?source=temporal');
+    const editingPayload: BootPayload = {
+      ...stepsPayload,
+      initialData: {
+        ...(stepsPayload.initialData as Record<string, unknown>),
+        dashboardConfig: {
+          ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+          features: {
+            temporalDashboard: { actionsEnabled: true, temporalTaskEditing: true },
+          },
+        },
+      },
+    };
+    const failedStepsSnapshot = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) =>
+        step.logicalStepId === 'apply'
+          ? { ...step, status: 'failed', executionOrdinal: 2 }
+          : step,
+      ),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Recovery task',
+      summary: 'Needs recovery',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      resume: { available: true, failedStepId: 'apply' },
+      actions: { canResumeFromFailedStep: true, canRerun: true },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            recoveryEligibility: {
+              eligible: true,
+              defaultAction: 'full_retry',
+              requestedAction: 'resume_from_workspace_checkpoint',
+              requiredBoundary: 'before_execution',
+              checkpointRef: 'artifact://checkpoint/before',
+              sessionRecoverable: false,
+              liveReattachReason: 'credential_generation_stale',
+              workspaceRecoverable: false,
+              workspaceRestoreReason: 'artifact_digest_mismatch',
+              checkpointValidationStatus: 'invalid',
+              operatorGuidance: 'full_retry',
+              evidence: [],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => failedStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={editingPayload} />);
+
+    await screen.findByRole('heading', { name: 'Recovery evidence' });
+    const resumeAction = await screen.findByTestId('recovery-resume-action');
+    expect(resumeAction.getAttribute('data-recommended')).toBe('false');
+    expect(resumeAction.className).toContain('secondary');
+    const retryAction = screen.getByTestId('recovery-retry-action');
+    expect(retryAction.className).toContain('queue-action');
+    // Host rejection narrative is surfaced first-class.
+    const hostDecision = screen.getByTestId('host-recovery-decision');
+    expect(hostDecision.textContent).toContain('was rejected');
+    expect(hostDecision.textContent).toContain('resume is unavailable');
   });
 
   it('MM-801 renders Execution as the focused step ledger and run history route', async () => {

@@ -1494,6 +1494,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
+    "integration.omnigent.recover_from_checkpoint": ("agent_runtime", "integration_omnigent_recover_from_checkpoint"),
+    "integration.omnigent.branch_from_checkpoint": ("agent_runtime", "integration_omnigent_branch_from_checkpoint"),
     "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
@@ -8050,6 +8052,42 @@ class TemporalAgentRuntimeActivities:
         )
         req = AgentExecutionRequest.model_validate(payload)
         return await omnigent_profile_bound_execute_activity(req)
+
+    async def integration_omnigent_recover_from_checkpoint(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.omnigent.recovery_activity_models import (
+            OmnigentCheckpointRecoveryRequest,
+        )
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_recover_from_checkpoint_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.recover_from_checkpoint",
+            kwargs=kwargs,
+        )
+        req = OmnigentCheckpointRecoveryRequest.model_validate(payload)
+        return await omnigent_recover_from_checkpoint_activity(req)
+
+    async def integration_omnigent_branch_from_checkpoint(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.omnigent.recovery_activity_models import (
+            OmnigentCheckpointBranchRequest,
+        )
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_branch_from_checkpoint_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.branch_from_checkpoint",
+            kwargs=kwargs,
+        )
+        req = OmnigentCheckpointBranchRequest.model_validate(payload)
+        return await omnigent_branch_from_checkpoint_activity(req)
 
     async def integration_omnigent_oauth_host_janitor(
         self, request: Any = None, /, **kwargs: Any

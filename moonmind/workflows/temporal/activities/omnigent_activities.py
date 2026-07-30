@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from temporalio import activity
 
+from moonmind.omnigent.recovery_activity_models import (
+    OmnigentCheckpointBranchRequest,
+    OmnigentCheckpointRecoveryRequest,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
-@activity.defn(name="integration.omnigent.execute")
-async def omnigent_execute_activity(
-    request: AgentExecutionRequest,
-) -> AgentRunResult:
-    """Run one Omnigent streaming execution."""
+@asynccontextmanager
+async def _omnigent_coordinator() -> AsyncIterator[object]:
+    """Build the production profile-bound coordinator behind the Activity boundary.
+
+    Yields a fully wired ``OmnigentProfileBoundExecutionCoordinator``. The same
+    authority seam (leases, hosts, run store, artifact service, remediation
+    workspace owner) backs normal ``execute()`` and the coordinator's
+    ``recover_from_checkpoint()`` / ``branch_from_checkpoint()`` paths, so
+    recovery and branch turns run through the identical credential, host, and
+    cleanup lifecycle as a fresh run.
+    """
 
     from api_service.db.base import async_session_maker
     import httpx
@@ -42,12 +54,6 @@ async def omnigent_execute_activity(
 
     artifact_gateway = LocalOmnigentArtifactGateway()
     run_store = OmnigentBridgeSessionStore(async_session_maker)
-    if not request.execution_profile_ref:
-        return await run_omnigent_execution(
-            request,
-            artifact_gateway=artifact_gateway,
-            run_store=run_store,
-        )
 
     async with httpx.AsyncClient() as http_client:
         omnigent_client = OmnigentHttpClient(
@@ -113,7 +119,87 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
+        yield coordinator
+
+
+@activity.defn(name="integration.omnigent.execute")
+async def omnigent_execute_activity(
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    """Run one Omnigent streaming execution."""
+
+    from api_service.db.base import async_session_maker
+
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.execute import run_omnigent_execution
+
+    if not request.execution_profile_ref:
+        return await run_omnigent_execution(
+            request,
+            artifact_gateway=LocalOmnigentArtifactGateway(),
+            run_store=OmnigentBridgeSessionStore(async_session_maker),
+        )
+
+    async with _omnigent_coordinator() as coordinator:
         return await coordinator.execute(request)
+
+
+@activity.defn(name="integration.omnigent.recover_from_checkpoint")
+async def omnigent_recover_from_checkpoint_activity(
+    request: OmnigentCheckpointRecoveryRequest,
+) -> AgentRunResult:
+    """Recover a failed Omnigent step through the coordinator.
+
+    Live-reattaches to the original host/session when every original authority
+    (provider/host lease, credential generation, registration, session, and
+    first-message identity) remains valid; otherwise cold-restores the validated
+    workspace checkpoint onto a fresh lease/host/session. The coordinator owns
+    the fail-closed live-vs-cold decision and the idempotency boundary, so a
+    Temporal Activity retry cannot repost the first message or duplicate hosts.
+    """
+
+    if not request.request.execution_profile_ref:
+        raise ValueError(
+            "checkpoint recovery requires executionProfileRef on the request"
+        )
+    async with _omnigent_coordinator() as coordinator:
+        return await coordinator.recover_from_checkpoint(
+            request=request.request,
+            checkpoint=request.checkpoint,
+            provider_lease=request.provider_lease,
+            host_lease=request.host_lease,
+            host_registered=request.host_registered,
+            session_valid=request.session_valid,
+            first_message_consistent=request.first_message_consistent,
+            current_credential_generation=request.current_credential_generation,
+            candidate_workspace=request.candidate_workspace,
+        )
+
+
+@activity.defn(name="integration.omnigent.branch_from_checkpoint")
+async def omnigent_branch_from_checkpoint_activity(
+    request: OmnigentCheckpointBranchRequest,
+) -> AgentRunResult:
+    """Execute a Checkpoint Branch turn through the coordinator.
+
+    Acquires a separate capacity-gated host lease and a fresh Omnigent session
+    from the validated checkpoint refs rather than reusing the source run's
+    active OAuth lease. The coordinator requires a new idempotency key, so branch
+    turns never collide with the source run's first-message boundary.
+    """
+
+    if not request.request.execution_profile_ref:
+        raise ValueError(
+            "checkpoint branch requires executionProfileRef on the request"
+        )
+    async with _omnigent_coordinator() as coordinator:
+        return await coordinator.branch_from_checkpoint(
+            request=request.request,
+            checkpoint=request.checkpoint,
+            current_credential_generation=request.current_credential_generation,
+            candidate_workspace=request.candidate_workspace,
+        )
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")
@@ -181,5 +267,7 @@ async def omnigent_oauth_host_janitor_activity(
 __all__ = [
     "omnigent_execute_activity",
     "omnigent_profile_bound_execute_activity",
+    "omnigent_recover_from_checkpoint_activity",
+    "omnigent_branch_from_checkpoint_activity",
     "omnigent_oauth_host_janitor_activity",
 ]

@@ -25,6 +25,10 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
 )
+from moonmind.omnigent.recovery_activity_models import (
+    OmnigentCheckpointBranchRequest,
+    OmnigentCheckpointRecoveryRequest,
+)
 from moonmind.workflows.temporal.activity_runtime import PlanGenerateActivityResult
 from moonmind.workflows.temporal.artifacts import ArtifactRef
 
@@ -78,6 +82,36 @@ async def execute_typed_activity(
         "integration.omnigent.profile_bound_execute",
     ],
     arg: AgentExecutionRequest,
+    *,
+    task_queue: str | None = None,
+    start_to_close_timeout: timedelta | None = None,
+    schedule_to_close_timeout: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retry_policy: RetryPolicy | None = None,
+    cancellation_type: ActivityCancellationType | None = None,
+    summary: str | Mapping[str, Any] | None = None,
+) -> AgentRunResult:
+    pass
+
+@overload
+async def execute_typed_activity(
+    activity: Literal["integration.omnigent.recover_from_checkpoint"],
+    arg: Mapping[str, Any] | OmnigentCheckpointRecoveryRequest,
+    *,
+    task_queue: str | None = None,
+    start_to_close_timeout: timedelta | None = None,
+    schedule_to_close_timeout: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retry_policy: RetryPolicy | None = None,
+    cancellation_type: ActivityCancellationType | None = None,
+    summary: str | Mapping[str, Any] | None = None,
+) -> AgentRunResult:
+    pass
+
+@overload
+async def execute_typed_activity(
+    activity: Literal["integration.omnigent.branch_from_checkpoint"],
+    arg: Mapping[str, Any] | OmnigentCheckpointBranchRequest,
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,

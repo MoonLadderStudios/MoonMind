@@ -976,6 +976,30 @@ def build_default_activity_catalog(
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(
+            activity_type="integration.omnigent.recover_from_checkpoint",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(
+                3600, 3700, heartbeat_timeout_seconds=120
+            ),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
+            activity_type="integration.omnigent.branch_from_checkpoint",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(
+                3600, 3700, heartbeat_timeout_seconds=120
+            ),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
             activity_type="integration.omnigent.oauth_host_janitor",
             family="integration",
             capability_class="agent_runtime",
