@@ -204,10 +204,143 @@ def _bind_candidate_workspace(
     )
 
 
+# Optional positive-integer ceilings an authoring surface may narrow. The
+# retrieval gateway (``_bridge_authoritative_issue``) and the deployment budget
+# snapshot (``_server_policy_snapshot``) clamp any host request against these at
+# issue time, so the compiled block is an *authored* per-run ceiling and can
+# never broaden deployment policy.
+_FOLLOW_UP_RETRIEVAL_INT_FIELDS: tuple[str, ...] = (
+    "topK",
+    "maxSources",
+    "maxQueryBytes",
+    "maxContextBytes",
+    "maxContextTokens",
+    "maxQueries",
+    "latencyMs",
+    "maxConcurrency",
+    "maxRequestsPerMinute",
+    "embeddingTimeoutMs",
+    "searchTimeoutMs",
+    "overlayMaxAgeSeconds",
+    "retentionDays",
+    "maxLifetimeSeconds",
+)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def compile_follow_up_retrieval_policy(
+    policy_snapshot: Mapping[str, Any],
+    parameters: Mapping[str, Any] | None,
+    *,
+    repository: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Compile the runtime ``followUpRetrieval`` block carried by the launch snapshot.
+
+    In-session (follow-up) retrieval grants the host an authorized capability, so
+    it is an authority boundary and stays disabled unless an authoring surface
+    explicitly enables it via ``parameters["followUpRetrieval"]``. Deployment
+    policy (``boundaries.rag``) supplies the default budgets; the gateway and the
+    server budget snapshot enforce the deployment ceilings, so this block is only
+    the authored per-run ceiling and never a broadening of policy.
+    """
+
+    authored: dict[str, Any] = {}
+    if isinstance(parameters, Mapping):
+        raw = parameters.get("followUpRetrieval")
+        if isinstance(raw, Mapping):
+            authored = dict(raw)
+    if authored.get("enabled") is not True:
+        return {"enabled": False}
+
+    rag: dict[str, Any] = {}
+    boundaries = (
+        policy_snapshot.get("boundaries")
+        if isinstance(policy_snapshot, Mapping)
+        else None
+    )
+    if isinstance(boundaries, Mapping) and isinstance(boundaries.get("rag"), Mapping):
+        rag = dict(boundaries["rag"])
+
+    collections = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in authored.get("collections", ())
+            if str(item).strip()
+        )
+    )
+    repository = str(repository or "").strip()
+    tenant_id = str(tenant_id or "").strip()
+    policy_version = (
+        str(policy_snapshot.get("policyRef") or "").strip()
+        if isinstance(policy_snapshot, Mapping)
+        else ""
+    )
+
+    if not (repository and tenant_id and policy_version and collections):
+        # Enabling without a resolvable scope would only yield an auditable 409
+        # from the gateway; keep the capability unavailable with an explicit,
+        # non-fatal reason instead of persisting a broken authority block.
+        return {"enabled": False, "reason": "incomplete_follow_up_retrieval_scope"}
+
+    block: dict[str, Any] = {
+        "enabled": True,
+        "required": bool(authored.get("required", False)),
+        "repository": repository,
+        "tenantId": tenant_id,
+        "policyVersion": policy_version,
+        "collections": collections,
+        "overlayPolicy": (
+            "skip" if str(authored.get("overlayPolicy")) == "skip" else "include"
+        ),
+        "staleOverlayAllowed": bool(authored.get("staleOverlayAllowed", False)),
+        "fallbackAllowed": bool(authored.get("fallbackAllowed", False)),
+    }
+
+    filters = authored.get("filters")
+    if isinstance(filters, Mapping):
+        compiled_filters = {
+            str(key): str(value)
+            for key, value in filters.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if compiled_filters:
+            block["filters"] = compiled_filters
+
+    for field in _FOLLOW_UP_RETRIEVAL_INT_FIELDS:
+        coerced = _coerce_positive_int(authored.get(field))
+        if coerced is not None:
+            block[field] = coerced
+
+    # Fold deployment policy budgets into the block when the author did not set a
+    # tighter value, so ``boundaries.rag`` authority actually reaches the gateway.
+    if "latencyMs" not in block:
+        policy_latency = _coerce_positive_int(rag.get("latencyBudgetMs"))
+        if policy_latency is not None:
+            block["latencyMs"] = policy_latency
+    if "maxContextTokens" not in block:
+        policy_tokens = _coerce_positive_int(rag.get("tokenBudget"))
+        if policy_tokens is not None:
+            block["maxContextTokens"] = policy_tokens
+
+    return block
+
+
 def _compile_persisted_effective_launch(
     policy_snapshot: Mapping[str, Any],
     *,
     provider_profile_id: str,
+    follow_up_retrieval: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the sole launch carrier from persisted immutable authority."""
 
@@ -265,6 +398,14 @@ def _compile_persisted_effective_launch(
         "boundaries": dict(boundaries),
         "policyAuthority": dict(policy_snapshot),
     }
+    # The retrieval gateway reads follow-up (in-session) retrieval authority from
+    # this top-level block. It must be inside the digest so a mutated capability
+    # policy is rejected by ``validate_effective_launch_snapshot``.
+    payload["followUpRetrieval"] = (
+        dict(follow_up_retrieval)
+        if isinstance(follow_up_retrieval, Mapping)
+        else {"enabled": False}
+    )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
         canonical.encode()
@@ -464,9 +605,45 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "persisted policy execution profile conflicts with launch selection",
                     code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                 )
+            launch_parameters = (
+                request.parameters if isinstance(request.parameters, dict) else {}
+            )
+            launch_workspace_spec = (
+                request.workspace_spec
+                if isinstance(request.workspace_spec, dict)
+                else {}
+            )
+            authored_follow_up = (
+                launch_parameters.get("followUpRetrieval")
+                if isinstance(launch_parameters.get("followUpRetrieval"), dict)
+                else {}
+            )
+            follow_up_repository = str(
+                authored_follow_up.get("repository")
+                or launch_parameters.get("repository")
+                or launch_workspace_spec.get("repository")
+                or ""
+            ).strip()
+            # MoonMind has no separate tenancy authority today (single-tenant by
+            # default), so fall back to a deployment-configurable tenant rather
+            # than leaving follow-up retrieval permanently unavailable once an
+            # operator opts in. Multi-tenant deployments author an explicit
+            # tenantId, which always takes precedence.
+            follow_up_tenant = str(
+                authored_follow_up.get("tenantId")
+                or launch_parameters.get("tenant")
+                or launch_parameters.get("tenantId")
+                or os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT", "default")
+            ).strip()
             effective_launch = _compile_persisted_effective_launch(
                 policy_snapshot,
                 provider_profile_id=profile_id,
+                follow_up_retrieval=compile_follow_up_retrieval_policy(
+                    policy_snapshot,
+                    launch_parameters,
+                    repository=follow_up_repository,
+                    tenant_id=follow_up_tenant,
+                ),
             )
             if (
                 self._repository_mutation_required(request)

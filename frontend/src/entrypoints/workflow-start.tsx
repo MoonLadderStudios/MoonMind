@@ -34,6 +34,14 @@ import {
   readRemediationCreateDraft,
   type RemediationCreateDraft,
 } from "../lib/remediationCreateDraft";
+import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  defaultContextRetrievalAuthoring,
+  hasAuthoredContextRetrieval,
+  parseContextRetrievalParameters,
+} from "../lib/contextRetrievalAuthoring";
 
 type WorkflowStartDashboardConfig = {
   features?: {
@@ -6021,6 +6029,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
+  const [contextRetrieval, setContextRetrieval] =
+    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
@@ -6587,6 +6597,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       );
     }
     setProduceReport(draft.reportOutputEnabled);
+    setContextRetrieval(
+      parseContextRetrievalParameters(
+        recordValue(temporalDraftQuery.data.execution.inputParameters),
+      ),
+    );
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
     setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
@@ -11043,6 +11058,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         schedulePayload;
     }
 
+    // Context retrieval (RAG) authoring (#3514). Placed at the payload level so
+    // `rag` / `followUpRetrieval` are lifted into the run's initial parameters
+    // (and, for scheduled runs, into target.initialParameters) server-side.
+    if (hasAuthoredContextRetrieval(contextRetrieval)) {
+      const compiledRetrieval =
+        compileContextRetrievalParameters(contextRetrieval);
+      const submittedRetrievalPayload = requestBody.payload as Record<
+        string,
+        unknown
+      >;
+      if (compiledRetrieval.rag) {
+        submittedRetrievalPayload.rag = compiledRetrieval.rag;
+      }
+      if (compiledRetrieval.followUpRetrieval) {
+        submittedRetrievalPayload.followUpRetrieval =
+          compiledRetrieval.followUpRetrieval;
+      }
+    }
+
     try {
       let inputArtifactRef: string | null = null;
       const submittedPayload = requestBody.payload as Record<string, unknown>;
@@ -13626,6 +13660,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </p>
           </div>
         ) : null}
+        <details className="queue-context-retrieval-disclosure">
+          <summary>Context retrieval (RAG)</summary>
+          <ContextRetrievalControls
+            value={contextRetrieval}
+            onChange={setContextRetrieval}
+            description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
+          />
+        </details>
         </section>
 
         {pageMode.mode === "create" ? (

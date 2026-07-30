@@ -9896,3 +9896,27 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+
+/* Context retrieval (RAG) authoring controls (MoonMind#3514). */
+.context-retrieval-controls { display: grid; gap: 1rem; }
+.context-retrieval-section {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+}
+.context-retrieval-section legend { font-weight: 600; padding: 0 0.35rem; }
+.context-retrieval-field { display: grid; gap: 0.3rem; }
+.context-retrieval-label { font-weight: 500; }
+.context-retrieval-ceiling-hint { color: rgb(var(--mm-muted)); font-weight: 400; }
+.context-retrieval-collections { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.context-retrieval-collection { align-items: center; display: inline-flex; gap: 0.35rem; }
+.context-retrieval-ceilings { color: rgb(var(--mm-muted)); }
+.context-retrieval-denials ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.context-retrieval-diagnostics { display: grid; gap: 0.75rem; }
+.context-retrieval-diagnostics .context-retrieval-capability {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.8rem;
+}

@@ -292,6 +292,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/retrieval/bridge-sessions/{bridge_session_id}/follow-up-retrieval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bridge Follow Up Retrieval Diagnostics
+         * @description Operator diagnostics for a bridge session's follow-up retrieval activity.
+         *
+         *     Returns bounded, secret-free per-capability lifecycle, per-request evidence
+         *     summaries, and aggregate telemetry for Workflow Detail — never capability
+         *     tokens or ContextPack bodies. Requires ownership of the bridge's workflow.
+         */
+        get: operations["bridge_follow_up_retrieval_diagnostics_retrieval_bridge_sessions__bridge_session_id__follow_up_retrieval_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/retrieval/capabilities/{capability_id}/results/{tool_call_id}": {
         parameters: {
             query?: never;
@@ -5858,6 +5882,10 @@ export interface components {
             idempotencyKey: string;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Followupretrieval */
+            followUpRetrieval?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** CheckpointBranchCreateRequest */
         CheckpointBranchCreateRequest: {
@@ -5888,6 +5916,10 @@ export interface components {
             gitWorkBranch?: string | null;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Followupretrieval */
+            followUpRetrieval?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** CheckpointBranchForkRequest */
         CheckpointBranchForkRequest: {
@@ -5910,6 +5942,10 @@ export interface components {
             idempotencyKey: string;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Followupretrieval */
+            followUpRetrieval?: {
+                [key: string]: unknown;
+            } | null;
             /** Parentturnid */
             parentTurnId?: string | null;
         };
@@ -14301,6 +14337,39 @@ export interface operations {
             header?: never;
             path: {
                 capability_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bridge_follow_up_retrieval_diagnostics_retrieval_bridge_sessions__bridge_session_id__follow_up_retrieval_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bridge_session_id: string;
             };
             cookie?: never;
         };

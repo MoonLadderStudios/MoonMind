@@ -10455,6 +10455,13 @@ async def _create_execution_from_workflow_request(
     }
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
+    # Context retrieval (RAG) authoring: initial ContextPack overrides (#3513)
+    # and in-session follow-up retrieval policy (#3514). Lifted here next to the
+    # omnigent block so the authored values reach the run's initial parameters.
+    if isinstance(payload.get("rag"), Mapping):
+        initial_parameters["rag"] = dict(payload["rag"])
+    if isinstance(payload.get("followUpRetrieval"), Mapping):
+        initial_parameters["followUpRetrieval"] = dict(payload["followUpRetrieval"])
     if "modelTier" in runtime_payload:
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:

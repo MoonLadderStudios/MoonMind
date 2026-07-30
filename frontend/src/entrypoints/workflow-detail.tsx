@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -24,6 +25,13 @@ import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
+import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  defaultContextRetrievalAuthoring,
+  hasAuthoredContextRetrieval,
+} from '../lib/contextRetrievalAuthoring';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -2737,6 +2745,188 @@ async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: str
   };
 }
 
+// Follow-up (in-session) retrieval operator diagnostics (MoonMind#3514).
+type FollowUpRetrievalRequest = {
+  evidenceRef?: string;
+  state?: string;
+  classification?: string | null;
+  resultCount?: number;
+  contextBytes?: number;
+  latencyMs?: number | null;
+  truncated?: boolean;
+  contextPackRef?: string | null;
+  delivery?: { state?: string } | null;
+};
+type FollowUpRetrievalCapability = {
+  capabilityId: string;
+  state: string;
+  expiresAt?: number;
+  revokedAt?: number | null;
+  queryCount?: number;
+  maxQueries?: number;
+  activeRequests?: number;
+  maxConcurrency?: number;
+  collections?: string[];
+  policyVersion?: string;
+  overlayPolicy?: string;
+  fallbackAllowed?: boolean;
+  scope?: Record<string, unknown>;
+  requests?: FollowUpRetrievalRequest[];
+};
+export type FollowUpRetrievalDiagnostics = {
+  bridgeSessionId: string;
+  capabilityCount: number;
+  capabilities: FollowUpRetrievalCapability[];
+  aggregate: Record<string, number>;
+};
+
+async function fetchFollowUpRetrievalDiagnostics(
+  apiBase: string,
+  bridgeSessionId: string,
+): Promise<FollowUpRetrievalDiagnostics | null> {
+  const resp = await fetch(
+    joinApiBasePath(
+      apiBase,
+      `/retrieval/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/follow-up-retrieval`,
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  const body = (await resp.json()) as Partial<FollowUpRetrievalDiagnostics>;
+  return {
+    bridgeSessionId,
+    capabilityCount: typeof body.capabilityCount === 'number' ? body.capabilityCount : 0,
+    capabilities: Array.isArray(body.capabilities) ? body.capabilities : [],
+    aggregate:
+      body.aggregate && typeof body.aggregate === 'object'
+        ? (body.aggregate as Record<string, number>)
+        : {},
+  };
+}
+
+function formatCapabilityExpiry(capability: FollowUpRetrievalCapability): string {
+  if (capability.state === 'revoked') {
+    return capability.revokedAt
+      ? `revoked ${new Date(capability.revokedAt * 1000).toLocaleString()}`
+      : 'revoked';
+  }
+  if (capability.state === 'expired') {
+    return 'expired';
+  }
+  return capability.expiresAt
+    ? `active until ${new Date(capability.expiresAt * 1000).toLocaleString()}`
+    : 'active';
+}
+
+export function FollowUpRetrievalDiagnosticsSection({
+  diagnostics,
+  isLoading,
+  error,
+}: {
+  diagnostics: FollowUpRetrievalDiagnostics | null;
+  isLoading: boolean;
+  error: unknown;
+}): ReactElement | null {
+  if (error) {
+    return (
+      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
+        <p>Follow-up retrieval diagnostics are unavailable.</p>
+      </div>
+    );
+  }
+  if (isLoading && !diagnostics) {
+    return null;
+  }
+  if (!diagnostics || diagnostics.capabilityCount === 0) {
+    return (
+      <div className="small stack" data-testid="omnigent-follow-up-retrieval">
+        <p>Follow-up retrieval: no in-session retrieval capability issued.</p>
+      </div>
+    );
+  }
+  const aggregate = diagnostics.aggregate ?? {};
+  const metric = (key: string): number => Number(aggregate[key] ?? 0);
+  return (
+    <div
+      className="small stack context-retrieval-diagnostics"
+      data-testid="omnigent-follow-up-retrieval"
+    >
+      <p>
+        Follow-up retrieval: {metric('requestCount')} request
+        {metric('requestCount') === 1 ? '' : 's'} across {diagnostics.capabilityCount}{' '}
+        capabilit{diagnostics.capabilityCount === 1 ? 'y' : 'ies'}
+        {' · '}
+        {metric('succeeded')} ok · {metric('empty')} empty · {metric('denied')} denied ·{' '}
+        {metric('failed')} failed
+      </p>
+      <p>
+        Fallback {metric('fallback')} · truncated {metric('truncated')} · budget-exhausted{' '}
+        {metric('budgetExhausted')} · timed-out {metric('timedOut')} · max latency{' '}
+        {metric('maxLatencyMs')}ms · context {metric('totalContextBytes')} bytes
+      </p>
+      <p>
+        Delivery — delivered {metric('delivered')} · not delivered {metric('notDelivered')} ·
+        unknown {metric('deliveryUnknown')} · cancelled {metric('cancelled')}
+      </p>
+      <p>
+        Capabilities — active {metric('activeCapabilities')} · expired{' '}
+        {metric('expiredCapabilities')} · revoked {metric('revokedCapabilities')}
+      </p>
+      {diagnostics.capabilities.map((capability) => (
+        <div key={capability.capabilityId} className="context-retrieval-capability stack">
+          <p>
+            <code className="text-xs">{capability.capabilityId}</code> · {formatCapabilityExpiry(capability)}
+            {' · '}
+            {Number(capability.queryCount ?? 0)}/{Number(capability.maxQueries ?? 0)} queries
+          </p>
+          {capability.scope ? (
+            <p>
+              Scope:{' '}
+              {Object.entries(capability.scope)
+                .filter(([, value]) => String(value ?? '').trim())
+                .map(([key, value]) => `${key}=${String(value)}`)
+                .join(', ')}
+            </p>
+          ) : null}
+          {Array.isArray(capability.collections) && capability.collections.length ? (
+            <p>
+              Collections: {capability.collections.join(', ')}
+              {capability.overlayPolicy ? ` · overlay ${capability.overlayPolicy}` : ''}
+              {capability.fallbackAllowed ? ' · fallback allowed' : ''}
+            </p>
+          ) : null}
+          {Array.isArray(capability.requests) && capability.requests.length ? (
+            <ul className="stack">
+              {capability.requests.map((request, index) => (
+                <li key={request.evidenceRef ?? `${capability.capabilityId}-${index}`}>
+                  {String(request.state ?? 'unknown')}
+                  {request.classification ? ` (${request.classification})` : ''}
+                  {' · '}
+                  {Number(request.resultCount ?? 0)} results
+                  {request.truncated ? ' · truncated' : ''}
+                  {typeof request.latencyMs === 'number' ? ` · ${request.latencyMs}ms` : ''}
+                  {request.delivery?.state ? ` · delivery ${request.delivery.state}` : ''}
+                  {request.contextPackRef ? (
+                    <>
+                      {' · '}
+                      <code className="text-xs break-all">{request.contextPackRef}</code>
+                    </>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No follow-up retrieval requests recorded yet.</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 async function resolveBridgeSessionProjection({
   apiBase,
   workflowId,
@@ -4510,13 +4700,30 @@ type BranchCreateDraft = {
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
 
 type BranchMutationRequest =
-  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string }
-  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
-  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string }
+  | { kind: 'create'; draft: BranchCreateDraft; source: StepLedgerRow; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
+  | { kind: 'continue'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
+  | { kind: 'fork'; branch: CheckpointBranch; instructions: string; idempotencyKey: string; contextRetrieval?: ContextRetrievalAuthoring | undefined }
   | { kind: 'promote'; branch: CheckpointBranch; competingBranches: CheckpointBranch[]; idempotencyKey: string }
   | { kind: 'publish'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'archive'; branch: CheckpointBranch; idempotencyKey: string }
   | { kind: 'compare'; branch: CheckpointBranch; againstBranchId: string };
+
+// Attach an authored follow-up retrieval override to a branch-turn request body
+// (MoonMind#3514). The checkpoint-branch API accepts (and records) the override;
+// launch inherits the parent run's compiled policy unless a narrower override is
+// authored here. Compiled values are always bounded by deployment ceilings.
+function applyBranchRetrievalOverride(
+  body: Record<string, unknown>,
+  contextRetrieval: ContextRetrievalAuthoring | undefined,
+): void {
+  if (!contextRetrieval) {
+    return;
+  }
+  const compiled = compileContextRetrievalParameters(contextRetrieval);
+  if (compiled.followUpRetrieval) {
+    body.followUpRetrieval = compiled.followUpRetrieval;
+  }
+}
 
 const BRANCH_MUTATING_STATES = new Set(['created', 'active', 'blocked', 'failed', 'succeeded', 'promotable']);
 const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
@@ -4749,6 +4956,11 @@ function BranchExplorerPanel({
   const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
   const [branchInstructions, setBranchInstructions] = useState('Continue this branch with bounded instructions.');
   const [againstBranchId, setAgainstBranchId] = useState('');
+  const [branchContextRetrieval, setBranchContextRetrieval] =
+    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
+  const branchRetrievalOverride = hasAuthoredContextRetrieval(branchContextRetrieval)
+    ? branchContextRetrieval
+    : undefined;
 
   useEffect(() => {
     const firstCheckpointRow = checkpointRows[0];
@@ -4971,6 +5183,7 @@ function BranchExplorerPanel({
             draft,
             source: selectedSource,
             idempotencyKey: branchIdempotencyKey('create', workflowId, stepBranchKey(selectedSource)),
+            contextRetrieval: branchRetrievalOverride,
           })}
         >
           Create branch from checkpoint
@@ -5019,6 +5232,16 @@ function BranchExplorerPanel({
             Branch action instructions
             <textarea value={branchInstructions} disabled={busy} rows={2} onChange={(event) => setBranchInstructions(event.target.value)} />
           </label>
+          <details className="branch-context-retrieval">
+            <summary>Context retrieval (RAG) for this turn</summary>
+            <ContextRetrievalControls
+              value={branchContextRetrieval}
+              onChange={setBranchContextRetrieval}
+              showInitialControls={false}
+              disabled={busy}
+              description="Continue/fork turns inherit the parent run's retrieval policy. Set an override here to narrow in-session follow-up retrieval for the new turn within deployment ceilings."
+            />
+          </details>
           <label>
             Compare against
             <select value={againstBranchId} disabled={busy || branches.length < 2} onChange={(event) => setAgainstBranchId(event.target.value)}>
@@ -5029,8 +5252,8 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
+            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Continue branch</button>
+            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId), contextRetrieval: branchRetrievalOverride })}>Fork from this branch</button>
             <button type="button" className="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
             <button type="button" className="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
             <button type="button" className="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
@@ -5982,6 +6205,13 @@ function BridgeSessionLogsPanel({
     },
     retry: false,
   });
+  const followUpRetrievalQuery = useQuery({
+    queryKey: ['omnigent-follow-up-retrieval', bridgeSessionId],
+    queryFn: () => fetchFollowUpRetrievalDiagnostics(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: isTerminal ? false : SESSION_PROJECTION_POLL_MS,
+    retry: false,
+  });
   const historyRows = useMemo(() => {
     const rows = mapEventsToTimelineRows(eventsQuery.data);
     const envelope = eventsQuery.data && 'terminalEnvelope' in eventsQuery.data
@@ -6266,6 +6496,11 @@ function BridgeSessionLogsPanel({
           ) : null}
         </div>
       ) : null}
+      <FollowUpRetrievalDiagnosticsSection
+        diagnostics={followUpRetrievalQuery.data ?? null}
+        isLoading={followUpRetrievalQuery.isLoading}
+        error={followUpRetrievalQuery.error}
+      />
       <section className="card stack" aria-label="Omnigent runtime identity">
         <h3>Codex via Omnigent</h3>
         <dl className="details-grid">
@@ -8815,6 +9050,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'continue') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/continue`;
         body = {
@@ -8825,6 +9061,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'fork') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/fork`;
         body = {
@@ -8835,6 +9072,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           maxBudgetUsd: null,
         };
+        applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'promote') {
         url = `${branchBase}/${encodeURIComponent(request.branch.branchId)}/promote`;
         body = {

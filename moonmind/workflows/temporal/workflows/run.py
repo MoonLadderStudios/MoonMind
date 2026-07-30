@@ -18112,6 +18112,14 @@ class MoonMindRunWorkflow:
             "story_breakdown_path",
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
+            # Context retrieval (RAG) authoring surfaces (#3514): initial
+            # ContextPack overrides and in-session follow-up retrieval policy,
+            # plus the repository/tenant scope the retrieval budget binds to.
+            "rag",
+            "followUpRetrieval",
+            "repository",
+            "tenant",
+            "tenantId",
         ):
             param_val = runtime_block.get(param_key)
             if param_val is None:
