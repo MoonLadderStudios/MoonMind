@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, TypedDict, cast
 
 from temporalio import exceptions, workflow
@@ -3889,6 +3889,7 @@ class MoonMindRunWorkflow:
             phase=RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
             consumedBudgets=ConsumedRemediationBudgets(),
             sourceRunId=info.run_id,
+            loopStartedAt=workflow.now().isoformat(),
         )
         self._sync_remediation_loop_projection()
 
@@ -4048,6 +4049,30 @@ class MoonMindRunWorkflow:
         _, runtime_block = resolve_loop_runtime(self._remediation_loop_runtime)
         return runtime_block
 
+    def _remediation_loop_elapsed_seconds(
+        self, state: RemediationLoopState
+    ) -> float | None:
+        """Return cumulative loop wall-clock seconds for budget enforcement.
+
+        The start instant is captured deterministically from ``workflow.now()``
+        at loop initialization and carried across Continue-As-New in loop
+        state, so elapsed time accumulates over the loop's full lifetime rather
+        than resetting each generation. An absent or unparseable start instant
+        leaves the wall-clock budget unenforced rather than fabricating time.
+        """
+
+        started_at = state.loop_started_at
+        if not started_at:
+            return None
+        try:
+            started = datetime.fromisoformat(started_at)
+        except ValueError:
+            return None
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed = (workflow.now() - started).total_seconds()
+        return elapsed if elapsed >= 0 else None
+
     async def _evaluate_dynamic_remediation_verification(
         self,
         *,
@@ -4148,6 +4173,7 @@ class MoonMindRunWorkflow:
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
+            elapsed_wall_clock_seconds=self._remediation_loop_elapsed_seconds(state),
         )
         decision_ref = await self._write_json_artifact(
             name=(

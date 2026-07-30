@@ -1183,6 +1183,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         decision="attempted",
         decision_reason="fresh_target_health_and_policy_allowed",
         repair_outcome="repaired",
+        target_disposition="reran",
         fresh_target_health_ref="art_health",
         authority_decision_ref="art_authority",
         guard_decision_ref="art_guard",
@@ -1219,6 +1220,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
             "verification": "art_verification",
         },
         "repairOutcome": "repaired",
+        "targetDisposition": "reran",
         "metadata": {"safe": "value"},
     }
 
@@ -1234,6 +1236,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         "status": "findings_reported",
         "rootCauseCategory": "provider_profile_lease_recovery_gap",
         "summary": "Investigated recurrence without creating a PR.",
+        "verification": {"status": "not_required"},
         "findingsRef": "art_findings",
         "metadata": {"safe": "value"},
     }
@@ -1432,6 +1435,7 @@ def test_reviewable_prevention_pr_url_survives_final_summary_sanitization():
         root_cause_category="provider_profile_lease_recovery_gap",
         summary="Created a recurrence-prevention change.",
         pull_request_url="https://github.com/org/repo/pull/123?token=raw-secret",
+        verification_status="pending",
     )
     final_summary = build_remediation_final_summary(
         summary=build_remediation_summary_block(

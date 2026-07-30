@@ -95,6 +95,54 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
 )
+# First-class verification-phase resolutions. A successfully delivered action is
+# not itself a successful remediation: after every side-effecting repair attempt
+# the verification phase re-reads fresh durable target evidence and records one
+# of these terminal resolutions.
+REMEDIATION_VERIFICATION_RESOLUTIONS = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+        "evidence_unavailable",
+        "approval_required",
+        "verification_failed",
+    }
+)
+# Resolutions that assert a concrete read of the target's post-action state and
+# therefore must cite the fresh durable evidence they were derived from.
+_REMEDIATION_EVIDENCE_BACKED_RESOLUTIONS = frozenset(
+    {
+        "verified_resolved",
+        "verified_no_change",
+        "still_failed",
+        "regressed",
+    }
+)
+# How the immediate repair left the target, reported independently of any
+# long-term prevention change.
+REMEDIATION_TARGET_DISPOSITIONS = frozenset(
+    {
+        "resumed",
+        "reran",
+        "branched",
+        "remained_failed",
+        "unsafe_to_mutate",
+        "not_applicable",
+    }
+)
+# Outcome of the separate verification of a prevention PR/Skill change. A
+# prevention change is verified independently of the immediate repair and never
+# relabels the target as repaired.
+REMEDIATION_PREVENTION_VERIFICATION_STATUSES = frozenset(
+    {
+        "passed",
+        "failed",
+        "not_required",
+        "pending",
+    }
+)
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS = 20
 TARGET_EVIDENCE_CLASSES = (
@@ -931,6 +979,16 @@ def normalize_remediation_resolution(value: Any) -> str:
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_RESOLUTIONS else "failed"
 
+def normalize_remediation_verification_resolution(value: Any) -> str:
+    """Return a bounded first-class verification resolution value."""
+
+    normalized = str(value or "").strip()
+    return (
+        normalized
+        if normalized in REMEDIATION_VERIFICATION_RESOLUTIONS
+        else "verification_failed"
+    )
+
 def build_remediation_summary_block(
     *,
     target_workflow_id: str,
@@ -1144,6 +1202,7 @@ def build_remediation_repair_decision(
     decision_reason: str,
     repair_outcome: str,
     current_run_id: str | None = None,
+    target_disposition: str | None = None,
     candidate_action_kind: str | None = None,
     candidate_reason: str | None = None,
     fresh_target_health_ref: str | None = None,
@@ -1171,6 +1230,23 @@ def build_remediation_repair_decision(
         )
     if normalized_decision != "attempted" and normalized_outcome == "repaired":
         raise ValueError("repair_outcome repaired requires an attempted repair")
+    normalized_disposition = (
+        _validated_choice(
+            target_disposition, REMEDIATION_TARGET_DISPOSITIONS, "target_disposition"
+        )
+        if target_disposition is not None
+        else None
+    )
+    if normalized_outcome == "repaired" and normalized_disposition in {
+        None,
+        "remained_failed",
+        "unsafe_to_mutate",
+        "not_applicable",
+    }:
+        raise ValueError(
+            "a repaired outcome requires a target disposition of resumed, reran, "
+            "or branched"
+        )
 
     pinned = _required_lifecycle_string(pinned_run_id, "pinned_run_id")
     current = _safe_identifier_string(current_run_id) or pinned
@@ -1198,6 +1274,8 @@ def build_remediation_repair_decision(
         ),
         "repairOutcome": normalized_outcome,
     }
+    if normalized_disposition is not None:
+        payload["targetDisposition"] = normalized_disposition
     candidate = _repair_candidate_payload(
         action_kind=candidate_action_kind,
         reason=candidate_reason,
@@ -1218,13 +1296,31 @@ def build_remediation_prevention_outcome(
     pull_request_url: str | None = None,
     findings_ref: str | None = None,
     blocked_reason: str | None = None,
+    verification_status: str = "not_required",
+    verification_ref: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded recurrence-prevention outcome."""
+    """Build a bounded recurrence-prevention outcome.
+
+    A prevention PR/Skill change is verified separately from the immediate
+    repair via ``verification_status``; a reviewable change must not be reported
+    as effective without its own passing verification, and prevention work never
+    relabels the target as repaired.
+    """
 
     normalized_status = _validated_choice(
         status, REMEDIATION_PREVENTION_STATUSES, "status"
     )
+    normalized_verification = _validated_choice(
+        verification_status,
+        REMEDIATION_PREVENTION_VERIFICATION_STATUSES,
+        "verification_status",
+    )
+    safe_verification_ref = _artifact_ref_string(verification_ref, "verification_ref")
+    if normalized_verification in {"passed", "failed"} and not safe_verification_ref:
+        raise ValueError(
+            "prevention verification_status passed/failed requires verification_ref"
+        )
     safe_pr_url = _safe_public_url(pull_request_url)
     safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
     safe_blocked_reason = _redacted_optional_text(blocked_reason)
@@ -1240,6 +1336,15 @@ def build_remediation_prevention_outcome(
         raise ValueError("no_reviewable_fix requires a summary reason")
     if normalized_status == "policy_blocked" and not safe_blocked_reason:
         raise ValueError("blockedReason is required for policy_blocked")
+    # A reviewable prevention PR/Skill change must be verified separately from
+    # the immediate repair; it is never reported as effective on its own.
+    if normalized_status == "reviewable_change_created" and (
+        normalized_verification == "not_required"
+    ):
+        raise ValueError(
+            "a reviewable prevention change requires a separate verification "
+            "(pending, passed, or failed)"
+        )
 
     payload: dict[str, Any] = {
         "schemaVersion": "v1",
@@ -1249,6 +1354,10 @@ def build_remediation_prevention_outcome(
         ),
         "summary": _required_redacted_text(summary, "summary"),
     }
+    verification: dict[str, Any] = {"status": normalized_verification}
+    if safe_verification_ref:
+        verification["verificationRef"] = safe_verification_ref
+    payload["verification"] = verification
     if safe_branch := _redacted_optional_text(branch):
         payload["branch"] = safe_branch
     if safe_commit := _redacted_optional_text(commit):
@@ -1259,6 +1368,103 @@ def build_remediation_prevention_outcome(
         payload["findingsRef"] = safe_findings_ref
     if safe_blocked_reason:
         payload["blockedReason"] = safe_blocked_reason
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def build_remediation_verification_result(
+    *,
+    action_id: str,
+    action_kind: str,
+    resolution: str,
+    target_workflow_id: str,
+    target_run_id: str,
+    action_result_ref: str,
+    timestamp: datetime | str,
+    target_session_id: str | None = None,
+    target_step_id: str | None = None,
+    fresh_evidence_ref: str | None = None,
+    before_state_ref: str | None = None,
+    after_immediate_state_ref: str | None = None,
+    after_stabilization_state_ref: str | None = None,
+    verification_hint: str | None = None,
+    prevention_change: bool = False,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a first-class post-action verification result.
+
+    The verification phase runs after a side-effecting repair attempt and reads
+    fresh durable target evidence. Evidence-backed resolutions
+    (``verified_resolved``/``verified_no_change``/``still_failed``/``regressed``)
+    must cite the fresh evidence and the exact action result they were derived
+    from, keeping "action delivered" strictly separate from "remediation
+    verified". ``prevention_change`` marks the separate verification of a
+    prevention PR/Skill change rather than a target repair.
+    """
+
+    normalized_resolution = _validated_choice(
+        resolution, REMEDIATION_VERIFICATION_RESOLUTIONS, "resolution"
+    )
+    action_result = _required_artifact_ref_string(
+        action_result_ref, "action_result_ref"
+    )
+    fresh_evidence = _artifact_ref_string(fresh_evidence_ref, "fresh_evidence_ref")
+    if (
+        normalized_resolution in _REMEDIATION_EVIDENCE_BACKED_RESOLUTIONS
+        and not fresh_evidence
+    ):
+        raise ValueError(
+            f"{normalized_resolution} requires fresh_evidence_ref from a durable "
+            "target re-read"
+        )
+    if normalized_resolution == "evidence_unavailable" and fresh_evidence:
+        raise ValueError(
+            "evidence_unavailable must not cite fresh target evidence"
+        )
+
+    target: dict[str, Any] = {
+        "workflowId": _required_lifecycle_string(
+            target_workflow_id, "target_workflow_id"
+        ),
+        "runId": _required_lifecycle_string(target_run_id, "target_run_id"),
+    }
+    if session_id := _safe_identifier_string(target_session_id):
+        target["sessionId"] = session_id
+    if step_id := _safe_identifier_string(target_step_id):
+        target["stepId"] = step_id
+
+    artifact_refs: dict[str, str] = {"actionResult": action_result}
+    for key, value in (
+        ("freshEvidence", fresh_evidence),
+        ("beforeState", _artifact_ref_string(before_state_ref, "before_state_ref")),
+        (
+            "afterImmediateState",
+            _artifact_ref_string(after_immediate_state_ref, "after_immediate_state_ref"),
+        ),
+        (
+            "afterStabilizationState",
+            _artifact_ref_string(
+                after_stabilization_state_ref, "after_stabilization_state_ref"
+            ),
+        ),
+    ):
+        if value:
+            artifact_refs[key] = value
+
+    payload: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "kind": "remediation.verification",
+        "phase": "complete",
+        "actionId": _required_lifecycle_string(action_id, "action_id"),
+        "actionKind": _required_redacted_text(action_kind, "action_kind"),
+        "resolution": normalized_resolution,
+        "preventionChange": bool(prevention_change),
+        "target": target,
+        "artifactRefs": artifact_refs,
+        "timestamp": _timestamp_string(timestamp),
+    }
+    if hint := _redacted_optional_text(verification_hint):
+        payload["verificationHint"] = hint
     if safe_metadata := _safe_policy_mapping(metadata):
         payload["metadata"] = safe_metadata
     return payload
@@ -1310,24 +1516,38 @@ def build_remediation_final_summary(
     summary: Mapping[str, Any],
     repair: Mapping[str, Any],
     prevention: Mapping[str, Any],
+    verification: Mapping[str, Any] | None = None,
+    operator_follow_up: Sequence[Any] = (),
     ops_diagnostic_artifact_refs: Mapping[str, Any] | None = None,
     decision_log_ref: str | None = None,
     final_audit_ref: str | None = None,
     lock_release: str,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Attach repair/prevention lifecycle output to a remediation summary."""
+    """Attach repair/prevention/verification lifecycle output to a summary.
+
+    The immediate-repair outcome, the terminal verification resolution, and any
+    long-term prevention work are reported as independent blocks so a prevention
+    PR can never relabel the target as successfully repaired. ``operator_follow_up``
+    records what a human still needs to do.
+    """
 
     if not isinstance(summary, Mapping):
         raise ValueError("summary must be an object")
     _validate_repair_payload(repair)
     _validate_prevention_payload(prevention)
+    if verification is not None:
+        _validate_verification_summary_payload(verification)
     normalized_lock_release = _validated_choice(
         lock_release, REMEDIATION_LOCK_RELEASE_STATUSES, "lock_release"
     )
     payload = _safe_lifecycle_payload(summary)
     payload["repair"] = _safe_lifecycle_payload(repair)
     payload["prevention"] = _safe_lifecycle_payload(prevention)
+    if verification is not None:
+        payload["verification"] = _safe_lifecycle_payload(verification)
+    if follow_up := _safe_string_list(operator_follow_up):
+        payload["operatorFollowUp"] = follow_up
     if refs := _artifact_refs_mapping(ops_diagnostic_artifact_refs):
         payload["opsDiagnosticArtifactRefs"] = refs
     if ref := _artifact_ref_string(decision_log_ref, "decision_log_ref"):
@@ -1552,6 +1772,15 @@ def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
         raise ValueError("prevention must be an object")
     _validated_choice(
         value.get("status"), REMEDIATION_PREVENTION_STATUSES, "prevention.status"
+    )
+
+def _validate_verification_summary_payload(value: Mapping[str, Any]) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError("verification must be an object")
+    _validated_choice(
+        value.get("resolution"),
+        REMEDIATION_VERIFICATION_RESOLUTIONS,
+        "verification.resolution",
     )
 
 def _artifact_ref_list(value: Any) -> list[dict[str, str]]:

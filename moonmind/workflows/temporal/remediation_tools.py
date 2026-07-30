@@ -20,11 +20,13 @@ from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
+    REMEDIATION_VERIFICATION_RESOLUTIONS,
     RemediationLifecyclePublisher,
     build_remediation_audit_event,
     build_remediation_decision_log,
     build_remediation_final_summary,
     build_remediation_target_annotation,
+    build_remediation_verification_result,
 )
 from moonmind.workflows.temporal.remediation_actions import (
     REMEDIATION_BRANCH_SENSITIVE_FIELDS,
@@ -817,13 +819,12 @@ class RemediationEvidenceToolService:
         )
 
         verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        verification_payload = _delivery_verification_payload(
+            verification,
+            verification_required=verification_required,
+            action_kind=action_kind,
+            action_id=action_request["actionId"],
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -912,6 +913,125 @@ class RemediationEvidenceToolService:
                 "auditEvent": audit_artifact.artifact_id,
                 "targetAnnotation": annotation_artifact.artifact_id,
             },
+        }
+
+    async def verify_action(
+        self,
+        *,
+        remediation_workflow_id: str,
+        action_kind: str,
+        action_id: str,
+        action_result_ref: str,
+        resolution: str,
+        fresh_evidence_ref: str | None = None,
+        before_state_ref: str | None = None,
+        after_immediate_state_ref: str | None = None,
+        after_stabilization_state_ref: str | None = None,
+        verification_hint: str | None = None,
+        prevention_change: bool = False,
+        target_session_id: str | None = None,
+        target_step_id: str | None = None,
+        principal: str = "service:remediation-tools",
+    ) -> dict[str, Any]:
+        """Run the first-class verification phase for a delivered action.
+
+        Verification is a distinct phase from delivery: after a side-effecting
+        repair attempt, this re-reads fresh durable target health and records one
+        of the first-class resolutions, linked to the exact action result and
+        target identity. It never rewrites the target's original outcome — it
+        only appends a supplemental annotation — and ``prevention_change`` marks
+        the separate verification of a prevention PR/Skill change.
+        """
+
+        normalized_action_kind = _required_string(action_kind, "actionKind")
+        normalized_resolution = _string_or_none(resolution)
+        if normalized_resolution not in REMEDIATION_VERIFICATION_RESOLUTIONS:
+            raise RemediationEvidenceToolError(
+                f"Unsupported verification resolution: {resolution!r}."
+            )
+        link = await self._load_link(remediation_workflow_id)
+        preparation = await self.prepare_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=normalized_action_kind,
+            principal=principal,
+        )
+        timestamp = datetime.now(timezone.utc)
+        try:
+            verification_payload = build_remediation_verification_result(
+                action_id=action_id,
+                action_kind=normalized_action_kind,
+                resolution=normalized_resolution,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                target_session_id=target_session_id,
+                target_step_id=target_step_id,
+                action_result_ref=action_result_ref,
+                fresh_evidence_ref=fresh_evidence_ref,
+                before_state_ref=before_state_ref,
+                after_immediate_state_ref=after_immediate_state_ref,
+                after_stabilization_state_ref=after_stabilization_state_ref,
+                verification_hint=verification_hint,
+                prevention_change=prevention_change,
+                timestamp=timestamp,
+                metadata={
+                    "targetRunChanged": preparation.target.target_run_changed,
+                    "targetState": preparation.target.state,
+                },
+            )
+        except ValueError as exc:
+            raise RemediationEvidenceToolError(str(exc)) from exc
+
+        label_kind = (
+            "prevention_verification" if prevention_change else "verification_result"
+        )
+        verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.verification",
+            name=f"reports/remediation_{label_kind}-{action_id}.json",
+            payload=verification_payload,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+
+        artifact_refs: dict[str, str] = {"verification": verification_artifact.artifact_id}
+        if not prevention_change:
+            annotation_payload = build_remediation_target_annotation(
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                remediation_workflow_id=link.remediation_workflow_id,
+                remediation_run_id=link.remediation_run_id,
+                action_kind=normalized_action_kind,
+                decision=_annotation_decision_for_verification(normalized_resolution),
+                artifact_refs={
+                    "actionResult": verification_payload["artifactRefs"]["actionResult"],
+                    "verification": verification_artifact.artifact_id,
+                },
+                timestamp=timestamp,
+                metadata={
+                    "verificationResolution": normalized_resolution,
+                    "nativeArtifactPolicy": "preserve",
+                },
+            )
+            annotation_artifact = (
+                await self._lifecycle_publisher.publish_target_annotation(
+                    remediation_workflow_id=link.remediation_workflow_id,
+                    target_workflow_id=link.target_workflow_id,
+                    target_run_id=link.target_run_id,
+                    name=f"annotations/remediation_verification-{action_id}.json",
+                    payload=annotation_payload,
+                    principal=principal,
+                )
+            )
+            artifact_refs["targetAnnotation"] = annotation_artifact.artifact_id
+
+        return {
+            "schemaVersion": "v1",
+            "actionKind": normalized_action_kind,
+            "actionId": action_id,
+            "resolution": normalized_resolution,
+            "preventionChange": bool(prevention_change),
+            "artifactRefs": artifact_refs,
         }
 
     async def publish_lifecycle_summary(
@@ -1213,6 +1333,50 @@ def _normalize_action_result_status(value: Any) -> str:
             f"Unsupported action result status: {status}."
         )
     return status
+
+_DELIVERY_VERIFICATION_PHASES = frozenset({"pending", "not_required"})
+
+def _delivery_verification_payload(
+    raw_verification: Any,
+    *,
+    verification_required: bool,
+    action_kind: str,
+    action_id: str,
+) -> dict[str, Any]:
+    """Build the constrained delivery-time verification stub for an action.
+
+    Delivering an action is not the same as verifying the remediation: this stub
+    records only whether a first-class verification phase is still owed
+    (``pending``) or is not applicable (``not_required``). The terminal
+    resolution is produced later by ``verify_action`` against fresh evidence.
+    """
+
+    payload = dict(raw_verification) if isinstance(raw_verification, Mapping) else {}
+    delivery_status = _string_or_none(payload.get("status"))
+    if delivery_status == "verified" or not verification_required:
+        phase = "not_required"
+    else:
+        phase = "pending"
+    if phase not in _DELIVERY_VERIFICATION_PHASES:  # pragma: no cover - defensive
+        raise RemediationEvidenceToolError(
+            f"Unsupported delivery verification phase: {phase}."
+        )
+    payload["phase"] = phase
+    payload["status"] = delivery_status or phase
+    payload.setdefault("actionKind", action_kind)
+    payload.setdefault("actionId", action_id)
+    return payload
+
+def _annotation_decision_for_verification(resolution: str) -> str:
+    """Map a first-class verification resolution to a target-annotation decision."""
+
+    if resolution == "approval_required":
+        return "approval_required"
+    if resolution == "evidence_unavailable":
+        return "escalated"
+    # verified_resolved / verified_no_change / still_failed / regressed /
+    # verification_failed all followed a delivered action attempt.
+    return "attempted"
 
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"accepted", "applied", "failed", "timed_out"}:

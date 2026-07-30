@@ -65,6 +65,26 @@ class RemediationActionRequest(BaseModel):
     dry_run: bool = Field(False, alias="dryRun")
 
 
+class RemediationVerifyActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    remediation_workflow_id: str = Field(alias="remediationWorkflowId")
+    action_kind: str = Field(alias="actionKind")
+    action_id: str = Field(alias="actionId")
+    action_result_ref: str = Field(alias="actionResultRef")
+    resolution: str
+    fresh_evidence_ref: str | None = Field(None, alias="freshEvidenceRef")
+    before_state_ref: str | None = Field(None, alias="beforeStateRef")
+    after_immediate_state_ref: str | None = Field(None, alias="afterImmediateStateRef")
+    after_stabilization_state_ref: str | None = Field(
+        None, alias="afterStabilizationStateRef"
+    )
+    verification_hint: str | None = Field(None, alias="verificationHint")
+    prevention_change: bool = Field(False, alias="preventionChange")
+    target_session_id: str | None = Field(None, alias="targetSessionId")
+    target_step_id: str | None = Field(None, alias="targetStepId")
+
+
 @dataclass(frozen=True, slots=True)
 class RemediationToolExecutionContext:
     service: RemediationEvidenceToolService
@@ -116,6 +136,13 @@ class RemediationToolRegistry:
             "Execute one pre-authorized and mutation-guarded typed remediation action.",
             RemediationActionRequest,
             self._handle_action,
+        )
+        self._register(
+            "remediation.verify_action",
+            "Record the first-class verification resolution for a delivered action "
+            "against fresh durable target evidence.",
+            RemediationVerifyActionRequest,
+            self._handle_verify_action,
         )
 
     def list_tools(self) -> list[ToolMetadata]:
@@ -209,6 +236,27 @@ class RemediationToolRegistry:
             parameters=request.parameters,
             idempotency_key=request.idempotency_key,
             dry_run=request.dry_run,
+            principal=context.principal,
+        )
+
+    async def _handle_verify_action(
+        self, request: RemediationVerifyActionRequest, dispatch: Any
+    ) -> Any:
+        _, context = dispatch
+        return await context.service.verify_action(
+            remediation_workflow_id=request.remediation_workflow_id,
+            action_kind=request.action_kind,
+            action_id=request.action_id,
+            action_result_ref=request.action_result_ref,
+            resolution=request.resolution,
+            fresh_evidence_ref=request.fresh_evidence_ref,
+            before_state_ref=request.before_state_ref,
+            after_immediate_state_ref=request.after_immediate_state_ref,
+            after_stabilization_state_ref=request.after_stabilization_state_ref,
+            verification_hint=request.verification_hint,
+            prevention_change=request.prevention_change,
+            target_session_id=request.target_session_id,
+            target_step_id=request.target_step_id,
             principal=context.principal,
         )
 

@@ -168,6 +168,7 @@ class RemediationLoopState(_Contract):
         default=None, alias="continuationReason"
     )
     continue_as_new_count: int = Field(default=0, alias="continueAsNewCount", ge=0)
+    loop_started_at: str | None = Field(default=None, alias="loopStartedAt")
 
     @model_validator(mode="after")
     def _attempt_counter_matches_ordinal(self) -> "RemediationLoopState":
@@ -498,6 +499,25 @@ def materialize_attempt_nodes(
     return remediation, verification
 
 
+def remediation_wall_clock_exhausted(
+    *,
+    spec: RemediationLoopSpec,
+    elapsed_wall_clock_seconds: float | None,
+) -> bool:
+    """Return whether the loop's total elapsed-time budget is exhausted.
+
+    ``maxWallClockSeconds`` bounds the cumulative wall-clock a remediation loop
+    may spend across all attempts and Continue-As-New generations. A ``None``
+    budget or unknown elapsed time never bounds progress, so an unconfigured
+    loop keeps its prior behavior.
+    """
+
+    budget = spec.budgets.max_wall_clock_seconds
+    if budget is None or elapsed_wall_clock_seconds is None:
+        return False
+    return elapsed_wall_clock_seconds >= budget
+
+
 def decide_remediation_continuation(
     *,
     spec: RemediationLoopSpec,
@@ -508,6 +528,7 @@ def decide_remediation_continuation(
     budget_ref: str | None = None,
     progress_ref: str | None = None,
     recoverable_evidence: bool = False,
+    elapsed_wall_clock_seconds: float | None = None,
 ) -> RemediationContinuationDecision:
     """Return the one deterministic routing decision for verifier evidence."""
 
@@ -564,6 +585,9 @@ def decide_remediation_continuation(
         raise ValueError(f"unsupported verifier verdict: {verdict}")
 
     consumed = state.consumed_budgets
+    wall_clock_exhausted = remediation_wall_clock_exhausted(
+        spec=spec, elapsed_wall_clock_seconds=elapsed_wall_clock_seconds
+    )
     allowed = (
         spec.terminal_policy.additional_work_needed == "continue_when_allowed"
         and consumed.attempts < spec.budgets.hard_max_attempts
@@ -571,8 +595,14 @@ def decide_remediation_continuation(
         < spec.budgets.max_consecutive_semantic_no_progress
         and consumed.repeated_failure_signature
         < spec.budgets.max_repeated_failure_signature
+        and not wall_clock_exhausted
     )
-    reason = "verification_requested_remediation" if allowed else "remediation_budget_or_progress_exhausted"
+    if allowed:
+        reason = "verification_requested_remediation"
+    elif wall_clock_exhausted:
+        reason = "wall_clock_budget_exhausted"
+    else:
+        reason = "remediation_budget_or_progress_exhausted"
     return RemediationContinuationDecision.model_validate(
         {
             **common,
