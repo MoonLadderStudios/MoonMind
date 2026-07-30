@@ -6,6 +6,7 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
+from moonmind.omnigent.cutover import CutoverPhase, select_runtime
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -813,6 +814,109 @@ async def test_github_3453_pre_change_omnigent_history_replays() -> None:
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+def test_github_3518_cutover_selection_never_runs_inside_workflow_code() -> None:
+    """MoonLadderStudios/MoonMind#3518: keep runtime selection replay-safe.
+
+    ``select_runtime``/``effective_phase`` read process env and a mounted
+    evidence file, so they are non-deterministic submission-boundary side
+    effects.  Recording ``runtimeCutover`` into the workflow start payload is
+    correct; invoking the cutover decision from replayed workflow code would
+    both break determinism and reintroduce an in-workflow fallback path that
+    could silently override an explicit Omnigent selection (AC8 + AC12).  This
+    guard fails fast if a future change moves that decision into the workflow.
+    """
+
+    from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    for module in (run_module, agent_run_module):
+        source = inspect.getsource(module)
+        assert "select_runtime" not in source, module.__name__
+        assert "effective_phase" not in source, module.__name__
+        assert "omnigent.cutover" not in source, module.__name__
+
+
+@pytest.mark.asyncio
+async def test_github_3518_cutover_runtime_parameter_histories_replay(
+    mock_run_environment,  # noqa: F811
+) -> None:
+    """MoonLadderStudios/MoonMind#3518: recorded histories replay across cutover.
+
+    The cutover adds a ``runtimeCutover`` evidence block to the workflow start
+    payload and can change the resolved ``targetRuntime`` default from
+    ``codex_cli`` to ``omnigent``.  In-flight runs started before the cutover
+    landed have neither key; runs started after it carry both.  A single
+    (mixed-version) current worker must replay both recorded histories without a
+    non-determinism error, proving the start-payload shape difference is passive
+    metadata rather than a divergent command source.
+    """
+
+    # Faithful post-cutover evidence: the exact dict persisted into
+    # ``initial_parameters['runtimeCutover']`` by the executions router when the
+    # Create default has advanced to Omnigent.
+    post_cutover_selection = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.CREATE_DEFAULT,
+        submission_kind="create",
+    )
+    assert post_cutover_selection.runtime_id == "omnigent"
+
+    pre_cutover_parameters: dict[str, Any] = {"targetRuntime": "codex_cli"}
+    post_cutover_parameters: dict[str, Any] = {
+        "targetRuntime": post_cutover_selection.runtime_id,
+        "runtimeCutover": post_cutover_selection.as_dict(),
+    }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-pre-cutover-replay",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            pre_cutover = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": pre_cutover_parameters,
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-mm3518-pre-cutover-history",
+                task_queue="test-mm3518-pre-cutover-replay",
+            )
+            assert (await pre_cutover.result())["status"] == "success"
+            pre_cutover_history = await pre_cutover.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-post-cutover-replay",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            post_cutover = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": post_cutover_parameters,
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-mm3518-post-cutover-history",
+                task_queue="test-mm3518-post-cutover-replay",
+            )
+            assert (await post_cutover.result())["status"] == "success"
+            post_cutover_history = await post_cutover.fetch_history()
+
+    # The current worker replays both the pre-cutover (no runtimeCutover) and
+    # post-cutover (runtimeCutover present) histories.
+    replayer = Replayer(
+        workflows=[MoonMindUserWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(pre_cutover_history)
+    await replayer.replay_workflow(post_cutover_history)
 
 
 @pytest.mark.asyncio
