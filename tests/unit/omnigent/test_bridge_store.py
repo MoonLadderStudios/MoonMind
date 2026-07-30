@@ -496,6 +496,90 @@ async def test_workspace_resolution_metadata_persists_through_allowlist(store):
 
 
 @pytest.mark.asyncio
+async def test_workspace_intent_evidence_persists_through_allowlist(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    # A representative subset of bounded, credential-free workspace-intent
+    # compilation evidence (see ``WorkspaceIntentRecord.evidence``).
+    evidence = {
+        "schemaVersion": "v1",
+        "producerVersion": "omnigent-workspace-intent@1",
+        "intentDigest": "sha256:abc123",
+        "repository": "https://github.com/acme/widgets.git",
+        "repositoryKind": "github_https",
+        "sourceCommit": "abc1234",
+        "startingBranch": "main",
+        "targetBranch": "feature/x",
+        "publishMode": "pr",
+        "repositoryMutation": True,
+        "requiredCapabilities": ["gh", "git"],
+        "credentialInjectionPolicy": "in_memory_only",
+        "inputRefCount": 2,
+        "restoreInputRefCount": 1,
+        "externalStateRefCount": 1,
+        "skillProjectionDigests": ["sha256:aa"],
+        "locatorKind": "sandbox",
+    }
+
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="workspace_intent_compiled",
+        event_identity="workspace_intent_compiled:sha256:abc123",
+        metadata=evidence,
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    intent_events = [
+        event
+        for event in events
+        if event.event_type == "lifecycle.workspace_intent_compiled"
+    ]
+    assert len(intent_events) == 1
+    # The advertised durable compilation evidence reaches Workflow Detail intact
+    # rather than being reduced to only the locator kind by the allowlist.
+    assert intent_events[0].metadata_["metadata"] == evidence
+
+
+@pytest.mark.asyncio
+async def test_conflicting_intent_digest_records_a_distinct_event(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    # A deterministic retry (same digest) deduplicates; a conflicting
+    # resubmission under the same idempotency key (new digest) is recorded as a
+    # distinct durable event rather than silently retaining the stale evidence.
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="workspace_intent_compiled",
+        event_identity="workspace_intent_compiled:sha256:first",
+        metadata={"intentDigest": "sha256:first"},
+    )
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="workspace_intent_compiled",
+        event_identity="workspace_intent_compiled:sha256:first",
+        metadata={"intentDigest": "sha256:first"},
+    )
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="workspace_intent_compiled",
+        event_identity="workspace_intent_compiled:sha256:second",
+        metadata={"intentDigest": "sha256:second"},
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    digests = sorted(
+        event.metadata_["metadata"]["intentDigest"]
+        for event in events
+        if event.event_type == "lifecycle.workspace_intent_compiled"
+    )
+    assert digests == ["sha256:first", "sha256:second"]
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(
