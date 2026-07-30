@@ -171,14 +171,32 @@ def _authored_publication_destination(
 
 
 def _classify_repository(source: str) -> str | None:
+    """Classify an authored repository source through the canonical classifier.
+
+    Reuses ``OmnigentOAuthHostRuntime._normalize_repository_source`` — the single
+    materialization-layer authority for repository identity — so durable intent
+    and Workflow Detail can never diverge from how the workspace is actually
+    cloned. That classifier resolves the ``owner/repo`` shorthand to
+    ``github_https`` and matches GitHub on the exact URL host, avoiding the
+    substring test that would both misreport a normal GitHub clone as
+    ``[local-source]`` and mislabel lookalike hosts (``github.com.evil.com``) as
+    GitHub.
+    """
+
     if not source:
         return None
-    lowered = source.lower()
-    if lowered.startswith(("http://", "https://")):
-        return "github_https" if "github.com" in lowered else "https"
-    if lowered.startswith(("git@", "ssh://")):
-        return "ssh"
-    return "local"
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+
+    try:
+        _normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
+            source
+        )
+    except OmnigentOAuthHostError:
+        # An unsupported/unclassifiable authored source is treated as local so
+        # bounded evidence redacts it rather than leaking a raw worker-local path.
+        return "local"
+    return kind
 
 
 def _asset_projection(

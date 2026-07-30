@@ -65,12 +65,28 @@ def test_digest_changes_when_governing_value_changes() -> None:
 
 def test_capabilities_are_case_normalized_and_deduped() -> None:
     record = _record(requiredCapabilities=["GH", "gh", " Git "])
-    assert record.required_capabilities == ["gh", "git"]
+    assert record.required_capabilities == ("gh", "git")
 
 
 def test_ref_lists_are_stripped_and_deduped_preserving_order() -> None:
     record = _record(inputRefs=[" artifact://a ", "artifact://a", "artifact://b"])
-    assert record.input_refs == ["artifact://a", "artifact://b"]
+    assert record.input_refs == ("artifact://a", "artifact://b")
+
+
+def test_record_is_frozen_so_digest_governing_state_cannot_drift() -> None:
+    record = _record()
+    # A frozen record rejects field reassignment, so the finalized digest can
+    # never observe values other than the ones it was computed over.
+    with pytest.raises(ValidationError):
+        record.target_branch = "feature/y"
+    # Collection fields are tuples, so no caller can append past the digest.
+    assert isinstance(record.required_capabilities, tuple)
+    assert isinstance(record.input_refs, tuple)
+    with pytest.raises(AttributeError):
+        record.required_capabilities.append("extra")  # type: ignore[attr-defined]
+    # The nested typed locator is frozen too.
+    with pytest.raises(ValidationError):
+        record.workspace_locator.relative_path = "elsewhere"
 
 
 def test_tampered_digest_is_rejected() -> None:
@@ -136,6 +152,30 @@ def test_assert_no_runtime_shortcut_keys_flags_smuggled_authority() -> None:
     for shortcut in ("dockerVolume", "bindSource", "hostId", "volumeName"):
         with pytest.raises(ValueError):
             assert_no_runtime_shortcut_keys({shortcut: "smuggled"})
+
+
+def test_portable_skill_inputs_are_not_treated_as_runtime_shortcuts() -> None:
+    # A selected Skill's portable inputs may legitimately be named ``volume``,
+    # ``bind``, ``daemon``, or ``hostId``; those grant no host authority (which
+    # derives only from the typed locator), so they must not be rejected.
+    assert_no_runtime_shortcut_keys(
+        {
+            "skill": {
+                "name": "some-skill",
+                "inputs": {
+                    "volume": "loud",
+                    "bind": True,
+                    "daemon": "background",
+                    "hostId": "logical-name",
+                },
+            }
+        }
+    )
+    # A genuine shortcut key outside the portable inputs payload is still flagged.
+    with pytest.raises(ValueError):
+        assert_no_runtime_shortcut_keys(
+            {"skill": {"name": "s"}, "dockerSocket": "/var/run/docker.sock"}
+        )
 
 
 def test_workspace_locator_payload_round_trips_typed_identity() -> None:

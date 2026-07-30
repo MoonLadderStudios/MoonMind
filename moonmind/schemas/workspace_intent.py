@@ -76,6 +76,13 @@ _UNSAFE_SHORTCUT_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Nested sections whose values are the sanctioned typed identity or an opaque
+# portable-capability payload, not host authority. The shortcut-key scan must
+# not descend into them: ``workspaceLocator`` is the canonical typed identity,
+# and ``inputs`` carries a selected Skill/tool's portable inputs, where an
+# ordinary field named ``volume``/``bind``/``hostId`` grants no runtime authority.
+_SHORTCUT_SCAN_SKIP_KEYS: frozenset[str] = frozenset({"workspacelocator", "inputs"})
+
 WORKSPACE_INTENT_UNSAFE_INPUT = "WORKSPACE_INTENT_UNSAFE_INPUT"
 WORKSPACE_INTENT_LOCATOR_REQUIRED = "WORKSPACE_INTENT_LOCATOR_REQUIRED"
 WORKSPACE_INTENT_DIGEST_MISMATCH = "WORKSPACE_INTENT_DIGEST_MISMATCH"
@@ -114,7 +121,7 @@ def _dedupe_refs(values: Any) -> list[str]:
 class WorkspaceIntentAssetProjection(BaseModel):
     """Immutable projection of one selected Skill or executable tool."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     name: str = Field(..., min_length=1, max_length=300)
     version: str | None = Field(None, max_length=300)
@@ -122,9 +129,15 @@ class WorkspaceIntentAssetProjection(BaseModel):
 
 
 class WorkspaceIntentRecord(BaseModel):
-    """Canonical, versioned, immutable workspace-intent contract for one run."""
+    """Canonical, versioned, immutable workspace-intent contract for one run.
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    The record is frozen and every digest-governing collection is a tuple, so no
+    caller can reassign a field or append to a ref/capability/projection list
+    after construction. ``intentDigest`` therefore always matches the governing
+    values it was finalized over.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     schema_version: Literal["v1"] = Field(
         WORKSPACE_INTENT_SCHEMA_VERSION, alias="schemaVersion"
@@ -151,25 +164,27 @@ class WorkspaceIntentRecord(BaseModel):
     target_branch: str | None = Field(None, alias="targetBranch", max_length=400)
 
     # Attachments and declared input artifact refs.
-    input_refs: list[str] = Field(default_factory=list, alias="inputRefs")
-    attachment_refs: list[str] = Field(default_factory=list, alias="attachmentRefs")
+    input_refs: tuple[str, ...] = Field(default_factory=tuple, alias="inputRefs")
+    attachment_refs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="attachmentRefs"
+    )
 
     # Selected Skill and tool projections with immutable version/digest evidence.
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
-    skill_projections: list[WorkspaceIntentAssetProjection] = Field(
-        default_factory=list, alias="skillProjections"
+    skill_projections: tuple[WorkspaceIntentAssetProjection, ...] = Field(
+        default_factory=tuple, alias="skillProjections"
     )
-    tool_projections: list[WorkspaceIntentAssetProjection] = Field(
-        default_factory=list, alias="toolProjections"
+    tool_projections: tuple[WorkspaceIntentAssetProjection, ...] = Field(
+        default_factory=tuple, alias="toolProjections"
     )
 
     # Checkpoint / workspace-head / external-state restore refs. Artifact-backed
     # restore inputs and provider-native external-state refs remain distinct.
-    restore_input_refs: list[str] = Field(
-        default_factory=list, alias="restoreInputRefs"
+    restore_input_refs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="restoreInputRefs"
     )
-    external_state_refs: list[str] = Field(
-        default_factory=list, alias="externalStateRefs"
+    external_state_refs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="externalStateRefs"
     )
 
     # Repository read-only versus mutation authority.
@@ -183,8 +198,8 @@ class WorkspaceIntentRecord(BaseModel):
     )
 
     # Required GitHub capabilities and credential-injection policy.
-    required_capabilities: list[str] = Field(
-        default_factory=list, alias="requiredCapabilities"
+    required_capabilities: tuple[str, ...] = Field(
+        default_factory=tuple, alias="requiredCapabilities"
     )
     credential_injection_policy: Literal["in_memory_only"] = Field(
         CREDENTIAL_INJECTION_IN_MEMORY_ONLY, alias="credentialInjectionPolicy"
@@ -231,7 +246,9 @@ class WorkspaceIntentRecord(BaseModel):
                 )
         computed = self.compute_digest()
         if self.intent_digest is None:
-            self.intent_digest = computed
+            # The model is frozen; stamp the finalized digest through the base
+            # setter, the one sanctioned mutation during construction.
+            object.__setattr__(self, "intent_digest", computed)
         elif self.intent_digest != computed:
             raise ValueError(
                 f"{WORKSPACE_INTENT_DIGEST_MISMATCH}: intentDigest does not match "
@@ -331,14 +348,15 @@ def assert_no_runtime_shortcut_keys(payload: Any) -> None:
     if isinstance(payload, dict):
         for key, nested in payload.items():
             normalized = _normalized_key(key)
-            # ``workspaceLocator`` is the sanctioned typed identity; recurse past
-            # it without treating its structural fields as shortcuts.
             if normalized in _UNSAFE_SHORTCUT_KEYS:
                 raise ValueError(
                     f"{WORKSPACE_INTENT_UNSAFE_INPUT}: authored workspace input "
                     f"must not carry the runtime-specific key {key!r}"
                 )
-            if normalized != "workspacelocator":
+            # Recurse into authored structure, but never into the sanctioned
+            # typed identity or an opaque portable-capability input payload, whose
+            # generic keys grant no runtime authority.
+            if normalized not in _SHORTCUT_SCAN_SKIP_KEYS:
                 assert_no_runtime_shortcut_keys(nested)
     elif isinstance(payload, (list, tuple)):
         for item in payload:

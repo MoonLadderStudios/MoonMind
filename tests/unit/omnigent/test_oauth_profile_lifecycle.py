@@ -2094,6 +2094,10 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
             "repository": "https://github.com/owner/repo.git",
             "startingBranch": "main",
             "targetBranch": "feature/x",
+            # A checkpoint restore that mixes an artifact input with a provider
+            # external-state ref. Only the artifact ref may reach host artifact
+            # materialization; the external-state ref must not be forwarded there.
+            "restoreInputRefs": ["artifact://chk1", "external-state:sess-9"],
         },
         parameters={
             "repository": "https://github.com/owner/repo.git",
@@ -2114,6 +2118,15 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
         request, workflow_id="workflow-1", step_execution_id="idem-1"
     )
     assert evidence["intentDigest"] == expected.intent_digest
+    # The durable event identity is scoped to the compiled intent digest so a
+    # conflicting resubmission under the same idempotency key cannot silently
+    # retain the stale evidence.
+    assert compiled["event_identity"] == (
+        f"workspace_intent_compiled:{expected.intent_digest}"
+    )
+    # Only the artifact-backed restore ref reaches host materialization; the
+    # provider external-state ref is partitioned out of the compiled record.
+    assert tuple(prepare_kwargs["restore_input_refs"]) == ("artifact://chk1",)
     assert evidence["schemaVersion"] == "v1"
     assert evidence["repositoryMutation"] is False
     assert evidence["publishMode"] == "none"

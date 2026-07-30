@@ -596,6 +596,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 await self._run_store.record_lifecycle_event(
                     request.idempotency_key,
                     event_type="workspace_intent_compiled",
+                    # Scope the durable event identity to the compiled intent
+                    # digest. A deterministic retry reproduces the same digest and
+                    # deduplicates; a conflicting resubmission under the same
+                    # idempotency key (changed repository, branch, locator, or
+                    # authority) produces a distinct digest and is recorded as a
+                    # new event instead of silently retaining the stale evidence.
+                    event_identity=(
+                        f"workspace_intent_compiled:{workspace_intent.intent_digest}"
+                    ),
                     metadata=workspace_intent.evidence(),
                 )
                 await emit(
@@ -767,10 +776,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else workspace_intent.checkout_commit
                 ),
+                # Host artifact materialization accepts only ``artifact://``
+                # restore inputs. The compiler already partitioned provider
+                # external-state refs into ``external_state_refs``; forward only
+                # the artifact-backed restore refs so a checkpoint/continuation
+                # carrying an external-state ref is not rejected before launch.
                 restore_input_refs=(
                     ()
                     if remediation_resolution is not None
-                    else self._restore_input_refs(request)
+                    else tuple(workspace_intent.restore_input_refs)
                 ),
             )
             await emit(current_stage, "completed")

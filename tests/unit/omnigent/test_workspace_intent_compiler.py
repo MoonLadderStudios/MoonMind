@@ -96,15 +96,49 @@ def test_compiles_full_authored_intent() -> None:
     assert intent.checkout_commit == "abc1234"
     assert intent.publish_mode == "pr"
     assert intent.repository_mutation is True
-    assert intent.required_capabilities == ["gh", "git"]
-    assert intent.input_refs == ["artifact://in1"]
+    assert intent.required_capabilities == ("gh", "git")
+    assert intent.input_refs == ("artifact://in1",)
     assert intent.workspace_locator.kind == "sandbox"
     # Artifact restore inputs and provider external-state refs stay distinct.
-    assert intent.restore_input_refs == ["artifact://chk1"]
-    assert intent.external_state_refs == ["external-state:sess-9"]
+    assert intent.restore_input_refs == ("artifact://chk1",)
+    assert intent.external_state_refs == ("external-state:sess-9",)
     assert [p.model_dump(by_alias=True) for p in intent.skill_projections] == [
         {"name": "pr-resolver", "version": None, "digest": "sha256:deadbeef"}
     ]
+
+
+def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
+    # The canonical materialization classifier resolves ``owner/repo`` to a
+    # GitHub clone, so durable evidence must not redact it as ``[local-source]``.
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": "acme/widgets",
+        },
+        parameters={"repository": "acme/widgets", "publishMode": "none"},
+    )
+    intent = _compile(request)
+    assert intent.repository == "acme/widgets"
+    assert intent.repository_kind == "github_https"
+    assert intent.evidence()["repository"] == "acme/widgets"
+
+
+def test_lookalike_https_host_is_not_classified_as_github() -> None:
+    # A substring test would mislabel these as GitHub; the exact-host classifier
+    # must classify them as a generic remote, never ``github_https``.
+    for source in (
+        "https://github.com.evil.com/acme/widgets.git",
+        "https://evil.com/github.com/acme/widgets.git",
+    ):
+        request = _request(
+            workspace_spec={
+                "workspaceLocator": _locator(),
+                "repository": source,
+            },
+            parameters={"repository": source, "publishMode": "none"},
+        )
+        intent = _compile(request)
+        assert intent.repository_kind == "remote"
 
 
 def test_equivalent_authored_requests_produce_equivalent_intent() -> None:
