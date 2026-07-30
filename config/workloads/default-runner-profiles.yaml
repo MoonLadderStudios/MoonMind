@@ -25,7 +25,7 @@ profiles:
       - CLAUDE_HOME
       - MM_PENTEST_CLAUDE_OAUTH_SOURCE
       - MM_PENTEST_SEED_CLAUDE_HOME
-    networkPolicy: bridge
+    networkPolicy: pentest_approved_lab
     resources:
       cpu: "4"
       memory: 8g
@@ -57,7 +57,7 @@ profiles:
       - CI
       - DOCKER_HOST
       - MOONMIND_DOCKER_NETWORK
-    networkPolicy: bridge
+    networkPolicy: docker_proxy
     resources:
       cpu: "4"
       memory: 8g

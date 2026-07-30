@@ -21,7 +21,7 @@ CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
 # Digest of the reviewed, mounted Squid policy. Attestation compares this
 # deployment-owned value with both the container label and the live file.
-EGRESS_CONFIG_DIGEST = "sha256:c3ad0d533dab70608bbbbcb0a5e82b94f67364cfcb2f4d670d0c944b2e945faa"
+EGRESS_CONFIG_DIGEST = "sha256:1a14f90f01f7926080e37300ef977a4347b44ad93b2a30d86951eeb76b730191"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
 # ``sandbox-egress-network``), so an operator that sets the documented override
@@ -33,12 +33,17 @@ EGRESS_NETWORK_REF = os.environ.get(
 _SANDBOX_EGRESS_NETWORK_REF = os.environ.get(
     "MOONMIND_SANDBOX_EGRESS_NETWORK", "moonmind_sandbox-egress-network"
 )
+OMNIGENT_EGRESS_NETWORK_REF = os.environ.get(
+    "MOONMIND_OMNIGENT_EGRESS_NETWORK", "moonmind_omnigent-egress-network"
+)
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
+OMNIGENT_PROXY_URL = "http://omnigent-egress-proxy:3129"
 _EXPECTED_GATEWAY_NETWORKS = frozenset(
     {
         EGRESS_NETWORK_REF,
         _SANDBOX_EGRESS_NETWORK_REF,
+        OMNIGENT_EGRESS_NETWORK_REF,
         "local-network",
     }
 )
@@ -134,11 +139,13 @@ class EgressProfile(BaseModel):
 
     @field_validator("dns_servers")
     @classmethod
-    def public_resolvers_only(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def approved_resolvers_only(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         for value in values:
             address = ipaddress.ip_address(value)
-            if not address.is_global:
-                raise ValueError("DNS resolvers must use global addresses")
+            if not address.is_global and value != "127.0.0.11":
+                raise ValueError(
+                    "DNS resolvers must be global or Docker's embedded resolver"
+                )
         return values
 
     @property
@@ -190,12 +197,10 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
                 "openai.com",
             )
         ],
-        "dnsServers": ["1.1.1.1", "8.8.8.8"],
+        "dnsServers": ["127.0.0.11"],
         "permittedWorkloadClasses": [
             "container_job",
             "managed_helper",
-            "omnigent_static",
-            "omnigent_on_demand",
             "rag_gateway",
             "remediation",
         ],
@@ -208,6 +213,46 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
     }
 )
 
+OMNIGENT_EGRESS_PROFILE = EgressProfile.model_validate(
+    {
+        **DEFAULT_EGRESS_PROFILE.model_dump(by_alias=True, mode="json"),
+        "profileId": "moonmind-omnigent-egress",
+        "dnsServers": ["127.0.0.11"],
+        "permittedWorkloadClasses": [
+            "omnigent_static",
+            "omnigent_on_demand",
+        ],
+        "networkRef": OMNIGENT_EGRESS_NETWORK_REF,
+    }
+)
+
+EGRESS_PROFILE_DIGESTS = {
+    profile.ref: profile.digest
+    for profile in (DEFAULT_EGRESS_PROFILE, OMNIGENT_EGRESS_PROFILE)
+}
+
+
+def _gateway_policy_digest(profile: EgressProfile) -> str:
+    """Digest proxy-enforced policy without deployment-specific identities."""
+
+    payload = profile.model_dump(by_alias=True, mode="json")
+    payload.pop("networkRef")
+    payload.pop("gatewayRef")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+
+EGRESS_PROFILE_SET_DIGEST = "sha256:" + hashlib.sha256(
+    json.dumps(
+        {
+            profile.ref: _gateway_policy_digest(profile)
+            for profile in (DEFAULT_EGRESS_PROFILE, OMNIGENT_EGRESS_PROFILE)
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+
 
 async def attest_docker_egress(
     *,
@@ -218,10 +263,13 @@ async def attest_docker_egress(
     """Prove the internal network and sole dual-homed gateway exist.
 
     Docker's ``internal`` flag removes a default external route at the network
-    layer.  The gateway is trusted deployment state and must carry the exact
-    profile and implementation labels.  A stale gateway/profile therefore
-    fails closed rather than being reused.
+    layer. The gateway is trusted deployment state and must carry the exact
+    approved profile-set and implementation labels. A stale gateway/profile
+    therefore fails closed rather than being reused.
     """
+
+    if EGRESS_PROFILE_DIGESTS.get(profile.ref) != profile.digest:
+        raise RuntimeError("restricted-egress profile is not approved")
 
     code, stdout, _ = await runner(
         ("network", "inspect", "--format", "{{json .}}", profile.network_ref)
@@ -251,8 +299,8 @@ async def attest_docker_egress(
         raise RuntimeError("restricted-egress gateway attestation is malformed") from exc
     labels = gateway.get("labels") or {}
     networks = gateway.get("networks") or {}
-    if labels.get("moonmind.egress.profile") != profile.ref:
-        raise RuntimeError("restricted-egress gateway profile is stale or mismatched")
+    if labels.get("moonmind.egress.profile-set-digest") != EGRESS_PROFILE_SET_DIGEST:
+        raise RuntimeError("restricted-egress gateway profile set is stale")
     if labels.get("moonmind.egress.enforcer") != ENFORCER_IMPLEMENTATION:
         raise RuntimeError("restricted-egress gateway implementation is unattested")
     if labels.get("moonmind.egress.config-digest") != EGRESS_CONFIG_DIGEST:
@@ -286,6 +334,7 @@ async def attest_docker_egress(
         "gatewayImageDigest": image_digest,
         "internal": True,
         "ipv6": False,
+        "idleSeconds": profile.idle_seconds,
         "gatewayNetworks": sorted(networks),
         "enforcer": ENFORCER_IMPLEMENTATION,
     }
@@ -315,6 +364,19 @@ def restricted_proxy_env() -> tuple[str, ...]:
         f"HTTPS_PROXY={PROXY_URL}",
         f"http_proxy={PROXY_URL}",
         f"https_proxy={PROXY_URL}",
+        "NO_PROXY=",
+        "no_proxy=",
+    )
+
+
+def omnigent_proxy_env() -> tuple[str, ...]:
+    """Proxy environment for the isolated Omnigent control-plane ingress."""
+
+    return (
+        f"HTTP_PROXY={OMNIGENT_PROXY_URL}",
+        f"HTTPS_PROXY={OMNIGENT_PROXY_URL}",
+        f"http_proxy={OMNIGENT_PROXY_URL}",
+        f"https_proxy={OMNIGENT_PROXY_URL}",
         "NO_PROXY=",
         "no_proxy=",
     )

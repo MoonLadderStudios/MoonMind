@@ -15,7 +15,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
-from moonmind.security.egress import DEFAULT_EGRESS_PROFILE
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
@@ -129,7 +129,7 @@ _SERVER_IMAGE = "bootstrap://OMNIGENT_IMAGE_REF"
 _COMMON = dict(
     serverImageRef=_SERVER_IMAGE,
     hostImageRef=_IMAGE,
-    networkRef=DEFAULT_EGRESS_PROFILE.network_ref,
+    networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
     enforcedEgress=True,
     limits={
         "cpuMillis": 2000,

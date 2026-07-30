@@ -399,6 +399,7 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     networks = compose["networks"]
 
     assert networks["sandbox-egress-network"]["internal"] is True
+    assert networks["omnigent-egress-network"]["internal"] is True
     assert _network_names(services["temporal-worker-sandbox"]) == {
         "sandbox-egress-network"
     }
@@ -420,8 +421,16 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         "local-network",
         "sandbox-egress-network",
         "restricted-egress-network",
+        "omnigent-egress-network",
     }
-    assert proxy_service["expose"] == ["3128"]
+    assert proxy_service["expose"] == ["3128", "3129"]
+    assert "omnigent-egress-proxy" in _network_aliases(
+        proxy_service,
+        "omnigent-egress-network",
+    )
+    assert proxy_service["labels"][
+        "moonmind.egress.profile-set-digest"
+    ].startswith("sha256:")
     assert proxy_service["labels"]["moonmind.egress.config-digest"].startswith(
         "sha256:"
     )
@@ -450,8 +459,12 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
-    assert "dns_nameservers 1.1.1.1 8.8.8.8" in squid_config
+    assert "dns_nameservers 127.0.0.11" in squid_config
     assert "request_timeout 300 seconds" in squid_config
+    assert "read_timeout 300 seconds" in squid_config
+    assert "http_port omnigent-egress-proxy:3129 name=omnigent_control" in squid_config
+    assert "http_access allow omnigent_listener omnigent_control omnigent_control_port" in squid_config
+    assert "::/0" in squid_config
     assert "acl connection_limit maxconn 128" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
 
@@ -564,6 +577,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 
     host_env = _env_map(host_service["environment"])
     assert host_env == {
+        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
+        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
+        "http_proxy": "http://omnigent-egress-proxy:3129",
+        "https_proxy": "http://omnigent-egress-proxy:3129",
+        "NO_PROXY": "",
+        "no_proxy": "",
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
         "HOME": "/home/app",
@@ -603,8 +622,11 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent": {"condition": "service_started"},
         "omnigent-host-claude-init": {"condition": "service_completed_successfully"},
         "omnigent-tools-init": {"condition": "service_completed_successfully"},
+        "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
-    assert _network_names(host_service) == {"local-network"}
+    assert _network_names(host_service) == {"omnigent-egress-network"}
+    assert host_service["cap_drop"] == ["ALL"]
+    assert host_service["security_opt"] == ["no-new-privileges:true"]
     assert host_service["restart"] == "unless-stopped"
     assert host_service["healthcheck"] == {
         "test": [
@@ -637,10 +659,10 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         # Restricted-egress enforcement (MoonLadderStudios/MoonMind#3516): the
         # static Codex host is routed through the trusted proxy on the internal
         # network. NO_PROXY is pinned empty so no destination bypasses it.
-        "HTTP_PROXY": "http://sandbox-egress-proxy:3128",
-        "HTTPS_PROXY": "http://sandbox-egress-proxy:3128",
-        "http_proxy": "http://sandbox-egress-proxy:3128",
-        "https_proxy": "http://sandbox-egress-proxy:3128",
+        "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
+        "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
+        "http_proxy": "http://omnigent-egress-proxy:3129",
+        "https_proxy": "http://omnigent-egress-proxy:3129",
         "NO_PROXY": "",
         "no_proxy": "",
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
@@ -697,6 +719,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
             "condition": "service_completed_successfully"
         },
         "omnigent-tools-init": {"condition": "service_completed_successfully"},
+        "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
     init_service = compose["services"]["omnigent-host-codex-init"]
     assert init_service["user"] == "0:0"
@@ -709,7 +732,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     # Restricted egress: the host attaches only to the internal enforcing
     # network (MoonLadderStudios/MoonMind#3516), never the routable
     # local-network.
-    assert _network_names(host_service) == {"restricted-egress-network"}
+    assert _network_names(host_service) == {"omnigent-egress-network"}
 
 
 def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():

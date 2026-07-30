@@ -11,7 +11,9 @@ from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
+    EGRESS_PROFILE_SET_DIGEST,
     ENFORCER_IMPLEMENTATION,
+    OMNIGENT_EGRESS_NETWORK_REF,
     PROXY_URL,
 )
 from moonmind.config.container_backend_settings import (
@@ -175,13 +177,14 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             payload = {
                 "labels": {
-                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                     "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
                     "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                 },
                 "networks": {
                     EGRESS_NETWORK_REF: {},
                     "moonmind_sandbox-egress-network": {},
+                    OMNIGENT_EGRESS_NETWORK_REF: {},
                     "local-network": {},
                 },
                 "image": "sha256:gateway-image",

@@ -3579,7 +3579,7 @@ async def test_pentest_workload_profile_registry_includes_claude_oauth_runner():
     profile = registry.get(PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID)
     assert profile is not None
     assert profile.image == PENTEST_RUNNER_IMAGE
-    assert profile.network_policy == "bridge"
+    assert profile.network_policy == "pentest_approved_lab"
     assert "ANTHROPIC_API_KEY" not in profile.env_allowlist
     assert "CLAUDE_HOME" in profile.env_allowlist
 
@@ -3633,7 +3633,7 @@ async def test_security_pentest_execute_rejects_registered_runner_image_drift(
                             }
                         ],
                         "envAllowlist": ["ANTHROPIC_API_KEY"],
-                        "networkPolicy": "bridge",
+                        "networkPolicy": "pentest_approved_lab",
                         "resources": {
                             "cpu": "4",
                             "memory": "8g",

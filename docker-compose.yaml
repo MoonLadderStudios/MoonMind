@@ -875,12 +875,22 @@ services:
     cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
     mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
     pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
     stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
     entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
     environment:
+      HTTP_PROXY: http://omnigent-egress-proxy:3129
+      HTTPS_PROXY: http://omnigent-egress-proxy:3129
+      http_proxy: http://omnigent-egress-proxy:3129
+      https_proxy: http://omnigent-egress-proxy:3129
+      NO_PROXY: ""
+      no_proxy: ""
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
@@ -914,6 +924,8 @@ services:
         condition: service_completed_successfully
       omnigent-tools-init:
         condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -925,7 +937,7 @@ services:
       retries: 12
       start_period: 30s
     networks:
-      - local-network
+      - omnigent-egress-network
     restart: unless-stopped
   omnigent-host-claude-init:
     profiles: ["omnigent-host-claude"]
@@ -989,10 +1001,10 @@ services:
     entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:
-      HTTP_PROXY: http://sandbox-egress-proxy:3128
-      HTTPS_PROXY: http://sandbox-egress-proxy:3128
-      http_proxy: http://sandbox-egress-proxy:3128
-      https_proxy: http://sandbox-egress-proxy:3128
+      HTTP_PROXY: http://omnigent-egress-proxy:3129
+      HTTPS_PROXY: http://omnigent-egress-proxy:3129
+      http_proxy: http://omnigent-egress-proxy:3129
+      https_proxy: http://omnigent-egress-proxy:3129
       NO_PROXY: ""
       no_proxy: ""
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
@@ -1025,8 +1037,10 @@ services:
         condition: service_completed_successfully
       omnigent-tools-init:
         condition: service_completed_successfully
+      sandbox-egress-proxy:
+        condition: service_healthy
     networks:
-      - restricted-egress-network
+      - omnigent-egress-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "/opt/moonmind/check-codex-oauth-host.sh"]
@@ -1212,19 +1226,23 @@ services:
     container_name: moonmind-sandbox-egress-proxy
     image: ubuntu/squid:latest
     labels:
-      moonmind.egress.profile: moonmind-provider-egress@1
+      moonmind.egress.profile-set-digest: sha256:210bb382a9738300138bca5e4f6885c2e472c725816504040a559a22a7909e82
       moonmind.egress.enforcer: docker-internal-proxy/v1
-      moonmind.egress.config-digest: sha256:c3ad0d533dab70608bbbbcb0a5e82b94f67364cfcb2f4d670d0c944b2e945faa
+      moonmind.egress.config-digest: sha256:1a14f90f01f7926080e37300ef977a4347b44ad93b2a30d86951eeb76b730191
     volumes:
       - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
     expose:
       - "3128"
+      - "3129"
     networks:
-      - local-network
-      - sandbox-egress-network
-      - restricted-egress-network
+      local-network: {}
+      sandbox-egress-network: {}
+      restricted-egress-network: {}
+      omnigent-egress-network:
+        aliases:
+          - omnigent-egress-proxy
     healthcheck:
-      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = c3ad0d533dab70608bbbbcb0a5e82b94f67364cfcb2f4d670d0c944b2e945faa"]
+      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = 1a14f90f01f7926080e37300ef977a4347b44ad93b2a30d86951eeb76b730191"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1271,4 +1289,7 @@ networks:
     internal: true
   restricted-egress-network:
     name: ${MOONMIND_RESTRICTED_EGRESS_NETWORK:-moonmind_restricted-egress-network}
+    internal: true
+  omnigent-egress-network:
+    name: ${MOONMIND_OMNIGENT_EGRESS_NETWORK:-moonmind_omnigent-egress-network}
     internal: true

@@ -6,13 +6,17 @@ on-demand Omnigent hosts.
 
 ## Architecture and authority
 
-The supported design is one dedicated Docker network with `internal: true` and
-IPv6 disabled. A workload is attached only to that network. Its sole
-internet-capable peer is a trusted, dual-homed Squid gateway. The trusted
-agent-runtime worker selects the immutable egress profile, attests the live
-network and gateway, and launches the workload. Public API, workflow, browser,
-and host-process contracts cannot select a Docker network, gateway, route,
-firewall command, extra host, device, namespace, or capability.
+The supported design uses deployment-owned Docker networks with `internal:
+true` and IPv6 disabled. A workload is attached only to the network selected by
+its immutable profile. Its sole internet-capable peer is one trusted Squid
+gateway with exactly one external attachment. Provider workloads and Omnigent
+hosts use separate internal networks and separate proxy listeners. The
+Omnigent listener is bound only to an alias on the Omnigent network, so generic
+Container Jobs and helpers have no route to the narrow control-plane exception.
+The trusted agent-runtime worker selects the immutable egress profile, attests
+the live network and gateway, and launches the workload. Public API, workflow,
+browser, and host-process contracts cannot select a Docker network, gateway,
+route, firewall command, extra host, device, namespace, or capability.
 
 An internal Docker network has no host-provided external route. Proxy
 environment variables provide compatibility, but are not the security
@@ -20,11 +24,14 @@ boundary: deleting or overriding them removes connectivity rather than
 restoring direct egress. Workloads run without privileges or capabilities,
 with `no-new-privileges`, without the Docker socket, and cannot attach a
 secondary network or launch a helper outside the trusted backend. Static
-Compose and on-demand hosts use the same internal network and gateway;
-Container Jobs and deployment-owned helper profiles resolve `bridge` policy to
-that same enforcing state. Plain Docker `bridge`, `local-network`, and local
-application URL allowlists are non-enforcing development mechanisms and must
-never be reported in `enforcedNetworkRefs`.
+Compose and on-demand hosts use the same Omnigent profile, internal network,
+isolated listener, and gateway. Deployment-owned runner profiles select an
+explicit network policy: `restricted_egress` uses the provider profile,
+`docker_proxy` reaches only the trusted Docker proxy, and a PentestGPT lab run
+fails before launch until its approved target maps to a reviewed lab egress
+profile. Plain Docker `bridge`, `local-network`, and local application URL
+allowlists are non-enforcing development mechanisms and must never be reported
+in `enforcedNetworkRefs`.
 
 The current implementation supports the deployment-selected daemon reached
 through MoonMind's restricted Docker proxy. Arbitrary remote daemon endpoints
@@ -45,21 +52,25 @@ unique-local ranges are rejected.
 The proxy permits only HTTPS `CONNECT` to port 443 for approved provider,
 source-control, artifact, and retrieval domains. All other methods, ports, IP
 literals, redirects to unapproved names, and alternate CONNECT targets fail.
-Squid resolves the requested name for each connection and applies the
-prohibited-address ACL after resolution, so CNAME chains, mixed answers,
-rebinding to a private address, metadata services, Docker/host gateways, and
-internal service DNS are denied. IPv6 is disabled on the workload network and
-IPv6 destination ranges are denied at the proxy. The single narrow exception
-is HTTP access from Omnigent hosts through the gateway to the `omnigent:8000`
-control endpoint; no other control-plane destination is allowed.
+Squid resolves through Docker's embedded DNS for each connection and applies
+the prohibited-address ACL after resolution, so Compose service discovery works
+without weakening CNAME, mixed-answer, rebinding, metadata, Docker/host gateway,
+or internal-service protections. IPv6 is disabled on workload networks and the
+gateway denies the entire IPv6 destination space on its external hop. The
+reviewed 300-second peer read timeout bounds idle CONNECT tunnels and is part of
+the attested profile/config digests. The single narrow exception is HTTP access
+through the Omnigent-only listener to the `omnigent:8000` control endpoint; no
+other workload network can reach that listener and no other control-plane
+destination is allowed.
 
 ## Lifecycle and evidence
 
 Before readiness or a networked launch, the worker verifies:
 
 1. the exact network exists, is internal, and has IPv6 disabled;
-2. the exact gateway exists, has the expected profile and enforcer labels, is
-   attached to the internal network, and has exactly one external attachment;
+2. the exact gateway exists, has the expected approved-profile-set and enforcer
+   labels, is attached to every declared internal network, and has exactly one
+   external attachment;
 3. the live profile version matches the immutable profile selected by policy.
 
 A passing attestation records the profile ref and digest, backend and enforcer

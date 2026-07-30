@@ -1840,10 +1840,10 @@ async def test_container_janitor_sweeps_expired_bounded_helpers(
         "--format",
         '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
     ]
-def test_bridge_profile_resolves_to_restricted_attested_network(tmp_path: Path) -> None:
+def test_restricted_profile_resolves_to_attested_network(tmp_path: Path) -> None:
     request = _validated_request(
         tmp_path,
-        profiles=[_profile_payload(network_policy="bridge")],
+        profiles=[_profile_payload(network_policy="restricted_egress")],
     )
 
     args = DockerWorkloadLauncher().build_run_args(request)
@@ -1857,14 +1857,46 @@ def test_bridge_profile_resolves_to_restricted_attested_network(tmp_path: Path) 
     assert args[args.index("--cap-drop") + 1] == "ALL"
 
 
+def test_docker_proxy_profile_preserves_its_target_specific_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "custom_docker_proxy")
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="docker_proxy")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == "custom_docker_proxy"
+    assert not any(value.startswith("HTTPS_PROXY=") for value in args)
+    assert not any("moonmind.egress.profile=" in value for value in args)
+
+
+def test_pentest_lab_profile_fails_before_a_target_profile_exists(
+    tmp_path: Path,
+) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="pentest_approved_lab")],
+    )
+
+    with pytest.raises(
+        DockerWorkloadLauncherError,
+        match="target-specific reviewed egress profile",
+    ):
+        DockerWorkloadLauncher().build_run_args(request)
+
+
 @pytest.mark.asyncio
-async def test_bridge_launch_fails_before_process_when_egress_is_unattested(
+async def test_restricted_launch_fails_before_process_when_egress_is_unattested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = _validated_request(
         tmp_path,
-        profiles=[_profile_payload(network_policy="bridge")],
+        profiles=[_profile_payload(network_policy="restricted_egress")],
     )
     process_started = False
 
@@ -1897,7 +1929,9 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
         DEFAULT_EGRESS_PROFILE,
         EGRESS_CONFIG_DIGEST,
         EGRESS_NETWORK_REF,
+        EGRESS_PROFILE_SET_DIGEST,
         ENFORCER_IMPLEMENTATION,
+        OMNIGENT_EGRESS_NETWORK_REF,
     )
 
     subcommand = args[1] if len(args) > 1 else ""
@@ -1910,13 +1944,14 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
             stdout=json.dumps(
                 {
                     "labels": {
-                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                         "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
                         "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                     },
                     "networks": {
                         EGRESS_NETWORK_REF: {},
                         "moonmind_sandbox-egress-network": {},
+                        OMNIGENT_EGRESS_NETWORK_REF: {},
                         "local-network": {},
                     },
                     "image": "sha256:gateway-image",
@@ -1932,12 +1967,12 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
             ).encode()
         )
     if subcommand == "run":
-        return _Process(returncode=0, stdout=b"bridge workload ok\n")
+        return _Process(returncode=0, stdout=b"restricted workload ok\n")
     return _Process(returncode=0)
 
 
 @pytest.mark.asyncio
-async def test_bridge_launch_publishes_egress_attestation_evidence(
+async def test_restricted_launch_publishes_egress_attestation_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1962,7 +1997,8 @@ async def test_bridge_launch_publishes_egress_attestation_evidence(
             artifactsDir=str(artifact_dir),
             profiles=[
                 _profile_payload(
-                    workspace_root=workspace_root, network_policy="bridge"
+                    workspace_root=workspace_root,
+                    network_policy="restricted_egress",
                 )
             ],
         )

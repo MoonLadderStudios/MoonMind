@@ -11,8 +11,11 @@ from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
+    EGRESS_PROFILE_SET_DIGEST,
     ENFORCER_IMPLEMENTATION,
+    OMNIGENT_EGRESS_NETWORK_REF,
     attest_docker_egress,
+    omnigent_proxy_env,
     restricted_proxy_env,
 )
 
@@ -74,13 +77,14 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
             return 0, json.dumps(
                 {
                     "labels": {
-                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                         "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
                         "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                     },
                     "networks": {
                         EGRESS_NETWORK_REF: {},
                         "moonmind_sandbox-egress-network": {},
+                        OMNIGENT_EGRESS_NETWORK_REF: {},
                         "local-network": {},
                     },
                     "image": "sha256:gateway-image",
@@ -126,10 +130,11 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
         ),
         (
             {"Internal": True, "EnableIPv6": False},
-            {"moonmind.egress.profile": "stale@1"},
+            {"moonmind.egress.profile-set-digest": "sha256:stale"},
             {
                 EGRESS_NETWORK_REF: {},
                 "moonmind_sandbox-egress-network": {},
+                OMNIGENT_EGRESS_NETWORK_REF: {},
                 "local-network": {},
             },
             "stale",
@@ -137,13 +142,14 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
         (
             {"Internal": True, "EnableIPv6": False},
             {
-                "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                 "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
                 "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
             },
             {
                 EGRESS_NETWORK_REF: {},
                 "moonmind_sandbox-egress-network": {},
+                OMNIGENT_EGRESS_NETWORK_REF: {},
                 "local-network": {},
                 "bypass": {},
             },
@@ -191,13 +197,14 @@ async def test_attestation_rejects_unobserved_rules_or_unhealthy_gateway(
             return 0, json.dumps(
                 {
                     "labels": {
-                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                         "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
                         "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                     },
                     "networks": {
                         EGRESS_NETWORK_REF: {},
                         "moonmind_sandbox-egress-network": {},
+                        OMNIGENT_EGRESS_NETWORK_REF: {},
                         "local-network": {},
                     },
                     "image": "sha256:gateway-image",
@@ -223,6 +230,30 @@ def test_proxy_environment_clears_bypass_variables():
     assert "no_proxy=" in values
     assert all("169.254.169.254" not in value for value in values)
 
+    omnigent_values = omnigent_proxy_env()
+    assert "HTTP_PROXY=http://omnigent-egress-proxy:3129" in omnigent_values
+    assert "NO_PROXY=" in omnigent_values
+
+
+@pytest.mark.asyncio
+async def test_attestation_rejects_unapproved_profile_bounds_before_docker_calls():
+    profile = _profile(idleSeconds=301)
+    called = False
+
+    async def runner(_args):
+        nonlocal called
+        called = True
+        return 0, b"", b""
+
+    with pytest.raises(RuntimeError, match="profile is not approved"):
+        await attest_docker_egress(
+            runner=runner,
+            profile=profile,
+            backend_ref="local",
+        )
+
+    assert called is False
+
 
 def test_network_ref_resolves_configured_override(monkeypatch):
     """The documented compose override feeds the immutable profile/attestation.
@@ -236,14 +267,21 @@ def test_network_ref_resolves_configured_override(monkeypatch):
 
     from moonmind.security import egress as egress_module
 
+    original_profile_set_digest = egress_module.EGRESS_PROFILE_SET_DIGEST
+    original_provider_digest = egress_module.DEFAULT_EGRESS_PROFILE.digest
     monkeypatch.setenv("MOONMIND_RESTRICTED_EGRESS_NETWORK", "custom_restricted_net")
     monkeypatch.setenv("MOONMIND_SANDBOX_EGRESS_NETWORK", "custom_sandbox_net")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EGRESS_NETWORK", "custom_omnigent_net")
     try:
         reloaded = importlib.reload(egress_module)
         assert reloaded.EGRESS_NETWORK_REF == "custom_restricted_net"
         assert reloaded.DEFAULT_EGRESS_PROFILE.network_ref == "custom_restricted_net"
+        assert reloaded.OMNIGENT_EGRESS_PROFILE.network_ref == "custom_omnigent_net"
+        assert reloaded.DEFAULT_EGRESS_PROFILE.digest != original_provider_digest
+        assert reloaded.EGRESS_PROFILE_SET_DIGEST == original_profile_set_digest
         assert "custom_restricted_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
         assert "custom_sandbox_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
+        assert "custom_omnigent_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
     finally:
         # Restore module-level defaults so later tests see the shipped values.
         monkeypatch.undo()

@@ -17,9 +17,9 @@ from moonmind.omnigent.oauth_hosts import (
 )
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.security.egress import (
-    DEFAULT_EGRESS_PROFILE,
+    OMNIGENT_EGRESS_PROFILE,
     attest_docker_egress,
-    restricted_proxy_env,
+    omnigent_proxy_env,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.omnigent.mounted_tool_preflight import (
@@ -266,7 +266,7 @@ class OmnigentOAuthHostRuntime:
         return validated
 
     async def _attest_egress(self, launch: Mapping[str, Any]):
-        if launch.get("networkRef") != DEFAULT_EGRESS_PROFILE.network_ref:
+        if launch.get("networkRef") != OMNIGENT_EGRESS_PROFILE.network_ref:
             raise OmnigentOAuthHostError(
                 "launch egress profile does not map to supported backend state",
                 code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
@@ -279,7 +279,7 @@ class OmnigentOAuthHostRuntime:
         try:
             return await attest_docker_egress(
                 runner=runner,
-                profile=DEFAULT_EGRESS_PROFILE,
+                profile=OMNIGENT_EGRESS_PROFILE,
                 backend_ref="omnigent-host-runtime",
             )
         except RuntimeError as exc:
@@ -700,7 +700,7 @@ class OmnigentOAuthHostRuntime:
         ]
         for runtime_env in adapter["env"]:
             args.extend(["--env", runtime_env])
-        for proxy_env in restricted_proxy_env():
+        for proxy_env in omnigent_proxy_env():
             args.extend(["--env", proxy_env])
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)

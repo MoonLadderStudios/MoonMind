@@ -235,17 +235,30 @@ def _workload_command_args(
 def _profile_network_args(network_policy: str) -> tuple[str, list[str]]:
     if network_policy == "none":
         return "none", []
-    if network_policy != "bridge":
-        raise DockerWorkloadLauncherError("unsupported workload network policy")
-    args = [
-        "--label",
-        f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}",
-        "--label",
-        f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}",
-    ]
-    for value in restricted_proxy_env():
-        args.extend(("--env", value))
-    return EGRESS_NETWORK_REF, args
+    if network_policy == "restricted_egress":
+        args = [
+            "--label",
+            f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}",
+            "--label",
+            f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}",
+        ]
+        for value in restricted_proxy_env():
+            args.extend(("--env", value))
+        return EGRESS_NETWORK_REF, args
+    if network_policy == "docker_proxy":
+        return (
+            os.environ.get(
+                "MOONMIND_DOCKER_PROXY_NETWORK",
+                "moonmind_docker-proxy-network",
+            ),
+            [],
+        )
+    if network_policy == "pentest_approved_lab":
+        raise DockerWorkloadLauncherError(
+            "pentest_approved_lab requires a target-specific reviewed egress "
+            "profile before launch"
+        )
+    raise DockerWorkloadLauncherError("unsupported workload network policy")
 
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
     normalized = posixpath.normpath(path)
@@ -804,16 +817,20 @@ class DockerWorkloadLauncher:
     ) -> EgressAttestation | None:
         """Fail closed at the shared process-creation boundary.
 
-        Argument construction is deliberately side-effect free, but a bridge
-        profile must not become a Docker process based on declared network
-        metadata alone. Both one-shot and helper launches pass this boundary.
+        Argument construction is deliberately side-effect free, but a
+        restricted-egress profile must not become a Docker process based on
+        declared network metadata alone. Both one-shot and helper launches
+        pass this boundary.
 
         The proven attestation is returned to the caller so each workload
         lifecycle can publish its durable evidence (profile/applied-rule digest
         and validation time) instead of discarding it.
         """
 
-        if request.profile is None or request.profile.network_policy != "bridge":
+        if (
+            request.profile is None
+            or request.profile.network_policy != "restricted_egress"
+        ):
             return None
 
         async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:

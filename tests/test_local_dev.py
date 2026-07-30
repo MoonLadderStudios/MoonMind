@@ -213,6 +213,9 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     restricted_network = networks.get("restricted-egress-network")
     assert isinstance(restricted_network, dict)
     assert restricted_network.get("internal") is True
+    omnigent_network = networks.get("omnigent-egress-network")
+    assert isinstance(omnigent_network, dict)
+    assert omnigent_network.get("internal") is True
 
     sandbox_worker = services.get("temporal-worker-sandbox")
     assert isinstance(
@@ -247,12 +250,13 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         "local-network",
         "sandbox-egress-network",
         "restricted-egress-network",
+        "omnigent-egress-network",
     }
-    assert proxy_service.get("expose") == ["3128"]
+    assert proxy_service.get("expose") == ["3128", "3129"]
     assert proxy_service["container_name"] == "moonmind-sandbox-egress-proxy"
-    assert proxy_service["labels"]["moonmind.egress.profile"] == (
-        "moonmind-provider-egress@1"
-    )
+    assert proxy_service["labels"][
+        "moonmind.egress.profile-set-digest"
+    ].startswith("sha256:")
     assert proxy_service["labels"]["moonmind.egress.enforcer"] == (
         "docker-internal-proxy/v1"
     )
@@ -279,14 +283,17 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert "http_access deny all" in squid_config
     assert "169.254.0.0/16" in squid_config
     assert "http_access deny forbidden_destination" in squid_config
+    assert "dns_nameservers 127.0.0.11" in squid_config
+    assert "read_timeout 300 seconds" in squid_config
+    assert "::/0" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
 
     codex_host = services["omnigent-host-codex"]
-    assert _network_names(codex_host) == {"restricted-egress-network"}
+    assert _network_names(codex_host) == {"omnigent-egress-network"}
     assert codex_host["cap_drop"] == ["ALL"]
     assert codex_host["security_opt"] == ["no-new-privileges:true"]
     codex_env = _env_map(codex_host["environment"])
-    assert codex_env["HTTPS_PROXY"] == "http://sandbox-egress-proxy:3128"
+    assert codex_env["HTTPS_PROXY"] == "http://omnigent-egress-proxy:3129"
     assert codex_env["NO_PROXY"] == ""
 
 
