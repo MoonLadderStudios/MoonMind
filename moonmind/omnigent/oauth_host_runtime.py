@@ -25,10 +25,18 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
+    WORKSPACE_AUTHORITY_MISMATCH,
     WORKSPACE_LOCATOR_ADAPTER,
+    WORKSPACE_LOCATOR_UNSUPPORTED,
+    WorkspaceLocatorResolutionError,
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -62,6 +70,11 @@ _DEFAULT_HOST_PATH = (
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+_GITHUB_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Bound restore-input materialization so a hostile or oversized artifact ref
+# cannot exhaust the authorized workspace before the host launches.
+_MAX_RESTORE_INPUT_REFS = 64
+_MAX_RESTORE_INPUT_BYTES = 64 * 1024 * 1024
 
 _RUNTIME_ADAPTERS = {
     "codex_cli": {
@@ -137,6 +150,10 @@ class OmnigentOAuthHostRuntime:
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
         )
+        # Bounded, non-sensitive evidence of the most recent workspace resolution,
+        # surfaced through the preflight result for Workflow Detail. Never carries
+        # credentials, raw daemon paths, or unbounded command output.
+        self._last_workspace_evidence: dict[str, Any] = {}
 
     async def prepare_host(
         self,
@@ -154,6 +171,11 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
+        repository_source: str = "",
+        starting_branch: str | None = None,
+        target_branch: str | None = None,
+        checkout_commit: str | None = None,
+        restore_input_refs: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -179,6 +201,13 @@ class OmnigentOAuthHostRuntime:
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
+            repository_source=repository_source,
+            starting_branch=starting_branch,
+            target_branch=target_branch,
+            checkout_commit=checkout_commit,
+            restore_input_refs=restore_input_refs,
+            github_token=github_token,
+            artifact_gateway=artifact_gateway,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -252,6 +281,7 @@ class OmnigentOAuthHostRuntime:
         validated["workspacePath"] = result["workspacePath"]
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
+        validated["workspaceResolution"] = dict(self._last_workspace_evidence)
         return validated
 
     @staticmethod
@@ -816,24 +846,73 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
+        repository_source: str = "",
+        starting_branch: str | None = None,
+        target_branch: str | None = None,
+        checkout_commit: str | None = None,
+        restore_input_refs: tuple[str, ...] = (),
+        github_token: str | None = None,
+        artifact_gateway: Any | None = None,
     ) -> Path:
+        """Resolve, and when required materialize, the authoritative workspace.
+
+        Every supported locator kind is routed through this single owning-worker
+        boundary. Profile-bound Omnigent workspace authority is the sandbox plane,
+        so managed-runtime and external-state locators fail closed here rather than
+        silently substituting a different workspace, and an external-state artifact
+        ref is never conflated with a local filesystem path.
+        """
+
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
-        if not isinstance(locator, SandboxWorkspaceLocator):
+        if isinstance(locator, ExternalStateLocator):
+            # External state proves session/provider continuity only. It is an
+            # artifact reference, not a local workspace, and cannot satisfy host
+            # workspace materialization; treating it as a path would conflate the
+            # two authorities. Its refs are materialized as restore *inputs* into
+            # a sandbox workspace instead (see ``restore_input_refs``).
+            raise OmnigentOAuthHostError(
+                "external-state locators are session-continuity refs, not a host "
+                "workspace; supply a sandbox locator with restore input refs",
+                code=WORKSPACE_LOCATOR_UNSUPPORTED,
+            )
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise OmnigentOAuthHostError(
+                "profile-bound Omnigent workspace authority is the sandbox plane; "
+                "managed-runtime locators are not a valid host workspace",
+                code=WORKSPACE_LOCATOR_UNSUPPORTED,
+            )
+        if not isinstance(locator, SandboxWorkspaceLocator):  # pragma: no cover
             raise OmnigentOAuthHostError(
                 "Omnigent repository work requires a sandbox WorkspaceLocator",
-                code="WORKSPACE_LOCATOR_UNSUPPORTED",
+                code=WORKSPACE_LOCATOR_UNSUPPORTED,
             )
+
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
-        # Validate the workflow-derived identity and containment before writing
-        # even the owner record.
-        resolve_sandbox_workspace_locator(
+        # 1. Validate the workflow-derived identity, containment, traversal, and
+        #    symlink behavior before any host mutation, without yet requiring the
+        #    directory to exist.
+        workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
-            must_exist=True,
+            must_exist=False,
         )
+        source = str(repository_source or "").strip()
+        already_materialized = workspace.is_dir()
+        # 2. A workspace that is neither pre-materialized nor accompanied by an
+        #    authored repository source cannot be created here; reject before
+        #    writing any owner record or running any command.
+        if not already_materialized and not source:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "authorized sandbox workspace is unavailable and no repository "
+                "source was authored to materialize it",
+            )
+        # 3. Establish or load the durable owner record and validate its binding
+        #    before mutating the filesystem, so a retry or a foreign record can
+        #    never author a second workspace under this identity.
         record_store = SandboxWorkspaceRecordStore(self._workspace_root)
         authoritative_record = record_store.load(locator.workspace_id)
         if authoritative_record is None:
@@ -844,6 +923,36 @@ class OmnigentOAuthHostRuntime:
                 relative_path=locator.relative_path,
             )
             record_store.ensure(authoritative_record)
+        resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            owner_record=authoritative_record,
+            expected_workflow_id=current_workflow_id,
+            expected_step_execution_id=current_step_execution_id,
+            must_exist=False,
+        )
+        # 4. Materialize the authored repository/branch and restore inputs exactly
+        #    once. Retries observe the already-materialized workspace and skip all
+        #    git and archive mutation.
+        materialization: dict[str, Any] = {"action": "reused_pre_materialized"}
+        if not already_materialized:
+            materialization = await self._materialize_repository(
+                workspace,
+                repository_source=source,
+                starting_branch=starting_branch,
+                target_branch=target_branch,
+                checkout_commit=checkout_commit,
+                github_token=github_token,
+            )
+            restore_evidence = await self._materialize_restore_inputs(
+                workspace,
+                restore_input_refs=restore_input_refs,
+                artifact_gateway=artifact_gateway,
+            )
+            if restore_evidence:
+                materialization["restoreInputs"] = restore_evidence
+        # 5. Final containment-checked resolution; the directory must now exist.
         workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
@@ -853,7 +962,228 @@ class OmnigentOAuthHostRuntime:
             expected_step_execution_id=current_step_execution_id,
             must_exist=True,
         )
+        self._last_workspace_evidence = self._workspace_resolution_evidence(
+            locator=locator,
+            expected_id=expected_id,
+            materialization=materialization,
+        )
         return workspace
+
+    async def _materialize_repository(
+        self,
+        workspace: Path,
+        *,
+        repository_source: str,
+        starting_branch: str | None,
+        target_branch: str | None,
+        checkout_commit: str | None,
+        github_token: str | None,
+    ) -> dict[str, Any]:
+        """Clone and check out the authored repository state deterministically.
+
+        Uses the shared bounded/redacted/cancellation-aware command runner. The
+        GitHub token, when present, is injected only through an in-memory git
+        credential helper (never argv or on-disk config) and only for GitHub HTTPS
+        sources, honoring declared-capability credential injection policy.
+        """
+
+        source, source_kind = self._normalize_repository_source(repository_source)
+        start = self._normalize_branch(starting_branch)
+        target = self._normalize_branch(target_branch)
+        commit = str(checkout_commit or "").strip()
+        workspace.parent.mkdir(parents=True, exist_ok=True)
+
+        git_env = dict(os.environ)
+        if source_kind == "github_https" and github_token:
+            git_env = build_github_token_git_environment(
+                github_token, base_env=os.environ
+            )
+
+        clone_args = ["git", "clone"]
+        # A remote clone can fetch just the authored branch; a local source keeps
+        # every ref so a subsequent checkout can select it.
+        if start and source_kind != "local":
+            clone_args.extend(["--branch", start, "--single-branch"])
+        clone_args.extend(["--", source, str(workspace)])
+        code, _out, err = await self._run(*clone_args, env=git_env, check=False)
+        if code != 0:
+            raise OmnigentOAuthHostError(
+                f"workspace repository materialization failed: {err.strip()[:200]}",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+
+        checked_out = start or None
+        if commit:
+            code, _out, err = await self._run(
+                "git", "-C", str(workspace), "checkout", "--detach", commit,
+                env=git_env, check=False,
+            )
+            if code != 0:
+                raise OmnigentOAuthHostError(
+                    f"workspace commit checkout failed: {err.strip()[:200]}",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                )
+            checked_out = commit
+        elif start and source_kind == "local":
+            code, _out, _err = await self._run(
+                "git", "-C", str(workspace), "checkout", start,
+                env=git_env, check=False,
+            )
+            if code != 0:
+                await self._run(
+                    "git", "-C", str(workspace), "checkout", "-B", start,
+                    f"origin/{start}", env=git_env, check=False,
+                )
+
+        output_branch = None
+        if target and target != checked_out:
+            # Honor the authored output branch without discarding the checked-out
+            # working tree, matching normal MoonMind repository semantics.
+            code, _out, err = await self._run(
+                "git", "-C", str(workspace), "checkout", "-B", target,
+                env=git_env, check=False,
+            )
+            if code != 0:
+                raise OmnigentOAuthHostError(
+                    f"workspace output branch selection failed: {err.strip()[:200]}",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                )
+            output_branch = target
+
+        return {
+            "action": "materialized",
+            "sourceKind": source_kind,
+            "startingBranch": start,
+            "checkedOut": checked_out,
+            "outputBranch": output_branch,
+            "commit": commit or None,
+        }
+
+    async def _materialize_restore_inputs(
+        self,
+        workspace: Path,
+        *,
+        restore_input_refs: tuple[str, ...],
+        artifact_gateway: Any | None,
+    ) -> list[dict[str, Any]]:
+        """Materialize checkpoint/external-state restore inputs into the workspace.
+
+        Restore inputs are durable ``artifact://`` references, resolved through the
+        artifact owner. A ref that looks like a local path is rejected so an
+        artifact ref can never be conflated with a filesystem path. Materialized
+        bytes are written under a bounded ``.moonmind/restore`` area inside the
+        already-containment-checked workspace.
+        """
+
+        refs = [str(ref).strip() for ref in restore_input_refs if str(ref).strip()]
+        if not refs:
+            return []
+        if len(refs) > _MAX_RESTORE_INPUT_REFS:
+            raise OmnigentOAuthHostError(
+                "too many restore input refs for the authorized workspace",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        artifact_service = self._as_artifact_service(artifact_gateway)
+        if artifact_service is None:
+            raise OmnigentOAuthHostError(
+                "restore inputs require an artifact service to resolve refs",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        restore_root = (workspace / ".moonmind" / "restore").resolve()
+        if not restore_root.is_relative_to(workspace.resolve()):  # pragma: no cover
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "restore materialization escaped the authorized workspace",
+            )
+        restore_root.mkdir(parents=True, exist_ok=True)
+        evidence: list[dict[str, Any]] = []
+        for ref in refs:
+            if not ref.startswith("artifact://"):
+                raise OmnigentOAuthHostError(
+                    "restore inputs must be durable artifact refs, not local paths",
+                    code=WORKSPACE_LOCATOR_UNSUPPORTED,
+                )
+            _metadata, payload = await artifact_service.read(artifact_id=ref)
+            if len(payload) > _MAX_RESTORE_INPUT_BYTES:
+                raise OmnigentOAuthHostError(
+                    "restore input exceeds the authorized workspace bound",
+                    code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+                )
+            digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
+            (restore_root / digest).write_bytes(payload)
+            evidence.append({"ref": ref, "bytes": len(payload)})
+        return evidence
+
+    @staticmethod
+    def _as_artifact_service(artifact_gateway: Any | None) -> Any | None:
+        if artifact_gateway is None:
+            return None
+        if hasattr(artifact_gateway, "read"):
+            return artifact_gateway
+
+        class _GatewayArtifactService:
+            async def read(self, *, artifact_id: str, **_kwargs: Any):
+                payload = await artifact_gateway.read_bytes(artifact_id)
+                return {}, payload
+
+        return _GatewayArtifactService()
+
+    @staticmethod
+    def _normalize_repository_source(repository_source: str) -> tuple[str, str]:
+        """Resolve an authored repository identity to a clone source and kind."""
+
+        value = str(repository_source or "").strip()
+        if not value:
+            raise OmnigentOAuthHostError(
+                "repository source is required to materialize the workspace",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        if value.startswith(("http://", "https://", "git@", "file://", "ssh://")):
+            kind = (
+                "github_https"
+                if value.startswith(("http://", "https://"))
+                and "github.com" in value
+                else "remote"
+            )
+            return value, kind
+        if value.startswith(("/", "./", "../")) or Path(value).is_absolute():
+            return value, "local"
+        if _GITHUB_SLUG.fullmatch(value):
+            suffix = "" if value.endswith(".git") else ".git"
+            return f"https://github.com/{value}{suffix}", "github_https"
+        raise OmnigentOAuthHostError(
+            "unsupported repository source; expected owner/repo, URL, or path",
+            code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+        )
+
+    @staticmethod
+    def _normalize_branch(branch: str | None) -> str | None:
+        normalized = str(branch or "").strip()
+        while normalized:
+            prior = normalized
+            for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):]
+            if prior == normalized:
+                break
+        return normalized or None
+
+    @staticmethod
+    def _workspace_resolution_evidence(
+        *,
+        locator: SandboxWorkspaceLocator,
+        expected_id: str,
+        materialization: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Assemble bounded, credential-free workspace-resolution evidence."""
+
+        return {
+            "locatorKind": locator.kind,
+            "workspaceId": locator.workspace_id,
+            "relativePath": locator.relative_path,
+            "identityVerified": locator.workspace_id == expected_id,
+            "materialization": dict(materialization),
+        }
 
     async def _initialize_required_tools(self) -> None:
         await self._run(

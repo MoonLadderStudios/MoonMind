@@ -679,8 +679,46 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
+                # A remediation workspace is already materialized and authorized by
+                # the remediation owner, so never re-clone it here. Fresh normal
+                # runs carry authored repository/branch intent that must be
+                # materialized into the authoritative sandbox workspace.
+                repository_source=(
+                    ""
+                    if remediation_resolution is not None
+                    else self._repository_source(request)
+                ),
+                starting_branch=(
+                    None
+                    if remediation_resolution is not None
+                    else self._starting_branch(request)
+                ),
+                target_branch=(
+                    None
+                    if remediation_resolution is not None
+                    else self._target_branch(request)
+                ),
+                checkout_commit=(
+                    None
+                    if remediation_resolution is not None
+                    else self._checkout_commit(request)
+                ),
+                restore_input_refs=(
+                    ()
+                    if remediation_resolution is not None
+                    else self._restore_input_refs(request)
+                ),
             )
             await emit(current_stage, "completed")
+            workspace_resolution = preflight.get("workspaceResolution")
+            if isinstance(workspace_resolution, Mapping) and workspace_resolution:
+                # Durable, bounded, credential-free evidence of which workspace was
+                # resolved and how it was materialized, for Workflow Detail.
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="workspace_resolution",
+                    metadata=dict(workspace_resolution),
+                )
             await emit("credential_mount", "started")
             await emit(
                 "credential_mount",
@@ -1163,6 +1201,63 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code="WORKSPACE_LOCATOR_REQUIRED",
             )
         return dict(locator)
+
+    @staticmethod
+    def _workspace_spec(request: AgentExecutionRequest) -> Mapping[str, Any]:
+        spec = request.workspace_spec
+        return spec if isinstance(spec, Mapping) else {}
+
+    @classmethod
+    def _repository_source(cls, request: AgentExecutionRequest) -> str:
+        spec = cls._workspace_spec(request)
+        parameters = request.parameters or {}
+        for candidate in (
+            spec.get("repository"),
+            spec.get("repo"),
+            parameters.get("repository"),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
+    @classmethod
+    def _starting_branch(cls, request: AgentExecutionRequest) -> str | None:
+        spec = cls._workspace_spec(request)
+        for candidate in (
+            spec.get("startingBranch"),
+            spec.get("branch"),
+            spec.get("baseBranch"),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _target_branch(cls, request: AgentExecutionRequest) -> str | None:
+        value = str(cls._workspace_spec(request).get("targetBranch") or "").strip()
+        return value or None
+
+    @classmethod
+    def _checkout_commit(cls, request: AgentExecutionRequest) -> str | None:
+        spec = cls._workspace_spec(request)
+        for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _restore_input_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
+        raw = cls._workspace_spec(request).get("restoreInputRefs")
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        return tuple(
+            dict.fromkeys(
+                str(value).strip() for value in raw if str(value).strip()
+            )
+        )
 
     @staticmethod
     def _remediation_workspace(
