@@ -2674,6 +2674,113 @@ async def test_prepare_workspace_rejects_local_path_restore_input(tmp_path) -> N
     assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
 
 
+@pytest.mark.asyncio
+async def test_prepare_workspace_materializes_attachments_as_refs(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    ref = "artifact://attachments/spec.pdf"
+    # The durable service is addressed by the scheme-stripped id, not the ref.
+    service = _FakeArtifactService({"attachments/spec.pdf": b"attachment-bytes"})
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+        attachment_refs=(ref,),
+        artifact_gateway=service,
+    )
+
+    attachment_dir = resolved / ".moonmind" / "attachments"
+    written = list(attachment_dir.iterdir())
+    assert len(written) == 1
+    assert written[0].read_bytes() == b"attachment-bytes"
+    attachment_evidence = runtime._last_workspace_evidence["materialization"][
+        "attachments"
+    ]
+    assert attachment_evidence == [{"ref": ref, "bytes": len(b"attachment-bytes")}]
+    # Attachments read under their own dedicated service principal, distinct from
+    # the restore-input authority.
+    assert service.read_calls == [
+        {
+            "artifact_id": "attachments/spec.pdf",
+            "principal": "service:omnigent_workspace_attachment",
+            "allow_restricted_raw": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_local_path_attachment(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    service = _FakeArtifactService({})
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+            attachment_refs=("/etc/shadow",),
+            artifact_gateway=service,
+        )
+
+    # An attachment that is a local path must never be conflated with an
+    # artifact ref.
+    assert exc.value.code == "WORKSPACE_LOCATOR_UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_records_denial_evidence_on_failure(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+
+    async def _failing_materialize(workspace, **_kwargs):
+        # An interrupted materialization leaves owned partial state behind.
+        workspace.mkdir(parents=True, exist_ok=True)
+        raise OmnigentOAuthHostError(
+            "workspace repository materialization failed",
+            code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+        )
+
+    runtime._materialize_repository = _failing_materialize  # type: ignore[assignment]
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+        )
+
+    denial = runtime._last_workspace_denial_evidence
+    assert denial["failedAuthorityClass"] == "workspace_materialization"
+    assert denial["reasonCode"] == "OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+    assert denial["retryable"] is True
+    assert denial["ownedPartialStateCreated"] is True
+    assert denial["reconciliation"] == "rebuild_owned_workspace_on_retry"
+    assert denial["workspaceId"] == workspace_id
+    # The bounded denial evidence never leaks a raw worker/daemon path, and it
+    # rides on the raised failure for the owning caller to persist.
+    assert tmp_path.as_posix() not in json.dumps(denial)
+    assert exc.value.workspace_denial_evidence == denial
+
+    # Because the completion marker was never written, a retry rebuilds the owned
+    # partial workspace rather than reusing it.
+    record_store = SandboxWorkspaceRecordStore(runtime._workspace_root)
+    assert record_store.is_materialized(workspace_id) is False
+
+
 class _StreamingArtifactService:
     """Durable-service fake that supports metadata + chunked reads."""
 
@@ -2917,6 +3024,7 @@ def test_coordinator_reads_repository_and_branch_intent_from_workspace_spec() ->
             "targetBranch": "agent/work",
             "baseCommit": "abc123",
             "restoreInputRefs": ["artifact://a", "artifact://a", "artifact://b"],
+            "attachmentRefs": ["artifact://att-1", "artifact://att-1", "artifact://att-2"],
         }
     )
 
@@ -2936,6 +3044,9 @@ def test_coordinator_reads_repository_and_branch_intent_from_workspace_spec() ->
     assert OmnigentProfileBoundExecutionCoordinator._restore_input_refs(request) == (
         ("artifact://a", "artifact://b")
     )
+    assert OmnigentProfileBoundExecutionCoordinator._attachment_refs(request) == (
+        ("artifact://att-1", "artifact://att-2")
+    )
 
 
 def test_coordinator_repository_intent_defaults_are_empty() -> None:
@@ -2946,6 +3057,7 @@ def test_coordinator_repository_intent_defaults_are_empty() -> None:
     assert OmnigentProfileBoundExecutionCoordinator._target_branch(request) is None
     assert OmnigentProfileBoundExecutionCoordinator._checkout_commit(request) is None
     assert OmnigentProfileBoundExecutionCoordinator._restore_input_refs(request) == ()
+    assert OmnigentProfileBoundExecutionCoordinator._attachment_refs(request) == ()
 
 
 @pytest.mark.asyncio

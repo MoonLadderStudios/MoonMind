@@ -708,6 +708,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else self._restore_input_refs(request)
                 ),
+                # A remediation workspace is already materialized with its own
+                # inputs; only fresh normal runs project declared attachments
+                # through the owning-worker boundary.
+                attachment_refs=(
+                    ()
+                    if remediation_resolution is not None
+                    else self._attachment_refs(request)
+                ),
             )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")
@@ -856,6 +864,23 @@ class OmnigentProfileBoundExecutionCoordinator:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
+                workspace_denial = getattr(exc, "workspace_denial_evidence", None)
+                if isinstance(workspace_denial, Mapping) and workspace_denial:
+                    # Durable, bounded, credential-free evidence that a workspace
+                    # materialization was denied: the failed authority class, stable
+                    # reason code, whether owned partial state was created, and the
+                    # reconciliation requirement for the next retry.
+                    await self._run_store.record_lifecycle_event(
+                        request.idempotency_key,
+                        event_type="workspace_materialization_denied",
+                        status="failed",
+                        event_identity=(
+                            f"{attempt_identity}:workspace_materialization_denied:failed"
+                        ),
+                        code=code,
+                        summary=str(exc),
+                        metadata=dict(workspace_denial),
+                    )
                 if isinstance(exc, MountedToolPreflightError):
                     await self._run_store.record_lifecycle_event(
                         request.idempotency_key,
@@ -1251,6 +1276,23 @@ class OmnigentProfileBoundExecutionCoordinator:
     @classmethod
     def _restore_input_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
         raw = cls._workspace_spec(request).get("restoreInputRefs")
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        return tuple(
+            dict.fromkeys(
+                str(value).strip() for value in raw if str(value).strip()
+            )
+        )
+
+    @classmethod
+    def _attachment_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
+        """Declared input attachments authored on the workspace spec.
+
+        Attachments are durable artifact refs (validated at the owning-worker
+        boundary); the ordered, de-duplicated ref list is materialized into the
+        authorized workspace alongside the repository and restore inputs.
+        """
+        raw = cls._workspace_spec(request).get("attachmentRefs")
         if not isinstance(raw, (list, tuple)):
             return ()
         return tuple(

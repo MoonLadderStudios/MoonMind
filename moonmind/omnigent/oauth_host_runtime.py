@@ -91,6 +91,11 @@ _MAX_RESTORE_TOTAL_BYTES = 256 * 1024 * 1024
 # under a dedicated service principal (mirrors the checkpoint/remediation
 # restorers, which never read restore material as an end user).
 _RESTORE_ARTIFACT_PRINCIPAL = "service:omnigent_workspace_restore"
+# Declared input attachments are a distinct input authority from checkpoint
+# restore material, so they read under their own service principal. Conflating
+# the two would let an attachment ref borrow the restore authority (or the
+# reverse); keeping principals separate preserves the authority boundary.
+_ATTACHMENT_ARTIFACT_PRINCIPAL = "service:omnigent_workspace_attachment"
 # Stream restore bytes from the artifact service in bounded chunks so an oversized
 # payload is rejected mid-stream instead of after full in-memory materialization.
 _RESTORE_STREAM_CHUNK_BYTES = 1024 * 1024
@@ -186,6 +191,11 @@ class OmnigentOAuthHostRuntime:
         # surfaced through the preflight result for Workflow Detail. Never carries
         # credentials, raw daemon paths, or unbounded command output.
         self._last_workspace_evidence: dict[str, Any] = {}
+        # Bounded, non-sensitive evidence of the most recent workspace-resolution
+        # *denial*. Carries the failed authority class, stable reason code,
+        # retryability, whether owned partial state was created, and the
+        # reconciliation requirement. Never carries credentials or raw paths.
+        self._last_workspace_denial_evidence: dict[str, Any] = {}
 
     async def prepare_host(
         self,
@@ -208,6 +218,7 @@ class OmnigentOAuthHostRuntime:
         target_branch: str | None = None,
         checkout_commit: str | None = None,
         restore_input_refs: tuple[str, ...] = (),
+        attachment_refs: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -239,6 +250,7 @@ class OmnigentOAuthHostRuntime:
             target_branch=target_branch,
             checkout_commit=checkout_commit,
             restore_input_refs=restore_input_refs,
+            attachment_refs=attachment_refs,
             github_token=github_token,
             artifact_gateway=artifact_gateway,
         )
@@ -914,6 +926,7 @@ class OmnigentOAuthHostRuntime:
         target_branch: str | None = None,
         checkout_commit: str | None = None,
         restore_input_refs: tuple[str, ...] = (),
+        attachment_refs: tuple[str, ...] = (),
         github_token: str | None = None,
         artifact_gateway: Any | None = None,
     ) -> Path:
@@ -1016,24 +1029,50 @@ class OmnigentOAuthHostRuntime:
         # 5. Materialize the authored repository/branch and restore inputs exactly
         #    once, then record durable completion. Retries observe the completed
         #    workspace and skip all git and archive mutation.
+        self._last_workspace_denial_evidence = {}
         materialization: dict[str, Any] = {"action": "reused_pre_materialized"}
         if not already_materialized:
-            materialization = await self._materialize_repository(
-                workspace,
-                repository_source=source,
-                starting_branch=starting_branch,
-                target_branch=target_branch,
-                checkout_commit=checkout_commit,
-                github_token=github_token,
-            )
-            restore_evidence = await self._materialize_restore_inputs(
-                workspace,
-                restore_input_refs=restore_input_refs,
-                artifact_gateway=artifact_gateway,
-            )
-            if restore_evidence:
-                materialization["restoreInputs"] = restore_evidence
-            record_store.mark_materialized(locator.workspace_id)
+            # Every mutation from here to the durable completion marker is owned by
+            # this run. If any step fails, bounded reconciliation evidence records
+            # whether owned partial state was created and that a retry must rebuild
+            # it, because the absent completion marker forces a rebuild rather than
+            # reuse of a partial directory.
+            try:
+                materialization = await self._materialize_repository(
+                    workspace,
+                    repository_source=source,
+                    starting_branch=starting_branch,
+                    target_branch=target_branch,
+                    checkout_commit=checkout_commit,
+                    github_token=github_token,
+                )
+                restore_evidence = await self._materialize_restore_inputs(
+                    workspace,
+                    restore_input_refs=restore_input_refs,
+                    artifact_gateway=artifact_gateway,
+                )
+                if restore_evidence:
+                    materialization["restoreInputs"] = restore_evidence
+                attachment_evidence = await self._materialize_attachments(
+                    workspace,
+                    attachment_refs=attachment_refs,
+                    artifact_gateway=artifact_gateway,
+                )
+                if attachment_evidence:
+                    materialization["attachments"] = attachment_evidence
+                record_store.mark_materialized(locator.workspace_id)
+            except Exception as exc:
+                denial = self._workspace_denial_evidence(
+                    locator=locator,
+                    expected_id=expected_id,
+                    error=exc,
+                    owned_partial_state_created=workspace.exists(),
+                )
+                self._last_workspace_denial_evidence = denial
+                # Attach the bounded reconciliation evidence to the failure so the
+                # owning caller can persist it without re-deriving authority state.
+                exc.workspace_denial_evidence = denial  # type: ignore[attr-defined]
+                raise
         # 6. Final containment-checked resolution; the directory must now exist.
         workspace = resolve_sandbox_workspace_locator(
             locator,
@@ -1159,58 +1198,112 @@ class OmnigentOAuthHostRuntime:
         already-containment-checked workspace.
         """
 
-        refs = [str(ref).strip() for ref in restore_input_refs if str(ref).strip()]
-        if not refs:
+        return await self._materialize_input_bundle(
+            workspace,
+            refs=restore_input_refs,
+            artifact_gateway=artifact_gateway,
+            subdir="restore",
+            principal=_RESTORE_ARTIFACT_PRINCIPAL,
+            noun="restore inputs",
+        )
+
+    async def _materialize_attachments(
+        self,
+        workspace: Path,
+        *,
+        attachment_refs: tuple[str, ...],
+        artifact_gateway: Any | None,
+    ) -> list[dict[str, Any]]:
+        """Materialize declared input attachments into the workspace.
+
+        Attachments are a distinct declared-input authority from checkpoint restore
+        material, so they route through the same canonical owning-worker boundary
+        but read under their own service principal and land under a bounded
+        ``.moonmind/attachments`` area. Like restore inputs they must be durable
+        ``artifact://`` refs; a ref that looks like a local path is rejected so an
+        attachment can never be conflated with a filesystem path.
+        """
+
+        return await self._materialize_input_bundle(
+            workspace,
+            refs=attachment_refs,
+            artifact_gateway=artifact_gateway,
+            subdir="attachments",
+            principal=_ATTACHMENT_ARTIFACT_PRINCIPAL,
+            noun="attachments",
+        )
+
+    async def _materialize_input_bundle(
+        self,
+        workspace: Path,
+        *,
+        refs: tuple[str, ...],
+        artifact_gateway: Any | None,
+        subdir: str,
+        principal: str,
+        noun: str,
+    ) -> list[dict[str, Any]]:
+        """Materialize a bounded bundle of durable input artifact refs.
+
+        Shared by restore-input and attachment materialization so every declared
+        input class is dereferenced through one canonical path: artifact-ref-only
+        (never a local path), per-ref and cumulative byte bounds, containment under
+        the already-validated workspace, and a dedicated read principal per class.
+        """
+
+        cleaned = [str(ref).strip() for ref in refs if str(ref).strip()]
+        if not cleaned:
             return []
-        if len(refs) > _MAX_RESTORE_INPUT_REFS:
+        if len(cleaned) > _MAX_RESTORE_INPUT_REFS:
             raise OmnigentOAuthHostError(
-                "too many restore input refs for the authorized workspace",
+                f"too many {noun} for the authorized workspace",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
         artifact_service = self._as_artifact_service(artifact_gateway)
         if artifact_service is None:
             raise OmnigentOAuthHostError(
-                "restore inputs require an artifact service to resolve refs",
+                f"{noun} require an artifact service to resolve refs",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
-        restore_root = (workspace / ".moonmind" / "restore").resolve()
-        if not restore_root.is_relative_to(workspace.resolve()):  # pragma: no cover
+        bundle_root = (workspace / ".moonmind" / subdir).resolve()
+        if not bundle_root.is_relative_to(workspace.resolve()):  # pragma: no cover
             raise WorkspaceLocatorResolutionError(
                 WORKSPACE_AUTHORITY_MISMATCH,
-                "restore materialization escaped the authorized workspace",
+                f"{noun} materialization escaped the authorized workspace",
             )
-        restore_root.mkdir(parents=True, exist_ok=True)
+        bundle_root.mkdir(parents=True, exist_ok=True)
         evidence: list[dict[str, Any]] = []
         total_bytes = 0
-        for ref in refs:
+        for ref in cleaned:
             if not ref.startswith("artifact://"):
                 raise OmnigentOAuthHostError(
-                    "restore inputs must be durable artifact refs, not local paths",
+                    f"{noun} must be durable artifact refs, not local paths",
                     code=WORKSPACE_LOCATOR_UNSUPPORTED,
                 )
             # The durable artifact contract addresses artifacts by id; the
             # canonical ``artifact://`` scheme must be stripped before lookup.
             artifact_id = ref[len("artifact://"):]
-            # Enforce the per-ref bound and the single cumulative restore budget
-            # together, so many individually-legal refs cannot aggregate past the
-            # advertised hostile-input bound.
+            # Enforce the per-ref bound and the single cumulative budget together,
+            # so many individually-legal refs cannot aggregate past the advertised
+            # hostile-input bound.
             per_ref_budget = min(
                 _MAX_RESTORE_INPUT_BYTES, _MAX_RESTORE_TOTAL_BYTES - total_bytes
             )
             if per_ref_budget <= 0:
                 raise OmnigentOAuthHostError(
-                    "restore inputs exceed the cumulative authorized workspace bound",
+                    f"{noun} exceed the cumulative authorized workspace bound",
                     code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
                 )
             await self._reject_oversized_restore_metadata(
-                artifact_service, artifact_id, per_ref_budget
+                artifact_service, artifact_id, per_ref_budget, principal
             )
             digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
             written = await self._write_restore_payload(
                 artifact_service,
                 artifact_id=artifact_id,
-                target=restore_root / digest,
+                target=bundle_root / digest,
                 budget_bytes=per_ref_budget,
+                principal=principal,
             )
             total_bytes += written
             evidence.append({"ref": ref, "bytes": written})
@@ -1218,7 +1311,10 @@ class OmnigentOAuthHostRuntime:
 
     @staticmethod
     async def _reject_oversized_restore_metadata(
-        artifact_service: Any, artifact_id: str, budget_bytes: int
+        artifact_service: Any,
+        artifact_id: str,
+        budget_bytes: int,
+        principal: str = _RESTORE_ARTIFACT_PRINCIPAL,
     ) -> None:
         """Reject an oversized restore artifact from metadata before reading bytes.
 
@@ -1231,7 +1327,7 @@ class OmnigentOAuthHostRuntime:
         try:
             metadata = await get_metadata(
                 artifact_id=artifact_id,
-                principal=_RESTORE_ARTIFACT_PRINCIPAL,
+                principal=principal,
             )
         except TypeError:
             return
@@ -1250,6 +1346,7 @@ class OmnigentOAuthHostRuntime:
         artifact_id: str,
         target: Path,
         budget_bytes: int,
+        principal: str = _RESTORE_ARTIFACT_PRINCIPAL,
     ) -> int:
         """Stream a restore payload to disk under a hard byte budget.
 
@@ -1264,7 +1361,7 @@ class OmnigentOAuthHostRuntime:
             with target.open("wb") as stream:
                 _artifact, chunks = await read_chunks(
                     artifact_id=artifact_id,
-                    principal=_RESTORE_ARTIFACT_PRINCIPAL,
+                    principal=principal,
                     allow_restricted_raw=True,
                     chunk_size=_RESTORE_STREAM_CHUNK_BYTES,
                 )
@@ -1281,7 +1378,7 @@ class OmnigentOAuthHostRuntime:
             return written
         _metadata, payload = await artifact_service.read(
             artifact_id=artifact_id,
-            principal=_RESTORE_ARTIFACT_PRINCIPAL,
+            principal=principal,
             allow_restricted_raw=True,
         )
         if len(payload) > budget_bytes:
@@ -1396,6 +1493,40 @@ class OmnigentOAuthHostRuntime:
             "relativePath": locator.relative_path,
             "identityVerified": locator.workspace_id == expected_id,
             "materialization": dict(materialization),
+        }
+
+    @staticmethod
+    def _workspace_denial_evidence(
+        *,
+        locator: SandboxWorkspaceLocator,
+        expected_id: str,
+        error: BaseException,
+        owned_partial_state_created: bool,
+    ) -> dict[str, Any]:
+        """Assemble bounded, credential-free workspace-denial evidence.
+
+        Records the failed authority class, a stable reason code, retryability, the
+        locator refs (never a raw path), whether owned partial state was created,
+        and the reconciliation requirement. Because the durable completion marker is
+        only written after a full materialization, a partially built workspace is
+        rebuilt on the next retry rather than reused.
+        """
+
+        code = str(getattr(error, "code", None) or type(error).__name__)[:96]
+        return {
+            "failedAuthorityClass": "workspace_materialization",
+            "locatorKind": locator.kind,
+            "workspaceId": locator.workspace_id,
+            "relativePath": locator.relative_path,
+            "identityVerified": locator.workspace_id == expected_id,
+            "reasonCode": code,
+            "retryable": True,
+            "ownedPartialStateCreated": bool(owned_partial_state_created),
+            "reconciliation": (
+                "rebuild_owned_workspace_on_retry"
+                if owned_partial_state_created
+                else "none"
+            ),
         }
 
     async def _initialize_required_tools(self) -> None:
