@@ -2738,9 +2738,9 @@ async def test_prepare_workspace_streams_restore_inputs_when_supported(
 async def test_prepare_workspace_rejects_oversized_restore_from_metadata(
     tmp_path, monkeypatch
 ) -> None:
-    import moonmind.omnigent.oauth_host_runtime as ohr
-
-    monkeypatch.setattr(ohr, "_MAX_RESTORE_INPUT_BYTES", 16)
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_INPUT_BYTES", 16
+    )
     source = tmp_path / "source"
     _init_source_repo(source)
     runtime = _runtime_for(tmp_path)
@@ -2768,12 +2768,14 @@ async def test_prepare_workspace_rejects_oversized_restore_from_metadata(
 async def test_prepare_workspace_enforces_cumulative_restore_budget(
     tmp_path, monkeypatch
 ) -> None:
-    import moonmind.omnigent.oauth_host_runtime as ohr
-
     # Each ref is individually legal, but together they exceed the cumulative
     # budget, so the second ref is rejected.
-    monkeypatch.setattr(ohr, "_MAX_RESTORE_INPUT_BYTES", 1024)
-    monkeypatch.setattr(ohr, "_MAX_RESTORE_TOTAL_BYTES", 1024)
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_INPUT_BYTES", 1024
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime._MAX_RESTORE_TOTAL_BYTES", 1024
+    )
     source = tmp_path / "source"
     _init_source_repo(source)
     runtime = _runtime_for(tmp_path)
