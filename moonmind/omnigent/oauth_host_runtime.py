@@ -18,6 +18,12 @@ from moonmind.omnigent.oauth_hosts import (
     validate_preflight_result,
 )
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.security.egress import (
+    OMNIGENT_EGRESS_PROFILE,
+    attest_docker_egress,
+    omnigent_proxy_env,
+)
+from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_mounted_tools,
@@ -223,6 +229,7 @@ class OmnigentOAuthHostRuntime:
             resolved_skillset_ref=resolved_skillset_ref,
             artifact_gateway=artifact_gateway,
         )
+        egress_attestation = await self._attest_egress(launch)
         workspace_source = await self._prepare_workspace(
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
@@ -293,6 +300,9 @@ class OmnigentOAuthHostRuntime:
             "harness": adapter["harness"],
             "competingCredentialsPresent": False,
             "mountedTools": mounted_tool_evidence,
+            "egressAttestation": egress_attestation.model_dump(
+                by_alias=True, mode="json"
+            ),
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
@@ -307,8 +317,32 @@ class OmnigentOAuthHostRuntime:
         validated["workspacePath"] = result["workspacePath"]
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
+        validated["egressAttestation"] = result["egressAttestation"]
         validated["workspaceResolution"] = dict(self._last_workspace_evidence)
         return validated
+
+    async def _attest_egress(self, launch: Mapping[str, Any]):
+        if launch.get("networkRef") != OMNIGENT_EGRESS_PROFILE.network_ref:
+            raise OmnigentOAuthHostError(
+                "launch egress profile does not map to supported backend state",
+                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
+            )
+
+        async def runner(args):
+            code, stdout, stderr = await self._run(*args, check=False)
+            return code, stdout.encode(), stderr.encode()
+
+        try:
+            return await attest_docker_egress(
+                runner=runner,
+                profile=OMNIGENT_EGRESS_PROFILE,
+                backend_ref="omnigent-host-runtime",
+            )
+        except RuntimeError as exc:
+            raise OmnigentOAuthHostError(
+                "launch egress backend attestation failed",
+                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
+            ) from exc
 
     @staticmethod
     def _runtime_adapter(binding: OmnigentOAuthHostBinding) -> Mapping[str, Any]:
@@ -671,6 +705,7 @@ class OmnigentOAuthHostRuntime:
             "/home/app",
             "--network",
             str(effective_launch["networkRef"]),
+            *structured_container_security_args(),
             "--cpus",
             str(int(effective_launch["limits"]["cpuMillis"]) / 1000),
             "--memory",
@@ -721,6 +756,8 @@ class OmnigentOAuthHostRuntime:
         ]
         for runtime_env in adapter["env"]:
             args.extend(["--env", runtime_env])
+        for proxy_env in omnigent_proxy_env():
+            args.extend(["--env", proxy_env])
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
         if token:

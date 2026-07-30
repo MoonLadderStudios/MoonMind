@@ -6,7 +6,7 @@ from pathlib import Path
 import runpy
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -2100,6 +2100,10 @@ async def _run_coordinator_failure_case(
         return_value=Path("/tmp/workspace")
     )
     runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
+    # Egress attestation is an orthogonal trusted-backend gate; this matrix
+    # exercises coordinator failure/cleanup evidence, so treat enforcement as
+    # already attested and let the intended failure stages surface.
+    runtime._attest_egress = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
     runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
     runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
     runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]

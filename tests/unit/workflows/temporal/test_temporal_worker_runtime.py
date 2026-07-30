@@ -4463,10 +4463,13 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         patch(
             "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
         ) as mock_backend_cls,
+        patch(
+            "moonmind.security.egress.attest_docker_egress",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
         mock_backend_cls.return_value.check_readiness = AsyncMock()
-        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, handlers = await _build_runtime_activities(topology)
 
     mock_backend_cls.return_value.check_readiness.assert_awaited_once()
@@ -4650,9 +4653,12 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
         patch(
             "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
         ) as mock_backend_cls,
+        patch(
+            "moonmind.security.egress.attest_docker_egress",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
         mock_backend_cls.return_value.check_readiness = AsyncMock()
-        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, _handlers = await _build_runtime_activities(topology)
 
     mock_agent_runtime_activities_cls.assert_called_once()
