@@ -15,15 +15,26 @@ activity, or live session involved.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.omnigent_bridge import (
+    OMNIGENT_BRIDGE_MOUNT_PATH,
     _bridge_event_payload,
+    _get_bridge_store,
+    _get_execution_service,
+    _require_bridge_enabled,
     _terminal_envelope,
+    router,
 )
+from api_service.auth_providers import get_current_user
 from api_service.db.models import Base
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
@@ -204,3 +215,131 @@ async def test_direct_compat_read_model_matches_omnigent_transport_shape(store) 
     assert payload["metadata"]["moonmind"]["source"] == "codex_direct_compat"
     assert payload["kind"] == "assistant_message"
     assert payload["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_direct_compat_reads_through_workflow_detail_http_routes(store) -> None:
+    """The Workflow Detail HTTP routes serve a retired direct-compat session.
+
+    The pure-journal tests above exercise the store/serializer helpers directly.
+    This boundary test drives the *production* read path an operator hits after
+    the direct worker is retired: it resolves the retained session by its
+    MoonMind workflow/run identity through ``GET /bridge-sessions/resolve``
+    (ownership authorization included), then fetches events through
+    ``GET /bridge-sessions/{id}/events`` and consumes the real
+    ``BridgeEventPageResponse`` HTTP shape — response-model serialization and
+    client JSON parsing — rather than calling the serializer helpers itself.
+    """
+
+    user_id = uuid4()
+    request = _request("direct-compat-http")
+    session_id = "codex-session-http"
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="direct-codex-compat",
+        agent_id="codex_cli",
+        agent_name="Codex CLI",
+        target_metadata={
+            "hostType": "managed",
+            "workspace": "MoonLadderStudios/MoonMind",
+            "compatibilityProfile": COMPAT_PROFILE,
+            "producer": "direct_codex_managed_session",
+        },
+    )
+    bridge_session_id = row.bridge_session_id
+    events = [
+        _direct_event(
+            {
+                "type": "session.started",
+                "status": "running",
+                "data": {"managedSessionWorkflowId": "mm:wf-direct"},
+            },
+            request=request,
+            session_id=session_id,
+            bridge_session_id=bridge_session_id,
+        ),
+        _direct_event(
+            {
+                "type": "response.output",
+                "status": "running",
+                "text": "Analyzed the repository and drafted a fix.",
+            },
+            request=request,
+            session_id=session_id,
+            bridge_session_id=bridge_session_id,
+        ),
+        _direct_event(
+            {"type": "response.completed", "status": "completed"},
+            request=request,
+            session_id=session_id,
+            bridge_session_id=bridge_session_id,
+        ),
+    ]
+    await store.append_events(bridge_session_id, events)
+    await store.mark_terminal(
+        request.idempotency_key,
+        status="completed",
+        terminal_refs={"summary": "Direct compatibility run completed."},
+    )
+
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    # Only substrate concerns are overridden: authenticated MoonMind principal,
+    # workflow-ownership service, bridge-enabled gate, and the durable store the
+    # events were persisted into. Resolution, authorization, and serialization
+    # all run through the real router code under test.
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=user_id, email="operator@example.com", is_superuser=False
+    )
+    app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(
+        describe_execution=_describe_execution_for(user_id)
+    )
+    app.dependency_overrides[_require_bridge_enabled] = lambda: SimpleNamespace(
+        enabled=True
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        # Resolve the retired direct-compat session by workflow/run identity,
+        # exactly as Workflow Detail does before reading legacy logs.
+        resolved = await client.get(
+            f"{base}/resolve", params={"workflowId": "mm:wf-direct"}
+        )
+        assert resolved.status_code == 200, resolved.text
+        resolution = resolved.json()
+        assert resolution["bridgeSessionId"] == bridge_session_id
+        assert resolution["workflowId"] == "mm:wf-direct"
+        assert resolution["status"] == "completed"
+        assert resolution["compatibilityProfile"]
+
+        # Consume the real HTTP events page for the resolved session.
+        page = await client.get(f"{base}/{bridge_session_id}/events")
+        assert page.status_code == 200, page.text
+        body = page.json()
+
+    assert body["bridgeSessionId"] == bridge_session_id
+    kinds = [item["kind"] for item in body["items"]]
+    assert kinds == ["session_started", "assistant_message", "response_completed"]
+
+    # Truthful provenance survives the HTTP response model: the wire transport
+    # tag is the Omnigent bridge journal while the runtime producer stays
+    # ``codex_direct_compat`` and is never relabeled as an Omnigent session.
+    for item in body["items"]:
+        assert item["metadata"]["source"] == "omnigent_bridge"
+        assert item["metadata"]["moonmind"]["source"] == "codex_direct_compat"
+        assert item["metadata"]["moonmind"]["source"] != "omnigent"
+
+    # The terminal envelope resolves from durable columns through the HTTP model.
+    assert body["terminal"] is True
+    assert body["terminalEnvelope"]["status"] == "completed"
+    assert body["terminalEnvelope"]["summary"] == "Direct compatibility run completed."
+
+
+def _describe_execution_for(owner_id):
+    async def describe_execution(workflow_id: str):
+        return SimpleNamespace(owner_id=owner_id)
+
+    return describe_execution
