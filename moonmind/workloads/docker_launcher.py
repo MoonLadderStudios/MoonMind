@@ -23,6 +23,7 @@ from moonmind.schemas.workload_models import (
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
+    EgressAttestation,
     attest_docker_egress,
     restricted_proxy_env,
 )
@@ -800,26 +801,38 @@ class DockerWorkloadLauncher:
 
     async def _attest_egress_before_launch(
         self, request: ValidatedWorkloadRequest
-    ) -> None:
+    ) -> EgressAttestation | None:
         """Fail closed at the shared process-creation boundary.
 
         Argument construction is deliberately side-effect free, but a bridge
         profile must not become a Docker process based on declared network
         metadata alone. Both one-shot and helper launches pass this boundary.
+
+        The proven attestation is returned to the caller so each workload
+        lifecycle can publish its durable evidence (profile/applied-rule digest
+        and validation time) instead of discarding it.
         """
 
         if request.profile is None or request.profile.network_policy != "bridge":
-            return
+            return None
 
         async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:
             stdout, stderr, code = await self._janitor._run_control(args)
             return code, stdout, stderr
 
-        await attest_docker_egress(
+        return await attest_docker_egress(
             runner=runner,
             profile=DEFAULT_EGRESS_PROFILE,
             backend_ref="docker-workload-launcher",
         )
+
+    @staticmethod
+    def _egress_attestation_evidence(
+        egress_attestation: EgressAttestation | None,
+    ) -> dict[str, object] | None:
+        if egress_attestation is None:
+            return None
+        return egress_attestation.model_dump(by_alias=True, mode="json")
 
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
         _ensure_paths_are_mounted(request)
@@ -943,9 +956,10 @@ class DockerWorkloadLauncher:
             else _request_timeout_seconds(request)
         )
         lease = await self._concurrency_limiter.acquire(request)
+        egress_attestation: EgressAttestation | None = None
 
         try:
-            await self._attest_egress_before_launch(request)
+            egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -1048,6 +1062,9 @@ class DockerWorkloadLauncher:
         diagnostics["collectedOutputRefs"] = dict(collected_refs)
         diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
+        egress_evidence = self._egress_attestation_evidence(egress_attestation)
+        diagnostics["egressAttestation"] = egress_evidence
+        workload_metadata["egressAttestation"] = egress_evidence
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -1095,8 +1112,9 @@ class DockerWorkloadLauncher:
     ) -> WorkloadResult:
         started_at = datetime.now(UTC)
         lease = await self._concurrency_limiter.acquire(request)
+        egress_attestation: EgressAttestation | None = None
         try:
-            await self._attest_egress_before_launch(request)
+            egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_helper_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -1117,6 +1135,7 @@ class DockerWorkloadLauncher:
                         "status": "not_started",
                         "reason": "docker run failed",
                     },
+                    egress_attestation=egress_attestation,
                 )
             self._helper_leases[request.container_name] = lease
             lease = None
@@ -1135,6 +1154,7 @@ class DockerWorkloadLauncher:
             stdout=_decode_stream(stdout),
             stderr=_decode_stream(stderr),
             readiness=readiness,
+            egress_attestation=egress_attestation,
         )
 
     async def stop_helper(
@@ -1243,6 +1263,7 @@ class DockerWorkloadLauncher:
         stderr: str,
         readiness: Mapping[str, object],
         teardown: Mapping[str, object] | None = None,
+        egress_attestation: EgressAttestation | None = None,
     ) -> WorkloadResult:
         duration_seconds = (completed_at - started_at).total_seconds()
         helper_metadata = _helper_metadata(
@@ -1278,6 +1299,9 @@ class DockerWorkloadLauncher:
         diagnostics["collectedOutputRefs"] = dict(collected_refs)
         diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
+        egress_evidence = self._egress_attestation_evidence(egress_attestation)
+        diagnostics["egressAttestation"] = egress_evidence
+        helper_metadata["egressAttestation"] = egress_evidence
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,

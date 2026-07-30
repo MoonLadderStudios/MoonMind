@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 from datetime import UTC, datetime
 from typing import Awaitable, Callable, Literal, Sequence
 
@@ -21,13 +22,23 @@ ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
 # Digest of the reviewed, mounted Squid policy. Attestation compares this
 # deployment-owned value with both the container label and the live file.
 EGRESS_CONFIG_DIGEST = "sha256:c3ad0d533dab70608bbbbcb0a5e82b94f67364cfcb2f4d670d0c944b2e945faa"
-EGRESS_NETWORK_REF = "moonmind_restricted-egress-network"
+# Deployment-owned network names. Compose resolves these same overrides when it
+# creates the networks (``restricted-egress-network`` /
+# ``sandbox-egress-network``), so an operator that sets the documented override
+# gets the resolved name fed into the immutable profile and every attestation
+# rather than a hard-coded default the backend would then fail closed against.
+EGRESS_NETWORK_REF = os.environ.get(
+    "MOONMIND_RESTRICTED_EGRESS_NETWORK", "moonmind_restricted-egress-network"
+)
+_SANDBOX_EGRESS_NETWORK_REF = os.environ.get(
+    "MOONMIND_SANDBOX_EGRESS_NETWORK", "moonmind_sandbox-egress-network"
+)
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
 _EXPECTED_GATEWAY_NETWORKS = frozenset(
     {
         EGRESS_NETWORK_REF,
-        "moonmind_sandbox-egress-network",
+        _SANDBOX_EGRESS_NETWORK_REF,
         "local-network",
     }
 )

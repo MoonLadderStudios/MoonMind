@@ -1888,3 +1888,128 @@ async def test_bridge_launch_fails_before_process_when_egress_is_unattested(
         await launcher.run(request)
 
     assert process_started is False
+
+
+def _healthy_egress_run_process(args: list[str]) -> _Process:
+    """Fake docker responses that satisfy attest_docker_egress plus the run."""
+
+    from moonmind.security.egress import (
+        DEFAULT_EGRESS_PROFILE,
+        EGRESS_CONFIG_DIGEST,
+        EGRESS_NETWORK_REF,
+        ENFORCER_IMPLEMENTATION,
+    )
+
+    subcommand = args[1] if len(args) > 1 else ""
+    if subcommand == "network":
+        return _Process(
+            stdout=json.dumps({"Internal": True, "EnableIPv6": False}).encode()
+        )
+    if subcommand == "inspect":
+        return _Process(
+            stdout=json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": {
+                        EGRESS_NETWORK_REF: {},
+                        "moonmind_sandbox-egress-network": {},
+                        "local-network": {},
+                    },
+                    "image": "sha256:gateway-image",
+                    "health": "healthy",
+                }
+            ).encode()
+        )
+    if subcommand == "exec":
+        return _Process(
+            stdout=(
+                f"{EGRESS_CONFIG_DIGEST.removeprefix('sha256:')}  "
+                "/etc/squid/squid.conf\n"
+            ).encode()
+        )
+    if subcommand == "run":
+        return _Process(returncode=0, stdout=b"bridge workload ok\n")
+    return _Process(returncode=0)
+
+
+@pytest.mark.asyncio
+async def test_bridge_launch_publishes_egress_attestation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-egress",
+            repoDir=str(workspace_root / "task-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+            profiles=[
+                _profile_payload(
+                    workspace_root=workspace_root, network_policy="bridge"
+                )
+            ],
+        )
+    )
+
+    assert result.status == "succeeded"
+    attestation = result.metadata["workload"]["egressAttestation"]
+    assert attestation is not None
+    assert attestation["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+    assert attestation["profileDigest"] == DEFAULT_EGRESS_PROFILE.digest
+    assert attestation["appliedRuleDigest"].startswith("sha256:")
+    assert attestation["validationResult"] == "passed"
+    assert "validatedAt" in attestation
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] == attestation
+
+
+@pytest.mark.asyncio
+async def test_none_network_launch_records_no_egress_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-none-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"ok\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-none-egress",
+            repoDir=str(workspace_root / "task-none-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    assert result.metadata["workload"]["egressAttestation"] is None
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] is None

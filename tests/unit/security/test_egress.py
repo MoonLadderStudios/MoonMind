@@ -49,9 +49,13 @@ def test_profile_rejects_internal_wildcard_and_direct_ip_names(name):
 
 
 def test_profile_is_immutable_digest_stable_and_has_no_execution_fields():
-    assert DEFAULT_EGRESS_PROFILE.digest == DEFAULT_EGRESS_PROFILE.digest
-    assert "command" not in DEFAULT_EGRESS_PROFILE.model_fields
-    assert "credential" not in DEFAULT_EGRESS_PROFILE.model_fields
+    # Rebuild the profile from its own serialized content and confirm the digest
+    # is content-stable. Comparing the property to itself would be a tautology
+    # (identical operands) and would not prove stability across construction.
+    rebuilt = _profile()
+    assert rebuilt.digest == DEFAULT_EGRESS_PROFILE.digest
+    assert "command" not in type(DEFAULT_EGRESS_PROFILE).model_fields
+    assert "credential" not in type(DEFAULT_EGRESS_PROFILE).model_fields
     with pytest.raises(ValidationError):
         _profile(firewallCommands=["iptables -F"])
 
@@ -218,3 +222,29 @@ def test_proxy_environment_clears_bypass_variables():
     assert "NO_PROXY=" in values
     assert "no_proxy=" in values
     assert all("169.254.169.254" not in value for value in values)
+
+
+def test_network_ref_resolves_configured_override(monkeypatch):
+    """The documented compose override feeds the immutable profile/attestation.
+
+    Setting ``MOONMIND_RESTRICTED_EGRESS_NETWORK`` must change the network the
+    profile declares and the attestation inspects, instead of leaving a hard
+    coded default the backend would fail closed against.
+    """
+
+    import importlib
+
+    from moonmind.security import egress as egress_module
+
+    monkeypatch.setenv("MOONMIND_RESTRICTED_EGRESS_NETWORK", "custom_restricted_net")
+    monkeypatch.setenv("MOONMIND_SANDBOX_EGRESS_NETWORK", "custom_sandbox_net")
+    try:
+        reloaded = importlib.reload(egress_module)
+        assert reloaded.EGRESS_NETWORK_REF == "custom_restricted_net"
+        assert reloaded.DEFAULT_EGRESS_PROFILE.network_ref == "custom_restricted_net"
+        assert "custom_restricted_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
+        assert "custom_sandbox_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
+    finally:
+        # Restore module-level defaults so later tests see the shipped values.
+        monkeypatch.undo()
+        importlib.reload(egress_module)
