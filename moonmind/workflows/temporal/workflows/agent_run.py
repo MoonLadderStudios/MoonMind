@@ -2425,12 +2425,15 @@ class MoonMindAgentRun:
         adapter: AgentAdapter,
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
+        remaining_budget_seconds: float | None = None,
     ) -> AgentRunStatusModel:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
         if use_managed_status_activity:
             schedule_to_close_override = (
-                self._managed_status_schedule_to_close_override()
+                self._managed_status_schedule_to_close_override(
+                    remaining_budget_seconds=remaining_budget_seconds,
+                )
             )
             status_payload = await self._execute_routed_activity(
                 "agent_runtime.status",
@@ -2461,12 +2464,25 @@ class MoonMindAgentRun:
         )
 
     @staticmethod
-    def _managed_status_schedule_to_close_override() -> timedelta | None:
-        """Preserve the former timeout for histories without the rollout patch."""
+    def _managed_status_schedule_to_close_override(
+        *,
+        remaining_budget_seconds: float | None = None,
+    ) -> timedelta | None:
+        """Bound status queueing without changing legacy activity commands."""
 
-        if workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
+        if not workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
+            return timedelta(seconds=180)
+        if remaining_budget_seconds is None:
             return None
-        return timedelta(seconds=180)
+        configured_seconds = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.status"
+        ).timeouts.schedule_to_close_seconds
+        return timedelta(
+            seconds=min(
+                float(configured_seconds),
+                max(0.001, float(remaining_budget_seconds)),
+            )
+        )
 
     async def _reconcile_managed_no_progress(
         self,
@@ -2527,11 +2543,24 @@ class MoonMindAgentRun:
             if completed or self.completion_event.is_set():
                 return self.final_result
 
+            remaining_status_budget = min(
+                (deadline - workflow.now()).total_seconds(),
+                timeout_seconds
+                - (workflow.now() - overall_start).total_seconds(),
+            )
+            if (
+                use_managed_status_activity
+                and not uses_codex_session_adapter
+                and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
+                and remaining_status_budget <= 0
+            ):
+                return None
             status_obj = await self._poll_managed_status(
                 request=request,
                 adapter=adapter,
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
+                remaining_budget_seconds=remaining_status_budget,
             )
 
     async def _cancel_managed_no_progress_and_fetch_cooldown_result(
@@ -2599,11 +2628,20 @@ class MoonMindAgentRun:
                     return self.final_result
                 return None
 
+            remaining_status_budget = (deadline - workflow.now()).total_seconds()
+            if (
+                use_managed_status_activity
+                and not uses_codex_session_adapter
+                and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
+                and remaining_status_budget <= 0
+            ):
+                return None
             status_obj = await self._poll_managed_status(
                 request=request,
                 adapter=adapter,
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
+                remaining_budget_seconds=remaining_status_budget,
             )
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
@@ -4812,11 +4850,24 @@ class MoonMindAgentRun:
                                 fallback_agent_id=request.agent_id,
                             )
                         else:
+                            remaining_status_budget = timeout_seconds - (
+                                workflow.now() - overall_start
+                            ).total_seconds()
+                            if (
+                                use_managed_status_activity
+                                and not uses_codex_session_adapter
+                                and workflow.patched(
+                                    MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID
+                                )
+                                and remaining_status_budget <= 0
+                            ):
+                                break
                             status_obj = await self._poll_managed_status(
                                 request=request,
                                 adapter=adapter,
                                 uses_codex_session_adapter=uses_codex_session_adapter,
                                 use_managed_status_activity=use_managed_status_activity,
+                                remaining_budget_seconds=remaining_status_budget,
                             )
 
                         self.run_status = status_obj.status

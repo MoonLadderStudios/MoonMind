@@ -13,12 +13,22 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("rollout_patch_enabled", "expected_schedule_to_close"),
-    [(False, timedelta(seconds=180)), (True, timedelta(seconds=600))],
+    (
+        "rollout_patch_enabled",
+        "remaining_budget_seconds",
+        "expected_schedule_to_close",
+    ),
+    [
+        (False, 45.0, timedelta(seconds=180)),
+        (True, None, timedelta(seconds=600)),
+        (True, 900.0, timedelta(seconds=600)),
+        (True, 45.0, timedelta(seconds=45)),
+    ],
 )
 async def test_managed_status_poll_timeout_is_replay_safe_and_rollout_tolerant(
     monkeypatch: pytest.MonkeyPatch,
     rollout_patch_enabled: bool,
+    remaining_budget_seconds: float | None,
     expected_schedule_to_close: timedelta,
 ) -> None:
     """Regression for the 2026-07-30 PR resolver worker-rollout failure."""
@@ -66,6 +76,7 @@ async def test_managed_status_poll_timeout_is_replay_safe_and_rollout_tolerant(
         adapter=object(),
         uses_codex_session_adapter=False,
         use_managed_status_activity=True,
+        remaining_budget_seconds=remaining_budget_seconds,
     )
 
     assert status.status == RunStatus.running

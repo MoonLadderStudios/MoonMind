@@ -204,16 +204,22 @@ class _CurrentHeadlessRemediationExecutionReplayFixture:
 @workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
 class _LegacyManagedStatusRolloutTimeoutReplayFixture:
     @workflow.run
-    async def run(self) -> int:
-        return 180
+    async def run(self) -> list[int]:
+        return [180, 180]
 
 
 @workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
 class _CurrentManagedStatusRolloutTimeoutReplayFixture:
     @workflow.run
-    async def run(self) -> int:
-        override = MoonMindAgentRun._managed_status_schedule_to_close_override()
-        return int(override.total_seconds()) if override is not None else 600
+    async def run(self) -> list[int]:
+        uncapped = MoonMindAgentRun._managed_status_schedule_to_close_override()
+        capped = MoonMindAgentRun._managed_status_schedule_to_close_override(
+            remaining_budget_seconds=45,
+        )
+        return [
+            int(uncapped.total_seconds()) if uncapped is not None else 600,
+            int(capped.total_seconds()) if capped is not None else 600,
+        ]
 
 
 @workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
@@ -743,7 +749,7 @@ async def test_managed_status_rollout_timeout_histories_replay() -> None:
                 id="test-managed-status-timeout-legacy",
                 task_queue="test-managed-status-timeout-legacy-replay",
             )
-            assert await legacy.result() == 180
+            assert await legacy.result() == [180, 180]
             legacy_history = await legacy.fetch_history()
 
         async with Worker(
@@ -757,7 +763,7 @@ async def test_managed_status_rollout_timeout_histories_replay() -> None:
                 id="test-managed-status-timeout-current",
                 task_queue="test-managed-status-timeout-current-replay",
             )
-            assert await current.result() == 600
+            assert await current.result() == [600, 45]
             current_history = await current.fetch_history()
 
     replayer = Replayer(
