@@ -1280,11 +1280,18 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
         )
 
-    @staticmethod
-    async def _github_token(request: AgentExecutionRequest) -> str | None:
-        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
-            request
-        ):
+    @classmethod
+    async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
+        gh_required = "gh" in cls._required_capabilities(request)
+        # A GitHub repository source must be cloned into the sandbox before the
+        # host launches. Private repositories require a credential for that clone
+        # even when mounted `gh` readiness is not a declared capability — for
+        # example read-only or publishMode=none work derives `git` but not `gh`.
+        # Resolve the clone credential from the authored GitHub repository source
+        # independently of mounted-`gh` readiness so private materialization does
+        # not silently fall back to an unauthenticated clone.
+        clone_needs_credential = cls._github_repository_source(request) is not None
+        if not gh_required and not clone_needs_credential:
             return None
         from moonmind.auth.github_credentials import resolve_github_credential
 
@@ -1292,11 +1299,35 @@ class OmnigentProfileBoundExecutionCoordinator:
         resolved = await resolve_github_credential(repo=repository or None)
         token = str(resolved.token or "").strip() if resolved else ""
         if not token:
-            raise OmnigentOAuthHostError(
-                "GitHub credential is required for mounted gh readiness",
-                code="github_auth_unavailable",
-            )
+            if gh_required:
+                raise OmnigentOAuthHostError(
+                    "GitHub credential is required for mounted gh readiness",
+                    code="github_auth_unavailable",
+                )
+            # A public GitHub clone can proceed unauthenticated; a private clone
+            # fails fast with an actionable error at materialization.
+            return None
         return token
+
+    @classmethod
+    def _github_repository_source(cls, request: AgentExecutionRequest) -> str | None:
+        """Return the authored GitHub HTTPS clone source, if any.
+
+        Reuses the single canonical repository-source classifier so GitHub
+        detection cannot drift between credential resolution and materialization.
+        """
+        source = cls._repository_source(request)
+        if not source:
+            return None
+        from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+
+        try:
+            normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
+                source
+            )
+        except OmnigentOAuthHostError:
+            return None
+        return normalized if kind == "github_https" else None
 
     @staticmethod
     def _github_mutation_required(request: AgentExecutionRequest) -> bool:

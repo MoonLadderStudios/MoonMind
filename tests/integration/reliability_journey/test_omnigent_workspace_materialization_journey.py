@@ -79,7 +79,9 @@ async def test_normal_workflow_materializes_one_authoritative_workspace(
     _init_source_repo(source)
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
-        client=SimpleNamespace(), workspace_root=workspace_root
+        client=SimpleNamespace(),
+        workspace_root=workspace_root,
+        repository_source_root=tmp_path,
     )
 
     # The workflow authors a durable locator identity, never a worker path.

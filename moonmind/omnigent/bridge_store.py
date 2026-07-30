@@ -1209,6 +1209,11 @@ class OmnigentBridgeSessionStore:
                         "retrievalState",
                         "retrievalMode",
                         "retrievalReason",
+                        "locatorKind",
+                        "workspaceId",
+                        "relativePath",
+                        "identityVerified",
+                        "materialization",
                     }
                 }
             journal.append(entry)

@@ -461,6 +461,41 @@ async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
 
 
 @pytest.mark.asyncio
+async def test_workspace_resolution_metadata_persists_through_allowlist(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    resolution = {
+        "locatorKind": "sandbox",
+        "workspaceId": "ws-abc123",
+        "relativePath": "repo",
+        "identityVerified": True,
+        "materialization": {
+            "action": "materialized",
+            "sourceKind": "github_https",
+            "checkedOut": "feature",
+            "restoreInputs": [{"ref": "artifact://a", "bytes": 12}],
+        },
+    }
+
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="workspace_resolution",
+        metadata=resolution,
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    resolution_events = [
+        event for event in events if event.event_type == "workspace_resolution"
+    ]
+    assert len(resolution_events) == 1
+    # The durable resolution evidence reaches Workflow Detail intact rather than
+    # being silently dropped by the metadata allowlist.
+    assert resolution_events[0].metadata_["metadata"] == resolution
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(

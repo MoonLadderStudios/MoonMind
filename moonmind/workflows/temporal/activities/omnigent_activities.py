@@ -71,6 +71,24 @@ async def omnigent_execute_activity(
                     )
                     return await service.read(artifact_id=artifact_id, **kwargs)
 
+            async def get_metadata(self, *, artifact_id: str, **kwargs):
+                async with async_session_maker() as artifact_session:
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(artifact_session)
+                    )
+                    return await service.get_metadata(
+                        artifact_id=artifact_id, **kwargs
+                    )
+
+            async def read_chunks(self, *, artifact_id: str, **kwargs):
+                async with async_session_maker() as artifact_session:
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(artifact_session)
+                    )
+                    return await service.read_chunks(
+                        artifact_id=artifact_id, **kwargs
+                    )
+
             async def write_complete(self, *, artifact_id: str, **kwargs):
                 async with async_session_maker() as artifact_session:
                     service = TemporalArtifactService(
