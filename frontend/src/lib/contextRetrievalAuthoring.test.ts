@@ -53,6 +53,18 @@ describe('contextRetrievalAuthoring', () => {
     expect(clamped.fallbackAllowed).toBe(false);
   });
 
+  it('caps maxQueries at the backend contract ceiling (100)', () => {
+    // The backend `RetrievalCapabilityIssue.max_queries` is le=100; the UI
+    // ceiling must match so 101-120 is not accepted only to fail issuance.
+    expect(DEFAULT_RETRIEVAL_CEILINGS.maxQueries.max).toBe(100);
+    const value = defaultContextRetrievalAuthoring();
+    value.followUp.enabled = true;
+    value.followUp.collections = ['repo'];
+    value.followUp.maxQueries = 120;
+    const compiled = compileContextRetrievalParameters(value);
+    expect(compiled.followUpRetrieval).toMatchObject({ maxQueries: 100 });
+  });
+
   it('compiles rag and followUpRetrieval fragments', () => {
     const value = defaultContextRetrievalAuthoring();
     value.initial.collections = ['repo', 'docs'];

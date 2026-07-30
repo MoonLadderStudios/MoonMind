@@ -19,9 +19,11 @@ from api_service.api.routers.retrieval_gateway import (
 from moonmind.omnigent.execution_profiles import (
     validate_effective_launch_snapshot,
 )
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 from moonmind.omnigent.profile_bound_execution import (
     _compile_persisted_effective_launch,
     compile_follow_up_retrieval_policy,
+    enforce_required_follow_up_retrieval,
 )
 
 
@@ -106,6 +108,70 @@ def test_follow_up_retrieval_folds_policy_budgets_when_unauthored() -> None:
     # boundaries.rag budgets reach the compiled block as the per-run ceiling.
     assert block["latencyMs"] == 4000
     assert block["maxContextTokens"] == 6000
+
+
+def test_follow_up_retrieval_clamps_authored_budgets_to_policy() -> None:
+    # Authored budgets larger than the selected policy must be clamped down; the
+    # gateway only clamps against deployment env limits, not the selected policy.
+    block = compile_follow_up_retrieval_policy(
+        _policy_snapshot(),
+        {
+            "followUpRetrieval": {
+                "enabled": True,
+                "collections": ["repo"],
+                "maxContextTokens": 9000,
+                "latencyMs": 9000,
+            }
+        },
+        repository="MoonMind",
+        tenant_id="tenant-1",
+    )
+    # policy tokenBudget=6000, latencyBudgetMs=4000 win over the larger authored
+    # values.
+    assert block["maxContextTokens"] == 6000
+    assert block["latencyMs"] == 4000
+
+
+def test_follow_up_retrieval_keeps_tighter_authored_budget() -> None:
+    block = compile_follow_up_retrieval_policy(
+        _policy_snapshot(),
+        {
+            "followUpRetrieval": {
+                "enabled": True,
+                "collections": ["repo"],
+                "maxContextTokens": 1000,
+                "latencyMs": 1500,
+            }
+        },
+        repository="MoonMind",
+        tenant_id="tenant-1",
+    )
+    # Authored values below the policy ceiling are preserved (they only narrow).
+    assert block["maxContextTokens"] == 1000
+    assert block["latencyMs"] == 1500
+
+
+def test_enforce_required_follow_up_retrieval_blocks_unavailable() -> None:
+    authored = {"enabled": True, "required": True}
+    compiled = {"enabled": False, "reason": "incomplete_follow_up_retrieval_scope"}
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        enforce_required_follow_up_retrieval(authored, compiled)
+    assert excinfo.value.code == "OMNIGENT_REQUIRED_FOLLOW_UP_RETRIEVAL_UNAVAILABLE"
+
+
+def test_enforce_required_follow_up_retrieval_allows_optional_and_available() -> None:
+    # Optional retrieval may degrade silently.
+    enforce_required_follow_up_retrieval(
+        {"enabled": True, "required": False}, {"enabled": False}
+    )
+    # Not enabled at all: required is moot.
+    enforce_required_follow_up_retrieval(
+        {"enabled": False, "required": True}, {"enabled": False}
+    )
+    # Required and available: no error.
+    enforce_required_follow_up_retrieval(
+        {"enabled": True, "required": True}, {"enabled": True}
+    )
 
 
 def test_follow_up_retrieval_incomplete_scope_disables_with_reason() -> None:

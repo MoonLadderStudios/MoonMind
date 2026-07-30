@@ -1539,6 +1539,16 @@ export function buildEditParametersPatch({
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
   }
+  // Context retrieval authority (#3514) is an operator-cleared control. When the
+  // submission does not carry `rag` / `followUpRetrieval` the operator disabled
+  // that authoring, so the inherited base value must be explicitly removed
+  // rather than silently preserved (mirrors the `mergeAutomation` clear above).
+  if (!("rag" in submittedPayload)) {
+    delete parametersPatch.rag;
+  }
+  if (!("followUpRetrieval" in submittedPayload)) {
+    delete parametersPatch.followUpRetrieval;
+  }
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
   return parametersPatch;
@@ -11159,6 +11169,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
+      // Context retrieval authoring (#3514) is submitted via the payload, not the
+      // workflow draft, so it must be compared explicitly or an exact rerun that
+      // only changes retrieval controls is classified as unchanged and its
+      // `parametersPatch` is dropped to null. Compare the compiled submission
+      // against the compiled source parameters.
+      const submittedRetrievalConfig = hasAuthoredContextRetrieval(contextRetrieval)
+        ? compileContextRetrievalParameters(contextRetrieval)
+        : {};
+      const sourceRetrievalAuthoring = parseContextRetrievalParameters(
+        recordValue(temporalDraftData?.execution?.inputParameters),
+      );
+      const sourceRetrievalConfig = hasAuthoredContextRetrieval(
+        sourceRetrievalAuthoring,
+      )
+        ? compileContextRetrievalParameters(sourceRetrievalAuthoring)
+        : {};
+      const retrievalConfigChanged =
+        JSON.stringify(submittedRetrievalConfig) !==
+        JSON.stringify(sourceRetrievalConfig);
       const currentPublishModeSelection = normalizePublishModeSelection(publishMode);
       const rerunDraftPublishModeSelection = normalizePublishModeSelection(
         rerunDraft?.publishMode,
@@ -11201,7 +11230,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               })),
             ) ||
           JSON.stringify(taskLevelAttachmentRefs) !==
-            JSON.stringify(rerunDraft.inputAttachments)
+            JSON.stringify(rerunDraft.inputAttachments) ||
+          retrievalConfigChanged
         : false;
       const isExactRerun = isExactRerunRequest && !rerunFormChanged;
       const artifactWorkflowPayload = mergeRecordValues(

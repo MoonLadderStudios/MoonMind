@@ -1303,6 +1303,43 @@ def test_summarize_bridge_session_aggregates_follow_up_evidence(tmp_path) -> Non
     assert cap["policyVersion"] == "policy-7"
 
 
+def test_summarize_bridge_session_merges_delivery_acknowledgement(tmp_path) -> None:
+    """A delivery ack for a request is folded into it, not counted separately."""
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(_session_budget(), lifetime_seconds=60)
+
+    # Original successful retrieval records a provisional delivery_unknown row.
+    _record_evidence(
+        registry,
+        capability,
+        state="succeeded",
+        resultCount=2,
+        correlation={"toolCallId": "tool-ack"},
+        delivery={"state": "delivery_unknown", "toolCallId": "tool-ack"},
+    )
+    # The bridge later acknowledges delivery: a second evidence row for the same
+    # toolCallId. It must project onto the original request, not inflate counts.
+    _record_evidence(
+        registry,
+        capability,
+        state="delivery_updated",
+        classification="delivered",
+        resultCount=0,
+        correlation={"toolCallId": "tool-ack"},
+        delivery={"state": "delivered", "toolCallId": "tool-ack"},
+    )
+
+    summary = registry.summarize_bridge_session("bridge-1")
+    agg = summary["aggregate"]
+    # One logical request, counted once, with the authoritative delivery state.
+    assert agg["requestCount"] == 1
+    assert agg["succeeded"] == 1
+    assert agg["delivered"] == 1
+    assert agg["deliveryUnknown"] == 0
+    # No spurious zero-result request surfaced by the acknowledgement row.
+    assert agg["empty"] == 0
+
+
 def test_summarize_bridge_session_excludes_other_bridge(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
     registry.issue(_session_budget(), lifetime_seconds=60)

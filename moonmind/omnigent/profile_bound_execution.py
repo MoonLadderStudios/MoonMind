@@ -322,18 +322,56 @@ def compile_follow_up_retrieval_policy(
         if coerced is not None:
             block[field] = coerced
 
-    # Fold deployment policy budgets into the block when the author did not set a
-    # tighter value, so ``boundaries.rag`` authority actually reaches the gateway.
-    if "latencyMs" not in block:
-        policy_latency = _coerce_positive_int(rag.get("latencyBudgetMs"))
-        if policy_latency is not None:
-            block["latencyMs"] = policy_latency
-    if "maxContextTokens" not in block:
-        policy_tokens = _coerce_positive_int(rag.get("tokenBudget"))
-        if policy_tokens is not None:
-            block["maxContextTokens"] = policy_tokens
+    # Clamp the policy-backed budgets to ``boundaries.rag`` so an authored run
+    # override can only ever narrow deployment policy, never broaden it. When the
+    # author omitted the field the policy value becomes the ceiling; when both are
+    # present the tighter (minimum) value wins. The gateway clamps host requests
+    # against deployment *environment* limits, not the selected policy, so the
+    # selected-policy ceiling must be folded in here or a run could receive a
+    # larger retrieval budget than its policy authorizes.
+    for block_field, policy_key in (
+        ("latencyMs", "latencyBudgetMs"),
+        ("maxContextTokens", "tokenBudget"),
+    ):
+        policy_value = _coerce_positive_int(rag.get(policy_key))
+        if policy_value is None:
+            continue
+        authored_value = block.get(block_field)
+        block[block_field] = (
+            min(authored_value, policy_value)
+            if isinstance(authored_value, int)
+            else policy_value
+        )
 
     return block
+
+
+def enforce_required_follow_up_retrieval(
+    authored_follow_up: Mapping[str, Any] | None,
+    compiled_block: Mapping[str, Any],
+) -> None:
+    """Fail the launch when required follow-up retrieval cannot be made available.
+
+    Follow-up retrieval is an authority boundary. When an operator explicitly
+    enables it with ``required: true`` the advertised guarantee must hold: if the
+    compiled capability is unavailable (for example an incomplete, unresolvable
+    scope), the step must block instead of silently launching with retrieval
+    disabled. Optional retrieval (``required`` unset/false) degrades quietly.
+    """
+
+    if not isinstance(authored_follow_up, Mapping):
+        return
+    if authored_follow_up.get("enabled") is not True:
+        return
+    if not bool(authored_follow_up.get("required")):
+        return
+    if compiled_block.get("enabled") is True:
+        return
+    reason = str(compiled_block.get("reason") or "follow_up_retrieval_unavailable")
+    raise OmnigentOAuthHostError(
+        f"required follow-up retrieval is unavailable: {reason}",
+        code="OMNIGENT_REQUIRED_FOLLOW_UP_RETRIEVAL_UNAVAILABLE",
+    )
 
 
 def _compile_persisted_effective_launch(
@@ -635,15 +673,17 @@ class OmnigentProfileBoundExecutionCoordinator:
                 or launch_parameters.get("tenantId")
                 or os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT", "default")
             ).strip()
+            follow_up_block = compile_follow_up_retrieval_policy(
+                policy_snapshot,
+                launch_parameters,
+                repository=follow_up_repository,
+                tenant_id=follow_up_tenant,
+            )
+            enforce_required_follow_up_retrieval(authored_follow_up, follow_up_block)
             effective_launch = _compile_persisted_effective_launch(
                 policy_snapshot,
                 provider_profile_id=profile_id,
-                follow_up_retrieval=compile_follow_up_retrieval_policy(
-                    policy_snapshot,
-                    launch_parameters,
-                    repository=follow_up_repository,
-                    tenant_id=follow_up_tenant,
-                ),
+                follow_up_retrieval=follow_up_block,
             )
             if (
                 self._repository_mutation_required(request)

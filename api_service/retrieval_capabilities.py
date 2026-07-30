@@ -610,6 +610,53 @@ class RetrievalCapabilityRegistry:
                 "requests": self._evidence_summaries(capability_id),
             }
 
+    @staticmethod
+    def _delivery_correlation_key(summary: dict[str, Any]) -> str | None:
+        """Return the ``toolCallId`` that ties a delivery update to its request."""
+        delivery = summary.get("delivery")
+        if isinstance(delivery, dict) and delivery.get("toolCallId"):
+            return str(delivery["toolCallId"])
+        correlation = summary.get("correlation")
+        if isinstance(correlation, dict):
+            for key in ("tool_call_id", "toolCallId"):
+                if correlation.get(key):
+                    return str(correlation[key])
+        return None
+
+    @classmethod
+    def _merge_delivery_evidence(
+        cls, requests: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Fold ``delivery_updated`` acknowledgements into their original request.
+
+        A successful retrieval records one evidence row (with a provisional
+        ``delivery_unknown`` state); the bridge's later delivery acknowledgement
+        records a second ``delivery_updated`` row for the same ``toolCallId``.
+        These are two evidence rows for a single logical request, so aggregating
+        them independently would inflate ``requestCount``, double-count the
+        request as both ``delivery_unknown`` and its final delivery outcome, and
+        surface a spurious zero-result request. Project the authoritative delivery
+        update onto the original request and drop the standalone acknowledgement.
+        """
+        merged: list[dict[str, Any]] = []
+        by_key: dict[str, dict[str, Any]] = {}
+        for request in requests:
+            key = cls._delivery_correlation_key(request)
+            if request.get("state") == "delivery_updated":
+                base = by_key.get(key) if key is not None else None
+                if base is not None:
+                    if isinstance(request.get("delivery"), dict):
+                        base["delivery"] = request["delivery"]
+                    continue
+                # Orphan acknowledgement with no retained base request: keep it
+                # once so the delivery outcome is not silently dropped.
+                merged.append(request)
+                continue
+            merged.append(request)
+            if key is not None:
+                by_key[key] = request
+        return merged
+
     def summarize_bridge_session(self, bridge_session_id: str) -> dict[str, Any]:
         """Aggregate follow-up retrieval evidence for one bridge session.
 
@@ -678,7 +725,9 @@ class RetrievalCapabilityRegistry:
                 aggregate["expiredCapabilities"] += 1
             elif state == "revoked":
                 aggregate["revokedCapabilities"] += 1
-            for request in capability.get("requests", []):
+            for request in self._merge_delivery_evidence(
+                capability.get("requests", [])
+            ):
                 aggregate["requestCount"] += 1
                 request_state = request.get("state")
                 classification = request.get("classification")

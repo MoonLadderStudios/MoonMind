@@ -80,7 +80,10 @@ export const DEFAULT_RETRIEVAL_CEILINGS: RetrievalCeilings = {
   collections: ['repo', 'docs'],
   topK: { min: 1, max: 50, default: 8 },
   maxContextTokens: { min: 64, max: 65536, default: 8192 },
-  maxQueries: { min: 1, max: 120, default: 12 },
+  // Backend contract: `RetrievalCapabilityIssue.max_queries` is `le=100`. The
+  // ceiling must match, or an authored 101–120 value passes the UI but fails
+  // capability issuance validation before deployment clamping can narrow it.
+  maxQueries: { min: 1, max: 100, default: 12 },
   latencyMs: { min: 100, max: 30000, default: 5000 },
   maxLifetimeSeconds: { min: 30, max: 3600, default: 900 },
   allowStaleOverlay: true,
