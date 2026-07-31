@@ -5,6 +5,13 @@ startup. The authoritative phase, evidence requirements, support statuses, and
 direct-runtime retirement gates are defined in
 [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md). Local validation must
 not promote a rollout phase without the protected-live artifact required there.
+Promotion binds every `codex-omnigent-support-matrix/v1` row to independently
+re-validated observed evidence (MoonLadderStudios/MoonMind#3564): the mounted
+promotion document names the support-matrix version, covered rows, image
+digests, architecture, and the exact evidence generation and expiry, and the
+launch boundary re-parses each artifact's observed per-row result before it
+authorizes any phase above the deployed one. Rollback to an earlier deployed
+phase stays available without rewriting those immutable per-run snapshots.
 
 **Document Class:** Canonical declarative  
 **Status:** Current  
