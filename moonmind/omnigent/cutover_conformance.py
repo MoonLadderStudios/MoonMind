@@ -1,4 +1,13 @@
-"""Build promotion evidence from independently resolvable cutover artifacts."""
+"""Build promotion evidence from independently resolvable cutover artifacts.
+
+Source issue: MoonLadderStudios/MoonMind#3564.
+
+The builder never trusts a caller-supplied row list or a bare ``passed`` flag.
+Each artifact must carry the observed lifecycle result for the rows it owns, and
+every attribute (host mode, runtime provenance, immutable images, architecture,
+conformance profile, launch-policy, and agent-profile version) is re-validated
+against the release before a row is counted as proven.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +20,14 @@ from typing import Any, Iterable, Mapping
 from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
 from moonmind.omnigent.cutover import (
     CUTOVER_POLICY_VERSION,
+    MATRIX_VERSION,
     REQUIRED_EVIDENCE_KINDS,
+    REQUIRED_MATRIX_ROWS,
     REQUIRED_TELEMETRY_GROUPS,
+    CutoverMatrixError,
+    validate_matrix_artifact,
 )
 
-ARTIFACT_SCHEMA_VERSION = "moonmind.codex-omnigent-cutover-artifact/v1"
 EVIDENCE_KIND_PROMOTION_FIELD = {
     "submissionMatrix": "allRequiredCasesPassed",
     "historicalReads": "historicalReadsPassed",
@@ -25,58 +37,9 @@ EVIDENCE_KIND_PROMOTION_FIELD = {
     "releaseMetadata": "profilePolicyReady",
 }
 
-# Stable row IDs are the machine-readable form of the canonical v1 matrix.
-REQUIRED_MATRIX_ROWS = (
-    "oauth-profile.static",
-    "oauth-profile.on-demand",
-    "bridge.stock-proxy",
-    "host.static",
-    "host.on-demand",
-    "submission.create",
-    "submission.edit",
-    "submission.rerun",
-    "submission.schedule",
-    "submission.preset",
-    "repository.read",
-    "repository.mutate-publish",
-    "workflow-detail.live-replay-resources-controls",
-    "lifecycle.cancel-timeout-failure-cleanup-janitor",
-    "checkpoint.capture-reattach-restore-branch",
-    "remediation.operator-autonomous-gate",
-    "rag.initial-follow-up",
-    "policy-agent-profile.persistence-ui",
-    "egress.enforced",
-    "release.images-architecture-upstream-license",
-    "direct-runtime.historical-read-fallback",
-)
-
 
 class CutoverEvidenceBuildError(ValueError):
     """Raised when protected evidence is incomplete or internally inconsistent."""
-
-
-def _artifact(path: Path) -> tuple[dict[str, Any], bytes]:
-    try:
-        content = path.read_bytes()
-        payload = json.loads(content)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise CutoverEvidenceBuildError(f"unreadable cutover artifact: {path}") from exc
-    if not isinstance(payload, dict):
-        raise CutoverEvidenceBuildError(f"cutover artifact is not an object: {path}")
-    if payload.get("schemaVersion") != ARTIFACT_SCHEMA_VERSION:
-        raise CutoverEvidenceBuildError(f"unsupported cutover artifact: {path}")
-    if payload.get("passed") is not True:
-        raise CutoverEvidenceBuildError(f"cutover artifact did not pass: {path}")
-    observations = payload.get("observations")
-    if (
-        not isinstance(observations, Mapping)
-        or not observations
-        or any(result is not True for result in observations.values())
-    ):
-        raise CutoverEvidenceBuildError(
-            f"cutover artifact lacks passing observed results: {path}"
-        )
-    return payload, content
 
 
 def build_cutover_evidence(
@@ -87,9 +50,15 @@ def build_cutover_evidence(
 ) -> dict[str, Any]:
     """Assemble a promotion document only from a complete protected matrix.
 
-    The builder derives pass booleans, refs, and SHA-256 values from artifact
-    bytes. Callers cannot declare coverage or success in the release config.
+    The builder derives pass booleans, refs, owned rows, and SHA-256 values from
+    the observed evidence in each artifact. Callers cannot declare coverage,
+    row ownership, or success in the release config.
     """
+
+    policy_version = release.get("launchPolicyVersion")
+    agent_profile_version = release.get("agentProfileVersion")
+    images = release.get("images")
+    architectures = release.get("architectures")
 
     manifest: list[dict[str, str]] = []
     promotion_results: dict[str, bool] = {}
@@ -97,18 +66,28 @@ def build_cutover_evidence(
     rows: set[str] = set()
     for supplied_path in artifact_paths:
         path = supplied_path.resolve()
-        payload, content = _artifact(path)
-        kind = payload.get("kind")
-        artifact_rows = payload.get("matrixRows")
-        if not isinstance(kind, str) or kind not in REQUIRED_EVIDENCE_KINDS:
-            raise CutoverEvidenceBuildError(f"invalid evidence kind in {path}")
+        try:
+            content = path.read_bytes()
+            payload = json.loads(content)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise CutoverEvidenceBuildError(
+                f"unreadable cutover artifact: {path}"
+            ) from exc
+        try:
+            kind, artifact_rows = validate_matrix_artifact(
+                payload,
+                expected_kind=None,
+                images=images,
+                architectures=architectures,
+                profile_version=PROFILE_VERSION,
+                profile_sha256=PROFILE_SHA256,
+                policy_version=policy_version,
+                agent_profile_version=agent_profile_version,
+            )
+        except CutoverMatrixError as exc:
+            raise CutoverEvidenceBuildError(f"{exc} in {path}") from exc
         if kind in kinds:
             raise CutoverEvidenceBuildError(f"duplicate evidence kind: {kind}")
-        if not isinstance(artifact_rows, list) or not artifact_rows or any(
-            not isinstance(row, str) or row not in REQUIRED_MATRIX_ROWS
-            for row in artifact_rows
-        ):
-            raise CutoverEvidenceBuildError(f"invalid matrix row coverage in {path}")
         duplicate_rows = rows.intersection(artifact_rows)
         if duplicate_rows:
             raise CutoverEvidenceBuildError(
@@ -157,8 +136,10 @@ def build_cutover_evidence(
             "generatedAt": (generated_at or datetime.now(timezone.utc)).isoformat(),
             "profileVersion": PROFILE_VERSION,
             "profileSha256": PROFILE_SHA256,
+            "launchPolicyVersion": policy_version,
+            "agentProfileVersion": agent_profile_version,
             **promotion_results,
-            "matrixVersion": "codex-omnigent-support-matrix/v1",
+            "matrixVersion": MATRIX_VERSION,
             "matrixRows": list(REQUIRED_MATRIX_ROWS),
             "evidenceRefs": [item["ref"] for item in manifest],
             "evidenceManifest": manifest,
@@ -168,8 +149,7 @@ def build_cutover_evidence(
 
 
 __all__ = [
-    "ARTIFACT_SCHEMA_VERSION",
-    "REQUIRED_MATRIX_ROWS",
+    "EVIDENCE_KIND_PROMOTION_FIELD",
     "CutoverEvidenceBuildError",
     "build_cutover_evidence",
 ]

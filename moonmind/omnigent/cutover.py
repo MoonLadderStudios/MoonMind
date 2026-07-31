@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlparse
 from moonmind.omnigent.conformance import (
     PROFILE_SHA256,
     PROFILE_VERSION,
+    REQUIRED_EVIDENCE_CHANNELS,
     ConformanceContractError,
     require_pinned_images,
 )
@@ -55,6 +56,220 @@ REQUIRED_EVIDENCE_KINDS = (
     "secretScan",
     "releaseMetadata",
 )
+
+# Machine-readable support-matrix contract (MoonLadderStudios/MoonMind#3564).
+# Each protected row is owned by exactly one evidence kind and observed on a
+# bounded set of host modes and runtime provenances. Support is proven only by
+# an artifact that carries the observed lifecycle result for its owned rows, not
+# by a caller-supplied row list or a bare pass boolean.
+MATRIX_VERSION = "codex-omnigent-support-matrix/v1"
+ARTIFACT_SCHEMA_VERSION = "moonmind.codex-omnigent-cutover-artifact/v2"
+ALLOWED_HOST_MODES = ("static", "on_demand")
+
+
+@dataclass(frozen=True, slots=True)
+class MatrixRow:
+    """One protected support row bound to its owning evidence kind."""
+
+    row_id: str
+    kind: str
+    host_modes: tuple[str, ...] = ALLOWED_HOST_MODES
+    provenance: tuple[str, ...] = ("omnigent",)
+
+
+REQUIRED_ROW_CATALOG: tuple[MatrixRow, ...] = (
+    MatrixRow("oauth-profile.static", "capacityOwnership", ("static",)),
+    MatrixRow("oauth-profile.on-demand", "capacityOwnership", ("on_demand",)),
+    MatrixRow("bridge.stock-proxy", "submissionMatrix"),
+    MatrixRow("host.static", "submissionMatrix", ("static",)),
+    MatrixRow("host.on-demand", "submissionMatrix", ("on_demand",)),
+    MatrixRow("submission.create", "submissionMatrix"),
+    MatrixRow("submission.edit", "submissionMatrix"),
+    MatrixRow("submission.rerun", "submissionMatrix"),
+    MatrixRow("submission.schedule", "submissionMatrix"),
+    MatrixRow("submission.preset", "submissionMatrix"),
+    MatrixRow("repository.read", "submissionMatrix"),
+    MatrixRow("repository.mutate-publish", "submissionMatrix"),
+    MatrixRow("workflow-detail.live-replay-resources-controls", "submissionMatrix"),
+    MatrixRow("lifecycle.cancel-timeout-failure-cleanup-janitor", "submissionMatrix"),
+    MatrixRow("checkpoint.capture-reattach-restore-branch", "temporalReplay"),
+    MatrixRow("remediation.operator-autonomous-gate", "secretScan"),
+    MatrixRow("rag.initial-follow-up", "releaseMetadata"),
+    MatrixRow("policy-agent-profile.persistence-ui", "releaseMetadata"),
+    MatrixRow("egress.enforced", "secretScan"),
+    MatrixRow("release.images-architecture-upstream-license", "releaseMetadata"),
+    MatrixRow(
+        "direct-runtime.historical-read-fallback",
+        "historicalReads",
+        ALLOWED_HOST_MODES,
+        ("codex_direct_compat",),
+    ),
+)
+
+# Stable row IDs are the machine-readable form of the canonical v1 matrix.
+REQUIRED_MATRIX_ROWS = tuple(row.row_id for row in REQUIRED_ROW_CATALOG)
+ROW_CATALOG: dict[str, MatrixRow] = {row.row_id: row for row in REQUIRED_ROW_CATALOG}
+
+
+class CutoverMatrixError(ValueError):
+    """Raised when a protected artifact fails observed-evidence row binding."""
+
+
+def _validate_row_secret_scan(secret_scan: Any, *, row_id: str) -> None:
+    """Bind a row to validated per-channel secret-scan evidence.
+
+    A self-asserted scalar (for example ``"clean"``) is never sufficient. Every
+    required evidence channel must record a passing scan bound to a resolvable
+    ``evidenceRef``, mirroring the conformance report contract in
+    ``moonmind.omnigent.conformance.build_report``. A missing channel, a
+    non-passing status, or an absent ref fails closed.
+    """
+
+    if not isinstance(secret_scan, Mapping):
+        raise CutoverMatrixError(
+            f"row {row_id!r} secret scan must carry per-channel evidence"
+        )
+    missing = set(REQUIRED_EVIDENCE_CHANNELS) - set(secret_scan)
+    if missing:
+        raise CutoverMatrixError(
+            f"row {row_id!r} secret scan is missing channels: {sorted(missing)}"
+        )
+    for channel in REQUIRED_EVIDENCE_CHANNELS:
+        result = secret_scan.get(channel)
+        evidence_ref = (
+            result.get("evidenceRef") if isinstance(result, Mapping) else None
+        )
+        if (
+            not isinstance(result, Mapping)
+            or result.get("status") != "passed"
+            or not isinstance(evidence_ref, str)
+            or not evidence_ref.strip()
+        ):
+            raise CutoverMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} lacks passing "
+                "evidence"
+            )
+
+
+def validate_matrix_artifact(
+    payload: Any,
+    *,
+    expected_kind: str | None,
+    images: Any,
+    architectures: Any,
+    profile_version: Any,
+    profile_sha256: Any,
+    policy_version: Any,
+    agent_profile_version: Any,
+) -> tuple[str, frozenset[str]]:
+    """Bind one protected artifact to the rows it independently proves.
+
+    Returns the owning evidence kind and the frozen set of rows it proves.
+    Raises :class:`CutoverMatrixError` when identity, ownership, host mode,
+    runtime provenance, immutable images, architecture, conformance profile,
+    launch-policy or agent-profile version, observed lifecycle result, or the
+    raw-channel secret scan cannot be independently confirmed. A caller-supplied
+    row name or a bare ``passed`` flag is never sufficient.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise CutoverMatrixError("artifact is not an object")
+    if payload.get("schemaVersion") != ARTIFACT_SCHEMA_VERSION:
+        raise CutoverMatrixError("unsupported artifact schema")
+    kind = payload.get("kind")
+    if not isinstance(kind, str) or kind not in REQUIRED_EVIDENCE_KINDS:
+        raise CutoverMatrixError("unsupported evidence kind")
+    if expected_kind is not None and kind != expected_kind:
+        raise CutoverMatrixError("evidence kind does not match manifest")
+    producer = payload.get("producerVersion")
+    if not isinstance(producer, str) or not producer.strip():
+        raise CutoverMatrixError("producer version is required")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise CutoverMatrixError("artifact declares no observed rows")
+
+    if not isinstance(images, Mapping):
+        raise CutoverMatrixError("release images are required")
+    try:
+        require_pinned_images(images)
+    except ConformanceContractError as exc:
+        raise CutoverMatrixError("release images must be immutable") from exc
+    architecture_set = (
+        {item for item in architectures if isinstance(item, str) and item.strip()}
+        if isinstance(architectures, list)
+        else set()
+    )
+    if not architecture_set:
+        raise CutoverMatrixError("release architectures are required")
+    if not isinstance(profile_version, str) or not isinstance(profile_sha256, str):
+        raise CutoverMatrixError("conformance profile evidence is required")
+    if not isinstance(policy_version, str) or not policy_version.strip():
+        raise CutoverMatrixError("launch policy version is required")
+    if not isinstance(agent_profile_version, str) or not agent_profile_version.strip():
+        raise CutoverMatrixError("agent profile version is required")
+
+    observed: dict[str, set[str]] = {}
+    for entry in rows:
+        if not isinstance(entry, Mapping):
+            raise CutoverMatrixError("observed row is not an object")
+        row_id = entry.get("row")
+        row = ROW_CATALOG.get(row_id) if isinstance(row_id, str) else None
+        if row is None:
+            raise CutoverMatrixError(f"unknown protected row: {row_id!r}")
+        if row.kind != kind:
+            raise CutoverMatrixError(
+                f"row {row_id!r} is not owned by evidence kind {kind!r}"
+            )
+        if entry.get("observedResult") != "passed":
+            raise CutoverMatrixError(f"row {row_id!r} did not observe a passing result")
+        if entry.get("hostMode") not in row.host_modes:
+            raise CutoverMatrixError(f"row {row_id!r} has an unsupported host mode")
+        if entry.get("runtimeProvenance") not in row.provenance:
+            raise CutoverMatrixError(
+                f"row {row_id!r} has unexpected runtime provenance"
+            )
+        _validate_row_secret_scan(entry.get("secretScan"), row_id=row_id)
+        architecture = entry.get("architecture")
+        if architecture not in architecture_set:
+            raise CutoverMatrixError(
+                f"row {row_id!r} was not observed on a released architecture"
+            )
+        if architecture in observed.get(row_id, set()):
+            raise CutoverMatrixError(
+                f"row {row_id!r} observed more than once on architecture "
+                f"{architecture!r}"
+            )
+        row_images = entry.get("images")
+        if not isinstance(row_images, Mapping) or dict(row_images) != dict(images):
+            raise CutoverMatrixError(
+                f"row {row_id!r} images are not the released immutable digests"
+            )
+        if (
+            entry.get("profileVersion") != profile_version
+            or entry.get("profileSha256") != profile_sha256
+        ):
+            raise CutoverMatrixError(
+                f"row {row_id!r} is not the canonical conformance profile"
+            )
+        if entry.get("launchPolicyVersion") != policy_version:
+            raise CutoverMatrixError(f"row {row_id!r} launch policy version mismatch")
+        if entry.get("agentProfileVersion") != agent_profile_version:
+            raise CutoverMatrixError(f"row {row_id!r} agent profile version mismatch")
+        observed.setdefault(row_id, set()).add(architecture)
+
+    # Every released architecture requires its own live evidence for each owned
+    # row. Membership in the release list is not enough: a row observed on only
+    # one of several released architectures leaves the others unproven, so the
+    # row is not counted as supported until the full per-row/architecture cross
+    # product is present.
+    for row_id, seen_architectures in observed.items():
+        missing_architectures = architecture_set - seen_architectures
+        if missing_architectures:
+            raise CutoverMatrixError(
+                f"row {row_id!r} was not observed on every released architecture: "
+                f"{sorted(missing_architectures)}"
+            )
+    return kind, frozenset(observed)
 
 
 class CutoverPhase(IntEnum):
@@ -160,6 +375,14 @@ class EffectivePhase:
             "expiresAt": expires_at,
             "profileVersion": evidence.get("profileVersion"),
             "profileSha256": evidence.get("profileSha256"),
+            "launchPolicyVersion": evidence.get("launchPolicyVersion"),
+            "agentProfileVersion": evidence.get("agentProfileVersion"),
+            "matrixVersion": evidence.get("matrixVersion"),
+            "matrixRows": (
+                list(evidence["matrixRows"])
+                if isinstance(evidence.get("matrixRows"), list)
+                else []
+            ),
             "images": dict(images) if isinstance(images, Mapping) else {},
             "architectures": (
                 list(architectures) if isinstance(architectures, list) else []
@@ -337,6 +560,19 @@ def evaluate_promotion(
         or evidence.get("profileSha256") != PROFILE_SHA256
     ):
         blockers.append("canonical_conformance_profile_required")
+    policy_version = evidence.get("launchPolicyVersion")
+    if not isinstance(policy_version, str) or not policy_version.strip():
+        blockers.append("launch_policy_version_required")
+    agent_profile_version = evidence.get("agentProfileVersion")
+    if not isinstance(agent_profile_version, str) or not agent_profile_version.strip():
+        blockers.append("agent_profile_version_required")
+    if evidence.get("matrixVersion") != MATRIX_VERSION:
+        blockers.append("unsupported_support_matrix_version")
+    declared_rows = evidence.get("matrixRows")
+    if not isinstance(declared_rows, list) or {
+        row for row in declared_rows if isinstance(row, str)
+    } != set(REQUIRED_MATRIX_ROWS):
+        blockers.append("matrix_row_coverage_incomplete")
     images = evidence.get("images")
     try:
         if not isinstance(images, Mapping):
@@ -442,7 +678,15 @@ def _verify_manifest_artifacts(
     *,
     evidence_document_path: Path,
 ) -> tuple[str, ...]:
-    """Resolve every manifest ref locally and bind its bytes to its digest."""
+    """Resolve every manifest ref locally, bind its bytes to its digest, and
+    re-validate the observed per-row evidence it carries.
+
+    Digest integrity alone is not support. Each artifact is re-parsed and its
+    owned rows re-validated against the promotion document's declared images,
+    architectures, conformance profile, launch-policy, and agent-profile
+    versions, so a syntactically complete promotion document whose artifacts
+    are self-asserted, mismatched, or incomplete fails closed here.
+    """
 
     manifest = evidence.get("evidenceManifest")
     if not isinstance(manifest, list) or not manifest:
@@ -450,11 +694,22 @@ def _verify_manifest_artifacts(
 
     blockers: list[str] = []
     base = evidence_document_path.resolve().parent
+    images = evidence.get("images")
+    architectures = evidence.get("architectures")
+    profile_version = evidence.get("profileVersion")
+    profile_sha256 = evidence.get("profileSha256")
+    policy_version = evidence.get("launchPolicyVersion")
+    agent_profile_version = evidence.get("agentProfileVersion")
+    observed_rows: set[str] = set()
+    seen_kinds: set[str] = set()
+    ownership_conflict = False
+    split_kind = False
     for item in manifest:
         if not isinstance(item, Mapping):
             continue
         ref = item.get("ref")
         expected = item.get("sha256")
+        kind = item.get("kind")
         if not isinstance(ref, str) or not isinstance(expected, str):
             continue
         try:
@@ -467,6 +722,41 @@ def _verify_manifest_artifacts(
             continue
         if hashlib.sha256(content).hexdigest() != expected:
             blockers.append("evidence_manifest_digest_mismatch")
+            continue
+        try:
+            payload = json.loads(content)
+            artifact_kind, rows = validate_matrix_artifact(
+                payload,
+                expected_kind=kind if isinstance(kind, str) else None,
+                images=images,
+                architectures=architectures,
+                profile_version=profile_version,
+                profile_sha256=profile_sha256,
+                policy_version=policy_version,
+                agent_profile_version=agent_profile_version,
+            )
+        except (json.JSONDecodeError, UnicodeError, CutoverMatrixError):
+            blockers.append("evidence_row_binding_invalid")
+            continue
+        # The canonical contract binds each evidence kind to exactly one
+        # artifact. A hand-authored or mutated promotion document can otherwise
+        # splice partial results from separate runs into two artifacts that
+        # share a kind but own disjoint rows; row overlap alone would not catch
+        # that. Reject the duplicate kind before unioning its rows so split
+        # coverage can never authorize a phase.
+        if artifact_kind in seen_kinds:
+            split_kind = True
+            continue
+        seen_kinds.add(artifact_kind)
+        if observed_rows & rows:
+            ownership_conflict = True
+        observed_rows |= rows
+    if split_kind:
+        blockers.append("split_evidence_kind_rejected")
+    if ownership_conflict:
+        blockers.append("matrix_row_ownership_conflict")
+    if observed_rows != set(REQUIRED_MATRIX_ROWS):
+        blockers.append("matrix_row_coverage_incomplete")
     return tuple(dict.fromkeys(blockers))
 
 
@@ -560,6 +850,15 @@ __all__ = [
     "MAX_EVIDENCE_AGE_SECONDS",
     "REQUIRED_EVIDENCE_KINDS",
     "REQUIRED_TELEMETRY_GROUPS",
+    "MATRIX_VERSION",
+    "ARTIFACT_SCHEMA_VERSION",
+    "ALLOWED_HOST_MODES",
+    "REQUIRED_ROW_CATALOG",
+    "REQUIRED_MATRIX_ROWS",
+    "ROW_CATALOG",
+    "MatrixRow",
+    "CutoverMatrixError",
+    "validate_matrix_artifact",
     "CutoverPhase",
     "EffectivePhase",
     "configured_phase",
