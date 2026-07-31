@@ -137,7 +137,9 @@ steps:
         inputs:
           run_verify: "{{ inputs.run_verify }}"
         publish:
-          mode: "{{ inputs.publish_mode }}"
+          mode: "{{ 'pr' if inputs.publish_mode == 'pr_with_merge_automation' else inputs.publish_mode }}"
+          mergeAutomation:
+            enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
