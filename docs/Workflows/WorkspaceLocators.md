@@ -13,7 +13,7 @@ and restores it through `workspace.apply_checkpoint`, retaining normal containme
 digest, and symlink checks. Omnigent session restore never applies a local archive,
 and workspace restore does not require the original Omnigent host.
 
-The **Codex via Omnigent** product path applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md). Workflow Create never authors absolute paths or daemon bind sources.
+The **Codex via Omnigent** product path (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`) applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md). Workflow Create never authors absolute paths or daemon bind sources.
 
 Durable workflow payloads identify workspaces with the discriminated
 `workspaceLocator` contract. A sandbox locator carries `workspaceId` and a relative
