@@ -44,6 +44,18 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
 )
+from moonmind.omnigent.workspace_intent import (
+    WorkspaceIntentCompilationError,
+    authored_checkout_commit,
+    authored_github_mutation_required,
+    authored_repository_mutation_required,
+    authored_repository_source,
+    authored_required_capabilities,
+    authored_restore_input_refs,
+    authored_starting_branch,
+    authored_target_branch,
+    compile_workspace_intent,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
@@ -558,6 +570,67 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "completed",
                 metadata={"effectiveLaunch": effective_launch},
             )
+            # Compile every normal authoring surface's authored request into one
+            # durable, versioned workspace-intent record before any host binding,
+            # lease, or workspace mutation. Unsafe or inconsistent authored input
+            # (runtime-specific bind paths, Docker authority, arbitrary host ids,
+            # credential-shaped values) fails closed here. Remediation runs carry
+            # a pre-materialized, separately-authorized workspace and are compiled
+            # by their owner, so they are not recompiled here.
+            workspace_intent = None
+            if remediation_resolution is None:
+                current_stage = "workspace_intent_compilation"
+                await emit(current_stage, "started")
+                try:
+                    workspace_intent = compile_workspace_intent(
+                        request,
+                        workflow_id=workflow_id,
+                        step_execution_id=(
+                            step_execution_id or request.idempotency_key
+                        ),
+                        run_id=(
+                            request.step_execution.run_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                        logical_step_id=(
+                            request.step_execution.logical_step_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                    )
+                except WorkspaceIntentCompilationError as exc:
+                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+                # Durable, bounded, credential-free, path-safe compilation
+                # evidence for Workflow Detail. A retry deterministically
+                # reproduces the same intent digest.
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="workspace_intent_compiled",
+                    # Scope the durable event identity to the compiled intent
+                    # digest. A deterministic retry reproduces the same digest and
+                    # deduplicates; a conflicting resubmission under the same
+                    # idempotency key (changed repository, branch, locator, or
+                    # authority) produces a distinct digest and is recorded as a
+                    # new event instead of silently retaining the stale evidence.
+                    event_identity=(
+                        f"workspace_intent_compiled:{workspace_intent.intent_digest}"
+                    ),
+                    metadata=workspace_intent.evidence(),
+                )
+                await emit(
+                    current_stage,
+                    "completed",
+                    metadata={
+                        "workspaceIntentDigest": workspace_intent.intent_digest,
+                        "workspaceIntentSchemaVersion": (
+                            workspace_intent.schema_version
+                        ),
+                        "locatorKind": workspace_intent.workspace_locator.kind,
+                        "repositoryMutation": workspace_intent.repository_mutation,
+                        "publishMode": workspace_intent.publish_mode,
+                    },
+                )
             owner_id = deterministic_lease_owner_id(
                 profile_id=profile_id,
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
@@ -678,7 +751,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workspace_locator=(
                     remediation_resolution.get("workspaceLocator")
                     if remediation_resolution is not None
-                    else self._workspace_locator(request)
+                    else workspace_intent.workspace_locator_payload()
                 ),
                 current_workflow_id=workflow_id,
                 current_step_execution_id=(
@@ -700,27 +773,32 @@ class OmnigentProfileBoundExecutionCoordinator:
                 repository_source=(
                     ""
                     if remediation_resolution is not None
-                    else self._repository_source(request)
+                    else (workspace_intent.repository or "")
                 ),
                 starting_branch=(
                     None
                     if remediation_resolution is not None
-                    else self._starting_branch(request)
+                    else workspace_intent.starting_branch
                 ),
                 target_branch=(
                     None
                     if remediation_resolution is not None
-                    else self._target_branch(request)
+                    else workspace_intent.target_branch
                 ),
                 checkout_commit=(
                     None
                     if remediation_resolution is not None
-                    else self._checkout_commit(request)
+                    else workspace_intent.checkout_commit
                 ),
+                # Host artifact materialization accepts only ``artifact://``
+                # restore inputs. The compiler already partitioned provider
+                # external-state refs into ``external_state_refs``; forward only
+                # the artifact-backed restore refs so a checkpoint/continuation
+                # carrying an external-state ref is not rejected before launch.
                 restore_input_refs=(
                     ()
                     if remediation_resolution is not None
-                    else self._restore_input_refs(request)
+                    else tuple(workspace_intent.restore_input_refs)
                 ),
             )
             await emit(current_stage, "completed")
@@ -1317,79 +1395,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                 policy_ref
             )
 
-    @staticmethod
-    def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:
-        if request.remediation_workspace is not None:
-            binding = RemediationWorkspaceBinding.model_validate(
-                request.remediation_workspace
-            )
-            return binding.destination_workspace_locator.model_dump(
-                by_alias=True, mode="json"
-            )
-        locator = request.workspace_spec.get("workspaceLocator")
-        if not isinstance(locator, Mapping):
-            raise OmnigentOAuthHostError(
-                "profile-bound Omnigent execution requires workspaceSpec.workspaceLocator",
-                code="WORKSPACE_LOCATOR_REQUIRED",
-            )
-        return dict(locator)
-
-    @staticmethod
-    def _workspace_spec(request: AgentExecutionRequest) -> Mapping[str, Any]:
-        spec = request.workspace_spec
-        return spec if isinstance(spec, Mapping) else {}
-
     @classmethod
     def _repository_source(cls, request: AgentExecutionRequest) -> str:
-        spec = cls._workspace_spec(request)
-        parameters = request.parameters or {}
-        for candidate in (
-            spec.get("repository"),
-            spec.get("repo"),
-            parameters.get("repository"),
-        ):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return ""
+        return authored_repository_source(request)
 
     @classmethod
     def _starting_branch(cls, request: AgentExecutionRequest) -> str | None:
-        spec = cls._workspace_spec(request)
-        for candidate in (
-            spec.get("startingBranch"),
-            spec.get("branch"),
-            spec.get("baseBranch"),
-        ):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return None
+        return authored_starting_branch(request)
 
     @classmethod
     def _target_branch(cls, request: AgentExecutionRequest) -> str | None:
-        value = str(cls._workspace_spec(request).get("targetBranch") or "").strip()
-        return value or None
+        return authored_target_branch(request)
 
     @classmethod
     def _checkout_commit(cls, request: AgentExecutionRequest) -> str | None:
-        spec = cls._workspace_spec(request)
-        for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return None
+        return authored_checkout_commit(request)
 
     @classmethod
     def _restore_input_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
-        raw = cls._workspace_spec(request).get("restoreInputRefs")
-        if not isinstance(raw, (list, tuple)):
-            return ()
-        return tuple(
-            dict.fromkeys(
-                str(value).strip() for value in raw if str(value).strip()
-            )
-        )
+        return authored_restore_input_refs(request)
 
     @staticmethod
     def _remediation_workspace(
@@ -1403,14 +1427,7 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:
-        raw = (request.parameters or {}).get("requiredCapabilities")
-        if not isinstance(raw, list):
-            return ()
-        return tuple(
-            dict.fromkeys(
-                str(value).strip().lower() for value in raw if str(value).strip()
-            )
-        )
+        return authored_required_capabilities(request)
 
     @classmethod
     async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
@@ -1463,38 +1480,11 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _github_mutation_required(request: AgentExecutionRequest) -> bool:
-        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
-            request
-        ):
-            return False
-        parameters = request.parameters or {}
-        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
-        if publish_mode not in {"", "none"}:
-            return True
-        skill = parameters.get("skill")
-        if not isinstance(skill, Mapping):
-            return False
-        side_effect = skill.get("sideEffect")
-        return isinstance(side_effect, Mapping) and bool(
-            str(side_effect.get("kind") or "").strip()
-        )
+        return authored_github_mutation_required(request)
 
     @staticmethod
     def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
-        parameters = request.parameters or {}
-        if bool(parameters.get("repositoryMutationRequired")):
-            return True
-        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
-        if publish_mode not in {"", "none"}:
-            return True
-        skill = parameters.get("skill")
-        if isinstance(skill, Mapping):
-            side_effect = skill.get("sideEffect")
-            if isinstance(side_effect, Mapping) and str(
-                side_effect.get("kind") or ""
-            ).strip():
-                return True
-        return False
+        return authored_repository_mutation_required(request)
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]

@@ -33,7 +33,7 @@ def _managed_relative_subpath(value: str) -> str:
 
 
 class SandboxWorkspaceLocator(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     kind: Literal["sandbox"] = "sandbox"
     workspace_id: str = Field(..., alias="workspaceId", min_length=1, max_length=200)
@@ -43,7 +43,7 @@ class SandboxWorkspaceLocator(BaseModel):
 
 
 class ManagedWorkspaceLocator(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     kind: Literal["managed_runtime"] = "managed_runtime"
     runtime_id: str = Field(..., alias="runtimeId", min_length=1, max_length=200)
@@ -56,7 +56,7 @@ class ManagedWorkspaceLocator(BaseModel):
 
 
 class ExternalStateLocator(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     kind: Literal["external_state"] = "external_state"
     artifact_ref: str = Field(..., alias="artifactRef", min_length=1, max_length=2000)

@@ -2161,6 +2161,287 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
     assert transitions[-1] == ("terminal", "failed")
 
 
+def _workspace_intent_profile():
+    return SimpleNamespace(
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=900,
+        runtime_id="codex_cli",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        secret_refs={},
+        command_behavior={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_coordinator_compiles_durable_workspace_intent_before_host_mutation() -> (
+    None
+):
+    """The normal authoring path compiles one durable, versioned intent record,
+    persists bounded evidence, and drives host preparation from it — before any
+    host or Docker mutation."""
+
+    from moonmind.omnigent.workspace_intent import compile_workspace_intent
+
+    events: list[tuple[str, dict]] = []
+    prepare_kwargs: dict = {}
+    execute = AsyncMock()
+    provider_lease = SimpleNamespace(
+        profile_id="codex",
+        runtime_id="codex_cli",
+        lease_id="provider-lease-1",
+        owner_id="owner-1",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+
+    class LeaseClient:
+        async def acquire_execution_lease(self, **_kwargs):
+            return provider_lease
+
+        async def release_lease(self, _lease):
+            return None
+
+    class Hosts:
+        def __init__(self):
+            self.lease = _host_lease().model_copy(
+                update={"status": "allocating", "omnigent_host_id": None}
+            )
+
+        async def get_binding_for_profile(self, _profile_id):
+            return _binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            return _binding().model_copy(update={
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
+
+        async def create_or_get_host_lease(self, **_kwargs):
+            return self.lease
+
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            assert self.lease.status == expected_status
+            self.lease = self.lease.model_copy(
+                update={"status": new_status, **dict(fields or {})}
+            )
+            return self.lease
+
+        async def mark_host_lease_stopped(self, _lease_id):
+            self.lease = self.lease.model_copy(update={"status": "stopped"})
+            return self.lease
+
+        async def mark_host_lease_failed(self, *_args, **_kwargs):
+            return None
+
+    class Runtime:
+        async def prepare_host(self, **kwargs):
+            prepare_kwargs.update(kwargs)
+            raise MountedToolPreflightError(
+                "stop after compile",
+                code="github_auth_unavailable",
+                evidence={"tool": "gh", "phase": "authentication"},
+            )
+
+        async def stop_host(self, **_kwargs):
+            return None
+
+    class Store:
+        async def get_or_create(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_profile_authorization(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
+            events.append((event_type, kwargs))
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=LeaseClient(),
+        host_repository=Hosts(),
+        host_runtime=Runtime(),
+        run_store=Store(),
+        execution_runner=execute,
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=_workspace_intent_profile()
+    )
+    coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
+
+    workspace_id = hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-1",
+        inputRefs=["artifact://in1"],
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": "https://github.com/owner/repo.git",
+            "startingBranch": "main",
+            "targetBranch": "feature/x",
+            # A checkpoint restore that mixes an artifact input with a provider
+            # external-state ref. Only the artifact ref may reach host artifact
+            # materialization; the external-state ref must not be forwarded there.
+            "restoreInputRefs": ["artifact://chk1", "external-state:sess-9"],
+        },
+        parameters={
+            "repository": "https://github.com/owner/repo.git",
+            "requiredCapabilities": ["gh"],
+            "publishMode": "none",
+        },
+    )
+
+    with pytest.raises(MountedToolPreflightError):
+        await coordinator.execute(request)
+
+    # Bounded, credential-free compilation evidence was persisted durably.
+    compiled = next(
+        kwargs for name, kwargs in events if name == "workspace_intent_compiled"
+    )
+    evidence = compiled["metadata"]
+    expected = compile_workspace_intent(
+        request, workflow_id="workflow-1", step_execution_id="idem-1"
+    )
+    assert evidence["intentDigest"] == expected.intent_digest
+    # The durable event identity is scoped to the compiled intent digest so a
+    # conflicting resubmission under the same idempotency key cannot silently
+    # retain the stale evidence.
+    assert compiled["event_identity"] == (
+        f"workspace_intent_compiled:{expected.intent_digest}"
+    )
+    # Only the artifact-backed restore ref reaches host materialization; the
+    # provider external-state ref is partitioned out of the compiled record.
+    assert tuple(prepare_kwargs["restore_input_refs"]) == ("artifact://chk1",)
+    assert evidence["schemaVersion"] == "v1"
+    assert evidence["repositoryMutation"] is False
+    assert evidence["publishMode"] == "none"
+    assert evidence["repositoryKind"] == "github_https"
+    assert evidence["locatorKind"] == "sandbox"
+    assert evidence["inputRefCount"] == 1
+
+    # Compilation happens before any host binding/mutation.
+    stage_order = [name for name, _ in events]
+    assert stage_order.index("workspace_intent_compilation") < stage_order.index(
+        "container_start"
+    )
+
+    # Host preparation is driven from the typed locator and authored source in
+    # the compiled record — never a caller bind path or volume name.
+    assert prepare_kwargs["workspace_locator"] == {
+        "kind": "sandbox",
+        "workspaceId": workspace_id,
+        "relativePath": "repo",
+    }
+    assert prepare_kwargs["repository_source"] == "https://github.com/owner/repo.git"
+    assert prepare_kwargs["starting_branch"] == "main"
+    assert prepare_kwargs["target_branch"] == "feature/x"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_fails_closed_on_smuggled_runtime_shortcut() -> None:
+    """A caller-authored Docker-authority shortcut fails closed at compile time,
+    before any provider lease or host mutation."""
+
+    events: list[tuple[str, dict]] = []
+    lease_acquired = False
+    prepared = False
+
+    class LeaseClient:
+        async def acquire_execution_lease(self, **_kwargs):
+            nonlocal lease_acquired
+            lease_acquired = True
+            return SimpleNamespace(
+                profile_id="codex",
+                runtime_id="codex_cli",
+                lease_id="provider-lease-1",
+                owner_id="owner-1",
+                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+            )
+
+        async def release_lease(self, _lease):
+            return None
+
+    class Hosts:
+        async def get_binding_for_profile(self, _profile_id):
+            return _binding()
+
+    class Runtime:
+        async def prepare_host(self, **_kwargs):
+            nonlocal prepared
+            prepared = True
+            return {}
+
+        async def stop_host(self, **_kwargs):
+            return None
+
+    class Store:
+        async def get_or_create(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_profile_authorization(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
+            events.append((event_type, kwargs))
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=LeaseClient(),
+        host_repository=Hosts(),
+        host_runtime=Runtime(),
+        run_store=Store(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=_workspace_intent_profile()
+    )
+    coordinator._github_token = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    workspace_id = hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-1",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": "owner/repo",
+            "dockerVolume": "operator-chosen-volume",
+        },
+        parameters={"repository": "owner/repo"},
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        await coordinator.execute(request)
+
+    assert excinfo.value.code == "WORKSPACE_INTENT_UNSAFE_INPUT"
+    # No workspace was compiled, no provider lease acquired, no host mutated.
+    assert not any(name == "workspace_intent_compiled" for name, _ in events)
+    assert lease_acquired is False
+    assert prepared is False
+
+
 def _launch_ready_profile():
     return SimpleNamespace(
         enabled=True,
