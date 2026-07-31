@@ -107,6 +107,33 @@ def test_compiles_full_authored_intent() -> None:
     ]
 
 
+def test_provider_target_persists_connection_revision_and_remote_tip_axes() -> None:
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+                "revision": {
+                    "kind": "git_commit",
+                    "commitSha": "abcdef012345",
+                },
+            },
+        },
+        parameters={"publishMode": "none", "requiredCapabilities": ["git"]},
+    )
+    intent = _compile(request)
+
+    assert intent.repository == "acme/widgets"
+    assert intent.connection_ref == "repository-connection:git-default"
+    assert intent.starting_branch == "main"
+    assert intent.checkout_commit == "abcdef012345"
+    assert intent.revision_kind == "git_commit"
+    assert intent.remote_tip_expectation == "read_only"
+
+
 def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
     # The canonical materialization classifier resolves ``owner/repo`` to a
     # GitHub clone, so durable evidence must not redact it as ``[local-source]``.
