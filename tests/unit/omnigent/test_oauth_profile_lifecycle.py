@@ -1804,6 +1804,206 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> None:
+    """The coordinator emits the unified #3561 authority chain once, credential-free.
+
+    It must appear before the terminal event, carry the workspace/runtime/
+    publication/terminal sections nested under ``authorityChain`` so the bridge
+    store allowlist preserves them, and leak no GitHub token or raw daemon path.
+    """
+
+    ordered: list[str] = []
+    authority_metadata: list[dict] = []
+
+    provider_lease = SimpleNamespace(
+        profile_id="codex",
+        runtime_id="codex_cli",
+        lease_id="provider-lease-1",
+        owner_id="owner-1",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+
+    class LeaseClient:
+        async def acquire_execution_lease(self, **_kwargs):
+            return provider_lease
+
+        async def release_lease(self, _lease):
+            ordered.append("provider_released")
+
+        async def record_cooldown(self, **_kwargs):
+            return None
+
+    # An on-demand binding: repository mutation (publishMode=branch) is only
+    # realizable on an isolated on-demand host, so authored publication requires it.
+    def _on_demand_binding():
+        return _binding().model_copy(
+            update={
+                "static_host_id": None,
+                "host_launch_profile_ref": "codex-on-demand@1",
+            }
+        )
+
+    class Hosts:
+        def __init__(self):
+            self.lease = _host_lease().model_copy(
+                update={"status": "allocating", "omnigent_host_id": None}
+            )
+
+        async def get_binding_for_profile(self, _profile_id):
+            return _on_demand_binding()
+
+        async def create_or_update_static_binding(self, **kwargs):
+            binding = _on_demand_binding()
+            if "effective_launch_snapshot" not in kwargs:
+                return binding
+            return binding.model_copy(update={
+                "host_launch_profile_ref": kwargs.get("host_launch_profile_ref")
+                or binding.host_launch_profile_ref,
+                "execution_profile_ref": kwargs["execution_profile_ref"],
+                "launch_policy_ref": kwargs["launch_policy_ref"],
+                "effective_launch_snapshot": kwargs["effective_launch_snapshot"],
+            })
+
+        async def create_or_get_host_lease(self, **_kwargs):
+            return self.lease
+
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            self.lease = self.lease.model_copy(
+                update={"status": new_status, **dict(fields or {})}
+            )
+            return self.lease
+
+        async def mark_host_lease_stopped(self, _lease_id):
+            ordered.append("host_stopped")
+            self.lease = self.lease.model_copy(update={"status": "stopped"})
+            return self.lease
+
+        async def mark_host_lease_failed(self, *_args, **_kwargs):
+            return None
+
+    class Runtime:
+        async def prepare_host(self, **_kwargs):
+            return {
+                "hostId": "host-1",
+                "workspacePath": "/workspaces/run",
+                # Bounded, credential-free resolution evidence as produced by the
+                # real runtime; the coordinator folds this into the authority chain.
+                "workspaceResolution": {
+                    "locatorKind": "sandbox",
+                    "workspaceId": "ws-1",
+                    "relativePath": "repo",
+                    "identityVerified": True,
+                    "materialization": {
+                        "action": "materialized",
+                        "sourceKind": "github_https",
+                        "startingBranch": "main",
+                        "checkedOut": "main",
+                        "outputBranch": "agent/impl",
+                    },
+                },
+            }
+
+        async def stop_host(self, **_kwargs):
+            ordered.append("host_cleanup")
+
+    class Store:
+        async def get_or_create(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_profile_authorization(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
+            ordered.append(event_type)
+            metadata = kwargs.get("metadata") or {}
+            if "authorityChain" in metadata:
+                authority_metadata.append(metadata["authorityChain"])
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="done",
+            outputRefs=["artifact://out-1"],
+            metadata={"pushRef": "artifact://push-1"},
+        )
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=LeaseClient(),
+        host_repository=Hosts(),
+        host_runtime=Runtime(),
+        run_store=Store(),
+        execution_runner=execute,
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
+    )
+    await coordinator.execute(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="codex",
+            correlationId="workflow-1",
+            idempotencyKey="idem-1",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(
+                        b"workflow-1:idem-1"
+                    ).hexdigest()[:24],
+                },
+                "repository": "owner/repo",
+                "startingBranch": "main",
+                "targetBranch": "agent/impl",
+            },
+            parameters={
+                "publishMode": "branch",
+                "repository": "owner/repo",
+                "omnigent": {"session": {"workspace": "owner/repo"}},
+            },
+        )
+    )
+
+    assert "authority_chain" in ordered
+    assert ordered.index("authority_chain") < ordered.index("terminal")
+    assert ordered.index("host_stopped") < ordered.index("authority_chain")
+    assert len(authority_metadata) == 1
+    chain = authority_metadata[0]
+    assert chain["schemaVersion"] == "omnigent-authority-chain-v1"
+    assert chain["workspace"]["candidateHead"] == "agent/impl"
+    assert chain["publication"]["publishMode"] == "branch"
+    assert chain["publication"]["outputBranch"] == "agent/impl"
+    assert (
+        chain["publication"]["publicationState"] == "authorized_pending_publication"
+    )
+    assert chain["publication"]["declaredOutputRefs"] == ["artifact://out-1"]
+    assert chain["publication"]["evidenceRefs"]["pushRef"] == "artifact://push-1"
+    assert chain["terminal"]["releaseOrdering"][-1] == "terminal"
+    assert chain["terminal"]["cleanupCompleted"] is True
+    assert chain["runtime"]["hostMode"] == "on_demand_docker"
+    assert chain["terminal"]["cleanupMode"] == "on_demand_remove"
+    # No credential material or raw daemon path anywhere in the projection.
+    flat = repr(chain)
+    assert "/workspaces/run" not in flat
+    assert "token" not in flat.lower()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_records_runner_preflight_block_before_execution() -> None:
     events: list[tuple[str, dict]] = []
     execute = AsyncMock()

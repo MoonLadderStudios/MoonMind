@@ -496,6 +496,60 @@ async def test_workspace_resolution_metadata_persists_through_allowlist(store):
 
 
 @pytest.mark.asyncio
+async def test_authority_chain_metadata_persists_through_allowlist(store):
+    """The unified #3561 authority-chain projection survives the allowlist intact.
+
+    It is nested under the single ``authorityChain`` key so the whole compact
+    workspace -> runtime -> publication -> terminal -> cleanup -> lease structure
+    reaches Workflow Detail without the top-level allowlist pruning its subtree.
+    """
+
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    authority_chain = {
+        "schemaVersion": "omnigent-authority-chain-v1",
+        "workspace": {"locatorKind": "sandbox", "workspaceId": "ws-1"},
+        "runtime": {"hostMode": "static_compose", "mountClasses": ["workspace"]},
+        "publication": {
+            "publishMode": "branch",
+            "outputBranch": "agent/impl",
+            "publicationState": "authorized_pending_publication",
+        },
+        "terminal": {
+            "cleanupCompleted": True,
+            "leaseReleased": True,
+            "releaseOrdering": [
+                "host_cleanup_completed",
+                "provider_lease_released",
+                "terminal",
+            ],
+        },
+        "reasons": [],
+    }
+
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="authority_chain",
+        event_identity="idem-1:attempt:1:authority_chain:completed",
+        status="completed",
+        metadata={"authorityChain": authority_chain},
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    authority_events = [
+        event
+        for event in events
+        if event.event_type == "lifecycle.authority_chain"
+    ]
+    assert len(authority_events) == 1
+    assert authority_events[0].metadata_["metadata"] == {
+        "authorityChain": authority_chain
+    }
+
+
+@pytest.mark.asyncio
 async def test_attach_conflicting_session_fails(store):
     request = _request()
     await store.get_or_create(
