@@ -98,12 +98,20 @@ evidence kind. Every artifact declares a `producerVersion` and a `rows` array
 of observed-evidence objects; each object carries the owned `row`, `hostMode`,
 `architecture`, immutable `images`, `profileVersion`/`profileSha256`,
 `launchPolicyVersion`, `agentProfileVersion`, `runtimeProvenance`, `observedResult`,
-and `secretScan`. `moonmind.omnigent.cutover.validate_matrix_artifact` rejects
+and `secretScan`. The `secretScan` is per-channel evidence, not a self-asserted
+string: it maps every required conformance evidence channel (`logs`,
+`temporalHistory`, `screenshots`, `archives`) to a `{status: "passed",
+evidenceRef}` object bound to a resolvable ref, mirroring
+`moonmind.omnigent.conformance.build_report`.
+`moonmind.omnigent.cutover.validate_matrix_artifact` rejects
 any artifact whose rows are unknown, foreign to the artifact's kind, observed
-on the wrong host mode or runtime provenance, produced for different images,
-architecture, or profile/policy/agent-profile versions, secret-bearing, or not
-observed as `passed`. A bare `passed` boolean or a self-declared row name is
-never sufficient.
+on the wrong host mode or runtime provenance, produced for different images or
+profile/policy/agent-profile versions, carrying a self-asserted or incomplete
+secret scan, or not observed as `passed`. Architecture membership is not enough:
+when the release declares more than one architecture, each owned row must carry
+its own passing observation for **every** released architecture, or the row is
+left unproven and promotion fails closed. A bare `passed` boolean or a
+self-declared row name is never sufficient.
 
 Run `tools/build_codex_omnigent_cutover_evidence.py --release RELEASE.json
 --artifact ARTIFACT.json ... --output promotion.json` to assemble the mounted
@@ -120,9 +128,13 @@ At promotion time the launch-authority boundary
 (`moonmind.omnigent.cutover.effective_phase`) independently re-resolves every
 manifest ref, binds its bytes to the recorded digest, **and re-parses each
 artifact to re-validate its observed per-row evidence** against the promotion
-document's declared images, architecture, and profile/policy/agent-profile
-versions. Digest integrity alone never authorizes a phase: a self-asserted,
-mismatched, incomplete, or coverage-short artifact leaves the affected rows
+document's declared images, architectures, and profile/policy/agent-profile
+versions. It also binds each evidence kind to exactly one artifact: two
+digest-valid artifacts that share a kind but own disjoint rows are rejected as
+split coverage before their rows are unioned, so a hand-authored document cannot
+splice partial results from separate runs into apparent completeness. Digest
+integrity alone never authorizes a phase: a self-asserted, mismatched,
+incomplete, split-kind, or coverage-short artifact leaves the affected rows
 unsupported and the effective phase at the deployed phase. The release-status
 projection additionally publishes the support-matrix version
 (`matrixVersion`), covered `matrixRows`, `launchPolicyVersion`, and

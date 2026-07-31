@@ -20,7 +20,11 @@ from moonmind.omnigent.cutover import (
     evaluate_promotion,
     select_runtime,
 )
-from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
+from moonmind.omnigent.conformance import (
+    PROFILE_SHA256,
+    PROFILE_VERSION,
+    REQUIRED_EVIDENCE_CHANNELS,
+)
 
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
@@ -31,6 +35,13 @@ IMAGES = {
 }
 POLICY_VERSION = "codex-static-launch-policy/v1"
 AGENT_PROFILE_VERSION = "codex-agent-profile/v1"
+
+
+def _clean_secret_scan() -> dict[str, object]:
+    return {
+        channel: {"status": "passed", "evidenceRef": f"evidence/{channel}.json"}
+        for channel in REQUIRED_EVIDENCE_CHANNELS
+    }
 
 
 def _observed_row(row_id: str) -> dict[str, object]:
@@ -46,12 +57,13 @@ def _observed_row(row_id: str) -> dict[str, object]:
         "agentProfileVersion": AGENT_PROFILE_VERSION,
         "runtimeProvenance": row.provenance[0],
         "observedResult": "passed",
-        "secretScan": "clean",
+        "secretScan": _clean_secret_scan(),
     }
 
 
-def _artifact_bytes(kind: str) -> bytes:
-    row_ids = [r for r in REQUIRED_MATRIX_ROWS if ROW_CATALOG[r].kind == kind]
+def _artifact_bytes(kind: str, row_ids: list[str] | None = None) -> bytes:
+    if row_ids is None:
+        row_ids = [r for r in REQUIRED_MATRIX_ROWS if ROW_CATALOG[r].kind == kind]
     return json.dumps(
         {
             "schemaVersion": ARTIFACT_SCHEMA_VERSION,
@@ -335,6 +347,76 @@ def test_effective_phase_rejects_self_asserted_row_artifact_with_matching_digest
 
     assert status.phase is CutoverPhase.OPT_IN
     assert "evidence_manifest_digest_mismatch" not in status.blockers
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert "matrix_row_coverage_incomplete" in status.blockers
+
+
+def test_effective_phase_rejects_split_evidence_for_one_kind(tmp_path) -> None:
+    """Two digest-valid artifacts sharing a kind cannot union into coverage.
+
+    A hand-authored or mutated promotion document can splice partial results
+    from separate runs or producers into two artifacts of the same evidence
+    kind that own disjoint rows. Row overlap alone would not catch that, so the
+    launch-authority consumer must reject the duplicate kind before unioning
+    its rows.
+    """
+
+    evidence = _evidence(tmp_path)
+    kind = "submissionMatrix"
+    row_ids = [r for r in REQUIRED_MATRIX_ROWS if ROW_CATALOG[r].kind == kind]
+    assert len(row_ids) >= 2
+    first_rows, second_rows = row_ids[:1], row_ids[1:]
+
+    manifest = [
+        item for item in evidence["evidenceManifest"] if item["kind"] != kind
+    ]
+    for index, subset in enumerate((first_rows, second_rows)):
+        content = _artifact_bytes(kind, subset)
+        name = f"{kind}-{index}.json"
+        (tmp_path / name).write_bytes(content)
+        manifest.append(
+            {
+                "kind": kind,
+                "ref": name,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    evidence["evidenceManifest"] = manifest
+    evidence["evidenceRefs"] = [item["ref"] for item in manifest]
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "split_evidence_kind_rejected" in status.blockers
+
+
+def test_effective_phase_requires_evidence_for_every_released_architecture(
+    tmp_path,
+) -> None:
+    """A row observed on only one of several released architectures fails closed."""
+
+    evidence = _evidence(tmp_path)
+    evidence["architectures"] = ["linux/amd64", "linux/arm64"]
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
     assert "evidence_row_binding_invalid" in status.blockers
     assert "matrix_row_coverage_incomplete" in status.blockers
 

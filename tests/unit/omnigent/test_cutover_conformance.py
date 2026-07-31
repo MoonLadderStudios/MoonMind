@@ -8,7 +8,11 @@ import json
 
 import pytest
 
-from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
+from moonmind.omnigent.conformance import (
+    PROFILE_SHA256,
+    PROFILE_VERSION,
+    REQUIRED_EVIDENCE_CHANNELS,
+)
 from moonmind.omnigent.cutover import (
     ARTIFACT_SCHEMA_VERSION,
     REQUIRED_EVIDENCE_KINDS,
@@ -51,12 +55,19 @@ def _release() -> dict[str, object]:
     }
 
 
-def _observed_row(row_id: str) -> dict[str, object]:
+def _clean_secret_scan() -> dict[str, object]:
+    return {
+        channel: {"status": "passed", "evidenceRef": f"evidence/{channel}.json"}
+        for channel in REQUIRED_EVIDENCE_CHANNELS
+    }
+
+
+def _observed_row(row_id: str, architecture: str = "linux/amd64") -> dict[str, object]:
     row = ROW_CATALOG[row_id]
     return {
         "row": row_id,
         "hostMode": row.host_modes[0],
-        "architecture": "linux/amd64",
+        "architecture": architecture,
         "images": dict(IMAGES),
         "profileVersion": PROFILE_VERSION,
         "profileSha256": PROFILE_SHA256,
@@ -64,11 +75,11 @@ def _observed_row(row_id: str) -> dict[str, object]:
         "agentProfileVersion": AGENT_PROFILE_VERSION,
         "runtimeProvenance": row.provenance[0],
         "observedResult": "passed",
-        "secretScan": "clean",
+        "secretScan": _clean_secret_scan(),
     }
 
 
-def _artifacts(tmp_path):
+def _artifacts(tmp_path, architectures: tuple[str, ...] = ("linux/amd64",)):
     owned: dict[str, list[str]] = {kind: [] for kind in REQUIRED_EVIDENCE_KINDS}
     for row_id in REQUIRED_MATRIX_ROWS:
         owned[ROW_CATALOG[row_id].kind].append(row_id)
@@ -81,7 +92,11 @@ def _artifacts(tmp_path):
                     "schemaVersion": ARTIFACT_SCHEMA_VERSION,
                     "kind": kind,
                     "producerVersion": "moonmind.codex-omnigent-observer/v1",
-                    "rows": [_observed_row(row_id) for row_id in row_ids],
+                    "rows": [
+                        _observed_row(row_id, architecture)
+                        for row_id in row_ids
+                        for architecture in architectures
+                    ],
                 },
                 sort_keys=True,
             ),
@@ -182,6 +197,71 @@ def test_builder_rejects_row_evidence_for_wrong_release_digests(tmp_path) -> Non
     paths[0].write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(CutoverEvidenceBuildError, match="released immutable digests"):
+        build_cutover_evidence(
+            release=_release(), artifact_paths=paths, generated_at=NOW
+        )
+
+
+def test_builder_requires_evidence_for_every_released_architecture(tmp_path) -> None:
+    """Declaring multiple architectures but observing one fails closed."""
+
+    release = _release()
+    release["architectures"] = ["linux/amd64", "linux/arm64"]
+    # Rows are only observed on amd64, so arm64 has no live evidence.
+    paths = _artifacts(tmp_path, architectures=("linux/amd64",))
+
+    with pytest.raises(
+        CutoverEvidenceBuildError, match="every released architecture"
+    ):
+        build_cutover_evidence(
+            release=release, artifact_paths=paths, generated_at=NOW
+        )
+
+
+def test_builder_accepts_full_per_architecture_coverage(tmp_path) -> None:
+    """Observing every row on every released architecture promotes."""
+
+    release = _release()
+    release["architectures"] = ["linux/amd64", "linux/arm64"]
+    paths = _artifacts(tmp_path, architectures=("linux/amd64", "linux/arm64"))
+
+    evidence = build_cutover_evidence(
+        release=release, artifact_paths=paths, generated_at=NOW
+    )
+    assert evidence["matrixRows"] == list(REQUIRED_MATRIX_ROWS)
+
+    decision = evaluate_promotion(
+        current_phase=CutoverPhase.OPT_IN,
+        requested_phase=CutoverPhase.CREATE_DEFAULT,
+        evidence=evidence,
+        now=NOW,
+    )
+    assert decision.allowed is True
+
+
+def test_builder_rejects_self_asserted_secret_scan_string(tmp_path) -> None:
+    """A bare ``"clean"`` scalar is not per-channel scan evidence."""
+
+    paths = _artifacts(tmp_path)
+    payload = json.loads(paths[0].read_text(encoding="utf-8"))
+    payload["rows"][0]["secretScan"] = "clean"
+    paths[0].write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CutoverEvidenceBuildError, match="per-channel evidence"):
+        build_cutover_evidence(
+            release=_release(), artifact_paths=paths, generated_at=NOW
+        )
+
+
+def test_builder_rejects_missing_secret_scan_channel(tmp_path) -> None:
+    """Every required evidence channel must record a passing, ref-bound scan."""
+
+    paths = _artifacts(tmp_path)
+    payload = json.loads(paths[0].read_text(encoding="utf-8"))
+    payload["rows"][0]["secretScan"].pop(REQUIRED_EVIDENCE_CHANNELS[0])
+    paths[0].write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CutoverEvidenceBuildError, match="missing channels"):
         build_cutover_evidence(
             release=_release(), artifact_paths=paths, generated_at=NOW
         )

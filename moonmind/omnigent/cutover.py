@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlparse
 from moonmind.omnigent.conformance import (
     PROFILE_SHA256,
     PROFILE_VERSION,
+    REQUIRED_EVIDENCE_CHANNELS,
     ConformanceContractError,
     require_pinned_images,
 )
@@ -114,6 +115,42 @@ class CutoverMatrixError(ValueError):
     """Raised when a protected artifact fails observed-evidence row binding."""
 
 
+def _validate_row_secret_scan(secret_scan: Any, *, row_id: str) -> None:
+    """Bind a row to validated per-channel secret-scan evidence.
+
+    A self-asserted scalar (for example ``"clean"``) is never sufficient. Every
+    required evidence channel must record a passing scan bound to a resolvable
+    ``evidenceRef``, mirroring the conformance report contract in
+    ``moonmind.omnigent.conformance.build_report``. A missing channel, a
+    non-passing status, or an absent ref fails closed.
+    """
+
+    if not isinstance(secret_scan, Mapping):
+        raise CutoverMatrixError(
+            f"row {row_id!r} secret scan must carry per-channel evidence"
+        )
+    missing = set(REQUIRED_EVIDENCE_CHANNELS) - set(secret_scan)
+    if missing:
+        raise CutoverMatrixError(
+            f"row {row_id!r} secret scan is missing channels: {sorted(missing)}"
+        )
+    for channel in REQUIRED_EVIDENCE_CHANNELS:
+        result = secret_scan.get(channel)
+        evidence_ref = (
+            result.get("evidenceRef") if isinstance(result, Mapping) else None
+        )
+        if (
+            not isinstance(result, Mapping)
+            or result.get("status") != "passed"
+            or not isinstance(evidence_ref, str)
+            or not evidence_ref.strip()
+        ):
+            raise CutoverMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} lacks passing "
+                "evidence"
+            )
+
+
 def validate_matrix_artifact(
     payload: Any,
     *,
@@ -171,7 +208,7 @@ def validate_matrix_artifact(
     if not isinstance(agent_profile_version, str) or not agent_profile_version.strip():
         raise CutoverMatrixError("agent profile version is required")
 
-    owned: set[str] = set()
+    observed: dict[str, set[str]] = {}
     for entry in rows:
         if not isinstance(entry, Mapping):
             raise CutoverMatrixError("observed row is not an object")
@@ -183,8 +220,6 @@ def validate_matrix_artifact(
             raise CutoverMatrixError(
                 f"row {row_id!r} is not owned by evidence kind {kind!r}"
             )
-        if row_id in owned:
-            raise CutoverMatrixError(f"row observed more than once: {row_id}")
         if entry.get("observedResult") != "passed":
             raise CutoverMatrixError(f"row {row_id!r} did not observe a passing result")
         if entry.get("hostMode") not in row.host_modes:
@@ -193,11 +228,16 @@ def validate_matrix_artifact(
             raise CutoverMatrixError(
                 f"row {row_id!r} has unexpected runtime provenance"
             )
-        if entry.get("secretScan") != "clean":
-            raise CutoverMatrixError(f"row {row_id!r} has an unresolved secret scan")
-        if entry.get("architecture") not in architecture_set:
+        _validate_row_secret_scan(entry.get("secretScan"), row_id=row_id)
+        architecture = entry.get("architecture")
+        if architecture not in architecture_set:
             raise CutoverMatrixError(
                 f"row {row_id!r} was not observed on a released architecture"
+            )
+        if architecture in observed.get(row_id, set()):
+            raise CutoverMatrixError(
+                f"row {row_id!r} observed more than once on architecture "
+                f"{architecture!r}"
             )
         row_images = entry.get("images")
         if not isinstance(row_images, Mapping) or dict(row_images) != dict(images):
@@ -215,8 +255,21 @@ def validate_matrix_artifact(
             raise CutoverMatrixError(f"row {row_id!r} launch policy version mismatch")
         if entry.get("agentProfileVersion") != agent_profile_version:
             raise CutoverMatrixError(f"row {row_id!r} agent profile version mismatch")
-        owned.add(row_id)
-    return kind, frozenset(owned)
+        observed.setdefault(row_id, set()).add(architecture)
+
+    # Every released architecture requires its own live evidence for each owned
+    # row. Membership in the release list is not enough: a row observed on only
+    # one of several released architectures leaves the others unproven, so the
+    # row is not counted as supported until the full per-row/architecture cross
+    # product is present.
+    for row_id, seen_architectures in observed.items():
+        missing_architectures = architecture_set - seen_architectures
+        if missing_architectures:
+            raise CutoverMatrixError(
+                f"row {row_id!r} was not observed on every released architecture: "
+                f"{sorted(missing_architectures)}"
+            )
+    return kind, frozenset(observed)
 
 
 class CutoverPhase(IntEnum):
@@ -648,7 +701,9 @@ def _verify_manifest_artifacts(
     policy_version = evidence.get("launchPolicyVersion")
     agent_profile_version = evidence.get("agentProfileVersion")
     observed_rows: set[str] = set()
+    seen_kinds: set[str] = set()
     ownership_conflict = False
+    split_kind = False
     for item in manifest:
         if not isinstance(item, Mapping):
             continue
@@ -670,7 +725,7 @@ def _verify_manifest_artifacts(
             continue
         try:
             payload = json.loads(content)
-            _, rows = validate_matrix_artifact(
+            artifact_kind, rows = validate_matrix_artifact(
                 payload,
                 expected_kind=kind if isinstance(kind, str) else None,
                 images=images,
@@ -683,9 +738,21 @@ def _verify_manifest_artifacts(
         except (json.JSONDecodeError, UnicodeError, CutoverMatrixError):
             blockers.append("evidence_row_binding_invalid")
             continue
+        # The canonical contract binds each evidence kind to exactly one
+        # artifact. A hand-authored or mutated promotion document can otherwise
+        # splice partial results from separate runs into two artifacts that
+        # share a kind but own disjoint rows; row overlap alone would not catch
+        # that. Reject the duplicate kind before unioning its rows so split
+        # coverage can never authorize a phase.
+        if artifact_kind in seen_kinds:
+            split_kind = True
+            continue
+        seen_kinds.add(artifact_kind)
         if observed_rows & rows:
             ownership_conflict = True
         observed_rows |= rows
+    if split_kind:
+        blockers.append("split_evidence_kind_rejected")
     if ownership_conflict:
         blockers.append("matrix_row_ownership_conflict")
     if observed_rows != set(REQUIRED_MATRIX_ROWS):
