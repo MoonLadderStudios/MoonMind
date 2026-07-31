@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -44,12 +45,58 @@ _PUBLICATION_REF_KEYS = (
     "captureManifestRef",
 )
 
+# The subset of publication refs that constitute realized terminal evidence the
+# publication owner produces after the run: a recorded commit, a verified push,
+# or a created pull request. Their presence reconciles the authorized
+# pre-publication snapshot into a published disposition.
+_TERMINAL_PUBLICATION_EVIDENCE_KEYS = (
+    "commitRef",
+    "pushRef",
+    "pullRequestRef",
+    "pullRequestUrl",
+)
+
 
 def _text(value: Any) -> str | None:
     text = str(value).strip() if value is not None else ""
     if not text:
         return None
     return text[:_MAX_STRING_CHARS]
+
+
+def _repository_identity(value: Any) -> str | None:
+    """Project a credential-free canonical repository identity.
+
+    An authored repository source may embed URL userinfo, for example
+    ``https://alice:token@github.com/org/repo.git`` or an scp-style
+    ``user:token@github.com:org/repo.git``. ``redact_sensitive_payload`` does not
+    recognize userinfo under the ``repository`` key, so the username/password
+    would otherwise persist verbatim in the durable lifecycle journal. Strip the
+    userinfo here so only the credential-free host/path identity is recorded.
+    """
+
+    text = _text(value)
+    if text is None:
+        return None
+    # scheme://[userinfo@]host/path — drop the userinfo component entirely.
+    split = urlsplit(text)
+    if split.scheme and split.netloc and "@" in split.netloc:
+        host = split.hostname or ""
+        if split.port:
+            host = f"{host}:{split.port}"
+        return _text(
+            urlunsplit(
+                (split.scheme, host, split.path, split.query, split.fragment)
+            )
+        )
+    # scp-style ``[user[:pass]@]host:path`` (no scheme). Only strip userinfo that
+    # carries an embedded credential (``user:pass@``); a bare ``git@`` username is
+    # a conventional, non-sensitive identity and is preserved.
+    if "://" not in text and "@" in text:
+        userinfo, _, remainder = text.partition("@")
+        if ":" in userinfo and "/" not in userinfo:
+            return _text(remainder)
+    return text
 
 
 def _ref_list(values: Any) -> list[str]:
@@ -70,14 +117,22 @@ def _class_list(values: Any) -> list[str]:
 
 
 def _publication_state(
-    *, publish_mode: str, repository_mutation: bool, terminal_status: str
+    *,
+    publish_mode: str,
+    repository_mutation: bool,
+    terminal_status: str,
+    publication_evidence_present: bool = False,
 ) -> str:
     """Classify the publication disposition MoonMind owns for this run.
 
     The coordinator does not itself push; the actual commit/push/PR side effects
     are performed by the shared publication path after the run result returns.
-    This records the disposition the Omnigent execution boundary authorized so the
-    downstream side-effect evidence can be reconciled against it.
+    Until that owner produces terminal evidence, the projection records the
+    disposition the Omnigent execution boundary *authorized*
+    (``authorized_pending_publication``). Once realized commit/push/PR evidence is
+    present in the result metadata, the state is reconciled to ``published`` so the
+    chain reflects the publication owner's terminal outcome rather than a stale
+    pre-publication snapshot.
     """
 
     normalized = (publish_mode or "none").strip().lower()
@@ -89,6 +144,8 @@ def _publication_state(
             if repository_mutation
             else "read_only_no_publication"
         )
+    if publication_evidence_present:
+        return "published"
     return "authorized_pending_publication"
 
 
@@ -144,9 +201,16 @@ def build_omnigent_authority_chain_evidence(
         "identityVerified": bool(workspace.get("identityVerified"))
         if workspace.get("identityVerified") is not None
         else None,
-        "repository": _text(repository),
+        "repository": _repository_identity(repository),
         "sourceBranch": _text(source_branch or materialization.get("startingBranch")),
-        "sourceCommit": _text(materialization.get("checkedOut")),
+        # Prefer the immutable resolved revision (``git rev-parse HEAD`` captured at
+        # materialization) so the authority evidence proves which source state ran,
+        # not a movable branch ref. Fall back to ``checkedOut`` only when a resolved
+        # commit is unavailable (for example an explicit detached-commit checkout).
+        "sourceCommit": _text(
+            materialization.get("resolvedCommit")
+            or materialization.get("checkedOut")
+        ),
         "candidateHead": _text(
             materialization.get("outputBranch") or output_branch
         ),
@@ -196,6 +260,9 @@ def build_omnigent_authority_chain_evidence(
         ref = _text(metadata.get(key))
         if ref is not None:
             publication_refs[key] = ref
+    publication_evidence_present = any(
+        key in publication_refs for key in _TERMINAL_PUBLICATION_EVIDENCE_KEYS
+    )
 
     publication_section = {
         "publishMode": (publish_mode or "none").strip().lower() or "none",
@@ -210,6 +277,7 @@ def build_omnigent_authority_chain_evidence(
             publish_mode=publish_mode or "none",
             repository_mutation=bool(repository_mutation_required),
             terminal_status=terminal_status,
+            publication_evidence_present=publication_evidence_present,
         ),
         "declaredOutputRefs": _ref_list(result_output_refs),
         "evidenceRefs": publication_refs,

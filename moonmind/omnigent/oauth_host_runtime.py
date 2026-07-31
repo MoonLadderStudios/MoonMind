@@ -1134,11 +1134,24 @@ class OmnigentOAuthHostRuntime:
                 )
             output_branch = target
 
+        # ``checkedOut`` records the authored selection (a branch name for the
+        # normal path), which is a movable ref. Resolve the immutable revision that
+        # was actually checked out so durable authority evidence proves which source
+        # state executed and cannot drift after the branch advances.
+        resolved_commit: str | None = None
+        code, out, _err = await self._run(
+            "git", "-C", str(workspace), "rev-parse", "HEAD",
+            env=git_env, check=False,
+        )
+        if code == 0:
+            resolved_commit = str(out or "").strip() or None
+
         return {
             "action": "materialized",
             "sourceKind": source_kind,
             "startingBranch": start,
             "checkedOut": checked_out,
+            "resolvedCommit": resolved_commit,
             "outputBranch": output_branch,
             "commit": commit or None,
         }

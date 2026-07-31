@@ -919,6 +919,31 @@ class OmnigentProfileBoundExecutionCoordinator:
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"
             terminal_status = result_status
+            if result_failed:
+                # The runner returned a failed ``AgentRunResult`` instead of
+                # raising, so the exception path never runs. Carry the provider
+                # failure code, class, and remediation into the unified authority
+                # chain; otherwise ``harvestState="failed"`` would surface with an
+                # empty reasons list, dropping evidence already on the result.
+                authority_reasons.append(
+                    {
+                        "stage": "resource_harvest",
+                        "code": (
+                            result.provider_error_code
+                            or (
+                                str(result.failure_class)
+                                if result.failure_class
+                                else "provider_run_failed"
+                            )
+                        ),
+                        "failureClass": (
+                            str(result.failure_class)
+                            if result.failure_class
+                            else None
+                        ),
+                        "remediationAction": result.retry_recommendation or None,
+                    }
+                )
             await emit("first_message_prepare", result_status)
             await emit("first_message_post", result_status)
             await emit(

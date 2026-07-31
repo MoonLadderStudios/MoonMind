@@ -39,6 +39,7 @@ def _workspace_resolution() -> dict:
             "sourceKind": "github_https",
             "startingBranch": "main",
             "checkedOut": "main",
+            "resolvedCommit": "a" * 40,
             "outputBranch": "agent/impl",
             "restoreInputs": [{"ref": "artifact://restore-1", "bytes": 12}],
         },
@@ -91,7 +92,8 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
     assert ws["locatorKind"] == "sandbox"
     assert ws["repository"] == "owner/repo"
     assert ws["sourceBranch"] == "main"
-    assert ws["sourceCommit"] == "main"
+    # The immutable resolved revision is projected, not the movable branch ref.
+    assert ws["sourceCommit"] == "a" * 40
     assert ws["candidateHead"] == "agent/impl"
     assert ws["materializationAction"] == "materialized"
     assert ws["restoreInputRefs"] == ["artifact://restore-1"]
@@ -108,7 +110,9 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
     assert pub["publishMode"] == "branch"
     assert pub["outputBranch"] == "agent/impl"
     assert pub["repositoryMutationAuthorized"] is True
-    assert pub["publicationState"] == "authorized_pending_publication"
+    # Realized push evidence in the result metadata reconciles the pre-publication
+    # snapshot into a published disposition.
+    assert pub["publicationState"] == "published"
     assert pub["declaredOutputRefs"] == ["artifact://out-1", "artifact://out-2"]
     assert pub["evidenceRefs"]["pushRef"] == "artifact://push-1"
     assert pub["evidenceRefs"]["resourceManifestRef"] == "artifact://resources"
@@ -120,6 +124,99 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
     assert term["leaseReleased"] is True
     assert term["janitorRequired"] is False
     assert term["releaseOrdering"][-1] == "terminal"
+
+
+def test_authority_chain_pending_publication_without_terminal_evidence() -> None:
+    """A branch/pr run stays pending until realized publication evidence exists."""
+
+    evidence = build_omnigent_authority_chain_evidence(
+        effective_launch=_effective_launch(),
+        workspace_resolution=_workspace_resolution(),
+        repository="owner/repo",
+        source_branch="main",
+        output_branch="agent/impl",
+        publish_mode="branch",
+        repository_mutation_required=True,
+        # A non-terminal ref (resource manifest) is not commit/push/PR evidence.
+        result_metadata={"resourceManifestRef": "artifact://resources"},
+        terminal_status="completed",
+    )
+    assert (
+        evidence["publication"]["publicationState"]
+        == "authorized_pending_publication"
+    )
+
+
+def test_authority_chain_reconciles_published_from_pull_request_evidence() -> None:
+    evidence = build_omnigent_authority_chain_evidence(
+        effective_launch=_effective_launch(),
+        workspace_resolution=_workspace_resolution(),
+        repository="owner/repo",
+        source_branch="main",
+        output_branch="agent/impl",
+        publish_mode="pr",
+        repository_mutation_required=True,
+        result_metadata={
+            "pullRequestRef": "artifact://pr-1",
+            "pullRequestUrl": "https://github.com/owner/repo/pull/9",
+        },
+        terminal_status="completed",
+    )
+    assert evidence["publication"]["publicationState"] == "published"
+
+
+def test_authority_chain_strips_repository_url_credentials() -> None:
+    """URL userinfo never persists into the durable repository identity."""
+
+    evidence = build_omnigent_authority_chain_evidence(
+        effective_launch=_effective_launch(),
+        workspace_resolution=_workspace_resolution(),
+        repository="https://alice:s3cr3t-token@github.com/org/repo.git",
+        source_branch="main",
+        output_branch="agent/impl",
+        publish_mode="branch",
+        repository_mutation_required=True,
+        terminal_status="completed",
+    )
+    repository = evidence["workspace"]["repository"]
+    assert repository == "https://github.com/org/repo.git"
+    assert "alice" not in repr(evidence)
+    assert "s3cr3t-token" not in repr(evidence)
+
+
+def test_authority_chain_strips_scp_style_repository_credentials() -> None:
+    evidence = build_omnigent_authority_chain_evidence(
+        effective_launch=_effective_launch(),
+        workspace_resolution=_workspace_resolution(),
+        repository="x-access-token:ghp_secretvalue@github.com:org/repo.git",
+        source_branch="main",
+        output_branch="agent/impl",
+        publish_mode="branch",
+        repository_mutation_required=True,
+        terminal_status="completed",
+    )
+    repository = evidence["workspace"]["repository"]
+    assert repository == "github.com:org/repo.git"
+    assert "ghp_secretvalue" not in repr(evidence)
+
+
+def test_authority_chain_falls_back_to_checked_out_commit() -> None:
+    """When no resolved SHA is captured, the checked-out selection is projected."""
+
+    workspace = _workspace_resolution()
+    workspace["materialization"].pop("resolvedCommit", None)
+    workspace["materialization"]["checkedOut"] = "d" * 40
+    evidence = build_omnigent_authority_chain_evidence(
+        effective_launch=_effective_launch(),
+        workspace_resolution=workspace,
+        repository="owner/repo",
+        source_branch="main",
+        output_branch="agent/impl",
+        publish_mode="branch",
+        repository_mutation_required=True,
+        terminal_status="completed",
+    )
+    assert evidence["workspace"]["sourceCommit"] == "d" * 40
 
 
 def test_authority_chain_classifies_no_publish_saved_work() -> None:

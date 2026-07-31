@@ -1803,13 +1803,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> None:
-    """The coordinator emits the unified #3561 authority chain once, credential-free.
+async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[dict]]:
+    """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
-    It must appear before the terminal event, carry the workspace/runtime/
-    publication/terminal sections nested under ``authorityChain`` so the bridge
-    store allowlist preserves them, and leak no GitHub token or raw daemon path.
+    Returns the ordered lifecycle event-type stream and every emitted
+    ``authorityChain`` projection so tests can assert both the success and the
+    returned-failure remediation-evidence paths against one harness.
     """
 
     ordered: list[str] = []
@@ -1921,13 +1920,6 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
             if "authorityChain" in metadata:
                 authority_metadata.append(metadata["authorityChain"])
 
-    async def execute(request, **_kwargs):
-        return AgentRunResult(
-            summary="done",
-            outputRefs=["artifact://out-1"],
-            metadata={"pushRef": "artifact://push-1"},
-        )
-
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=LeaseClient(),
@@ -1978,6 +1970,26 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
             },
         )
     )
+    return ordered, authority_metadata
+
+
+@pytest.mark.asyncio
+async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> None:
+    """The coordinator emits the unified #3561 authority chain once, credential-free.
+
+    It must appear before the terminal event, carry the workspace/runtime/
+    publication/terminal sections nested under ``authorityChain`` so the bridge
+    store allowlist preserves them, and leak no GitHub token or raw daemon path.
+    """
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="done",
+            outputRefs=["artifact://out-1"],
+            metadata={"pushRef": "artifact://push-1"},
+        )
+
+    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
 
     assert "authority_chain" in ordered
     assert ordered.index("authority_chain") < ordered.index("terminal")
@@ -1988,9 +2000,9 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
     assert chain["workspace"]["candidateHead"] == "agent/impl"
     assert chain["publication"]["publishMode"] == "branch"
     assert chain["publication"]["outputBranch"] == "agent/impl"
-    assert (
-        chain["publication"]["publicationState"] == "authorized_pending_publication"
-    )
+    # The returned result carried realized push evidence, so the pre-publication
+    # snapshot is reconciled to a published disposition.
+    assert chain["publication"]["publicationState"] == "published"
     assert chain["publication"]["declaredOutputRefs"] == ["artifact://out-1"]
     assert chain["publication"]["evidenceRefs"]["pushRef"] == "artifact://push-1"
     assert chain["terminal"]["releaseOrdering"][-1] == "terminal"
@@ -2001,6 +2013,39 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
     flat = repr(chain)
     assert "/workspaces/run" not in flat
     assert "token" not in flat.lower()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_records_returned_runner_failure_in_authority_chain() -> None:
+    """A runner that returns a failed result (not raising) still records evidence.
+
+    The exception path never runs, so the returned provider failure code, class,
+    and remediation must be folded into the authority-chain reasons; otherwise
+    ``harvestState="failed"`` would surface with an empty reasons list.
+    """
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="provider failed",
+            outputRefs=["artifact://out-1"],
+            failureClass="integration_error",
+            providerErrorCode="429",
+            retryRecommendation="retry_after_provider_cooldown",
+        )
+
+    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
+
+    assert len(authority_metadata) == 1
+    chain = authority_metadata[0]
+    assert chain["terminal"]["harvestState"] == "failed"
+    assert chain["publication"]["publicationState"] == "not_published_failed_run"
+    reasons = chain["reasons"]
+    harvest_reasons = [r for r in reasons if r["stage"] == "resource_harvest"]
+    assert harvest_reasons, "returned provider failure must appear in the chain"
+    reason = harvest_reasons[0]
+    assert reason["code"] == "429"
+    assert reason["failureClass"] == "integration_error"
+    assert reason["remediationAction"] == "retry_after_provider_cooldown"
 
 
 @pytest.mark.asyncio
@@ -2968,6 +3013,17 @@ async def test_prepare_workspace_materializes_repository_and_branch(tmp_path) ->
     assert evidence["identityVerified"] is True
     assert evidence["materialization"]["action"] == "materialized"
     assert evidence["materialization"]["checkedOut"] == "feature"
+    # The immutable resolved revision is captured alongside the movable branch ref
+    # so authority evidence proves which source state executed.
+    resolved_commit = evidence["materialization"]["resolvedCommit"]
+    expected_commit = subprocess.run(
+        ["git", "-C", str(resolved), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert resolved_commit == expected_commit
+    assert len(resolved_commit) == 40
     # Bounded evidence never leaks a raw worker/daemon path.
     assert str(resolved) not in json.dumps(evidence)
 
