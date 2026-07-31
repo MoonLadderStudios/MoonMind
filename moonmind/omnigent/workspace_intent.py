@@ -360,9 +360,20 @@ def compile_workspace_intent(
             checkoutCommit=authored_checkout_commit(request),
             revisionKind=authored_revision_kind(request),
             remoteTipExpectation=(
-                "read_only"
+                {"kind": "read_only"}
                 if authored_revision_kind(request)
-                else "must_equal"
+                else {
+                    "kind": "must_equal",
+                    "revision": {
+                        "provider": (
+                            "lore"
+                            if authored_revision_kind(request) == "lore_revision"
+                            else "git"
+                        ),
+                        "repositoryId": repository,
+                        "commitSha": authored_checkout_commit(request),
+                    },
+                }
                 if repository
                 else None
             ),
