@@ -1,7 +1,10 @@
 # Provider Profiles
 
 Omnigent compatibility and capacity are governed by an
-[immutable policy version](../Omnigent/PolicyAuthority.md).
+[immutable policy version](../Omnigent/PolicyAuthority.md). The Codex product path
+this profile serves is the canonical external-agent identity `agentKind=external`,
+`agentId=omnigent`, nested harness `codex-native`, reconciled end-to-end by
+[NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
 
 **Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md)
 

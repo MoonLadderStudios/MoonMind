@@ -8,7 +8,10 @@ through Omnigent. “Supported” means repository evidence or a protected live
 artifact independently proves the row. Code presence alone is “implemented” or
 “unverified,” never “supported.” The current release phase is **1 — opt-in**:
 the repository does not contain the complete protected-live acceptance artifact,
-so promotion is fail-closed.
+so promotion is fail-closed. The end-to-end product-path sequence, field
+authority, and complete failure matrix that this support state qualifies are
+reconciled in
+[Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
 ## Compatibility inventory
 
