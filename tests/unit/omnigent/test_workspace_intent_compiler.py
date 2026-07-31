@@ -25,6 +25,7 @@ from moonmind.omnigent.workspace_intent import (
     authored_required_capabilities,
     compile_workspace_intent,
 )
+from moonmind.workflows.executions.repository_contract import RepositoryContractError
 
 _WORKFLOW_ID = "workflow-1"
 _STEP_EXECUTION_ID = "workflow-1:run-1:step-1:execution:1"
@@ -301,6 +302,54 @@ async def test_prepared_boundary_authorizes_remote_tip_before_runtime_launch() -
             "commitSha": "abcdef012345",
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_preparation_boundary_rejects_deployment_client_mismatch(
+    monkeypatch,
+) -> None:
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={
+            "publishMode": "none",
+            "requiredCapabilities": ["git"],
+        },
+    )
+    intent = _compile(request)
+    monkeypatch.setenv(
+        "MOONMIND_DEFAULT_GIT_REPOSITORY_CONNECTION",
+        """{
+          "schemaVersion": "moonmind.repository-connection.v1",
+          "id": "repository-connection:git-default",
+          "provider": "git",
+          "displayName": "Default GitHub connection",
+          "endpointRef": "https://github.com",
+          "allowedRepositoryIds": [],
+          "allowedOperations": ["read"],
+          "clientPolicy": {
+            "pinnedVersion": "github-resolver.v1",
+            "compatibleServerVersions": [],
+            "toolBundleRef": "moonmind.auth.github_credentials",
+            "executableSha256": "deployment-policy-does-not-match-runtime"
+          },
+          "credentialSource": "github_resolver"
+        }""",
+    )
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        await OmnigentProfileBoundExecutionCoordinator._authorize_repository_before_preparation(
+            request=request,
+            workspace_intent=intent,
+            github_token="resolved-in-memory",
+        )
 
 
 def test_retry_reproduces_the_same_immutable_intent() -> None:

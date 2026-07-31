@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "moonmind.repository-connection.v1",
+  "id": "repository-connection:git-default",
+  "provider": "git",
+  "displayName": "Default GitHub connection",
+  "endpointRef": "https://github.com",
+  "allowedRepositoryIds": [],
+  "allowedOperations": ["read", "write", "branch_write", "review_request"],
+  "clientPolicy": {
+    "pinnedVersion": "github-resolver.v1",
+    "compatibleServerVersions": [],
+    "toolBundleRef": "moonmind.auth.github_credentials",
+    "executableSha256": "5fab48add473756ded9117013eeaf604c29058a8c23a66d693d98edd9723e68e"
+  },
+  "credentialSource": "github_resolver"
+}

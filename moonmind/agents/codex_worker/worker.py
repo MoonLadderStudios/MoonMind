@@ -41,7 +41,13 @@ from moonmind.security.outbound_scan import (
     resolve_high_security_mode,
     scan_outbound_bundle,
 )
-from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
+from moonmind.workflows.executions.job_types import (
+    CANONICAL_WORKFLOW_JOB_TYPE,
+    LEGACY_WORKFLOW_JOB_TYPES,
+)
+from moonmind.workflows.executions.repository_contract import (
+    LEGACY_REPOSITORY_DECODER_VERSION,
+)
 from moonmind.workflows.executions.execution_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
     WorkflowContractError,
@@ -498,7 +504,7 @@ class CodexWorkerConfig:
     lease_seconds: int
     workdir: Path
     allowed_types: tuple[str, ...] = ("task", "codex_exec", "codex_skill")
-    legacy_job_types_enabled: bool = True
+    legacy_job_types_enabled: bool = False
     pause_poll_interval_ms: int = 5000
     worker_runtime: str = "codex"
     default_skill: str = "auto"
@@ -614,7 +620,7 @@ class CodexWorkerConfig:
         )
         worker_token = str(source.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
         legacy_enabled_raw = (
-            str(source.get("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "true")).strip().lower()
+            str(source.get("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "false")).strip().lower()
         )
         legacy_job_types_enabled = legacy_enabled_raw not in {
             "0",
@@ -1640,6 +1646,11 @@ class CodexWorker:
             canonical_payload = build_canonical_workflow_view(
                 job_type=job.type,
                 payload=job.payload,
+                recorded_history_decoder_version=(
+                    LEGACY_REPOSITORY_DECODER_VERSION
+                    if job.type in LEGACY_WORKFLOW_JOB_TYPES
+                    else None
+                ),
             )
         except WorkflowContractError as exc:
             await self._emit_event(

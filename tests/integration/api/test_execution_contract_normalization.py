@@ -37,7 +37,11 @@ _VALID_RESUME_BLOCK = {
 }
 
 _BASE_PAYLOAD = {
-    "repository": "test/repo",
+    "repository": {
+        "provider": "git",
+        "repository": {"name": "test/repo"},
+        "branch": {"name": "main"},
+    },
     "workflow": {"instructions": "Do work"},
 }
 
@@ -61,6 +65,25 @@ def _workflow_step_payload(*steps: dict) -> dict:
             "instructions": "Validate explicit Step Type payloads for MM-569.",
             "steps": list(steps),
         }
+    )
+
+
+def test_new_submission_rejects_legacy_repository_string() -> None:
+    with pytest.raises(WorkflowContractError):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={"repository": "test/repo", "workflow": {"instructions": "work"}},
+        )
+
+
+def test_default_git_connection_is_persisted_at_contract_boundary() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload({}),
+    )
+    assert (
+        result["repository"]["connectionRef"]
+        == "repository-connection:git-default"
     )
 
 

@@ -7167,9 +7167,9 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
     assert config.claude_cli_auth_mode == "oauth"
-    assert config.legacy_job_types_enabled is True
+    assert config.legacy_job_types_enabled is False
     assert config.worker_runtime == "codex"
-    assert config.allowed_types == ("task", "codex_exec", "codex_skill")
+    assert config.allowed_types == ("task",)
     assert config.worker_capabilities == ("codex", "git", "gh")
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
@@ -10895,5 +10895,40 @@ async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
     assert len(queue.failed) == 1
     assert "legacy job type disabled" in queue.failed[0]
     assert handler.calls == []
+
+
+async def test_recorded_history_mode_routes_worker_through_frozen_decoder(
+    tmp_path: Path,
+) -> None:
+    job = ClaimedJob(
+        id=uuid4(),
+        type="codex_exec",
+        payload={"repository": "a/b", "ref": "release", "instruction": "run"},
+    )
+    queue = FakeQueueClient()
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="history-replay-worker",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=75,
+        workdir=tmp_path,
+        allowed_types=("task", "codex_exec", "codex_skill"),
+        legacy_job_types_enabled=True,
+        worker_capabilities=("codex", "git"),
+    )
+    worker = CodexWorker(config=config, queue_client=queue)
+
+    prepared = await worker._prepare_claimed_task_job(job=job)
+
+    assert prepared is not None
+    payload, _runtime = prepared
+    assert payload["repository"] == {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "a/b"},
+        "branch": {"name": "release"},
+        "revision": None,
+    }
 
 # PR #533 CI retrigger.

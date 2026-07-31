@@ -8,7 +8,10 @@ drift across authoring and runtime code.
 
 from __future__ import annotations
 
+import hashlib
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -207,6 +210,76 @@ def reconcile_default_git_connection(
     )
 
 
+def resolve_deployment_repository_connection(
+    target: AuthoredRepositoryTarget,
+) -> RepositoryConnection:
+    """Resolve deployment-owned policy independently from runtime observation.
+
+    Operators may pin the complete connection document.  The packaged default is
+    a versioned policy whose expected digest is intentionally not derived from
+    the executable observed by the execution coordinator.
+    """
+
+    raw = os.getenv("MOONMIND_DEFAULT_GIT_REPOSITORY_CONNECTION", "").strip()
+    if raw:
+        try:
+            connection = RepositoryConnection.model_validate_json(raw)
+        except ValueError as exc:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_POLICY_INVALID",
+                "deployment repository connection policy is invalid",
+            ) from exc
+    else:
+        policy_path = (
+            Path(__file__).resolve().parents[3]
+            / "config"
+            / "repository-connections"
+            / "git-default.json"
+        )
+        try:
+            connection = RepositoryConnection.model_validate_json(
+                policy_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_POLICY_INVALID",
+                "packaged default Git repository connection policy is unavailable",
+            ) from exc
+    if connection.id != target.connection_ref:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"no deployment-owned connection is configured for {target.connection_ref!r}",
+        )
+    return connection
+
+
+def observe_repository_client_evidence(
+    connection: RepositoryConnection,
+) -> RepositoryClientEvidence:
+    """Observe the installed resolver independently of connection policy."""
+
+    if connection.provider != "git":
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            f"no repository client observer is available for {connection.provider!r}",
+        )
+    resolver_path = (
+        Path(__file__).resolve().parents[2] / "auth" / "github_credentials.py"
+    )
+    try:
+        digest = hashlib.sha256(resolver_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            "the configured Git repository resolver is unavailable",
+        ) from exc
+    return RepositoryClientEvidence(
+        toolBundleRef="moonmind.auth.github_credentials",
+        clientVersion="github-resolver.v1",
+        executableSha256=digest,
+    )
+
+
 def validate_connection_and_client(
     target: AuthoredRepositoryTarget,
     connection: RepositoryConnection,
@@ -324,6 +397,7 @@ async def ensure_repository_ready(
     readiness_registry: CapabilityReadinessRegistry,
     credential_resolver: CredentialResolver = resolve_default_git_credential,
     remote_tip_verifier: RemoteTipVerifier | None = None,
+    verify_remote_tip: bool = True,
 ) -> RepositoryConnection:
     """Resolve and validate all repository authority before any side effect.
 
@@ -353,7 +427,7 @@ async def ensure_repository_ready(
     if connection.credential_source == "github_resolver":
         await _await_if_needed(credential_resolver(target.repository.name))
 
-    if operation != "read":
+    if operation != "read" and verify_remote_tip:
         if remote_tip_verifier is None:
             raise RepositoryContractError(
                 REPOSITORY_REMOTE_TIP_MISMATCH,
@@ -383,7 +457,9 @@ __all__ = [
     "decode_legacy_repository_history_v1",
     "derive_repository_capabilities",
     "ensure_repository_ready",
+    "observe_repository_client_evidence",
     "reconcile_default_git_connection",
+    "resolve_deployment_repository_connection",
     "resolve_default_git_credential",
     "validate_connection_and_client",
 ]

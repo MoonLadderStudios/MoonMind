@@ -15,7 +15,9 @@ from moonmind.workflows.executions.repository_contract import (
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
     ensure_repository_ready,
+    observe_repository_client_evidence,
     reconcile_default_git_connection,
+    resolve_deployment_repository_connection,
     resolve_default_git_credential,
     validate_connection_and_client,
 )
@@ -44,6 +46,33 @@ def test_common_git_draft_injects_default_connection_and_keeps_axes_distinct() -
     assert target.branch.name == "main"
     assert target.revision is not None
     assert target.revision.commit_sha == "abcdef012345"
+
+
+def test_deployment_policy_and_observed_client_are_independent(monkeypatch) -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    monkeypatch.setenv(
+        "MOONMIND_DEFAULT_GIT_REPOSITORY_CONNECTION",
+        reconcile_default_git_connection(
+            client_policy=RepositoryClientPolicy(
+                pinnedVersion="github-resolver.v1",
+                toolBundleRef="moonmind.auth.github_credentials",
+                executableSha256="deployment-pinned-digest",
+            )
+        ).model_dump_json(by_alias=True),
+    )
+
+    connection = resolve_deployment_repository_connection(target)
+    observed = observe_repository_client_evidence(connection)
+
+    assert observed.executable_sha256 != connection.client_policy.executable_sha256
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        validate_connection_and_client(target, connection, observed, operation="read")
 
 
 @pytest.mark.parametrize("legacy", ["owner/repo", None, 123])
