@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+from pathlib import Path
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -67,6 +68,15 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
     resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.repository_contract import (
+    DEFAULT_GIT_CONNECTION_REF,
+    CapabilityReadinessRegistry,
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryContractError,
+    ensure_repository_ready,
+    reconcile_default_git_connection,
 )
 
 
@@ -760,7 +770,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
                 target_repository=str(
-                    (request.parameters or {}).get("repository") or ""
+                    workspace_intent.repository
+                    if workspace_intent is not None
+                    else ""
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
                 github_token=github_token,
@@ -815,6 +827,33 @@ class OmnigentProfileBoundExecutionCoordinator:
                     request.idempotency_key,
                     event_type="workspace_resolution",
                     metadata=dict(workspace_resolution),
+                )
+            if remediation_resolution is None:
+                current_stage = "repository_readiness"
+                await emit(current_stage, "started")
+                try:
+                    workspace_intent = await self._ensure_prepared_repository_ready(
+                        request=request,
+                        workspace_intent=workspace_intent,
+                        preflight=preflight,
+                        github_token=github_token,
+                    )
+                except RepositoryContractError as exc:
+                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+                await emit(
+                    current_stage,
+                    "ready",
+                    metadata={
+                        "connectionRef": workspace_intent.connection_ref,
+                        "workspaceIntentDigest": workspace_intent.intent_digest,
+                        "remoteTipExpectation": (
+                            workspace_intent.remote_tip_expectation.model_dump(
+                                by_alias=True, mode="json"
+                            )
+                            if workspace_intent.remote_tip_expectation is not None
+                            else None
+                        ),
+                    },
                 )
             await emit("credential_mount", "started")
             await emit(
@@ -1469,7 +1508,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             return None
         from moonmind.auth.github_credentials import resolve_github_credential
 
-        repository = str((request.parameters or {}).get("repository") or "").strip()
+        repository = cls._repository_source(request)
         resolved = await resolve_github_credential(repo=repository or None)
         token = str(resolved.token or "").strip() if resolved else ""
         if not token:
@@ -1510,6 +1549,129 @@ class OmnigentProfileBoundExecutionCoordinator:
     @staticmethod
     def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
         return authored_repository_mutation_required(request)
+
+    @staticmethod
+    async def _ensure_prepared_repository_ready(
+        *,
+        request: AgentExecutionRequest,
+        workspace_intent: Any,
+        preflight: Mapping[str, Any],
+        github_token: str | None,
+    ) -> Any:
+        """Authorize the prepared repository before runtime launch or Tool use."""
+
+        from moonmind.omnigent.workspace_intent import authored_repository_target
+
+        target = authored_repository_target(request)
+        if target.provider != "git" or target.connection_ref != DEFAULT_GIT_CONNECTION_REF:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                f"no deployment-owned connection is configured for {target.connection_ref!r}",
+            )
+
+        resolver_path = (
+            Path(__file__).resolve().parents[1] / "auth" / "github_credentials.py"
+        )
+        resolver_digest = hashlib.sha256(resolver_path.read_bytes()).hexdigest()
+        policy = RepositoryClientPolicy(
+            pinnedVersion="github-resolver.v1",
+            toolBundleRef="moonmind.auth.github_credentials",
+            executableSha256=resolver_digest,
+        )
+        connection = reconcile_default_git_connection(client_policy=policy)
+        evidence = RepositoryClientEvidence(
+            toolBundleRef=policy.tool_bundle_ref,
+            clientVersion=policy.pinned_version,
+            executableSha256=resolver_digest,
+        )
+
+        mounted = preflight.get("mountedTools")
+        mounted_status = (
+            str(mounted.get("status") or "")
+            if isinstance(mounted, Mapping)
+            else ""
+        )
+        repository_tokens = {
+            "git",
+            "lore",
+            "gh",
+            "repo.read",
+            "repo.write",
+            "repo.branch.write",
+        }
+        # Non-repository capabilities have already passed the authoritative
+        # runtime/Skill/Tool registry before this handoff. Preserve that owner
+        # instead of duplicating its readiness semantics here.
+        runtime_owned_tokens = {
+            str(token).strip().lower()
+            for token in workspace_intent.required_capabilities
+            if str(token).strip().lower() not in repository_tokens
+        }
+        runtime_owned_tokens.update(("codex", "codex_cli", "claude", "claude_code"))
+        registry = CapabilityReadinessRegistry(
+            runtime_owned_tokens=tuple(sorted(runtime_owned_tokens))
+        )
+        registry.register("git", lambda _context: True)
+        registry.register("repo.read", lambda _context: True)
+        registry.register("repo.write", lambda _context: True)
+        registry.register("repo.branch.write", lambda _context: True)
+        registry.register("gh", lambda _context: mounted_status == "ready")
+
+        resolution = preflight.get("workspaceResolution")
+        materialization = (
+            resolution.get("materialization")
+            if isinstance(resolution, Mapping)
+            else None
+        )
+        prepared_commit = (
+            str(materialization.get("resolvedCommit") or "").strip()
+            if isinstance(materialization, Mapping)
+            else ""
+        )
+        remote_tip_commit = (
+            str(materialization.get("remoteTipCommit") or "").strip()
+            if isinstance(materialization, Mapping)
+            else ""
+        )
+        if workspace_intent.repository_mutation:
+            if not remote_tip_commit:
+                raise RepositoryContractError(
+                    "REPOSITORY_REMOTE_TIP_MISMATCH",
+                    "repository mutation requires observed provider remote-tip evidence",
+                )
+            prepared_payload = workspace_intent.model_dump(
+                by_alias=True, mode="json"
+            )
+            prepared_payload.pop("intentDigest", None)
+            workspace_intent = type(workspace_intent).model_validate(
+                {
+                    **prepared_payload,
+                    "remoteTipExpectation": {
+                        "kind": "must_equal",
+                        "revision": {
+                            "provider": "git",
+                            "repositoryId": target.repository.name,
+                            "commitSha": remote_tip_commit,
+                        },
+                    },
+                }
+            )
+
+        await ensure_repository_ready(
+            target,
+            publish_mode=workspace_intent.publish_mode,
+            operation="write" if workspace_intent.repository_mutation else "read",
+            skill_capabilities=workspace_intent.required_capabilities,
+            connection_resolver=lambda _target: connection,
+            evidence_resolver=lambda _connection: evidence,
+            readiness_registry=registry,
+            credential_resolver=lambda _repository: github_token or True,
+            remote_tip_verifier=(
+                lambda _target: bool(prepared_commit)
+                and prepared_commit == remote_tip_commit
+            ),
+        )
+        return workspace_intent
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]

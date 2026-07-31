@@ -1341,28 +1341,6 @@ class WorkflowRuntimeSelection(BaseModel):
             raise WorkflowContractError("task.runtime.tierFallback must be clamp or strict")
         return normalized
 
-class WorkflowGitSelection(BaseModel):
-    """Branch-selection values for task execution."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    branch: str | None = Field(None, alias="branch")
-    starting_branch: str | None = Field(None, alias="startingBranch")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_target_branch(cls, value: object) -> object:
-        if not isinstance(value, Mapping):
-            return value
-        payload = dict(value)
-        payload.pop("targetBranch", None)
-        return payload
-
-    @field_validator("branch", "starting_branch", mode="before")
-    @classmethod
-    def _normalize_branches(cls, value: object) -> str | None:
-        return _clean_optional_str(value)
-
 class WorkflowPublishSelection(BaseModel):
     """Publish controls for branch/pull-request behavior."""
 
@@ -2152,7 +2130,6 @@ class WorkflowExecutionSpec(BaseModel):
     runtime: WorkflowRuntimeSelection = Field(
         default_factory=WorkflowRuntimeSelection, alias="runtime"
     )
-    git: WorkflowGitSelection = Field(default_factory=WorkflowGitSelection, alias="git")
     publish: WorkflowPublishSelection = Field(
         default_factory=WorkflowPublishSelection, alias="publish"
     )
@@ -2171,6 +2148,16 @@ class WorkflowExecutionSpec(BaseModel):
     recovery: WorkflowRecoveryProvenance | None = Field(None, alias="recovery")
     resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
     depends_on: list[str] | None = Field(None, alias="dependsOn")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_superseded_repository_authority(cls, value: object) -> object:
+        if isinstance(value, Mapping) and "git" in value:
+            raise WorkflowContractError(
+                "workflow.git is not accepted; use the top-level provider-discriminated "
+                "repository target"
+            )
+        return value
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -3134,20 +3121,16 @@ def build_authoritative_workflow_input_snapshot(
     """Build explicit authored fields for durable task input reconstruction."""
 
     task = _snapshot_mapping(task_payload)
-    git = _safe_mapping(task.get("git"))
+    repository_target = _snapshot_mapping(repository)
+    repository_branch = _safe_mapping(repository_target.get("branch"))
     steps = [
         step for step in _safe_list(task.get("steps")) if isinstance(step, Mapping)
     ]
     runtime_mode = _runtime_mode_from_spec(task, target_runtime=target_runtime)
-    repository_value = (
-        _clean_optional_str(git.get("repository"))
-        or _clean_optional_str(repository)
-        or None
-    )
+    repository_value: object = repository_target or None
     branch_value = (
         _clean_optional_str(task.get("branch"))
-        or _clean_optional_str(git.get("branch"))
-        or _clean_optional_str(git.get("startingBranch"))
+        or _clean_optional_str(repository_branch.get("name"))
         or None
     )
     authored_steps: list[dict[str, Any]] = []

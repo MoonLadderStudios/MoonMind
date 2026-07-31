@@ -18096,12 +18096,8 @@ class MoonMindRunWorkflow:
                 )
         for ws_key in (
             "repository",
-            "repo",
-            "startingBranch",
             "targetBranch",
-            "baseBranch",
             "publishBaseBranch",
-            "branch",
         ):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:

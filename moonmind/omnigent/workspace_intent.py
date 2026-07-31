@@ -24,6 +24,11 @@ from moonmind.schemas.workspace_intent import (
     WorkspaceIntentRecord,
     assert_no_runtime_shortcut_keys,
 )
+from moonmind.workflows.executions.repository_contract import (
+    AuthoredRepositoryTarget,
+    RepositoryContractError,
+    compile_repository_target,
+)
 
 
 class WorkspaceIntentCompilationError(ValueError):
@@ -44,44 +49,21 @@ def _parameters(request: AgentExecutionRequest) -> Mapping[str, Any]:
     return parameters if isinstance(parameters, Mapping) else {}
 
 
+def authored_repository_target(
+    request: AgentExecutionRequest,
+) -> AuthoredRepositoryTarget:
+    try:
+        return compile_repository_target(_spec(request).get("repository"))
+    except RepositoryContractError as exc:
+        raise WorkspaceIntentCompilationError(exc.code, str(exc)) from exc
+
+
 def authored_repository_source(request: AgentExecutionRequest) -> str:
-    spec = _spec(request)
-    parameters = _parameters(request)
-    for candidate in (
-        spec.get("repository"),
-        spec.get("repo"),
-        parameters.get("repository"),
-    ):
-        if isinstance(candidate, Mapping):
-            nested = candidate.get("repository")
-            if isinstance(nested, Mapping):
-                value = str(nested.get("name") or "").strip()
-                if value:
-                    return value
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return ""
+    return authored_repository_target(request).repository.name
 
 
 def authored_starting_branch(request: AgentExecutionRequest) -> str | None:
-    spec = _spec(request)
-    repository = spec.get("repository")
-    if isinstance(repository, Mapping):
-        branch = repository.get("branch")
-        if isinstance(branch, Mapping):
-            value = str(branch.get("name") or "").strip()
-            if value:
-                return value
-    for candidate in (
-        spec.get("startingBranch"),
-        spec.get("branch"),
-        spec.get("baseBranch"),
-    ):
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return None
+    return authored_repository_target(request).branch.name
 
 
 def authored_target_branch(request: AgentExecutionRequest) -> str | None:
@@ -90,39 +72,23 @@ def authored_target_branch(request: AgentExecutionRequest) -> str | None:
 
 
 def authored_checkout_commit(request: AgentExecutionRequest) -> str | None:
-    spec = _spec(request)
-    repository = spec.get("repository")
-    if isinstance(repository, Mapping):
-        revision = repository.get("revision")
-        if isinstance(revision, Mapping):
-            for key in ("commitSha", "revisionSignature"):
-                value = str(revision.get(key) or "").strip()
-                if value:
-                    return value
-    for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return None
+    revision = authored_repository_target(request).revision
+    if revision is None:
+        return None
+    return str(
+        getattr(revision, "commit_sha", None)
+        or getattr(revision, "revision_signature", None)
+        or ""
+    ).strip() or None
 
 
 def authored_connection_ref(request: AgentExecutionRequest) -> str | None:
-    repository = _spec(request).get("repository")
-    if not isinstance(repository, Mapping):
-        return None
-    value = str(repository.get("connectionRef") or "").strip()
-    return value or None
+    return authored_repository_target(request).connection_ref
 
 
 def authored_revision_kind(request: AgentExecutionRequest) -> str | None:
-    repository = _spec(request).get("repository")
-    if not isinstance(repository, Mapping):
-        return None
-    revision = repository.get("revision")
-    if not isinstance(revision, Mapping):
-        return None
-    value = str(revision.get("kind") or "").strip()
-    return value or None
+    revision = authored_repository_target(request).revision
+    return revision.kind if revision is not None else None
 
 
 def authored_restore_input_refs(request: AgentExecutionRequest) -> tuple[str, ...]:
@@ -343,7 +309,8 @@ def compile_workspace_intent(
             "workspaceSpec.workspaceLocator is required to compile workspace intent",
         )
 
-    repository = authored_repository_source(request) or None
+    repository_target = authored_repository_target(request)
+    repository = repository_target.repository.name
     restore_refs = authored_restore_input_refs(request)
     restore_input_refs, external_state_refs = _partition_restore_refs(restore_refs)
 
@@ -355,6 +322,7 @@ def compile_workspace_intent(
             logicalStepId=logical_step_id,
             stepExecutionId=step_execution_id,
             repository=repository,
+            repositoryProvider=repository_target.provider,
             repositoryKind=_classify_repository(repository or ""),
             connectionRef=authored_connection_ref(request),
             checkoutCommit=authored_checkout_commit(request),
@@ -364,11 +332,7 @@ def compile_workspace_intent(
             # have no observed tip yet; the repository-preparation boundary
             # must resolve that tip before granting mutation authority.
             remoteTipExpectation=(
-                {"kind": "read_only"}
-                if authored_revision_kind(request)
-                else {"kind": "resolve_before_mutation"}
-                if repository
-                else None
+                {"kind": "read_only"} if authored_revision_kind(request) else None
             ),
             startingBranch=authored_starting_branch(request),
             targetBranch=authored_target_branch(request),
@@ -401,6 +365,7 @@ __all__ = [
     "authored_publish_mode",
     "authored_repository_mutation_required",
     "authored_repository_source",
+    "authored_repository_target",
     "authored_required_capabilities",
     "authored_restore_input_refs",
     "authored_starting_branch",

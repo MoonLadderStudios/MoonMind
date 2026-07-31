@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -128,6 +128,43 @@ class WorkspaceIntentAssetProjection(BaseModel):
     digest: str | None = Field(None, max_length=300)
 
 
+class GitRemoteTipRevision(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    provider: Literal["git"]
+    repository_id: str = Field(..., alias="repositoryId", min_length=1)
+    commit_sha: str = Field(..., alias="commitSha", min_length=7)
+
+
+class LoreRemoteTipRevision(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    provider: Literal["lore"]
+    repository_id: str = Field(..., alias="repositoryId", min_length=1)
+    revision_signature: str = Field(..., alias="revisionSignature", min_length=1)
+    revision_number: int | None = Field(None, alias="revisionNumber")
+
+
+RepositoryRemoteTipRevision = Annotated[
+    GitRemoteTipRevision | LoreRemoteTipRevision,
+    Field(discriminator="provider"),
+]
+
+
+class MustEqualRemoteTipExpectation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    kind: Literal["must_equal"]
+    revision: RepositoryRemoteTipRevision
+
+
+class MustNotExistRemoteTipExpectation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["must_not_exist"]
+
+
+class ReadOnlyRemoteTipExpectation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["read_only"]
+
+
 class WorkspaceIntentRecord(BaseModel):
     """Canonical, versioned, immutable workspace-intent contract for one run.
 
@@ -156,11 +193,22 @@ class WorkspaceIntentRecord(BaseModel):
 
     # Repository identity and immutable source evidence.
     repository: str | None = Field(None, alias="repository", max_length=2000)
+    repository_provider: Literal["git", "lore"] | None = Field(
+        None, alias="repositoryProvider"
+    )
     repository_kind: str | None = Field(None, alias="repositoryKind", max_length=50)
     connection_ref: str | None = Field(None, alias="connectionRef", max_length=500)
     checkout_commit: str | None = Field(None, alias="checkoutCommit", max_length=200)
     revision_kind: str | None = Field(None, alias="revisionKind", max_length=50)
-    remote_tip_expectation: dict[str, Any] | None = Field(
+    remote_tip_expectation: (
+        Annotated[
+            MustEqualRemoteTipExpectation
+            | MustNotExistRemoteTipExpectation
+            | ReadOnlyRemoteTipExpectation,
+            Field(discriminator="kind"),
+        ]
+        | None
+    ) = Field(
         None, alias="remoteTipExpectation"
     )
 
@@ -311,10 +359,15 @@ class WorkspaceIntentRecord(BaseModel):
             "stepExecutionId": self.step_execution_id,
             "repository": repository_evidence,
             "repositoryKind": self.repository_kind,
+            "repositoryProvider": self.repository_provider,
             "connectionRef": self.connection_ref,
             "sourceCommit": self.checkout_commit,
             "revisionKind": self.revision_kind,
-            "remoteTipExpectation": self.remote_tip_expectation,
+            "remoteTipExpectation": (
+                self.remote_tip_expectation.model_dump(by_alias=True, mode="json")
+                if self.remote_tip_expectation is not None
+                else None
+            ),
             "startingBranch": self.starting_branch,
             "targetBranch": self.target_branch,
             "publishMode": self.publish_mode,

@@ -1119,6 +1119,22 @@ class OmnigentOAuthHostRuntime:
                     f"origin/{start}", env=git_env, check=False,
                 )
 
+        remote_tip_commit: str | None = None
+        if start and source_kind != "local":
+            code, out, _err = await self._run(
+                "git",
+                "-C",
+                str(workspace),
+                "ls-remote",
+                "--refs",
+                "origin",
+                f"refs/heads/{start}",
+                env=git_env,
+                check=False,
+            )
+            if code == 0:
+                remote_tip_commit = str(out or "").strip().split(maxsplit=1)[0] or None
+
         output_branch = None
         if target and target != checked_out:
             # Honor the authored output branch without discarding the checked-out
@@ -1152,6 +1168,7 @@ class OmnigentOAuthHostRuntime:
             "startingBranch": start,
             "checkedOut": checked_out,
             "resolvedCommit": resolved_commit,
+            "remoteTipCommit": remote_tip_commit,
             "outputBranch": output_branch,
             "commit": commit or None,
         }

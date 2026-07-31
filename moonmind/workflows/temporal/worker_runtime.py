@@ -671,6 +671,14 @@ def _resolve_authored_branch(
     parameter_payload: Mapping[str, Any],
     input_payload: Mapping[str, Any],
 ) -> str:
+    for payload in (task_payload, parameter_payload, input_payload):
+        repository_target = payload.get("repository")
+        if isinstance(repository_target, Mapping):
+            branch = repository_target.get("branch")
+            if isinstance(branch, Mapping):
+                value = _coerce_non_empty_text(branch.get("name"))
+                if value:
+                    return value
     repository_default_branch = _repository_default_branch_candidate(
         git_payload,
         task_payload,
@@ -1619,17 +1627,20 @@ def _build_runtime_planner():
         ):
             node_inputs["publishBaseBranch"] = publish_base_branch
 
-        repository = (
+        repository_target = (
             task_payload.get("repository")
             or input_payload.get("repository")
             or parameter_payload.get("repository")
-            or parameter_payload.get("repo")
-            or selected_skill_inputs.get("repository")
-            or selected_skill_inputs.get("repo")
         )
-        if isinstance(repository, str) and repository.strip():
-            node_inputs["repository"] = repository.strip()
-            node_inputs["repo"] = repository.strip()
+        if isinstance(repository_target, Mapping):
+            repository_node = _coerce_mapping(repository_target.get("repository"))
+            branch_node = _coerce_mapping(repository_target.get("branch"))
+            repository_name = _coerce_non_empty_text(repository_node.get("name"))
+            branch_name = _coerce_non_empty_text(branch_node.get("name"))
+            if repository_name:
+                node_inputs["repository"] = dict(repository_target)
+            if branch_name:
+                node_inputs["startingBranch"] = branch_name
         if selected_skill_name:
             node_inputs["selectedSkill"] = selected_skill_name
             node_inputs["skill"] = _normalized_agent_skill_payload(

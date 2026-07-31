@@ -14,6 +14,9 @@ import hashlib
 import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.omnigent.profile_bound_execution import (
+    OmnigentProfileBoundExecutionCoordinator,
+)
 from moonmind.omnigent.workspace_intent import (
     WORKSPACE_INTENT_LOCATOR_REQUIRED,
     WORKSPACE_INTENT_UNSAFE_INPUT,
@@ -43,16 +46,19 @@ def _locator(**overrides):
 def _request(*, workspace_spec=None, parameters=None, **overrides):
     spec = {
         "workspaceLocator": _locator(),
-        "repository": "https://github.com/acme/widgets.git",
-        "startingBranch": "main",
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "acme/widgets"},
+            "branch": {"name": "main"},
+            "revision": {"kind": "git_commit", "commitSha": "abc1234"},
+        },
         "targetBranch": "feature/x",
-        "checkoutCommit": "abc1234",
         "restoreInputRefs": ["artifact://chk1", "external-state:sess-9"],
     }
     if workspace_spec is not None:
         spec = workspace_spec
     params = {
-        "repository": "https://github.com/acme/widgets.git",
         "publishMode": "pr",
         "requiredCapabilities": ["gh", "git"],
     }
@@ -89,7 +95,8 @@ def _compile(request):
 
 def test_compiles_full_authored_intent() -> None:
     intent = _compile(_request())
-    assert intent.repository == "https://github.com/acme/widgets.git"
+    assert intent.repository == "acme/widgets"
+    assert intent.repository_provider == "git"
     assert intent.repository_kind == "github_https"
     assert intent.starting_branch == "main"
     assert intent.target_branch == "feature/x"
@@ -127,11 +134,41 @@ def test_provider_target_persists_connection_revision_and_remote_tip_axes() -> N
     intent = _compile(request)
 
     assert intent.repository == "acme/widgets"
+    assert intent.repository_provider == "git"
     assert intent.connection_ref == "repository-connection:git-default"
     assert intent.starting_branch == "main"
     assert intent.checkout_commit == "abcdef012345"
     assert intent.revision_kind == "git_commit"
-    assert intent.remote_tip_expectation == {"kind": "read_only"}
+    assert intent.remote_tip_expectation.model_dump(by_alias=True) == {
+        "kind": "read_only"
+    }
+
+
+def test_lore_target_preserves_provider_and_immutable_revision_axis() -> None:
+    intent = _compile(
+        _request(
+            workspace_spec={
+                "workspaceLocator": _locator(),
+                "repository": {
+                    "provider": "lore",
+                    "connectionRef": "repository-connection:tactics-lore",
+                    "repository": {"name": "Tactics"},
+                    "branch": {"name": "main"},
+                    "revision": {
+                        "kind": "lore_revision",
+                        "revisionSignature": "lore-signature-1",
+                    },
+                },
+            },
+            parameters={"publishMode": "none", "requiredCapabilities": ["lore"]},
+        )
+    )
+
+    assert intent.repository_provider == "lore"
+    assert intent.repository == "Tactics"
+    assert intent.starting_branch == "main"
+    assert intent.checkout_commit == "lore-signature-1"
+    assert intent.revision_kind == "lore_revision"
 
 
 def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
@@ -140,9 +177,14 @@ def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
     request = _request(
         workspace_spec={
             "workspaceLocator": _locator(),
-            "repository": "acme/widgets",
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
         },
-        parameters={"repository": "acme/widgets", "publishMode": "none"},
+        parameters={"publishMode": "none"},
     )
     intent = _compile(request)
     assert intent.repository == "acme/widgets"
@@ -160,9 +202,14 @@ def test_lookalike_https_host_is_not_classified_as_github() -> None:
         request = _request(
             workspace_spec={
                 "workspaceLocator": _locator(),
-                "repository": source,
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": source},
+                    "branch": {"name": "main"},
+                },
             },
-            parameters={"repository": source, "publishMode": "none"},
+            parameters={"publishMode": "none"},
         )
         intent = _compile(request)
         assert intent.repository_kind == "remote"
@@ -175,16 +222,19 @@ def test_equivalent_authored_requests_produce_equivalent_intent() -> None:
     preset = _request(
         workspace_spec={
             "restoreInputRefs": ["external-state:sess-9", "artifact://chk1"],
-            "checkoutCommit": "abc1234",
             "targetBranch": "feature/x",
-            "startingBranch": "main",
-            "repository": "https://github.com/acme/widgets.git",
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+                "revision": {"kind": "git_commit", "commitSha": "abc1234"},
+            },
             "workspaceLocator": _locator(),
         },
         parameters={
             "requiredCapabilities": ["GH", "GIT"],
             "publishMode": "pr",
-            "repository": "https://github.com/acme/widgets.git",
         },
     )
     assert _compile(create).intent_digest == _compile(preset).intent_digest
@@ -205,7 +255,52 @@ def test_branch_submission_defers_remote_tip_resolution_without_null_revision() 
     )
     intent = _compile(request)
     assert intent.checkout_commit is None
-    assert intent.remote_tip_expectation == {"kind": "resolve_before_mutation"}
+    assert intent.remote_tip_expectation is None
+
+
+@pytest.mark.asyncio
+async def test_prepared_boundary_authorizes_remote_tip_before_runtime_launch() -> None:
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={
+            "publishMode": "branch",
+            "requiredCapabilities": ["git"],
+        },
+    )
+    intent = _compile(request)
+    prepared = await OmnigentProfileBoundExecutionCoordinator._ensure_prepared_repository_ready(
+        request=request,
+        workspace_intent=intent,
+        preflight={
+            "mountedTools": {"status": "not_required"},
+            "workspaceResolution": {
+                "materialization": {
+                    "resolvedCommit": "abcdef012345",
+                    "remoteTipCommit": "abcdef012345",
+                }
+            },
+        },
+        github_token="resolved-in-memory",
+    )
+
+    assert prepared.remote_tip_expectation.model_dump(
+        by_alias=True, mode="json"
+    ) == {
+        "kind": "must_equal",
+        "revision": {
+            "provider": "git",
+            "repositoryId": "acme/widgets",
+            "commitSha": "abcdef012345",
+        },
+    }
 
 
 def test_retry_reproduces_the_same_immutable_intent() -> None:
@@ -228,7 +323,12 @@ def test_fails_closed_on_smuggled_docker_authority() -> None:
     request = _request(
         workspace_spec={
             "workspaceLocator": _locator(),
-            "repository": "https://github.com/acme/widgets.git",
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
             "dockerVolume": "operator-chosen-volume",
         }
     )
@@ -241,7 +341,12 @@ def test_fails_closed_on_credential_shaped_value() -> None:
     request = _request(
         workspace_spec={
             "workspaceLocator": _locator(),
-            "repository": "https://github.com/acme/widgets.git",
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
             "startingBranch": "token=ghp_shouldnotbehere",
         }
     )
@@ -252,7 +357,14 @@ def test_fails_closed_on_credential_shaped_value() -> None:
 
 def test_fails_closed_when_locator_missing() -> None:
     request = _request(
-        workspace_spec={"repository": "https://github.com/acme/widgets.git"}
+        workspace_spec={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            }
+        }
     )
     with pytest.raises(WorkspaceIntentCompilationError) as excinfo:
         _compile(request)

@@ -1209,11 +1209,15 @@ def test_pr_publish_derives_gh_without_implicit_git_for_non_repository_workflow(
     assert "git" not in result["requiredCapabilities"]
 
 
-def test_required_capabilities_derive_git_from_repository_or_git_context() -> None:
+def test_required_capabilities_derive_git_from_provider_repository_target() -> None:
     repository_result = build_canonical_workflow_view(
         job_type="task",
         payload={
-            "repository": "MoonLadderStudios/MoonMind",
+            "repository": {
+                "provider": "git",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
             "targetRuntime": "codex_cli",
             "task": {
                 "instructions": "Run repository-backed work.",
@@ -1221,20 +1225,7 @@ def test_required_capabilities_derive_git_from_repository_or_git_context() -> No
             },
         },
     )
-    git_context_result = build_canonical_workflow_view(
-        job_type="task",
-        payload={
-            "targetRuntime": "codex_cli",
-            "task": {
-                "instructions": "Run branch-backed work.",
-                "git": {"branch": "feature/mm-945"},
-                "publish": {"mode": "none"},
-            },
-        },
-    )
-
     assert "git" in repository_result["requiredCapabilities"]
-    assert "git" in git_context_result["requiredCapabilities"]
 
 
 def test_explicit_git_required_capability_is_preserved_without_repository_context() -> None:
@@ -2256,27 +2247,14 @@ def test_fr009_empty_depends_on_normalized_to_none() -> None:
     assert spec.depends_on is None
 
 
-# FR-010/011: task.git.branch is the canonical field; targetBranch is stripped.
-
-def test_fr010_branch_is_canonical_authored_field() -> None:
-    """MM-638 FR-010: task.git.branch is accepted and present in canonical output."""
-    result = build_canonical_workflow_view(
-        job_type="task",
-        payload=_canonical_task_payload({"git": {"branch": "feature/my-branch"}}),
-    )
-    assert result["workflow"]["git"]["branch"] == "feature/my-branch"
-
-
-def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
-    """MM-668: targetBranch must not be normalized into active authored branch."""
-    result = build_canonical_workflow_view(
-        job_type="task",
-        payload=_canonical_task_payload({
-            "git": {"targetBranch": "feature/legacy"},
-        }),
-    )
-    assert result["workflow"]["git"]["branch"] is None
-    assert "targetBranch" not in result["workflow"]["git"]
+def test_workflow_git_authority_is_rejected_for_new_submissions() -> None:
+    with pytest.raises(WorkflowContractError, match="workflow.git is not accepted"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload=_canonical_task_payload(
+                {"git": {"branch": "feature/my-branch"}}
+            ),
+        )
 
 
 # SC-001: Full recover_from_failed_step acceptance scenario
@@ -2430,19 +2408,6 @@ def test_edge_case_recovery_checkpoint_ref_empty_is_rejected() -> None:
     bad_resume = {**_VALID_RESUME_BLOCK, "recoveryCheckpointRef": ""}
     with pytest.raises(ValidationError):
         ResumeFromFailedStepRef.model_validate(bad_resume)
-
-
-def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
-    """MM-638 edge case: branch and startingBranch are distinct fields and both preserved."""
-    result = build_canonical_workflow_view(
-        job_type="task",
-        payload=_canonical_task_payload({
-            "git": {"branch": "main", "startingBranch": "sha-abc123"},
-        }),
-    )
-    git = result["workflow"]["git"]
-    assert git["branch"] == "main"
-    assert git["startingBranch"] == "sha-abc123"
 
 
 def test_recorded_legacy_history_uses_only_explicit_versioned_decoder() -> None:
