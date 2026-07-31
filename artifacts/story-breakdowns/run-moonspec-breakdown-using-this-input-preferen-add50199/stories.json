@@ -1,0 +1,1273 @@
+{
+  "source": {
+    "title": "Lore VCS Integration — System / Feature Design View",
+    "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+    "referencePath": "docs/Workflows/LoreVcsIntegrationDesign.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "originalDesignText": "# Lore VCS Integration — System / Feature Design View\n\n**Status:** Proposed  \n**Document Class:** Canonical declarative  \n**Viewpoint:** System / Feature Design View  \n**Updated:** 2026-07-30  \n**Audience:** MoonMind contributors, workflow and runtime authors, integration authors, security reviewers, operators, and repository administrators  \n**Authority:** Transitional canonical design for provider-discriminated repository targets, repository connections, Lore-backed workspaces, repository capabilities, publication evidence, generated-review handoff, exact-revision CI, and provider-authoritative merge automation  \n**Owning Surface:** Workflow repository, workspace, publishing, Managed Agents, Omnigent, Security, and integration boundaries  \n**Related Docs:** [`MoonMindArchitecture.md`](../MoonMindArchitecture.md), [`WorkflowArchitecture.md`](./WorkflowArchitecture.md), [`WorkflowPublishing.md`](./WorkflowPublishing.md), [`RequiredCapabilities.md`](./RequiredCapabilities.md), [`WorkspaceLocators.md`](./WorkspaceLocators.md), [`ManagedAgentsGit.md`](../ManagedAgents/ManagedAgentsGit.md), [`OmnigentHostMountedTools.md`](../Omnigent/OmnigentHostMountedTools.md), [`SecretsSystem.md`](../Security/SecretsSystem.md), [`SkillSystem.md`](../Steps/SkillSystem.md), [`SkillAndPlanContracts.md`](./SkillAndPlanContracts.md)  \n**Related Implementation:** [`execution_contract.py`](../../moonmind/workflows/executions/execution_contract.py), [`moonmind/publish/`](../../moonmind/publish/), [`moonmind/auth/`](../../moonmind/auth/), [`moonmind/workflows/temporal/runtime/`](../../moonmind/workflows/temporal/runtime/), and future repository-provider adapters\n\n> This document defines desired state. Implementation sequencing, migration checklists, Tactics cutover status, and rollout ownership belong in `docs/tmp/`, issues, pull requests, or the external Tactics operational plan.\n\n---\n\n## 1. Purpose\n\nMoonMind currently treats repository selection, Git transport, GitHub authentication, pull-request publication, and merge automation as closely coupled concepts. That is valid for a GitHub-authoritative repository, but it is not valid for a project whose authoritative revisions live in Lore and whose GitHub repository is a generated review projection.\n\nThis design makes repository authority explicit. It lets MoonMind:\n\n- author one provider-discriminated repository target at the top-level workflow boundary;\n- preserve the ordinary GitHub experience through a deployment-seeded default Git connection;\n- prepare an exact Lore repository and revision as a complete workflow workspace;\n- deliver that same authoritative workspace to managed and Omnigent runtime lanes without inventing a second repository copy;\n- give agents the real, pinned repository CLI and provider-aware operating guidance;\n- inspect, stage, diff, commit, push, and lock through Lore without treating a generated Git tree as authoritative;\n- preserve exact repository identities in checkpoints, artifacts, CI requests, publication evidence, review mappings, and merge requests;\n- request a generated GitHub pull request without pushing repository contents to GitHub;\n- consume projected GitHub PR, check, and review state as derived review evidence;\n- send review fixes back through a Lore workspace as a new Lore revision; and\n- compile merge automation to the selected provider's authority boundary rather than assuming that GitHub merge is universally authoritative.\n\nThe initial motivating deployment is Tactics. Its intended authority model is a complete Lore repository containing root `Content/**`, exact-revision Unreal CI, and one-way generated Git history that omits root `Content/**` while retaining plugin-owned Content. MoonMind must fit that model rather than create a competing Lore-to-GitHub bridge or a GitHub-to-Lore synchronization path.\n\n---\n\n## 2. Desired behavior\n\n### 2.1 Authority model\n\nFor a Lore-backed repository, MoonMind uses this fixed authority direction:\n\n```text\nWorkflow author or review-remediation request\n        |\n        v\nMoonMind resolves a Lore repository target\n        |\n        v\nExact Lore workspace, including paths omitted from GitHub\n        |\n        +---- agent reads and changes the workspace\n        |\n        +---- MoonMind or a Lore-aware auto-publish Skill publishes\n        v\nAuthoritative Lore work branch and exact Lore revision\n        |\n        +---- exact-revision CI\n        |\n        +---- conditional, versioned review request\n        v\nExternal Lore-to-GitHub bridge\n        |\n        v\nGenerated Git commit, branch, pull request, and checks\n        |\n        +---- Codex and human review\n        |\n        +---- findings become a new Lore-backed run\n        v\nLore-side merge coordinator merges the approved Lore revision\n```\n\nThe following are invariants:\n\n1. **Lore is the repository-content authority.** The Lore repository id and immutable revision signature identify repository state. Branch identity is carried separately when branch reachability or mutation matters.\n2. **GitHub is a review projection.** A Git commit SHA, generated branch, or pull request is derived identity and must map to the exact Lore revision before MoonMind treats it as current.\n3. **GitHub never writes repository contents back into Lore.** Review findings are inputs to a new Lore-backed run. The resulting fix is committed to Lore and projected again.\n4. **The authoritative workspace contains the complete Lore revision.** MoonMind must not substitute the filtered GitHub tree for root `Content/**`, Lore workspace state, locks, or other Lore-only state.\n5. **A new Lore revision stales earlier branch-scoped CI and review evidence.** This applies even when the generated Git tree is unchanged, such as a root-Content-only revision.\n6. **Ordinary MoonMind publication cannot merge protected Lore branches.** It may request review or submit a merge request to the external coordinator, but it does not bypass that coordinator.\n7. **Authority handoffs are conditional.** Branch publication and review-request writes are accepted only against the exact expected branch state; a later run cannot overwrite a newer revision's handoff.\n8. **Merge automation is provider-authoritative.** Git targets may use GitHub merge automation. Lore targets use the Lore merge coordinator and never compile to a GitHub-merging `pr-resolver` path.\n\n### 2.2 Primary scenarios\n\n#### Read or analyze an exact revision\n\nA workflow may author an immutable revision selector with `publish.mode = \"none\"`. MoonMind resolves the connection, repository, branch context, and exact revision; materializes the complete revision into a contained workspace; records the prepared identity; and launches the selected runtime without repository mutation authority.\n\n#### Implement and publish a branch\n\nMoonMind prepares the selected branch at a recorded remote-tip expectation. The agent changes the complete workspace. The deterministic publisher scans external changes, checks lock and contamination policy, stages intended paths, builds a publication candidate, performs the Secrets System outbound scan when required, publishes through a provider-native compare-and-set or equivalent lease, verifies the exact remote revision, and emits provider-neutral publication evidence.\n\n#### Request a generated pull request\n\nFor `publish.mode = \"pr\"`, MoonMind first verifies the Lore publication. It then writes an idempotent review-request envelope only if the Lore work branch still points at the exact published revision. MoonMind durably waits for the external bridge to confirm that this revision maps to the generated Git commit and pull-request head. MoonMind does not directly push the generated Git branch or create the GitHub pull request.\n\n#### Remediate GitHub review findings\n\nMoonMind resolves the generated pull request through trusted bridge mapping data, identifies the authoritative Lore repository, branch, and current revision, fetches authorized GitHub review context, and performs remediation against the Lore workspace. The agent may read GitHub review state, but repository mutation and publication go only to Lore. A later generated Git commit updates the same review projection.\n\n#### Run exact-revision CI\n\nMoonMind or a connected CI controller receives an immutable repository CI request, materializes the complete Lore revision, and returns immutable terminal evidence for that exact revision. When a Git mapping exists, the result may also be projected to a GitHub Check Run, but the Git SHA is not the workspace input.\n\n#### Request provider-authoritative merge automation\n\nWhen the operator selects PR publishing with merge automation:\n\n- a Git target uses the existing Git-provider merge-automation implementation;\n- a Lore target publishes and projects the exact Lore revision, then submits a typed request to the Lore merge coordinator and waits on coordinator state; and\n- a Lore target whose connection does not advertise a compatible merge coordinator is rejected before launch rather than falling back to GitHub merge.\n\n### 2.3 Compatibility with the Tactics authority and projection contract\n\nA Tactics-compatible implementation must preserve all of the following:\n\n- root `/Content/**` is present in MoonMind's Lore workspace and exact-revision CI input;\n- root `/Content/**` is not expected to appear in the generated GitHub tree;\n- plugin-owned `Plugins/**/Content/**` remains ordinary repository content;\n- Content-only Lore revisions remain publishable, CI-addressable, and reviewable even when the generated Git tree is tree-identical;\n- review summaries distinguish code paths from root Content paths and carry visual or asset-validation evidence when available;\n- generated Git history, parent mapping, symlink reconstruction, fast-forward-only generated refs, and divergence quarantine remain responsibilities of the external projection bridge;\n- MoonMind never directly updates or force-pushes a generated GitHub ref;\n- the exact current Lore revision, not merely the GitHub head, gates CI, review freshness, and merge submission; and\n- GitHub merge actions are not authoritative for the Lore-backed repository.\n\n---\n\n## 3. Shape\n\n### 3.1 Component topology\n\n```mermaid\nflowchart LR\n    UI[Workflow Create / API] --> COMP[Repository target compiler]\n    COMP --> RT[ResolvedRepositoryTarget]\n    RT --> WF[MoonMind.UserWorkflow]\n    WF --> ACT[Repository Activities]\n    ACT --> ADAPTER[RepositoryProviderAdapter]\n    ADAPTER --> REMOTE[Git or Lore authority]\n\n    ACT --> WS[Contained exact-revision workspace]\n    WS --> BIND[RepositoryWorkspaceBinding]\n    BIND --> AGENT[Managed runtime or Omnigent runner]\n    TOOLS[Read-only MoonMind tool bundle] --> AGENT\n    SKILLS[Resolved repository-aware Skills] --> AGENT\n\n    AGENT --> WS\n    WF --> PUB[Repository publisher]\n    PUB --> SCAN[Secrets System outbound scan]\n    PUB --> ADAPTER\n    ADAPTER --> REV[Authoritative repository revision]\n\n    REV --> CI[Exact-revision CI controller]\n    REV --> REQ[Conditional review request]\n    REQ --> BRIDGE[External Lore-to-GitHub bridge]\n    BRIDGE --> MAP[Durable Lore-to-Git mapping]\n    MAP --> PR[Generated GitHub PR and checks]\n\n    PR --> REVIEW[Codex and human review]\n    REVIEW --> UI\n\n    WF --> MREQ[Provider merge-automation child]\n    MREQ --> COORD[GitHub merge path or Lore coordinator]\n    COORD --> REMOTE\n```\n\nTemporal workflow code carries compact identities and orchestrates retries, waits, signals, and child work. Connection reconciliation, credential resolution, filesystem work, repository CLI or client calls, network calls, security scans, artifact writes, projection-status reads, and merge-request submission occur in Activities or external service boundaries.\n\n### 3.2 Canonical contract replacement and atomic cutover\n\nThe repository-provider change is a cohesive contract replacement, not an additive compatibility alias.\n\n| Superseded shape | Canonical desired state |\n| --- | --- |\n| Top-level `repository: string` plus `task.git.branch` | One top-level provider-discriminated `repository` object |\n| `task.repository` as an ignored extra field | No nested repository target; repository authority is top-level |\n| `task.auth.repoAuthRef` and `publishAuthRef` | `repository.connectionRef` to a deployment-owned `RepositoryConnection` |\n| Repository presence always derives `git` | Provider- and Skill-aware capability compilation |\n| `publish.mode = \"pr\"` always derives `gh` | Provider-specific PR capability derivation |\n| `acceptedRepositoryEvidence` plus `moonmind.publish.auto.v1` | One `moonmind.publish.repository.v1` evidence contract for managed and agent-owned publication |\n| Git-named checkpoint and Omnigent repository identity fields | Provider-discriminated repository checkpoint and runtime identity |\n| GitHub-only merge automation | Provider-authoritative merge automation |\n\nCutover rules:\n\n1. New submissions use only the new top-level `repository` contract.\n2. New authoring, create, edit, rerun, preset, test, mock, and documentation paths do not emit the old string or `task.git` fields.\n3. Existing durable workflow histories may replay through a frozen, explicitly versioned legacy decoder when required by Temporal history compatibility.\n4. The legacy decoder is not an authoring normalizer and cannot accept new submissions.\n5. Legacy fields and translators are removed after the applicable history and persisted-payload retention window.\n6. The implementation introduces the default Git connection, target compiler, provider-aware capability derivation, Git and Lore publisher support, the shared publication-evidence writer, every built-in repository-mutating auto Skill, validators, workflow consumers, projections, and tests before enabling the new contract.\n7. The deployment version that enables new repository submissions also removes `acceptedRepositoryEvidence` and new-write support for `moonmind.publish.auto.v1`; frozen readers remain only for already-recorded histories.\n8. An evidence-first or connection-later partial rollout is invalid because every new publication result requires `connectionRef` and `clientEvidence`.\n\nAll new repository schemas use the dotted `moonmind.<contract>.vN` convention. Existing repository-adjacent checkpoint schemas with unrelated version conventions are replaced as part of the provider-discriminated checkpoint cutover rather than retained as a third parallel surface.\n\n### 3.3 Repository connections and the default Git path\n\nRepository access is configured through a first-class `RepositoryConnection`. It is not an LLM Provider Profile. It selects repository endpoint, policy, credential resolver, client compatibility, and optional review or merge integrations.\n\n```ts\ntype RepositoryProvider = \"git\" | \"lore\";\n\ninterface RepositoryConnectionBase {\n  schemaVersion: \"moonmind.repository-connection.v1\";\n  id: string;\n  provider: RepositoryProvider;\n  displayName: string;\n\n  endpointRef: string;\n  trustBundleRef?: string;\n\n  allowedRepositoryIds?: string[];\n  allowedOperations: Array<\n    | \"read\"\n    | \"write\"\n    | \"branch_write\"\n    | \"lock\"\n    | \"review_request\"\n    | \"merge_request\"\n  >;\n\n  clientPolicy: {\n    pinnedVersion: string;\n    compatibleServerVersions?: string[];\n    toolBundleRef: string;\n    executableSha256: string;\n  };\n}\n\ninterface GitRepositoryConnection extends RepositoryConnectionBase {\n  provider: \"git\";\n  credential:\n    | { source: \"github_resolver\" }\n    | { source: \"secret_ref\"; credentialRef: SecretRef };\n\n  pullRequest?: {\n    provider: \"github\";\n    repositoryScope: \"selected_repository\";\n  };\n}\n\ninterface LoreRepositoryConnection extends RepositoryConnectionBase {\n  provider: \"lore\";\n  credential:\n    | { source: \"secret_ref\"; credentialRef: SecretRef }\n    | { source: \"trusted_network_development\" };\n\n  projection?: {\n    provider: \"github\";\n    repository: string;\n    authority: \"review_only\";\n    statusSourceRef: string;\n  };\n\n  mergeCoordinator?: {\n    endpointRef: string;\n    policyRef: string;\n    supportedProtocolVersion: string;\n  };\n}\n\ntype RepositoryConnection =\n  | GitRepositoryConnection\n  | LoreRepositoryConnection;\n```\n\nRules:\n\n- `credentialRef` is required exactly when `credential.source = \"secret_ref\"` and is forbidden for `github_resolver` and `trusted_network_development`.\n- `credentialRef` is the typed `SecretRef` owned by the Secrets System; this design does not introduce another string grammar or secret parser.\n- The durable connection contains no private key, token, password, cookie, auth header, or absolute runtime path.\n- `trusted_network_development` is eligible only under explicit development or migration-shadow policy. It is never production-ready merely because the server is reachable.\n- Repository and operation allowlists are checked before workspace preparation and again before mutation.\n- Client version, tool-bundle ref, and executable digest are pinned. `latest` is not a durable client identity.\n- The tool-bundle manifest is observed runtime evidence; the connection policy is the expected value. Readiness requires the manifest's executable digest and version to equal the connection policy. Any mismatch fails closed with `LORE_CLIENT_UNAVAILABLE` for Lore or the corresponding Git client-readiness diagnostic.\n- A connection may select a compatible worker or host pool carrying its exact tool-bundle snapshot.\n\n#### Seeded default Git connection\n\nMoonMind reconciles a deployment-owned connection with the well-known id:\n\n```text\nrepository-connection:git-default\n```\n\nThe default connection has `provider = \"git\"` and `credential.source = \"github_resolver\"`. Startup or Settings reconciliation derives its readiness from the existing GitHub settings and token resolver chain rather than asking an operator to manually create a connection record.\n\nThe common GitHub authoring path therefore remains low ceremony:\n\n1. The user selects a GitHub repository and branch as today.\n2. The Create compiler injects `repository-connection:git-default` when no advanced connection was selected.\n3. The normalized submitted payload always carries the explicit connection ref.\n4. Repository readiness invokes the canonical GitHub credential resolver.\n5. Advanced deployments may select a different Git connection explicitly.\n\n`ManagedAgentsGit.md` remains authoritative for Git/GitHub credential-source precedence, token probes, transport shaping, and GitHub permissions. `RepositoryConnection` wraps and selects that resolver boundary; it does not redefine or duplicate the resolver chain. Lore credential resolution remains governed by this design, the Secrets System, and the future repository integration module.\n\n### 3.4 Authored repository target\n\nThe canonical submitted workflow boundary carries one top-level repository object:\n\n```ts\ninterface AuthoredGitRepositoryTarget {\n  provider: \"git\";\n  connectionRef: string;\n  repository: { name: string };\n  branch: { name: string };\n  revision?: {\n    kind: \"git_commit\";\n    commitSha: string;\n  };\n}\n\ninterface AuthoredLoreRepositoryTarget {\n  provider: \"lore\";\n  connectionRef: string;\n  repository: { name: string };\n  branch: { name: string };\n  revision?: {\n    kind: \"lore_revision\";\n    revisionSignature: string;\n  };\n}\n\ntype AuthoredRepositoryTarget =\n  | AuthoredGitRepositoryTarget\n  | AuthoredLoreRepositoryTarget;\n```\n\nA UI draft for the ordinary GitHub path may omit `connectionRef`; the control-plane compiler must insert the seeded default before validation and snapshot persistence. Worker-bound and persisted new-contract payloads never omit it.\n\nRepresentative Lore submission:\n\n```json\n{\n  \"repository\": {\n    \"provider\": \"lore\",\n    \"connectionRef\": \"repository-connection:tactics-lore\",\n    \"repository\": { \"name\": \"Tactics\" },\n    \"branch\": { \"name\": \"main\" }\n  },\n  \"workflow\": {\n    \"publish\": { \"mode\": \"pr\" },\n    \"instructions\": \"Implement the selected change\"\n  }\n}\n```\n\nRepresentative exact-revision read:\n\n```json\n{\n  \"repository\": {\n    \"provider\": \"lore\",\n    \"connectionRef\": \"repository-connection:tactics-lore\",\n    \"repository\": { \"name\": \"Tactics\" },\n    \"branch\": { \"name\": \"main\" },\n    \"revision\": {\n      \"kind\": \"lore_revision\",\n      \"revisionSignature\": \"<immutable-signature>\"\n    }\n  },\n  \"workflow\": {\n    \"publish\": { \"mode\": \"none\" },\n    \"instructions\": \"Analyze this exact historical revision\"\n  }\n}\n```\n\nValidation rules:\n\n- `revision` selects immutable historical state and is valid for `publish.mode = \"none\"` and exact-revision Tool or CI requests.\n- `revision` is rejected for ordinary `branch`, `pr`, or `auto` publication because silently mutating from a historical checkout is ambiguous.\n- Creating a new work branch from a historical revision is a separate explicit provider operation with its own target branch and remote-tip expectation.\n- For `publish.mode = \"pr\"`, the authored branch is the base or target branch; MoonMind creates or resolves a work branch.\n- For `publish.mode = \"branch\"`, the authored branch is the branch to update.\n- Review remediation may resolve the existing Lore work branch from trusted projection mapping instead of generating another branch.\n\n### 3.5 Resolved repository identity\n\nRepository identity, branch identity, and immutable revision identity are distinct axes.\n\n```ts\ninterface RepositoryRef {\n  id: string;\n  name: string;\n}\n\ninterface RepositoryBranchRef {\n  repositoryId: string;\n  id: string;\n  name: string;\n}\n\ninterface GitRevisionRef {\n  provider: \"git\";\n  repositoryId: string;\n  commitSha: string;\n}\n\ninterface LoreRevisionRef {\n  provider: \"lore\";\n  repositoryId: string;\n  revisionSignature: string;\n  revisionNumber?: number; // display and diagnostics only\n}\n\ntype RepositoryRevisionRef = GitRevisionRef | LoreRevisionRef;\n\ntype RemoteTipExpectation =\n  | { kind: \"must_equal\"; revision: RepositoryRevisionRef }\n  | { kind: \"must_not_exist\" }\n  | { kind: \"read_only\" };\n```\n\nProvider rules:\n\n- For Git branches, `RepositoryBranchRef.id` is the canonical full ref, such as `refs/heads/main`; `name` is the short display name, such as `main`.\n- For Lore branches, `id` is the stable provider branch id and `name` is the display name.\n- `LoreRevisionRef` deliberately does not embed a branch id. A revision signature identifies immutable repository state; branch reachability and the branch selected for mutation are represented by `RepositoryBranchRef`.\n- The pinned Lore adapter verifies the deployment's actual revision and reachability behavior. If a pinned client exposes branch-scoped lookup constraints, those constraints are adapter validation evidence rather than a reason to conflate branch identity with immutable revision identity.\n\n```ts\ninterface RepositoryClientEvidence {\n  toolBundleRef: string;\n  clientVersion: string;\n  executableSha256: string;\n  serverVersion?: string;\n}\n\ninterface ResolvedRepositoryTarget {\n  schemaVersion: \"moonmind.repository-target.v1\";\n  provider: RepositoryProvider;\n  connectionRef: string;\n\n  repository: RepositoryRef;\n  baseBranch: RepositoryBranchRef;\n  workBranch?: RepositoryBranchRef & {\n    origin: \"generated\" | \"selected\" | \"review_mapping\" | \"historical_branch\";\n  };\n\n  preparedRevision: RepositoryRevisionRef;\n  preparedBranch: RepositoryBranchRef;\n  remoteTipExpectation: RemoteTipExpectation;\n  clientEvidence: RepositoryClientEvidence;\n\n  authority: \"authoritative\";\n  projection?: {\n    provider: \"github\";\n    repository: string;\n    authority: \"review_only\";\n  };\n}\n```\n\nRules:\n\n- A selected existing branch uses `must_equal` with the exact observed tip.\n- A newly generated work branch uses `must_not_exist` until its first conditional publication succeeds.\n- Read-only exact-revision work uses `read_only` and receives no branch-mutation authority.\n- Revision numbers, display names, timestamps, and generated Git SHAs never replace the immutable provider revision field.\n\n### 3.6 Repository provider adapter\n\nMoonMind introduces one provider boundary rather than scattering `if lore` branches through workflow, runtime, checkpoint, and publishing code.\n\n```ts\ninterface RepositoryProviderAdapter {\n  resolveTarget(authoredTarget): ResolvedRepositoryTarget;\n  checkReadiness(target, requiredCapabilities): RepositoryReadiness;\n\n  prepareWorkspace(target, authorityLocator): PreparedRepositoryWorkspace;\n  bindWorkspace(preparedWorkspace, runtimeLane): RepositoryWorkspaceBinding;\n  inspectWorkspace(workspace, scanMode): RepositoryWorkspaceStatus;\n  createOrResolveWorkBranch(target, branchIntent): ResolvedRepositoryTarget;\n\n  acquireLocks(workspace, request, idempotencyKey): RepositoryLockLease;\n  releaseLocks(workspace, lease, idempotencyKey): RepositoryLockResult;\n  reconcileRunOwnedLocks(runOwnership, idempotencyKey): RepositoryLockReconciliation;\n\n  stageChanges(workspace, selection): RepositoryWorkspaceStatus;\n  buildPublicationCandidate(workspace, commitIntent): RepositoryPublicationCandidate;\n  commit(workspace, candidate, idempotencyKey): RepositoryMutationResult;\n  pushCompareAndSet(\n    workspace,\n    remoteTipExpectation,\n    idempotencyKey\n  ): RepositoryMutationResult;\n  verifyRemoteTip(target, expectedRevision): RepositoryVerification;\n\n  requestReviewConditionally(\n    target,\n    request,\n    expectedBranchTip,\n    idempotencyKey\n  ): ReviewRequestResult;\n  readProjectionStatus(requestRef): RepositoryProjectionStatus;\n\n  captureCheckpoint(workspace): RepositoryCheckpoint;\n  restoreCheckpoint(checkpoint, authorityLocator): PreparedRepositoryWorkspace;\n}\n```\n\nThe Lore adapter may initially invoke the pinned CLI through bounded subprocess calls when machine-readable output is available. It validates structured output against MoonMind-owned schemas and does not parse human-oriented prose as durable state. A later native library binding may replace subprocess internals without changing workflow contracts.\n\nThe adapter does not expose a protected-branch `merge` method to ordinary publication. Protected merge is a separate coordinator boundary.\n\n### 3.7 Workspace authority, runtime delivery, cache isolation, and checkpoints\n\nA prepared Lore workspace has these properties:\n\n- it is materialized from the exact resolved Lore revision;\n- it includes every path in that revision, including paths absent from the GitHub projection;\n- its repository-authority locator uses `workspaceLocator.kind = \"sandbox\"` for the initial integration;\n- repository authority remains in `ResolvedRepositoryTarget` and the sandbox locator, not in an authored absolute path or a new provider-specific locator alias;\n- it records repository, branch, revision, remote-tip expectation, client evidence, and connection id in immutable workspace metadata;\n- it has no unrelated dirty, staged, or run-owned lock state at start;\n- it is containment-checked before runtime binding; and\n- repository-scoped Skills are resolved from the authoritative Lore workspace.\n\nRuntime delivery is explicit:\n\n```ts\ninterface RepositoryWorkspaceBinding {\n  schemaVersion: \"moonmind.repository-workspace-binding.v1\";\n  authorityLocator: WorkspaceLocator; // kind = sandbox\n  runtimeLane: \"managed_runtime\" | \"omnigent\";\n  runtimeVisiblePath: string;\n  mountMode: \"direct_path\" | \"bind_mount\";\n  readOnly: boolean;\n}\n```\n\n- For the managed-runtime lane, the launcher delegates repository preparation to the adapter and uses the returned sandbox workspace as the run's repository root. A managed-runtime lifecycle record may reference that sandbox locator, but it does not create a second checkout or claim a second repository authority.\n- For Omnigent, MoonMind resolves the sandbox locator to a daemon-visible path and bind-mounts it at the canonical host workspace path, normally `/workspaces/run`.\n- Checkpoint, restore, publication, and containment operations always target the authority locator, not a runtime-local copy.\n- A lane that cannot bind the exact prepared sandbox workspace blocks before launch.\n\nLore state is split deliberately:\n\n1. **Run-private mutable state** includes auth materialization, workspace indexes, staging state, lock ownership, mutable client config, and operation journals. It is never shared across unrelated runs.\n2. **Deployment-shared verified object cache** may contain immutable content-addressed repository objects when the pinned client supports safe cache separation. It is read-only to agent runs, keyed by endpoint/repository/client compatibility, contains no credentials or locks, and may be discarded and rebuilt without losing authority.\n\nEvery cache object is digest-verified before use. A failed digest check evicts or quarantines the object and fails the preparation attempt; an agent run never writes directly into the shared cache. Cache population occurs through a trusted initializer or adapter boundary using atomic publish semantics.\n\nLore tracks workspace state differently from Git. When an agent, Unreal Editor, compiler, asset tool, or other process changes files outside Lore, the publisher performs the pinned client's external-change scan before status, staging, checkpointing, publication, or no-change conclusions. A clean result without a successful required scan is not evidence.\n\nThe provider-discriminated checkpoint contract is:\n\n```ts\ninterface RepositoryCheckpoint {\n  schemaVersion: \"moonmind.repository-checkpoint.v1\";\n  provider: RepositoryProvider;\n  checkpointKind: \"repository_revision\" | \"repository_delta\";\n\n  repository: RepositoryRef;\n  branch: RepositoryBranchRef;\n  baseRevision: RepositoryRevisionRef;\n  remoteTipExpectation: RemoteTipExpectation;\n\n  deltaArtifactRef?: ArtifactRef;\n  changedPathsRef?: ArtifactRef;\n  stagedPathsRef?: ArtifactRef;\n  providerShelfRef?: string;\n\n  workspaceDigest: string; // sha256:<64 lowercase hex>\n  clientEvidence: RepositoryClientEvidence;\n\n  // Constant by design: checkpoints never capture or restore repository locks.\n  lockState: \"not_captured\";\n}\n```\n\nCheckpoint rules:\n\n- Artifact refs use the canonical typed `ArtifactRef` contract; illustrative serialized refs use the established `artifact://...` grammar.\n- A clean committed checkpoint normally uses `repository_revision` and restores directly from its immutable revision.\n- An uncommitted checkpoint uses `repository_delta`: MoonMind materializes the exact base revision in a fresh workspace, applies the bounded delta artifact, runs containment and symlink checks, performs the external-change scan, and re-stages only paths listed in `stagedPathsRef`.\n- Mutable `.lore` state, auth material, operation journals, and locks are not archived or restored. The adapter reconstructs fresh provider state.\n- Locks are reacquired explicitly after restore when the resumed step still requires them; a checkpoint never resurrects an old lock implicitly.\n- A provider-native shelf or stash may be used only when the pinned client proves it is immutable, exact-base-bound, retrievable by a safe provider ref, and free of embedded credentials or lock ownership.\n- Delta capture is size-bounded. Oversized dirty work fails with an actionable checkpoint diagnostic rather than silently creating an unbounded Content archive.\n- Git-shaped `baselineCommit`, `headCommit`, `headRef`, `sourceBranch`, and `owner/repo` validation are replaced by provider-discriminated identity in checkpoint, Omnigent, restore, and resume contracts.\n\n### 3.8 Required capabilities and readiness registry\n\nRepository support uses the existing `requiredCapabilities: string[]` execution contract. It does not create a second capability system.\n\n| Capability | Meaning |\n| --- | --- |\n| `lore` | A compatible pinned Lore client, connection, trust policy, and workspace implementation are ready. |\n| `repo.read` | The selected provider may resolve and prepare the requested repository state. |\n| `repo.write` | The trusted publication owner may create and conditionally publish a repository revision. |\n| `repo.branch.write` | The workflow may create, select, or advance an allowed non-protected work branch. |\n| `repo.lock` | Explicit lock operations are authorized and terminal reconciliation can clean up run-owned locks. |\n| `repo.review.request` | The workflow may write a conditional Lore review-request handoff and read bridge projection status. |\n| `repo.merge.request` | The workflow may submit a request to the provider-authoritative merge coordinator. It does not grant direct merge authority. |\n| `git` | The selected Git provider's client and workspace path are required. It is not an alias for repository presence. |\n| `gh` | GitHub repository, PR, review, comment, check, or merge-automation access is required. |\n\nThis design claims `repo.read`, `repo.write`, and `repo.branch.write` as provider-neutral capability semantics, superseding their earlier placeholder treatment as scoped aliases of `git`.\n\nDerivation rules:\n\n- a Lore-backed workspace contributes `lore` and `repo.read`;\n- a Git-backed workspace contributes `git` and `repo.read`;\n- `publish.mode = \"branch\"` contributes `repo.write` and `repo.branch.write`;\n- `publish.mode = \"pr\"` on Lore contributes `repo.write`, `repo.branch.write`, and `repo.review.request`;\n- `publish.mode = \"pr\"` on Git contributes `repo.write`, `repo.branch.write`, and `gh`;\n- a Skill that uses locks contributes `repo.lock`;\n- merge automation on Lore contributes `repo.merge.request`;\n- merge automation on Git contributes the Git/GitHub capabilities owned by `WorkflowPublishing.md`, including `gh`;\n- reading or writing GitHub review/check state contributes `gh`;\n- merely waiting on bridge projection status does not require `gh` when the status source is the trusted bridge API; and\n- provider, runtime, publish, Skill, Tool, preset, and merge-automation sources remain additive.\n\nReadiness becomes registry-driven:\n\n```ts\ninterface CapabilityReadinessProvider {\n  token: string;\n  check(context): CapabilityReadinessResult;\n}\n```\n\nRules:\n\n1. Every normalized token must resolve to a registered readiness provider or an explicitly runtime-owned token.\n2. Unknown tokens fail closed with `REPOSITORY_CAPABILITY_UNKNOWN`; they are never silently ignored.\n3. Repository readiness receives the resolved target, requested operation, runtime lane, Skill snapshot, connection policy, merge-automation intent, and tool-bundle evidence.\n4. The existing hardwired behavior that adds `git` for any repository and `gh` for every PR publish is replaced in the same cohesive implementation change.\n5. Readiness completes before workspace mutation, Tool execution, or runtime launch.\n6. Lore merge automation additionally requires a configured, compatible `mergeCoordinator`; absence blocks with `LORE_MERGE_AUTOMATION_UNAVAILABLE`.\n\n### 3.9 Agent-visible Lore tooling and runtime lanes\n\nThe canonical runtime tool is the real Lore CLI, mounted through the existing MoonMind tool-bundle design:\n\n```text\n/opt/moonmind-tools/\n  manifest.json\n  bin/\n    gh\n    lore\n```\n\nA Lore manifest entry carries both acquisition and runtime evidence:\n\n```json\n{\n  \"name\": \"lore\",\n  \"version\": \"<pinned-version>\",\n  \"platform\": \"linux/amd64\",\n  \"sha256\": \"<release-archive-sha256>\",\n  \"executableSha256\": \"<installed-executable-sha256>\",\n  \"path\": \"bin/lore\",\n  \"versionProbe\": [\"--version\"]\n}\n```\n\nThe initializer validates the release artifact and installed executable. Runtime readiness validates the executable digest, version probe, and selected bundle ref against `RepositoryConnection.clientPolicy`. The connection's expected values are authoritative policy; the bundle manifest is observed evidence. A mismatch fails closed and never silently updates the connection.\n\nMounted-tool preflight is capability-table-driven rather than hardcoded to `gh`.\n\nConnection-specific routing uses immutable bundle snapshots:\n\n- on-demand hosts mount the exact selected bundle;\n- managed runtime workers advertise compatible bundle refs;\n- static Omnigent hosts are grouped by immutable bundle version rather than changing tools in place; and\n- a run that cannot reach a compatible host or worker fails before session creation with `LORE_CLIENT_UNAVAILABLE`.\n\nThe runtime receives a run-private Lore configuration root. It does not inherit an operator's global Lore home or another run's authentication state. Trust material is read-only. Raw credentials remain outside workflow payloads, Temporal history, artifacts, prompts, command transcripts, and shared tool volumes.\n\nFor MoonMind-managed `branch` and `pr` publication, the preferred privilege split is:\n\n1. MoonMind prepares the workspace through the trusted adapter.\n2. The agent receives local repository operations needed to inspect and modify the workspace.\n3. The agent does not receive a reusable remote-write credential.\n4. After the agent exits, the trusted publisher receives short-lived mutation material, performs final validation and security scanning, conditionally publishes, and verifies the remote revision.\n\nA Lore-aware `auto` Skill may receive remote mutation capability only on a run-dedicated or equivalently isolated runtime, only when its resolved content declares Lore support, and only when the runtime can enforce the same outbound scan and evidence rules as managed publication.\n\n### 3.10 Lore VCS Agent Skill and provider support metadata\n\nMoonMind provides a portable `lore-vcs` Agent Skill alongside the executable. The Skill is provider guidance, not an executable Tool and not a substitute for the CLI.\n\nRepository-mutating Skills declare support explicitly:\n\n```yaml\nmetadata:\n  repository:\n    supported-providers:\n      - lore\n  publish:\n    mode: auto\n    owner: agent\n    evidence-schema: moonmind.publish.repository.v1\n  required-capabilities:\n    - lore\n    - repo.read\n    - repo.write\n    - repo.branch.write\n```\n\nRules:\n\n- `ResolvedSkillEntry` preserves `supported_repository_providers` and `publish_evidence_schema` from the exact resolved content.\n- A Skill with repository write or publish authority must declare supported providers; absence fails closed.\n- Existing Git-only repository Skills are updated to declare `[git]` and emit the new evidence contract in the same atomic cutover.\n- Provider compatibility is enforced after Skill resolution and before runtime launch.\n- A later-precedence repo or local Skill with the same name does not inherit provider privileges from a built-in Skill.\n\nThe `lore-vcs` content teaches agents to:\n\n- identify repository, branch, prepared revision, remote-tip expectation, connection, client evidence, workspace binding, and publish owner from immutable workspace metadata;\n- run the external-change scan when non-Lore tools edited files;\n- inspect status and diff before and after changes;\n- distinguish dirty, staged, committed-local, pushed, review-requested, projected, and merged state;\n- use trusted ids and revision signatures rather than guess from display names;\n- avoid direct work on protected branches;\n- avoid unconditional force, history rewriting, and generated GitHub ref mutation;\n- acquire locks only when `repo.lock` is declared;\n- release run-owned locks or leave them to trusted terminal reconciliation;\n- never break another human or service identity's lock;\n- leave final remote publication to MoonMind for managed `branch` and `pr` modes;\n- emit `moonmind.publish.repository.v1` evidence for `auto`; and\n- treat a GitHub PR URL as a review locator, not the repository write target.\n\nThe Skill is tested against the exact pinned client version represented by its content and tool-bundle evidence.\n\n### 3.11 Bounded executable Tools and lock lifecycle\n\nCLI access is appropriate for open-ended repository work inside an agent run. High-authority or cross-system actions use typed Tools or trusted Activities.\n\n| Tool | Purpose | Authority boundary |\n| --- | --- | --- |\n| `repository.inspect` | Return normalized repository, branch, revision, status, changed-path, and lock evidence. | Read-only provider adapter. |\n| `repository.request_review` | Write an idempotent conditional review request for the exact branch tip. | Adapter plus repository or bridge handoff policy. |\n| `repository.projection_status` | Resolve the exact Lore-to-Git mapping, generated PR, and projected checks. | Read-only bridge or mapping API. |\n| `repository.lock.acquire` | Acquire policy-scoped locks and return run ownership evidence. | Provider adapter plus lock policy. |\n| `repository.lock.release` | Idempotently release the run's own lock lease. | Provider adapter plus ownership check. |\n| `repository.lock.reconcile` | Release or report orphaned run-owned locks during terminal cleanup. | Trusted Activity; never agent prose. |\n| `repository.submit_merge_request` | Submit exact revision, CI, review, and approval evidence to the coordinator. | Coordinator API; never a direct protected merge. |\n| `repository.merge_status` | Read current coordinator status by exact request id and revision. | Read-only coordinator API. |\n\nA lock lease is typed:\n\n```ts\ninterface RepositoryLockLease {\n  schemaVersion: \"moonmind.repository-lock-lease.v1\";\n  leaseId: string;\n  provider: RepositoryProvider;\n  repository: RepositoryRef;\n  branch?: RepositoryBranchRef;\n  paths: string[];\n  owner: {\n    workflowExecutionId: string;\n    workflowRunId: string;\n    stepId?: string;\n  };\n  acquiredRevision: RepositoryRevisionRef;\n  acquiredAt: string;\n  expiresAt?: string;\n  cleanupPolicy: \"release_on_terminal\";\n}\n```\n\nLock rules:\n\n- acquire, release, and reconciliation are idempotent;\n- terminal success, failure, cancellation, timeout, runtime loss, and retry all enter trusted reconciliation;\n- the publisher checks lock conflicts before final staging and publication;\n- a path locked by another human, agent, or service identity blocks with `LORE_LOCK_CONFLICT`;\n- MoonMind never breaks another identity's lock as automatic recovery; and\n- failed cleanup is durable evidence and an operator-visible blocker, not a silent warning.\n\n### 3.12 Publish modes and deterministic publication\n\nMoonMind preserves product-level publish modes while compiling them through the selected provider.\n\n| Mode | Lore-backed behavior |\n| --- | --- |\n| `none` | Prepare and run in the Lore workspace. Do not create or push a revision. |\n| `branch` | Publish and verify the exact Lore work-branch revision. Do not create or update a GitHub PR. |\n| `pr` | Publish the Lore work branch, conditionally request projection, and wait for an exact generated PR mapping. |\n| `auto` | A resolved Lore-aware Skill owns admitted repository side effects and emits the same canonical provider-neutral evidence. |\n\n`publish.mode = \"none\"` is not a publication operation:\n\n- it emits no `moonmind.publish.repository.v1` artifact;\n- it may still emit repository target, readiness, status, checkpoint, analysis, and runtime artifacts;\n- it finalizes through the existing `PUBLISH_DISABLED` finish mapping; and\n- the absence of publication evidence is expected rather than an error.\n\nFor managed `branch` and `pr` modes, final publication is deterministic infrastructure work:\n\n1. run the required external-change scan;\n2. capture pre-publication status, locks, changed paths, and staged paths;\n3. reject contamination, protected-target publication, another owner's lock, or incompatible branch movement;\n4. stage only intended workspace changes;\n5. create or identify the final local revision;\n6. construct the bounded outbound bundle from revision metadata and the complete intended diff;\n7. invoke the Secrets System high-security outbound scan before any push;\n8. block with redacted diagnostics when the scan rejects the bundle;\n9. publish through a provider-native compare-and-set or equivalent branch-update lease;\n10. query the remote branch and require an exact immutable revision match; and\n11. emit immutable `moonmind.publish.repository.v1` evidence.\n\nThe outbound scan is enforcement, not Skill guidance. It follows `SecretsSystem.md`: findings identify only category and safe location; raw detected values do not enter logs, errors, artifacts, or summaries. When high-security mode is disabled, the Secrets System's canonical allow behavior applies without silently mutating the candidate.\n\nRemote concurrency semantics distinguish unsafe force from atomic expected-tip publication:\n\n- unconditional force, lease widening, and force-based conflict repair are prohibited;\n- Git may use `--force-with-lease=<branch>:<exact-recorded-sha>` when that is the provider's compare-and-set primitive;\n- Lore must use a pinned provider-supported compare-and-set, conditional branch update, or exclusive publication lease;\n- a plain push followed only by post-hoc verification is insufficient when it permits a time-of-check/time-of-use race; and\n- if the pinned Lore surface cannot provide an atomic equivalent, `repo.write` readiness fails rather than weakening the invariant.\n\nA no-change result is valid only when the prepared or locally committed revision is verified as the exact remote branch tip.\n\n### 3.13 Unified repository publication evidence\n\n`moonmind.publish.repository.v1` is the single new-write evidence contract for both MoonMind-managed and agent-owned repository publication. It is not emitted for resolved mode `none`.\n\n```ts\ntype RepositoryPublishStatus =\n  | \"verified\"\n  | \"no_op_verified\"\n  | \"blocked\"\n  | \"failed\";\n\ntype RepositoryPublishOwner = \"moonmind\" | \"agent\";\n\ntype RepositoryPublishAction =\n  | \"none\"\n  | \"commit\"\n  | \"push\"\n  | \"merge\"\n  | \"commit_and_push\"\n  | \"push_and_merge\"\n  | \"request_review\"\n  | \"commit_push_and_request_review\";\n\ninterface RepositoryPublicationEvidence {\n  schemaVersion: \"moonmind.publish.repository.v1\";\n  mode: \"auto\" | \"branch\" | \"pr\";\n  owner: RepositoryPublishOwner;\n  provider: RepositoryProvider;\n  status: RepositoryPublishStatus;\n  action: RepositoryPublishAction;\n\n  connectionRef: string;\n  repository: RepositoryRef;\n  branch: RepositoryBranchRef;\n  baseRevision: RepositoryRevisionRef;\n  publishedRevision?: RepositoryRevisionRef;\n\n  remoteVerification?: {\n    verified: boolean;\n    expectation: RemoteTipExpectation;\n    observedRevision?: RepositoryRevisionRef;\n    method:\n      | \"provider_compare_and_set\"\n      | \"provider_publication_lease\"\n      | \"remote_read\";\n  };\n\n  clientEvidence: RepositoryClientEvidence;\n\n  securityScan?: {\n    required: boolean;\n    status: \"allowed\" | \"blocked\";\n    resultRef?: ArtifactRef;\n  };\n\n  changes: {\n    changedPathsRef?: ArtifactRef;\n    stagedPathsRef?: ArtifactRef;\n    rootContentChanged?: boolean;\n    contentOnly?: boolean;\n  };\n\n  reviewRequest?: {\n    requestId: string;\n    status: \"requested\" | \"stale\" | \"failed\";\n    revision: RepositoryRevisionRef;\n  };\n\n  projection?: {\n    status: \"pending\" | \"mapped\" | \"diverged\" | \"failed\";\n    projectionVersion?: string;\n    gitCommitSha?: string;\n    pullRequestUrl?: string;\n    pullRequestHeadSha?: string;\n    failureCode?: string;\n  };\n\n  blockedReason?: string;\n  diagnosticsRef?: ArtifactRef;\n  verificationSteps: string[];\n}\n```\n\nContract rules:\n\n1. Successful commit or push actions require `publishedRevision`, `remoteVerification.verified = true`, and exact equality between `publishedRevision` and `observedRevision`.\n2. `no_op_verified` requires remote verification that the intended existing revision is already the exact branch tip.\n3. Managed publication uses `owner = \"moonmind\"`; auto Skill publication uses `owner = \"agent\"`.\n4. Agent-owned evidence is not a weaker schema. The runtime validates the same required fields, action vocabulary, client evidence, outbound-scan evidence, and remote proof.\n5. `request_review` and `commit_push_and_request_review` require a successful conditional handoff for the same exact published revision.\n6. For a pending projection, unmapped Git fields are omitted. They are not serialized as `null`.\n7. A Content-only Lore revision is not converted to `NO_COMMIT` merely because the generated Git tree or PR diff is empty.\n8. `merge` and `push_and_merge` remain valid only for provider-aware auto Skills whose selected provider authorizes that merge operation. Ordinary Lore publication does not use them; protected Lore merge evidence comes from the coordinator result contract.\n9. Evidence carries safe connection and client/tool-bundle refs but never credentials, trust private keys, or raw auth configuration.\n10. Existing Git-only auto Skills, the shared `publish_evidence.py` helper, managed Git publishers, validators, and workflow outcome consumers move to this schema together with the seeded default Git connection. No component may emit the new schema without a valid resolved `connectionRef`.\n\nWorkflow outcome mapping:\n\n| Evidence and external state | Workflow outcome |\n| --- | --- |\n| resolved mode `none`, no publication evidence expected | `PUBLISH_DISABLED` |\n| `branch`, `verified`, exact remote revision | `PUBLISHED_BRANCH` |\n| `pr`, exact Lore publication, projection still pending | existing `awaiting_external` with `LORE_PROJECTION_PENDING` |\n| `pr`, exact mapped commit and PR head | `PUBLISHED_PR` |\n| `no_op_verified` | `NO_COMMIT` |\n| `blocked` | publish-stage blocked/failure result with stable code |\n| `failed` or invalid evidence | publish-stage failure |\n\nThe implementation removes new-write use of `acceptedRepositoryEvidence` and `moonmind.publish.auto.v1` rather than introducing a third parallel evidence shape. Frozen readers may remain only for already-recorded histories.\n\n### 3.14 Conditional review-request handoff\n\nThe canonical request is:\n\n```json\n{\n  \"schemaVersion\": \"moonmind.lore-review-request.v1\",\n  \"requestId\": \"<stable-idempotency-id>\",\n  \"workflowExecutionId\": \"<workflow-id>\",\n  \"workflowRunId\": \"<run-id>\",\n  \"repositoryId\": \"<lore-repository-id>\",\n  \"branchId\": \"<lore-work-branch-id>\",\n  \"revisionSignature\": \"<exact-published-revision>\",\n  \"expectedBranchTipRevisionSignature\": \"<same-exact-published-revision>\",\n  \"baseBranchId\": \"<lore-target-branch-id>\",\n  \"title\": \"<bounded-review-title>\",\n  \"summary\": \"<bounded-review-summary>\",\n  \"rootContentChanged\": true\n}\n```\n\nThe request contains no credentials, raw prompts, private artifact contents, or host paths.\n\nHandoff rules:\n\n- the request is accepted only when the current work-branch tip still equals `expectedBranchTipRevisionSignature`;\n- a stale run receives `LORE_REVIEW_REQUEST_STALE` and cannot overwrite a newer revision's request;\n- rewriting the same request id for the same revision is idempotent;\n- advancing the branch requires a new per-revision request;\n- the preferred external representation is an append-only bridge request record keyed by repository, branch, revision, and request id; and\n- a single mutable Lore branch-metadata slot is conforming only when the pinned provider supports an atomic compare-and-set against the exact branch tip and the bridge preserves per-revision request history.\n\nA repository may select another handoff mechanism through connection policy, but it must preserve exact revision, base branch, idempotency, conditional write semantics, no content write-back, and externally observable status.\n\nThe bridge owns its durable queue, reconciliation, mapping database, generated commits, generated refs, and GitHub App behavior. MoonMind consumes bridge status; it does not infer successful projection from metadata presence.\n\n### 3.15 Projection status, workflow state, and bounded waiting\n\nA projection response has a closed status vocabulary:\n\n```ts\ninterface LoreProjectionRef {\n  schemaVersion: \"moonmind.lore-projection.v1\";\n  requestId: string;\n  loreRevision: LoreRevisionRef;\n  branch: RepositoryBranchRef;\n  projectionVersion: string;\n  gitRepository: string;\n  status: \"pending\" | \"mapped\" | \"diverged\" | \"failed\";\n  gitCommitSha?: string;\n  githubPullRequest?: {\n    number: number;\n    url: string;\n    headSha: string;\n    baseRef: string;\n  };\n  failureCode?: string;\n  diagnosticsRef?: ArtifactRef;\n}\n```\n\nMoonMind treats a mapping as current only when:\n\n- the mapped Lore revision equals the current Lore work-branch tip;\n- the GitHub PR head equals the mapped Git commit;\n- the mapping uses the active projection policy version; and\n- the bridge has not marked the branch divergent or quarantined.\n\nWorkflow mapping is deterministic:\n\n| Bridge response | Workflow behavior |\n| --- | --- |\n| `pending` | stay in existing `awaiting_external` with `LORE_PROJECTION_PENDING` and reconcile again |\n| `mapped` without a matching PR for `pr` mode | remain `awaiting_external` |\n| `mapped` with exact matching PR head | finalize `PUBLISHED_PR` when merge automation is not selected, otherwise start provider merge automation |\n| `diverged` | terminal publish failure with `LORE_PROJECTION_DIVERGED` |\n| `failed` | terminal publish failure with `LORE_PROJECTION_FAILED` |\n| blank, unknown, or newly introduced status | fail closed with `LORE_PROJECTION_STATUS_INVALID` |\n\nNo new top-level `review_requested` workflow state is introduced. Review request and projection phase are machine-readable substate/reason fields under the existing `awaiting_external` state.\n\nWaiting is bounded by deployment policy:\n\n1. Before the soft deadline, MoonMind reconciles with bounded backoff and shows the current request and next check.\n2. After the soft deadline, the UI exposes an explicit reconcile/intervention action while the workflow remains truthful about the verified Lore publication.\n3. At the hard deadline, the workflow finalizes as failed with `LORE_PROJECTION_TIMEOUT`; it preserves publication and request evidence so resume retries only projection reconciliation rather than republishing the branch.\n4. A delayed but authoritative terminal mapping must not be overwritten by lagging UI or projection rows; exact bridge and artifact evidence remains authoritative.\n\nGitHub access on a Lore-backed run is constrained:\n\n- `gh` or the GitHub API may read generated PRs, reviews, threads, comments, and checks when `gh` is declared;\n- MoonMind may post a semantic response or review-status comment when separately authorized;\n- MoonMind and its agents do not push the generated branch;\n- MoonMind does not use GitHub's merge endpoint as the repository merge action;\n- a GitHub suggestion or review fix is applied in the Lore workspace and published as a new Lore revision; and\n- final Codex review remains coordinated with current exact-revision CI and projection state rather than firing on every intermediate revision.\n\n### 3.16 Exact-revision CI request and terminal evidence\n\nThe immutable request is:\n\n```ts\ninterface RepositoryCiRequest {\n  schemaVersion: \"moonmind.repository-ci-request.v1\";\n  requestId: string;\n  provider: RepositoryProvider;\n  connectionRef: string;\n  repository: RepositoryRef;\n  branch: RepositoryBranchRef;\n  revision: RepositoryRevisionRef;\n  changedPathsRef?: ArtifactRef;\n  correlationId: string;\n  idempotencyKey: string;\n}\n```\n\nThe controller returns immutable terminal evidence:\n\n```ts\ninterface RepositoryCiResult {\n  schemaVersion: \"moonmind.repository-ci-result.v1\";\n  requestId: string;\n  provider: RepositoryProvider;\n  connectionRef: string;\n  repository: RepositoryRef;\n  branch: RepositoryBranchRef;\n\n  requestedRevision: RepositoryRevisionRef;\n  observedRevision: RepositoryRevisionRef;\n  observedBranchTip: RepositoryRevisionRef;\n\n  status: \"succeeded\" | \"failed\" | \"cancelled\";\n  controller: {\n    id: string;\n    version: string;\n  };\n  clientEvidence: RepositoryClientEvidence;\n\n  artifactRefs: ArtifactRef[];\n  diagnosticsRef?: ArtifactRef;\n\n  projectedCheck?: {\n    provider: \"github\";\n    gitCommitSha: string;\n    checkRunId: string;\n    checkRunUrl?: string;\n    publicationVerified: boolean;\n  };\n\n  completedAt: string;\n}\n```\n\nTerminal and freshness rules:\n\n- `succeeded` satisfies a gate only when requested, observed, and current branch-tip revisions are exact matches.\n- `failed` is a current CI failure only for the same exact revision.\n- `cancelled` never satisfies a gate and maps to a cancelled CI outcome.\n- any later branch tip makes an earlier result stale without mutating the immutable result artifact;\n- merge submission includes the result ref plus a currentness assessment performed against the live branch tip;\n- blank or unknown controller statuses fail closed with `LORE_CI_RESULT_INVALID`; and\n- a stale result produces `LORE_CI_STALE`, not success or generic failure.\n\nThe CI controller must synchronize the complete Lore revision, preserve root Content, publish artifacts under the exact identity, and treat Content-only revisions as new CI inputs. Tactics-specific Unreal build planning, asset validation, visual proof, packaging, and GHCR behavior remain owned by Tactics CI design.\n\n### 3.17 Provider-authoritative merge automation and coordinator evidence\n\nThe existing operator-facing `pr_with_merge_automation` selection remains one product concept. The repository compiler chooses the implementation from the resolved provider:\n\n| Repository provider | Compiled behavior |\n| --- | --- |\n| Git/GitHub | Existing `publish.mode = \"pr\"` plus Git-provider `MoonMind.MergeAutomation` behavior and GitHub-authoritative merge |\n| Lore with compatible coordinator | `publish.mode = \"pr\"` plus a Lore merge-coordination child that submits `RepositoryMergeRequest` and waits for `RepositoryMergeResult` |\n| Lore without compatible coordinator | Reject before launch with `LORE_MERGE_AUTOMATION_UNAVAILABLE` |\n\nA Lore target never starts the GitHub-merging `pr-resolver` implementation. `pr-resolver` may participate only in a provider-aware read/remediation role whose resolved Skill metadata explicitly supports Lore and whose terminal operation is coordinator submission rather than GitHub merge.\n\nThe parent `MoonMind.UserWorkflow` follows the existing merge-automation lifecycle rule:\n\n1. publish the exact work-branch revision;\n2. wait for the exact generated PR mapping and required current CI/review evidence;\n3. enter or remain in `awaiting_external` while the provider-specific merge-automation child runs;\n4. satisfy downstream dependencies only after authoritative merge success; and\n5. preserve publication, projection, CI, approval, request, and coordinator evidence across retry or resume.\n\n`repository.submit_merge_request` sends:\n\n```ts\ninterface RepositoryMergeRequest {\n  schemaVersion: \"moonmind.repository-merge-request.v1\";\n  requestId: string;\n  provider: \"lore\";\n  connectionRef: string;\n  repository: RepositoryRef;\n  sourceBranch: RepositoryBranchRef;\n  sourceRevision: LoreRevisionRef;\n  targetBranch: RepositoryBranchRef;\n  observedTargetRevision: LoreRevisionRef;\n  ciResultRef: ArtifactRef;\n  projectionStatusRef: ArtifactRef;\n  approvalPolicyRef: string;\n  approvalEvidenceRefs: ArtifactRef[];\n  requesterRef: string;\n  idempotencyKey: string;\n}\n```\n\nThe coordinator returns immutable status evidence:\n\n```ts\ninterface RepositoryMergeResult {\n  schemaVersion: \"moonmind.repository-merge-result.v1\";\n  requestId: string;\n  provider: \"lore\";\n  connectionRef: string;\n  repository: RepositoryRef;\n  sourceBranch: RepositoryBranchRef;\n  requestedSourceRevision: LoreRevisionRef;\n  targetBranch: RepositoryBranchRef;\n  requestedTargetRevision: LoreRevisionRef;\n\n  status:\n    | \"pending\"\n    | \"accepted\"\n    | \"merging\"\n    | \"merged\"\n    | \"rejected\"\n    | \"failed\";\n\n  observedSourceRevision?: LoreRevisionRef;\n  observedTargetRevision?: LoreRevisionRef;\n  mergeRevision?: LoreRevisionRef;\n  rejectionCode?: string;\n  diagnosticsRef?: ArtifactRef;\n  coordinator: {\n    id: string;\n    version: string;\n  };\n  updatedAt: string;\n}\n```\n\nApproval evidence may be produced by:\n\n- current GitHub review approvals tied to the exact projected PR head;\n- a MoonMind approval-gate artifact tied to the exact Lore revision; or\n- coordinator-native policy evaluation.\n\nMoonMind records and submits safe evidence refs; it does not infer approval from comment prose or an unrelated PR state. The external coordinator is authoritative for determining whether the configured approval policy is satisfied.\n\nCoordinator mapping is deterministic:\n\n| Coordinator response | Workflow behavior |\n| --- | --- |\n| `pending`, `accepted`, or `merging` | remain `awaiting_external` with `LORE_MERGE_COORDINATOR_PENDING` and reconcile |\n| `merged` with exact source, target, and merge revision evidence | complete the existing merge-automation success path; repository authority is the coordinator-confirmed Lore merge |\n| `rejected` because source or target moved | terminal merge-automation failure with `LORE_MERGE_REJECTED_STALE` |\n| `rejected` because CI, review, approval, conflict, or policy is unsatisfied | terminal merge-automation failure with the bounded coordinator rejection code, defaulting to `LORE_MERGE_REJECTED` |\n| `failed` | terminal merge-automation failure with `LORE_MERGE_COORDINATOR_FAILED` |\n| blank, unknown, or newly introduced status | fail closed with `LORE_MERGE_STATUS_INVALID` |\n\nCoordinator waiting uses the same bounded-wait principles as projection:\n\n1. Before the soft deadline, reconcile with bounded backoff.\n2. After the soft deadline, expose operator reconcile/intervention while retaining exact request evidence.\n3. At the hard deadline, finalize merge automation as failed with `LORE_MERGE_COORDINATOR_TIMEOUT`.\n4. Resume reuses the same request id and reconciles coordinator state; it does not republish the branch or submit a duplicate logical merge.\n5. A later authoritative merge result cannot be overwritten by a lagging projection row or stale workflow attempt.\n\nThe coordinator owns:\n\n- per-target-branch serialization;\n- current source and target tip validation;\n- CI, projection, review, and approval freshness;\n- dry-run Lore conflict checks, including Content conflicts;\n- protected-branch policy;\n- the Lore merge revision;\n- projection of merge parents;\n- GitHub PR reconciliation and generated-branch cleanup; and\n- fault handling without rewriting generated history.\n\nA successful GitHub merge without the corresponding coordinator-confirmed Lore merge is an authority violation, not repository success.\n\n### 3.18 Security and credential materialization\n\nRepository credentials follow the Secrets System's reference-over-value rule.\n\nThe trusted repository boundary may receive:\n\n- the resolved server endpoint;\n- pinned trust material;\n- selected human or service identity;\n- short-lived token or run-private auth materialization;\n- exact allowed repository ids and operations; and\n- client/server compatibility policy.\n\nThe agent runtime receives only what its execution mode needs:\n\n- read-only runs receive no write credential;\n- managed `branch` and `pr` runs normally receive no remote-write credential;\n- `auto` runs receive narrow mutation material only when the exact resolved Skill, security scan, and host isolation permit it;\n- merge-coordinator credentials are never materialized into an ordinary agent shell; and\n- GitHub credentials do not imply Lore permissions, nor do Lore credentials imply GitHub permissions.\n\nThe design does not standardize on raw Lore tokens in workflow-authored CLI arguments. Non-interactive materialization must keep secrets out of process listings visible to unrelated workloads, logs, histories, shell history, and artifacts. Until a safe pinned-client path is verified, authenticated agent-side mutation is unavailable; trusted adapter-side mutation may still use a narrower boundary.\n\nConnection readiness includes endpoint reachability, TLS validation, authentication state, repository and operation authorization, client compatibility, executable digest evidence, and a bounded repository probe. MoonMind does not silently try another endpoint, identity, trust mode, provider, credential resolver, or less-constrained runtime.\n\n### 3.19 Concurrency, idempotency, and recovery\n\nEvery mutation uses a stable idempotency key derived from workflow, run, step, publication owner, provider, and logical operation.\n\nThe publisher records:\n\n- prepared revision and branch;\n- remote-tip expectation;\n- local committed revision;\n- outbound scan result ref;\n- exact pushed revision;\n- remotely observed tip;\n- review-request id and conditional-write result; and\n- any run-owned lock leases.\n\nRetry behavior:\n\n- when the exact revision is already the verified remote tip, return the prior successful result;\n- when the same review request is already accepted for the same exact revision, return the prior result;\n- when the same merge request already exists, reconcile it rather than creating another logical request;\n- when the remote branch moved unexpectedly, block with `LORE_BRANCH_MOVED`;\n- when the review request is stale because the branch advanced, block with `LORE_REVIEW_REQUEST_STALE`;\n- never create an extra revision solely because an Activity retried after a lost response;\n- never repair branch movement with unconditional force or a widened lease;\n- reconcile run-owned locks on every terminal and retry boundary;\n- do not infer failure from a lost notification when direct reconciliation can prove state; and\n- do not infer success from local state when remote verification is unavailable.\n\nNotifications are advisory wake-ups. Projection, CI, lock-cleanup, and merge consumers reconcile exact ids and revision signatures because notification delivery is not durable workflow state.\n\n### 3.20 Diagnostics, artifacts, and UI\n\nStable blocker and failure codes include:\n\n| Code | Meaning |\n| --- | --- |\n| `REPOSITORY_PROVIDER_UNSUPPORTED` | Runtime, Skill, Tool, or publisher does not support the selected provider. |\n| `REPOSITORY_CAPABILITY_UNKNOWN` | A required capability has no registered readiness implementation. |\n| `REPOSITORY_REVISION_SELECTOR_INVALID` | An immutable revision selector was used with an incompatible mutation mode. |\n| `REPOSITORY_DEFAULT_CONNECTION_UNAVAILABLE` | The common Git path could not resolve the deployment-seeded default connection. |\n| `LORE_CLIENT_UNAVAILABLE` | The pinned client, executable digest, or compatible tool bundle is absent or mismatched. |\n| `LORE_CONNECTION_NOT_READY` | Endpoint, TLS, authentication, version, or authorization readiness failed. |\n| `LORE_REVISION_NOT_FOUND` | The exact prepared or requested revision cannot be resolved. |\n| `LORE_WORKSPACE_BINDING_UNSUPPORTED` | The selected runtime lane cannot use the exact sandbox-authority workspace. |\n| `LORE_WORKSPACE_SCAN_FAILED` | Required external-change scanning did not complete successfully. |\n| `LORE_CACHE_INTEGRITY_FAILED` | A shared immutable cache object failed digest or isolation validation. |\n| `LORE_CHECKPOINT_TOO_LARGE` | Dirty repository delta exceeds checkpoint policy. |\n| `LORE_LOCK_CONFLICT` | Intended paths are locked by another owner. |\n| `LORE_LOCK_CLEANUP_FAILED` | Run-owned locks could not be reconciled safely. |\n| `LORE_BRANCH_MOVED` | The remote branch no longer matches the expected state. |\n| `LORE_OUTBOUND_SCAN_BLOCKED` | The Secrets System blocked publication before push. |\n| `LORE_PUSH_NOT_VERIFIED` | The remote tip could not be proven equal to the published revision. |\n| `LORE_REVIEW_REQUEST_STALE` | The branch advanced before the request was conditionally written. |\n| `LORE_REVIEW_REQUEST_FAILED` | The versioned review handoff was not written or verified. |\n| `LORE_PROJECTION_PENDING` | Lore publication succeeded but the exact Git/PR mapping is not confirmed. |\n| `LORE_PROJECTION_DIVERGED` | The bridge quarantined or rejected the generated ref. |\n| `LORE_PROJECTION_FAILED` | The bridge reported terminal projection failure. |\n| `LORE_PROJECTION_STATUS_INVALID` | Projection status was blank, unknown, or outside the contract. |\n| `LORE_PROJECTION_TIMEOUT` | Projection did not reach an exact PR mapping before the hard deadline. |\n| `LORE_CI_RESULT_INVALID` | CI terminal evidence is missing, malformed, or uses an unknown status. |\n| `LORE_CI_STALE` | CI evidence does not target the current Lore revision. |\n| `LORE_MERGE_AUTOMATION_UNAVAILABLE` | Lore merge automation was selected without a compatible coordinator connection. |\n| `LORE_MERGE_COORDINATOR_REQUIRED` | A direct protected merge was attempted outside the coordinator. |\n| `LORE_MERGE_COORDINATOR_PENDING` | The exact merge request is accepted or still processing. |\n| `LORE_MERGE_REJECTED` | Coordinator policy, approval, CI, review, or conflict checks rejected the request. |\n| `LORE_MERGE_REJECTED_STALE` | The source or target revision moved after merge readiness was evaluated. |\n| `LORE_MERGE_COORDINATOR_FAILED` | The coordinator reported terminal execution failure. |\n| `LORE_MERGE_STATUS_INVALID` | Coordinator status was blank, unknown, or outside the contract. |\n| `LORE_MERGE_COORDINATOR_TIMEOUT` | Coordinator processing did not reach terminal success before the hard deadline. |\n\nRepresentative immutable artifacts are:\n\n- `repository_target.json`;\n- `repository_readiness.json`;\n- `repository_workspace_binding.json`;\n- `repository_status_before.json`;\n- `repository_status_after.json`;\n- `repository_changed_paths.json`;\n- `repository_checkpoint.json`;\n- `repository_lock_leases.json`;\n- `repository_security_scan.json`;\n- `repository_publish_result.json`;\n- `repository_review_request.json`;\n- `repository_projection_status.json`;\n- `repository_ci_result.json`;\n- `repository_merge_request.json`;\n- `repository_merge_result.json`; and\n- bounded, redacted command or adapter diagnostics.\n\nThe UI clearly labels:\n\n- **Authoritative repository:** Git or Lore;\n- repository, branch, and revision identities;\n- the selected connection and whether the seeded default Git connection was used;\n- client evidence through safe display fields;\n- current remote verification;\n- root Content change presence;\n- generated Git commit and GitHub PR as projection fields;\n- projection, CI, review, and merge freshness against the current Lore revision;\n- current `awaiting_external` reason and deadlines; and\n- lock, cache, connection, or cleanup failures requiring operator action.\n\n### 3.21 Document ownership and promotion\n\nThis design remains transitional authority until implemented content is promoted into durable owning documents.\n\n- `WorkflowArchitecture.md` owns the top-level provider-discriminated repository authoring, default-connection injection, and compilation contract.\n- `WorkflowPublishing.md` owns provider-specific PR capability derivation, the unified `moonmind.publish.repository.v1` evidence contract, `PUBLISH_DISABLED` behavior, provider-authoritative merge automation, outcome mapping, and removal of parallel evidence shapes.\n- `RequiredCapabilities.md` owns provider-neutral capability semantics, derivation, registry-driven readiness, and unknown-token failure.\n- `WorkspaceLocators.md` owns sandbox authority, `RepositoryWorkspaceBinding`, provider-discriminated runtime identity, checkpoint application, and restore containment.\n- `OmnigentHostMountedTools.md` owns bundle initialization, archive and executable digests, host routing, `PATH`, and manifest-driven preflight.\n- `SkillSystem.md` owns supported-repository-provider and evidence-schema metadata in resolved Skills.\n- `ManagedAgentsGit.md` remains authoritative for Git/GitHub credential resolution, token probes, transport shaping, and permissions. The seeded Git connection selects that resolver.\n- `SecretsSystem.md` owns `SecretRef`, outbound scanning, redaction, and late materialization.\n- The future repository integration module owns `RepositoryConnection`, default-connection reconciliation, provider adapters, lock leases, projection reads, merge-coordinator reads, and repository Tools.\n\n---\n\n## 4. Non-goals\n\n### NON-GOAL-001 MoonMind is not the Lore-to-Git projection worker\n\nMoonMind does not generate the one-Git-commit-per-Lore-revision history, own the bare Git mirror, reconstruct Tactics projection symlinks, enforce root-Content filtering, or force-reconcile generated refs. It integrates with the external bridge through exact conditional requests and mapping status.\n\n### NON-GOAL-002 MoonMind does not create GitHub-to-Lore synchronization\n\nNo webhook, PR action, merge button, Git push, or agent operation writes projected GitHub repository content back into Lore.\n\n### NON-GOAL-003 MoonMind does not replace the Lore merge coordinator\n\nOrdinary workflows may submit merge requests. They do not acquire protected-main authority, bypass current CI or review checks, or perform a direct protected merge.\n\n### NON-GOAL-004 MoonMind does not harden or operate the Lore server\n\nServer authentication, CA lifecycle, firewalling, stable addressing, off-device backup, restore drills, capacity monitoring, server upgrades, and public exposure policy remain deployment responsibilities.\n\n### NON-GOAL-005 MoonMind does not use a filtered Git clone as a workspace substitute\n\nA generated GitHub checkout is not an acceptable workspace for a Lore-authoritative run, even when the immediate issue appears code-only.\n\n### NON-GOAL-006 MoonMind does not maintain a custom Omnigent host solely for Lore\n\nThe pinned `lore` executable and its Skill use standard read-only tool and Skill projection boundaries. A derived host image requires separate justification.\n\n### NON-GOAL-007 MoonMind does not infer structured state from human CLI prose\n\nDurable adapter state comes from validated machine-readable output, a native binding, or a typed external API.\n\n### NON-GOAL-008 Tool presence does not imply authorization\n\nInstalling `lore` in the tool bundle grants no repository, write, lock, review, CI, or merge permission.\n\n---\n\n## 5. Constraints & decisions\n\n### AUTHORITY-001 Lore revision identity is canonical\n\nEvery Lore-backed workspace, checkpoint, CI request, publish result, review request, and merge request carries the Lore repository id and exact revision signature. Branch identity is a separate field. Derived Git identities never replace them.\n\n### AUTHORITY-002 Projection is one-way\n\nMoonMind may read GitHub review state and send separately authorized non-content interactions. All repository-content changes flow through Lore.\n\n### CONTRACT-001 One top-level provider-discriminated target\n\nNew contracts use top-level `repository.provider`. The old repository string, nested `task.repository`, and `task.git` authoring shapes are removed rather than normalized indefinitely.\n\n### CONTRACT-002 Exact revision is explicit and read-only by default\n\nHistorical revision selection is authored explicitly and cannot silently become branch publication.\n\n### CONTRACT-003 Repository connection owns access selection\n\nEndpoint, trust, credential resolver, repository allowlist, operation allowlist, projection policy, merge-coordinator policy, and client compatibility are selected by `connectionRef`, not scattered workflow auth fields.\n\n### CONTRACT-004 The common Git path is deployment-seeded\n\nOrdinary GitHub workflows compile to `repository-connection:git-default`, which selects the existing resolver from `ManagedAgentsGit.md`. Operators do not need to create a connection record before using the common path.\n\n### CONTRACT-005 One publication evidence contract\n\nManaged and agent-owned repository publication use `moonmind.publish.repository.v1`. Parallel new-write evidence envelopes are defects.\n\n### CONTRACT-006 Publication evidence cutover is atomic\n\nDefault Git connection reconciliation, all publishers, the shared evidence helper, repository-mutating Skills, validators, consumers, and tests move together before legacy new-writes are removed.\n\n### WORKSPACE-001 Exact revision and complete tree\n\nThe prepared workspace reproduces the exact complete Lore revision. Missing root Content or unverified substitutions are hard failures.\n\n### WORKSPACE-002 Mutable provider state is reconstructed\n\nCheckpoints preserve repository revision and bounded worktree deltas, not mutable `.lore` auth, lock, or operation state.\n\n### WORKSPACE-003 Immutable cache sharing is explicit\n\nOnly digest-verified content-addressed objects may be shared across runs. Mutable workspace, credential, staging, and lock state remains run-private.\n\n### WORKSPACE-004 One authority workspace reaches every runtime lane\n\nThe adapter prepares one sandbox-authority workspace. Managed and Omnigent launchers bind that workspace rather than independently materializing repository state.\n\n### TOOLING-001 Real pinned client\n\nAgents receive the real `lore` executable at its ordinary name from a versioned, checksum-verified, read-only tool bundle.\n\n### TOOLING-002 Manifest-driven readiness\n\nTool preflight is capability-table-driven and validates the executable digest and version selected by the connection. Policy and observed manifest mismatches fail closed.\n\n### TOOLING-003 Portable provider Skill\n\nAgent behavior lives in resolved `lore-vcs` Skill content. MoonMind supplies isolation, credentials, workspace preparation, conditional publication, and evidence validation rather than duplicating the Skill's semantic procedure.\n\n### SECURITY-001 Least-privilege split\n\nWorkspace preparation, agent-local work, trusted publication, GitHub review access, lock cleanup, and merge coordination are separate authorization boundaries.\n\n### SECURITY-002 No raw secrets in durable state\n\nLore credentials and private trust material are referenced and resolved late. They do not enter workflow payloads, artifacts, repository metadata, prompts, or generated Git history.\n\n### SECURITY-003 Outbound scanning precedes publication\n\nWhen required by the Secrets System, revision metadata and intended diffs are scanned before the remote side effect. A blocked scan cannot be bypassed by Skill instructions.\n\n### PUBLISH-001 Remote revision verification\n\nA Lore publish is successful only when the exact published revision is observed at the intended remote branch tip.\n\n### PUBLISH-002 Atomic expected-tip publication\n\nPublication uses compare-and-set or an equivalent exclusive lease. Unconditional force and post-hoc-only race detection are not acceptable substitutes.\n\n### PUBLISH-003 Review requests are revision-conditional\n\nA review request is accepted only while the work branch still points at the exact requested revision. A stale run cannot overwrite a newer request.\n\n### PUBLISH-004 None is not publication\n\nResolved mode `none` emits no repository publication evidence and finishes through `PUBLISH_DISABLED`.\n\n### REVIEW-001 PR mode confirms an exact projection\n\n`publish.mode = \"pr\"` completes as a published PR only after the generated PR head maps to the exact Lore revision. Request submission alone remains `awaiting_external`.\n\n### REVIEW-002 Content-only revisions remain first-class\n\nAn empty projected diff does not erase a Lore revision, its CI need, root Content changes, or review evidence.\n\n### SKILL-001 Provider support is explicit\n\nA Skill with repository side effects declares supported providers and its publication evidence schema. Git-only Skills fail before running on Lore.\n\n### CI-001 CI is keyed by immutable repository revision\n\nThe exact Lore revision is the CI input and freshness key. GitHub checks are projections of that result.\n\n### MERGE-001 Protected Lore merge is coordinator-only\n\nMoonMind's ordinary repository adapter has no protected merge operation. The merge-request Tool targets the external coordinator.\n\n### MERGE-002 Merge automation compiles by provider\n\nGit targets may use GitHub-authoritative merge automation. Lore targets use coordinator submission and bounded reconciliation or fail before launch when no coordinator is configured.\n\n### LOCK-001 Locks have durable run ownership and terminal reconciliation\n\nLock acquire, release, and cleanup are typed, idempotent, and verified. MoonMind never silently breaks another identity's lock.\n\n### QUALITY-001 Replay-safe orchestration\n\nWorkflow history contains compact, secret-free ids and refs. External calls and filesystem operations occur in retry-safe Activities with explicit idempotency.\n\n### QUALITY-002 Reconciliation over notification trust\n\nNotifications are wake-ups. Consumers reconcile exact current state before advancing workflow status.\n\n### QUALITY-003 Provider-neutral observability\n\nOperator views and artifacts show authoritative and projected identities separately and never label generated Git state as the Lore workspace state.\n\n### QUALITY-004 Client/server compatibility is explicit\n\nEvery execution records safe evidence of the client, executable digest, tool bundle, and compatible server policy. Mutable `latest` selection is prohibited.\n\n### QUALITY-005 Unsupported runtime combinations fail before launch\n\nEvery advertised runtime lane proves workspace, tool, Skill, credential, checkpoint, publication, and cleanup boundaries; unsupported combinations are rejected rather than assumed.\n\n---\n\n## 6. Conformance\n\n### 6.1 Runtime × capability × boundary matrix\n\nThe implementation must prove or reject each combination explicitly:\n\n| Capability or boundary | Managed runtime | Omnigent on-demand / run-dedicated | Omnigent reusable static host |\n| --- | --- | --- | --- |\n| Exact read-only Lore workspace | Required through adapter-prepared sandbox binding | Required through bind mount | Required when workspace isolation is verified |\n| Pinned `lore` executable and digest preflight | Required | Required | Required per immutable host bundle |\n| Resolved `lore-vcs` Skill materialization | Required | Required | Required |\n| Read-only credential isolation | Required | Required | Required |\n| MoonMind-managed `branch` / `pr` handoff | Required | Required | Allowed because remote write remains trusted adapter-side |\n| Agent-owned `auto` Lore mutation | Required only on isolated mutation-capable runtime | Required when run-dedicated and scan/evidence enforcement is verified | Unsupported until per-run secret and environment isolation is verified |\n| Repository checkpoint restore | Required against sandbox authority | Required against sandbox authority | Required when workspace restore isolation is verified |\n| Run-owned lock reconciliation | Required | Required | Required; host reuse must not retain another run's locks |\n| Secrets System outbound scan before push | Required | Required | Required at trusted publisher boundary |\n| Lore merge automation | Required when the product advertises it | Required when the product advertises it | Coordinator access remains trusted control-plane work |\n\nA product path may advertise only matrix cells with current conformance evidence. Every unsupported cell blocks before runtime launch with a structured diagnostic.\n\n### 6.2 Required cases\n\nAn implementation conforms only when it proves at least these cases:\n\n1. startup or Settings reconciliation creates `repository-connection:git-default` from the existing GitHub settings/resolver boundary;\n2. an ordinary GitHub workflow requires no manual connection creation and persists the injected default connection ref;\n3. the default Git connection invokes `ManagedAgentsGit.md` credential resolution rather than duplicating its precedence chain;\n4. new authoring accepts the top-level Git and Lore repository unions;\n5. new authoring rejects the old repository string and `task.git` fields after cutover;\n6. legacy recorded histories replay through the explicit frozen decoder without enabling new legacy submissions;\n7. exact historical Lore revision checkout is reachable through the authored revision selector;\n8. a historical revision selector with `branch`, `pr`, or `auto` publication is rejected;\n9. Git branch ids normalize to canonical full refs while preserving short display names;\n10. `credentialRef` is required for `secret_ref` and rejected for credential sources that do not use it;\n11. full-tree preparation includes root Content and plugin Content correctly;\n12. the adapter-prepared sandbox workspace reaches the managed runtime without a second checkout;\n13. the same sandbox authority reaches supported Omnigent lanes through a verified bind;\n14. exact workspace, tool, Skill, and credential boundaries pass on managed runtime;\n15. exact workspace, tool, Skill, and credential boundaries pass on supported Omnigent lanes;\n16. unsupported reusable-host auto mutation blocks before session creation;\n17. unknown required capabilities fail closed;\n18. Git `pr` mode derives `repo.write`, `repo.branch.write`, and `gh`;\n19. Lore `pr` mode derives `repo.write`, `repo.branch.write`, and `repo.review.request`;\n20. missing or mismatched executable digest fails closed, including a connection/manifest mismatch;\n21. shared cache objects are digest-verified on use;\n22. the shared cache contains no credentials, mutable config, staging state, journals, or locks;\n23. one run cannot poison cache content served to another run;\n24. external file modification is scanned before status, stage, checkpoint, and publication;\n25. a secret-like intended diff is blocked before push with redacted diagnostics;\n26. no-change publication verifies the exact remote revision;\n27. resolved mode `none` emits no publication evidence and finishes as `PUBLISH_DISABLED`;\n28. new-branch creation uses `must_not_exist` and rejects an unexpected existing branch;\n29. existing-branch publication uses exact compare-and-set and rejects branch-tip movement;\n30. retry after lost commit or push response does not create a duplicate revision;\n31. Content-only revision publication remains a successful Lore publication;\n32. pending projection evidence omits unmapped Git and PR fields;\n33. review-request write fails when the branch advances before the handoff;\n34. concurrent review requests cannot overwrite a newer revision's request;\n35. an exact mapped Git commit and PR head finalize `PUBLISHED_PR` when merge automation is not selected;\n36. projection `failed`, `diverged`, blank, unknown, and timeout paths map to their stable terminal codes;\n37. GitHub review remediation reads the generated PR but writes only to Lore;\n38. direct generated-Git branch mutation is blocked;\n39. direct protected Lore merge is blocked;\n40. lock conflict with a human or service identity blocks publication without breaking the lock;\n41. success, failure, cancellation, runtime loss, and retry reconcile run-owned locks;\n42. clean checkpoint restore reconstructs from the exact revision;\n43. dirty checkpoint restore reconstructs provider state, applies a bounded delta, re-scans, and re-stages intended paths;\n44. checkpoints contain no credentials, lock leases, or mutable `.lore` state, and `lockState = \"not_captured\"` is invariant;\n45. oversized dirty Content checkpoints fail with an actionable diagnostic;\n46. CI returns typed success, failure, and cancellation evidence with observed revision and controller version;\n47. a branch advance makes earlier CI evidence stale and unable to satisfy merge readiness;\n48. Git merge automation retains the Git-provider path;\n49. Lore merge automation never starts a GitHub-merging `pr-resolver`;\n50. Lore merge automation blocks before launch when the selected connection has no compatible coordinator;\n51. Lore merge automation submits exact current CI, projection, approval, source, and target evidence;\n52. coordinator `pending`, `accepted`, and `merging` remain bounded `awaiting_external`;\n53. coordinator `merged` completes only with exact merge revision evidence;\n54. coordinator stale rejection, policy rejection, failure, unknown status, and hard timeout map to stable terminal codes;\n55. merge resume reconciles the same request id without republishing or duplicating the logical merge;\n56. auth-disabled Lore connection is rejected outside explicit development or migration-shadow policy;\n57. credentials remain absent from Temporal history, artifacts, review requests, and generated Git history;\n58. incompatible client/server versions are rejected; and\n59. projection divergence is surfaced without force-based repair.\n\n---\n\n## 7. External protocol basis\n\nThe provider adapter and `lore-vcs` Skill must be verified against the deployment's pinned Lore version and command surface, including:\n\n- [Lore Quickstart](https://lore.epicgames.com/docs/quickstart)\n- [Lore CLI command reference](https://lore.epicgames.com/docs/cli/command-reference)\n- [Lore configuration reference](https://lore.epicgames.com/docs/cli/configuration)\n- [Lore system design](https://lore.epicgames.com/docs/learn/system-design)\n- [Lore FAQ and language bindings](https://lore.epicgames.com/docs/faq)\n\nDocumentation for a newer or nightly client is not evidence that the deployment's pinned client supports the same flags, output shapes, authentication flow, metadata semantics, revision reachability, compare-and-set behavior, cache separation, lock lifecycle, or merge-coordinator protocol. Conformance tests and captured tool-bundle evidence govern the supported MoonMind integration.\n"
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "extractedAt": "2026-07-31T04:50:50.132207+00:00",
+  "designSummary": "MoonMind replaces GitHub-coupled repository assumptions with provider-discriminated Git and Lore targets. Lore-backed runs operate on one complete exact-revision workspace, publish through conditional provider-native authority, project review one way into GitHub, key CI to immutable Lore revisions, and delegate protected merges to a Lore coordinator. The design requires atomic contract/evidence cutover, portable pinned tooling, least privilege, replay-safe reconciliation, and explicit runtime conformance while leaving projection, Lore server operations, and protected-branch merge ownership outside MoonMind.",
+  "canonicalClaims": [
+    {
+      "id": "NON-GOAL-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "MoonMind does not become the Lore-to-Git projection worker."
+    },
+    {
+      "id": "NON-GOAL-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "Projected GitHub content never synchronizes back into Lore."
+    },
+    {
+      "id": "NON-GOAL-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "MoonMind does not replace or bypass the Lore merge coordinator."
+    },
+    {
+      "id": "NON-GOAL-004",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "Lore server hardening and operations remain deployment responsibilities."
+    },
+    {
+      "id": "NON-GOAL-005",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "A filtered Git checkout cannot substitute for a complete Lore workspace."
+    },
+    {
+      "id": "NON-GOAL-006",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "Lore uses standard tool and Skill projection rather than a dedicated Omnigent host."
+    },
+    {
+      "id": "NON-GOAL-007",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "Durable state is never inferred from human-oriented CLI prose."
+    },
+    {
+      "id": "NON-GOAL-008",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "4. Non-goals"
+      ],
+      "summary": "Tool installation does not grant repository authority."
+    },
+    {
+      "id": "AUTHORITY-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Lore repository id and exact revision signature are canonical; branch identity remains separate."
+    },
+    {
+      "id": "AUTHORITY-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Repository-content changes flow only through Lore; GitHub is a one-way review projection."
+    },
+    {
+      "id": "CONTRACT-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "New workflows use one top-level provider-discriminated repository target."
+    },
+    {
+      "id": "CONTRACT-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Historical revision selection is explicit and read-only by default."
+    },
+    {
+      "id": "CONTRACT-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "RepositoryConnection selects endpoint, trust, credentials, policy, integrations, and client compatibility."
+    },
+    {
+      "id": "CONTRACT-004",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "A deployment-seeded default Git connection preserves the low-ceremony GitHub path."
+    },
+    {
+      "id": "CONTRACT-005",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Managed and agent-owned publication share moonmind.publish.repository.v1."
+    },
+    {
+      "id": "CONTRACT-006",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Publication evidence and default-connection cutover is atomic across producers and consumers."
+    },
+    {
+      "id": "WORKSPACE-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Lore workspaces reproduce the exact complete revision, including root Content."
+    },
+    {
+      "id": "WORKSPACE-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Checkpoints reconstruct mutable provider state instead of archiving it."
+    },
+    {
+      "id": "WORKSPACE-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Only verified immutable objects may be shared; mutable state is run-private."
+    },
+    {
+      "id": "WORKSPACE-004",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "One sandbox-authority workspace is bound into every supported runtime lane."
+    },
+    {
+      "id": "TOOLING-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Agents receive the real pinned, checksum-verified Lore client."
+    },
+    {
+      "id": "TOOLING-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Manifest-driven readiness validates the connection-selected client and fails closed."
+    },
+    {
+      "id": "TOOLING-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Portable lore-vcs Skill content owns agent procedure while MoonMind supplies substrate."
+    },
+    {
+      "id": "SECURITY-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Repository operations are split into least-privilege authority boundaries."
+    },
+    {
+      "id": "SECURITY-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Raw credentials and private trust material never enter durable state."
+    },
+    {
+      "id": "SECURITY-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Required outbound scanning occurs before remote publication."
+    },
+    {
+      "id": "PUBLISH-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Publication succeeds only after exact remote revision verification."
+    },
+    {
+      "id": "PUBLISH-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Branch updates use atomic expected-tip semantics."
+    },
+    {
+      "id": "PUBLISH-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Review requests are conditional on the exact current Lore revision."
+    },
+    {
+      "id": "PUBLISH-004",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Publish mode none emits no publication evidence and maps to PUBLISH_DISABLED."
+    },
+    {
+      "id": "REVIEW-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "PR completion requires an exact current Lore-to-Git/PR mapping."
+    },
+    {
+      "id": "REVIEW-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Content-only Lore revisions remain publishable, testable, and reviewable."
+    },
+    {
+      "id": "SKILL-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Repository-mutating Skills declare provider support and evidence schema."
+    },
+    {
+      "id": "CI-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "CI input and freshness are keyed by immutable repository revision."
+    },
+    {
+      "id": "MERGE-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Protected Lore merge authority belongs only to the external coordinator."
+    },
+    {
+      "id": "MERGE-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Merge automation compiles by provider and Lore fails before launch without a coordinator."
+    },
+    {
+      "id": "LOCK-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Locks have typed run ownership and verified terminal reconciliation."
+    },
+    {
+      "id": "QUALITY-001",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Orchestration is replay-safe, compact, secret-free, and idempotent."
+    },
+    {
+      "id": "QUALITY-002",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Consumers reconcile authoritative state instead of trusting notifications."
+    },
+    {
+      "id": "QUALITY-003",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Observability distinguishes authoritative Lore identity from projected Git identity."
+    },
+    {
+      "id": "QUALITY-004",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Client/server compatibility and executable identity are explicit."
+    },
+    {
+      "id": "QUALITY-005",
+      "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+      "sections": [
+        "5. Constraints & decisions"
+      ],
+      "summary": "Unsupported runtime combinations fail before launch."
+    }
+  ],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Provider-discriminated repository contract",
+      "type": "requirement",
+      "source_section": "3.2–3.5",
+      "explanation": "Replace GitHub-coupled authoring with explicit provider, connection, repository, branch, revision, and remote-tip identities."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Connection and readiness compilation",
+      "type": "integration",
+      "source_section": "3.3 and 3.8",
+      "explanation": "Resolve deployment-owned connections, derive provider-aware capabilities, and fail closed before mutation or launch."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Exact complete workspace delivery",
+      "type": "requirement",
+      "source_section": "3.6–3.7",
+      "explanation": "Prepare one exact full Lore workspace and bind that authority into every supported runtime lane."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Cache and checkpoint integrity",
+      "type": "state-model",
+      "source_section": "3.7",
+      "explanation": "Keep mutable state private, verify shared immutable cache objects, and restore checkpoints from revision plus bounded deltas."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Pinned portable tooling",
+      "type": "integration",
+      "source_section": "3.9–3.10",
+      "explanation": "Deliver the pinned real client and resolved provider-aware Skill with verified metadata and host compatibility."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Least-privilege repository operations",
+      "type": "security",
+      "source_section": "3.11 and 3.18",
+      "explanation": "Separate read, write, lock, review, CI, and merge authorities while keeping secrets out of durable and agent-visible state."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Deterministic provider-native publication",
+      "type": "requirement",
+      "source_section": "3.12",
+      "explanation": "Scan, stage, atomically publish, remotely verify, and represent none/no-op behavior truthfully."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Unified publication evidence",
+      "type": "artifact",
+      "source_section": "3.13",
+      "explanation": "Use one validated provider-neutral evidence envelope across managed and agent-owned publication."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Conditional review projection",
+      "type": "integration",
+      "source_section": "3.14–3.15",
+      "explanation": "Request projection against an exact tip and reconcile bounded, closed-vocabulary bridge status to an exact PR head."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Lore-backed review remediation",
+      "type": "requirement",
+      "source_section": "2.2 and 3.15",
+      "explanation": "Read generated GitHub review state but apply and publish every content fix through a new Lore revision."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Exact-revision CI",
+      "type": "integration",
+      "source_section": "3.16",
+      "explanation": "Run CI on the complete immutable Lore revision and gate freshness with exact observed identities."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Provider-authoritative merge automation",
+      "type": "integration",
+      "source_section": "3.17",
+      "explanation": "Compile Git targets to GitHub merge and Lore targets to exact-evidence coordinator submission and bounded reconciliation."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Lock-safe retry and recovery",
+      "type": "state-model",
+      "source_section": "3.11 and 3.19",
+      "explanation": "Make mutations and lock cleanup idempotent and reconcile authority after lost responses or terminal transitions."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Operator evidence and diagnostics",
+      "type": "observability",
+      "source_section": "3.20",
+      "explanation": "Expose stable codes, immutable artifacts, freshness, deadlines, and separate authoritative/projected identities."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Tactics authority compatibility",
+      "type": "constraint",
+      "source_section": "2.3",
+      "explanation": "Preserve complete root Content authority, Content-only revision identity, filtered projection, and external bridge ownership."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Atomic cutover and replay boundary",
+      "type": "migration",
+      "source_section": "3.2",
+      "explanation": "Move all new authoring and evidence surfaces together while retaining only a frozen decoder for durable histories."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Explicit non-goal boundaries",
+      "type": "non-goal",
+      "source_section": "4. Non-goals",
+      "explanation": "Keep projection, server operations, protected merge, authorization, and provider-state parsing outside inappropriate MoonMind boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Runtime conformance matrix",
+      "type": "constraint",
+      "source_section": "6. Conformance",
+      "explanation": "Prove or reject every advertised runtime × capability × boundary combination with boundary-level cases."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Compile provider-aware repository targets and readiness",
+      "shortName": "repository target",
+      "description": "As a MoonMind operator or workflow author, I need one explicit Git-or-Lore target to resolve through a policy-owned connection before any execution begins.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.2 Canonical contract replacement and atomic cutover",
+          "3.3 Repository connections and the default Git path",
+          "3.4 Authored repository target",
+          "3.5 Resolved repository identity",
+          "3.8 Required capabilities and readiness registry"
+        ],
+        "claimIds": [
+          "AUTHORITY-001",
+          "CONTRACT-001",
+          "CONTRACT-002",
+          "CONTRACT-003",
+          "CONTRACT-004",
+          "QUALITY-004"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002"
+        ]
+      },
+      "independentTest": "Submit representative Git, Lore, exact-read, invalid legacy, invalid mutation-selector, unknown-capability, and unavailable-connection requests and verify normalized identities or stable pre-launch failures.",
+      "acceptanceCriteria": [
+        "New submissions accept only the provider-discriminated top-level union and persist connectionRef.",
+        "The common Git path injects repository-connection:git-default and invokes the existing GitHub resolver.",
+        "Repository, branch, immutable revision, and remote-tip expectation remain distinct.",
+        "Capability derivation is provider/publish/Skill/Tool aware; unknown tokens fail closed.",
+        "Connection policy and observed client evidence must match before mutation."
+      ],
+      "requirements": [
+        "Implement compiler, validation, connection reconciliation, and registry readiness as one coherent boundary.",
+        "Retain only a frozen versioned legacy decoder for already-recorded histories."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Replace GitHub-coupled authoring with explicit provider, connection, repository, branch, revision, and remote-tip identities."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Resolve deployment-owned connections, derive provider-aware capabilities, and fail closed before mutation or launch."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Prepare and bind exact Lore workspaces",
+      "shortName": "exact workspace",
+      "description": "As a MoonMind operator or workflow author, I need the complete exact Lore revision, including root Content, to reach managed and Omnigent lanes through one sandbox authority.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.6 Repository provider adapter",
+          "3.7 Workspace authority, runtime delivery, cache isolation, and checkpoints",
+          "6. Conformance"
+        ],
+        "claimIds": [
+          "WORKSPACE-001",
+          "WORKSPACE-002",
+          "WORKSPACE-003",
+          "WORKSPACE-004",
+          "NON-GOAL-005",
+          "QUALITY-005"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Prepare a full-tree Lore fixture, bind the same authority into each supported lane, mutate externally, checkpoint/restore clean and dirty states, corrupt cache content, and verify exact behavior or structured rejection.",
+      "acceptanceCriteria": [
+        "The adapter prepares the exact revision with root and plugin Content and no second checkout.",
+        "Managed and supported Omnigent lanes bind the same sandbox-authority workspace.",
+        "External changes are scanned before status, checkpoint, or clean conclusions.",
+        "Mutable state, credentials, journals, and locks are excluded from caches and checkpoints.",
+        "Dirty restore reapplies a bounded delta, rechecks containment/symlinks, scans, and restages intended paths.",
+        "Unsupported lane combinations and oversized checkpoints fail before launch or restore."
+      ],
+      "requirements": [
+        "Provide provider adapter workspace, binding, cache, checkpoint, and restore boundaries."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Prepare one exact full Lore workspace and bind that authority into every supported runtime lane."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Keep mutable state private, verify shared immutable cache objects, and restore checkpoints from revision plus bounded deltas."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Preserve complete root Content authority, Content-only revision identity, filtered projection, and external bridge ownership."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Prove or reject every advertised runtime × capability × boundary combination with boundary-level cases."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Deliver pinned Lore tooling and portable provider Skills",
+      "shortName": "lore tooling",
+      "description": "As a MoonMind operator or workflow author, I need agents to receive the verified Lore client and portable provider guidance without tool presence granting authority.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.9 Agent-visible Lore tooling and runtime lanes",
+          "3.10 Lore VCS Agent Skill and provider support metadata",
+          "4. Non-goals",
+          "6. Conformance"
+        ],
+        "claimIds": [
+          "TOOLING-001",
+          "TOOLING-002",
+          "TOOLING-003",
+          "SKILL-001",
+          "NON-GOAL-006",
+          "NON-GOAL-007",
+          "NON-GOAL-008",
+          "QUALITY-004",
+          "QUALITY-005"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Resolve a lore-vcs Skill and immutable tool bundle onto compatible hosts, then exercise digest/version/provider mismatches, Git-only Skills, human-only CLI output, and unauthorized operations.",
+      "acceptanceCriteria": [
+        "The real lore executable is pinned by archive and executable digests and exposed at its ordinary name.",
+        "Connection policy is compared with observed manifest/version evidence and mismatches fail closed.",
+        "Resolved Skill metadata preserves supported providers and evidence schema without precedence privilege inheritance.",
+        "Durable adapter state uses validated structured output or typed APIs, never human prose.",
+        "Tool installation alone grants no read, write, lock, review, CI, or merge authority.",
+        "Runtime routing rejects incompatible hosts before session creation."
+      ],
+      "requirements": [
+        "Create the portable lore-vcs Skill and capability-driven bundle preflight."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Deliver the pinned real client and resolved provider-aware Skill with verified metadata and host compatibility."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Keep projection, server operations, protected merge, authorization, and provider-state parsing outside inappropriate MoonMind boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Prove or reject every advertised runtime × capability × boundary combination with boundary-level cases."
+        }
+      ],
+      "dependencies": [
+        "A custom Lore-only Omnigent host."
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Enforce least-privilege repository security boundaries",
+      "shortName": "repository security",
+      "description": "As a MoonMind operator or workflow author, I need credentials and high-authority operations to be isolated, late-bound, policy-scoped, and absent from durable evidence.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.3 Repository connections and the default Git path",
+          "3.11 Bounded executable Tools and lock lifecycle",
+          "3.18 Security and credential materialization"
+        ],
+        "claimIds": [
+          "SECURITY-001",
+          "SECURITY-002",
+          "NON-GOAL-004",
+          "NON-GOAL-008"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "independentTest": "Exercise read-only, managed publication, isolated auto, lock, review, and merge modes and inspect payloads, histories, artifacts, process exposure, and authorization failures.",
+      "acceptanceCriteria": [
+        "Read-only and managed publication runs do not receive reusable remote-write credentials.",
+        "Auto mutation is admitted only for an explicitly compatible Skill on an isolated enforcement-capable runtime.",
+        "Merge-coordinator credentials never enter an ordinary agent shell.",
+        "Repository and operation allowlists are checked before preparation and mutation.",
+        "SecretRef material is resolved late and absent from histories, artifacts, prompts, review requests, and generated Git history.",
+        "MoonMind never silently substitutes endpoint, identity, trust, resolver, provider, or runtime."
+      ],
+      "requirements": [
+        "Implement typed authority surfaces and safe credential materialization."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Separate read, write, lock, review, CI, and merge authorities while keeping secrets out of durable and agent-visible state."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Keep projection, server operations, protected merge, authorization, and provider-state parsing outside inappropriate MoonMind boundaries."
+        }
+      ],
+      "dependencies": [
+        "Lore server hardening, backup, upgrades, or public exposure policy."
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Publish revisions atomically with unified evidence",
+      "shortName": "verified publish",
+      "description": "As a MoonMind operator or workflow author, I need managed and agent-owned publication to scan, conditionally update, remotely verify, and emit the same immutable evidence.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.2 Canonical contract replacement and atomic cutover",
+          "3.12 Publish modes and deterministic publication",
+          "3.13 Unified repository publication evidence"
+        ],
+        "claimIds": [
+          "CONTRACT-005",
+          "CONTRACT-006",
+          "SECURITY-003",
+          "PUBLISH-001",
+          "PUBLISH-002",
+          "PUBLISH-004",
+          "REVIEW-002"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "independentTest": "Publish changed, unchanged, Content-only, scan-blocked, moved-branch, managed, and agent-owned fixtures and validate exact remote state, outcomes, and canonical evidence.",
+      "acceptanceCriteria": [
+        "Managed branch/pr publication scans external changes, rejects contamination/locks/protected targets, stages intended paths, scans outbound content, and mutates only after approval.",
+        "Branch publication uses exact compare-and-set or an equivalent exclusive lease; widened or unconditional force is prohibited.",
+        "Success and no-op both require exact remote-tip verification.",
+        "moonmind.publish.repository.v1 is the only new-write evidence schema for managed and auto publication.",
+        "Mode none emits no publication evidence and finalizes as PUBLISH_DISABLED.",
+        "Content-only Lore changes remain successful revisions even when the projected Git tree is unchanged.",
+        "All producers, validators, consumers, Skills, and the seeded connection cut over atomically."
+      ],
+      "requirements": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Scan, stage, atomically publish, remotely verify, and represent none/no-op behavior truthfully."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Use one validated provider-neutral evidence envelope across managed and agent-owned publication."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Preserve complete root Content authority, Content-only revision identity, filtered projection, and external bridge ownership."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Move all new authoring and evidence surfaces together while retaining only a frozen decoder for durable histories."
+        }
+      ],
+      "dependencies": [
+        "Projection bridge implementation and protected Lore merge."
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Project exact Lore revisions for review and remediation",
+      "shortName": "review projection",
+      "description": "As a MoonMind operator or workflow author, I need PR publication and review fixes to preserve one-way Lore authority while reconciling an exact generated review projection.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "2.1 Authority model",
+          "2.2 Primary scenarios",
+          "2.3 Compatibility with the Tactics authority and projection contract",
+          "3.14 Conditional review-request handoff",
+          "3.15 Projection status, workflow state, and bounded waiting"
+        ],
+        "claimIds": [
+          "AUTHORITY-002",
+          "PUBLISH-003",
+          "REVIEW-001",
+          "REVIEW-002",
+          "NON-GOAL-001",
+          "NON-GOAL-002"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "independentTest": "Publish a Lore revision, race the conditional request, reconcile every projection status and deadline, advance the branch, and remediate a generated PR while verifying that all content writes return through Lore.",
+      "acceptanceCriteria": [
+        "Review requests are idempotent per exact revision and accepted only while the branch tip matches.",
+        "PR success requires active-policy mapping whose Git commit equals the PR head and whose Lore revision equals the current branch tip.",
+        "Pending and mapped-without-PR remain awaiting_external; divergence, failure, invalid status, and hard timeout use stable outcomes.",
+        "Resume reconciles projection without republishing an already verified branch.",
+        "GitHub review data may be read when authorized, but fixes create a new Lore revision and never mutate generated refs.",
+        "The external bridge owns mapping, generated history/refs/PRs, divergence quarantine, and projection filtering."
+      ],
+      "requirements": [
+        "STORY-005"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Request projection against an exact tip and reconcile bounded, closed-vocabulary bridge status to an exact PR head."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Read generated GitHub review state but apply and publish every content fix through a new Lore revision."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Preserve complete root Content authority, Content-only revision identity, filtered projection, and external bridge ownership."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Keep projection, server operations, protected merge, authorization, and provider-state parsing outside inappropriate MoonMind boundaries."
+        }
+      ],
+      "dependencies": [
+        "Implementing the Lore-to-Git bridge or GitHub-to-Lore synchronization."
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Gate workflows on exact-revision CI evidence",
+      "shortName": "revision ci",
+      "description": "As a MoonMind operator or workflow author, I need CI results and projected checks to remain immutable and fresh only for the exact complete repository revision.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "2.2 Run exact-revision CI",
+          "3.16 Exact-revision CI request and terminal evidence"
+        ],
+        "claimIds": [
+          "CI-001",
+          "AUTHORITY-001",
+          "REVIEW-002"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-015"
+        ]
+      },
+      "independentTest": "Run success, failure, cancellation, invalid-status, branch-advance, Content-only, and optional projected-check cases and compare requested, observed, and live branch-tip revisions.",
+      "acceptanceCriteria": [
+        "Requests identify provider, connection, repository, branch, immutable revision, and stable idempotency.",
+        "The controller materializes the complete revision including root Content and returns immutable typed evidence.",
+        "Success gates only when requested, observed, and current branch-tip revisions match exactly.",
+        "Branch advance makes old CI evidence stale without mutating its artifact.",
+        "Unknown/blank statuses fail closed; cancellation never satisfies a gate.",
+        "GitHub Check Runs are projections and never become the workspace input."
+      ],
+      "requirements": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Run CI on the complete immutable Lore revision and gate freshness with exact observed identities."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Preserve complete root Content authority, Content-only revision identity, filtered projection, and external bridge ownership."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Compile merge automation to repository authority",
+      "shortName": "provider merge",
+      "description": "As a MoonMind operator or workflow author, I need one operator merge-automation choice to use GitHub authority for Git and coordinator authority for Lore with exact evidence.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "2.2 Request provider-authoritative merge automation",
+          "3.17 Provider-authoritative merge automation and coordinator evidence",
+          "4. Non-goals"
+        ],
+        "claimIds": [
+          "MERGE-001",
+          "MERGE-002",
+          "NON-GOAL-003",
+          "AUTHORITY-002"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "independentTest": "Compile Git and Lore targets, omit a Lore coordinator, submit exact Lore evidence, reconcile every coordinator status/deadline/resume path, and attempt forbidden direct merges.",
+      "acceptanceCriteria": [
+        "Git targets retain Git-provider merge automation; Lore targets never start a GitHub-merging pr-resolver.",
+        "Lore selection without a compatible coordinator fails before launch.",
+        "Merge requests carry exact source/target, CI, projection, approval, policy, requester, and idempotency evidence.",
+        "Pending states remain bounded awaiting_external; merged completes only with exact coordinator evidence.",
+        "Stale/policy rejection, failure, invalid status, and timeout map to stable terminal codes.",
+        "Resume reuses the request id without republishing or duplicating the logical merge.",
+        "A GitHub merge without coordinator-confirmed Lore merge is an authority violation."
+      ],
+      "requirements": [
+        "STORY-006",
+        "STORY-007"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Compile Git targets to GitHub merge and Lore targets to exact-evidence coordinator submission and bounded reconciliation."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Keep projection, server operations, protected merge, authorization, and provider-state parsing outside inappropriate MoonMind boundaries."
+        }
+      ],
+      "dependencies": [
+        "Replacing the coordinator or directly merging protected Lore branches."
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-009",
+      "summary": "Reconcile locks and repository mutations safely",
+      "shortName": "safe recovery",
+      "description": "As a MoonMind operator or workflow author, I need retries, cancellation, runtime loss, and lost responses to converge without duplicate revisions, stale success, or abandoned run-owned locks.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.11 Bounded executable Tools and lock lifecycle",
+          "3.19 Concurrency, idempotency, and recovery"
+        ],
+        "claimIds": [
+          "LOCK-001",
+          "QUALITY-001",
+          "QUALITY-002",
+          "PUBLISH-001",
+          "PUBLISH-002"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013"
+        ]
+      },
+      "independentTest": "Inject lost responses, duplicate Activities, branch movement, conflicting foreign locks, cancellation, timeout, runtime loss, and cleanup failure and inspect authoritative remote/lock state.",
+      "acceptanceCriteria": [
+        "Every mutation uses a stable logical idempotency key.",
+        "Retries reconcile exact remote/request state and never create a revision solely because a response was lost.",
+        "Unexpected branch movement blocks without force repair.",
+        "Acquire, release, and cleanup are typed and idempotent across all terminal and retry boundaries.",
+        "Foreign locks block publication and are never broken automatically.",
+        "Cleanup failure is durable, operator-visible evidence.",
+        "Notifications only wake consumers; exact identifiers and revisions determine progress."
+      ],
+      "requirements": [
+        "STORY-002",
+        "STORY-005"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Make mutations and lock cleanup idempotent and reconcile authority after lost responses or terminal transitions."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    },
+    {
+      "id": "STORY-010",
+      "summary": "Expose authoritative repository evidence and diagnostics",
+      "shortName": "repository evidence",
+      "description": "As a MoonMind operator or workflow author, I need operators to distinguish Lore authority from Git projection and act on stable blockers, freshness, and bounded waits.",
+      "sourceReference": {
+        "path": "docs/Workflows/LoreVcsIntegrationDesign.md",
+        "title": "Lore VCS Integration — System / Feature Design View",
+        "sections": [
+          "3.20 Diagnostics, artifacts, and UI",
+          "6. Conformance"
+        ],
+        "claimIds": [
+          "QUALITY-003",
+          "QUALITY-005",
+          "AUTHORITY-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Render and query representative success, pending, stale, invalid, blocked, cleanup-failed, Content-only, and projected states and validate labels, artifact refs, codes, deadlines, and secret redaction.",
+      "acceptanceCriteria": [
+        "Artifacts preserve immutable target, readiness, binding, status, checkpoint, lock, scan, publication, projection, CI, and merge evidence.",
+        "Stable diagnostic codes identify each documented blocker/failure boundary.",
+        "UI labels authoritative provider/repository/branch/revision separately from generated Git commit/PR.",
+        "Freshness for projection, CI, review, and merge is shown against the current Lore revision.",
+        "awaiting_external reasons, soft/hard deadlines, and reconcile actions are visible.",
+        "Diagnostics and artifacts are bounded and redacted.",
+        "Only runtime matrix cells with conformance evidence are advertised."
+      ],
+      "requirements": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-005",
+        "STORY-006",
+        "STORY-007",
+        "STORY-008",
+        "STORY-009"
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Expose stable codes, immutable artifacts, freshness, deadlines, and separate authoritative/projected identities."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Prove or reject every advertised runtime × capability × boundary combination with boundary-level cases."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "outOfScope": [],
+      "risks": []
+    }
+  ],
+  "coverageMatrix": {
+    "NON-GOAL-001": [
+      "STORY-006"
+    ],
+    "NON-GOAL-002": [
+      "STORY-006"
+    ],
+    "NON-GOAL-003": [
+      "STORY-008"
+    ],
+    "NON-GOAL-004": [
+      "STORY-004"
+    ],
+    "NON-GOAL-005": [
+      "STORY-002"
+    ],
+    "NON-GOAL-006": [
+      "STORY-003"
+    ],
+    "NON-GOAL-007": [
+      "STORY-003"
+    ],
+    "NON-GOAL-008": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "AUTHORITY-001": [
+      "STORY-001",
+      "STORY-007",
+      "STORY-010"
+    ],
+    "AUTHORITY-002": [
+      "STORY-006",
+      "STORY-008"
+    ],
+    "CONTRACT-001": [
+      "STORY-001"
+    ],
+    "CONTRACT-002": [
+      "STORY-001"
+    ],
+    "CONTRACT-003": [
+      "STORY-001"
+    ],
+    "CONTRACT-004": [
+      "STORY-001"
+    ],
+    "CONTRACT-005": [
+      "STORY-005"
+    ],
+    "CONTRACT-006": [
+      "STORY-005"
+    ],
+    "WORKSPACE-001": [
+      "STORY-002"
+    ],
+    "WORKSPACE-002": [
+      "STORY-002"
+    ],
+    "WORKSPACE-003": [
+      "STORY-002"
+    ],
+    "WORKSPACE-004": [
+      "STORY-002"
+    ],
+    "TOOLING-001": [
+      "STORY-003"
+    ],
+    "TOOLING-002": [
+      "STORY-003"
+    ],
+    "TOOLING-003": [
+      "STORY-003"
+    ],
+    "SECURITY-001": [
+      "STORY-004"
+    ],
+    "SECURITY-002": [
+      "STORY-004"
+    ],
+    "SECURITY-003": [
+      "STORY-005"
+    ],
+    "PUBLISH-001": [
+      "STORY-005",
+      "STORY-009"
+    ],
+    "PUBLISH-002": [
+      "STORY-005",
+      "STORY-009"
+    ],
+    "PUBLISH-003": [
+      "STORY-006"
+    ],
+    "PUBLISH-004": [
+      "STORY-005"
+    ],
+    "REVIEW-001": [
+      "STORY-006"
+    ],
+    "REVIEW-002": [
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "SKILL-001": [
+      "STORY-003"
+    ],
+    "CI-001": [
+      "STORY-007"
+    ],
+    "MERGE-001": [
+      "STORY-008"
+    ],
+    "MERGE-002": [
+      "STORY-008"
+    ],
+    "LOCK-001": [
+      "STORY-009"
+    ],
+    "QUALITY-001": [
+      "STORY-009"
+    ],
+    "QUALITY-002": [
+      "STORY-009"
+    ],
+    "QUALITY-003": [
+      "STORY-010"
+    ],
+    "QUALITY-004": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "QUALITY-005": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-010"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-010"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-006",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-010"
+    ]
+  }
+}
