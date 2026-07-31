@@ -1214,6 +1214,12 @@ class OmnigentBridgeSessionStore:
                         "relativePath",
                         "identityVerified",
                         "materialization",
+                        # Unified bounded workspace -> runtime -> publication ->
+                        # terminal -> cleanup -> lease authority-chain projection
+                        # (MoonLadderStudios/MoonMind#3561). Nested under one key so
+                        # the whole compact, secret-scanned structure survives this
+                        # top-level allowlist intact.
+                        "authorityChain",
                         # Durable workspace-intent compilation evidence. Bounded,
                         # credential-free, and path-safe by construction
                         # (``WorkspaceIntentRecord.evidence``); persisted so

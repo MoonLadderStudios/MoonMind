@@ -20,6 +20,9 @@ from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
 )
+from moonmind.omnigent.authority_chain import (
+    build_omnigent_authority_chain_evidence,
+)
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
@@ -375,6 +378,14 @@ class OmnigentProfileBoundExecutionCoordinator:
         effective_launch: dict[str, Any] | None = None
         remediation_resolution: Mapping[str, Any] | None = None
         terminal_status = "completed"
+        # Bounded, credential-free evidence accumulated across the run so the
+        # unified authority chain (MoonLadderStudios/MoonMind#3561) can be emitted
+        # once at terminal, covering both success and every failure path.
+        authority_workspace_resolution: Mapping[str, Any] | None = None
+        authority_result: AgentRunResult | None = None
+        authority_bridge_session_id: str | None = None
+        authority_cleanup_mode: str | None = None
+        authority_reasons: list[dict[str, Any]] = []
         try:
             await emit("request_validated", "started")
             if not profile_id:
@@ -719,6 +730,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 omnigent_host_id=binding.static_host_id,
                 effective_launch_snapshot=effective_launch,
             )
+            authority_bridge_session_id = str(
+                getattr(bridge, "bridge_session_id", "") or ""
+            ) or None
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -789,6 +803,11 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")
+            authority_workspace_resolution = (
+                dict(workspace_resolution)
+                if isinstance(workspace_resolution, Mapping)
+                else None
+            )
             if isinstance(workspace_resolution, Mapping) and workspace_resolution:
                 # Durable, bounded, credential-free evidence of which workspace was
                 # resolved and how it was materialized, for Workflow Detail.
@@ -896,9 +915,35 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            authority_result = result
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"
             terminal_status = result_status
+            if result_failed:
+                # The runner returned a failed ``AgentRunResult`` instead of
+                # raising, so the exception path never runs. Carry the provider
+                # failure code, class, and remediation into the unified authority
+                # chain; otherwise ``harvestState="failed"`` would surface with an
+                # empty reasons list, dropping evidence already on the result.
+                authority_reasons.append(
+                    {
+                        "stage": "resource_harvest",
+                        "code": (
+                            result.provider_error_code
+                            or (
+                                str(result.failure_class)
+                                if result.failure_class
+                                else "provider_run_failed"
+                            )
+                        ),
+                        "failureClass": (
+                            str(result.failure_class)
+                            if result.failure_class
+                            else None
+                        ),
+                        "remediationAction": result.retry_recommendation or None,
+                    }
+                )
             await emit("first_message_prepare", result_status)
             await emit("first_message_post", result_status)
             await emit(
@@ -934,6 +979,14 @@ class OmnigentProfileBoundExecutionCoordinator:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
+                authority_reasons.append(
+                    {
+                        "stage": current_stage,
+                        "code": code,
+                        "failureClass": failure_class,
+                        "remediationAction": remediation,
+                    }
+                )
                 if isinstance(exc, MountedToolPreflightError):
                     await self._run_store.record_lifecycle_event(
                         request.idempotency_key,
@@ -970,6 +1023,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         if binding.host_launch_profile_ref
                         else "static_drain"
                     )
+                    authority_cleanup_mode = cleanup_mode
                     await emit(
                         "host_cleanup",
                         "started",
@@ -1013,6 +1067,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                         # Preserve the primary cleanup failure when best-effort
                         # persistence of that failure also becomes unavailable.
                         pass
+                    authority_reasons.append(
+                        {
+                            "stage": "host_cleanup",
+                            "code": type(cleanup_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
                     await emit(
                         "host_cleanup",
                         "failed",
@@ -1069,15 +1131,110 @@ class OmnigentProfileBoundExecutionCoordinator:
                         metadata={"leaseReleased": False, "janitorRequired": True},
                         ignore_errors=True,
                     )
+            janitor_required = provider_lease is not None and not lease_released
+            # Emit the single unified, bounded, credential-free authority chain
+            # (MoonLadderStudios/MoonMind#3561) before terminal so Workflow Detail
+            # exposes one workspace -> runtime -> publication -> terminal ->
+            # cleanup -> lease projection for both success and failure paths.
+            try:
+                release_ordering: list[str] = []
+                if host_lease is not None:
+                    release_ordering.append(
+                        "host_cleanup_completed"
+                        if safe_to_release_provider
+                        else "host_cleanup_incomplete"
+                    )
+                if provider_lease is not None:
+                    release_ordering.append(
+                        "provider_lease_released"
+                        if lease_released
+                        else "provider_lease_release_deferred"
+                    )
+                release_ordering.append("terminal")
+                if janitor_required:
+                    authority_reasons.append(
+                        {
+                            "stage": "profile_lease_release",
+                            "code": "credential_cleanup_incomplete",
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
+                authorization_evidence: dict[str, Any] = {}
+                if profile_id:
+                    authorization_evidence["providerProfileId"] = profile_id
+                if provider_lease is not None:
+                    authorization_evidence["providerLeaseRef"] = provider_lease.lease_id
+                if binding is not None:
+                    authorization_evidence["hostBindingRef"] = binding.binding_ref
+                    authorization_evidence["endpointRef"] = binding.endpoint_ref
+                if host_lease is not None:
+                    authorization_evidence["hostLeaseRef"] = host_lease.lease_id
+                    authorization_evidence["credentialGeneration"] = (
+                        host_lease.credential_generation
+                    )
+                    if host_lease.omnigent_host_id:
+                        authorization_evidence["omnigentHostId"] = (
+                            host_lease.omnigent_host_id
+                        )
+                if effective_launch is not None:
+                    authorization_evidence["effectiveLaunchRef"] = str(
+                        effective_launch.get("snapshotRef") or ""
+                    )
+                if authority_bridge_session_id:
+                    authorization_evidence["bridgeSessionId"] = (
+                        authority_bridge_session_id
+                    )
+                authority_chain = build_omnigent_authority_chain_evidence(
+                    effective_launch=effective_launch,
+                    workspace_resolution=authority_workspace_resolution,
+                    repository=self._repository_source(request) or None,
+                    source_branch=self._starting_branch(request),
+                    output_branch=self._target_branch(request),
+                    publish_mode=str(
+                        (request.parameters or {}).get("publishMode") or "none"
+                    ),
+                    required_capabilities=self._required_capabilities(request),
+                    repository_mutation_required=self._repository_mutation_required(
+                        request
+                    ),
+                    github_mutation_required=self._github_mutation_required(request),
+                    profile_authorization=authorization_evidence,
+                    result_output_refs=(
+                        authority_result.output_refs
+                        if authority_result is not None
+                        else ()
+                    ),
+                    result_metadata=(
+                        authority_result.metadata
+                        if authority_result is not None
+                        else None
+                    ),
+                    terminal_status=terminal_status,
+                    cleanup_mode=authority_cleanup_mode,
+                    cleanup_completed=safe_to_release_provider,
+                    lease_released=lease_released,
+                    janitor_required=janitor_required,
+                    release_ordering=release_ordering,
+                    reasons=authority_reasons,
+                )
+                await emit(
+                    "authority_chain",
+                    "completed",
+                    metadata={"authorityChain": authority_chain},
+                    ignore_errors=True,
+                )
+            except Exception:
+                # Bounded evidence is best-effort and must never mask the primary
+                # run outcome or its terminal record.
+                pass
             await emit(
                 "terminal",
                 terminal_status,
                 metadata={
                     "cleanupCompleted": safe_to_release_provider,
                     "leaseReleased": lease_released,
-                    "janitorRequired": (
-                        provider_lease is not None and not lease_released
-                    ),
+                    "janitorRequired": janitor_required,
                 },
                 ignore_errors=True,
             )
