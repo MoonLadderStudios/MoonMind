@@ -687,6 +687,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             assert "run_verify" in {
                 item["name"] for item in github_breakdown_template.inputs_schema
             }
+            publish_mode_input = next(
+                item
+                for item in github_breakdown_template.inputs_schema
+                if item["name"] == "publish_mode"
+            )
+            if slug == "github-issue-breakdown-implement":
+                assert "pr_with_merge_automation" in publish_mode_input["options"]
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in github_breakdown_template.steps

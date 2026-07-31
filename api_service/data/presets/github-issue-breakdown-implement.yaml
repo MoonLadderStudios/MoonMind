@@ -37,6 +37,7 @@ inputs:
     default: pr
     options:
       - pr
+      - pr_with_merge_automation
       - branch
       - none
   - name: run_verify
