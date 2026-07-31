@@ -190,6 +190,24 @@ def test_equivalent_authored_requests_produce_equivalent_intent() -> None:
     assert _compile(create).intent_digest == _compile(preset).intent_digest
 
 
+def test_branch_submission_defers_remote_tip_resolution_without_null_revision() -> None:
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "acme/widgets"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": "branch"},
+    )
+    intent = _compile(request)
+    assert intent.checkout_commit is None
+    assert intent.remote_tip_expectation == {"kind": "resolve_before_mutation"}
+
+
 def test_retry_reproduces_the_same_immutable_intent() -> None:
     request = _request()
     first = _compile(request)

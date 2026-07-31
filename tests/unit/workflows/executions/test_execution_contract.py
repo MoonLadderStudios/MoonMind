@@ -2443,3 +2443,22 @@ def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
     git = result["workflow"]["git"]
     assert git["branch"] == "main"
     assert git["startingBranch"] == "sha-abc123"
+
+
+def test_recorded_legacy_history_uses_only_explicit_versioned_decoder() -> None:
+    result = build_canonical_workflow_view(
+        job_type="codex_exec",
+        payload={
+            "repository": "owner/repo",
+            "ref": "release",
+            "instruction": "historical task",
+        },
+        recorded_history_decoder_version="moonmind.repository-legacy-history.v1",
+    )
+    assert result["repository"] == {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "owner/repo"},
+        "branch": {"name": "release"},
+        "revision": None,
+    }

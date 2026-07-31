@@ -11,6 +11,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryClientPolicy,
     RepositoryContractError,
     compile_repository_target,
+    decode_recorded_repository_history,
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
     ensure_repository_ready,
@@ -130,6 +131,22 @@ def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
     target = decode_legacy_repository_history_v1("owner/repo", "release")
     assert target.connection_ref == DEFAULT_GIT_CONNECTION_REF
     assert target.branch.name == "release"
+
+
+def test_recorded_history_dispatch_requires_exact_frozen_decoder_version() -> None:
+    target = decode_recorded_repository_history(
+        decoder_version="moonmind.repository-legacy-history.v1",
+        repository="owner/repo",
+        branch="release",
+    )
+    assert target.repository.name == "owner/repo"
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_LEGACY_DECODER_UNSUPPORTED"
+    ):
+        decode_recorded_repository_history(
+            decoder_version="moonmind.repository-legacy-history.v2",
+            repository="owner/repo",
+        )
 
 
 @pytest.mark.asyncio

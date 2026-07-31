@@ -359,21 +359,14 @@ def compile_workspace_intent(
             connectionRef=authored_connection_ref(request),
             checkoutCommit=authored_checkout_commit(request),
             revisionKind=authored_revision_kind(request),
+            # A must_equal expectation is valid only when compilation already
+            # has an immutable authored revision. Ordinary branch submissions
+            # have no observed tip yet; the repository-preparation boundary
+            # must resolve that tip before granting mutation authority.
             remoteTipExpectation=(
                 {"kind": "read_only"}
                 if authored_revision_kind(request)
-                else {
-                    "kind": "must_equal",
-                    "revision": {
-                        "provider": (
-                            "lore"
-                            if authored_revision_kind(request) == "lore_revision"
-                            else "git"
-                        ),
-                        "repositoryId": repository,
-                        "commitSha": authored_checkout_commit(request),
-                    },
-                }
+                else {"kind": "resolve_before_mutation"}
                 if repository
                 else None
             ),

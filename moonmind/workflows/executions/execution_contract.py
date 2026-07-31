@@ -32,6 +32,7 @@ from .job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
 from .repository_contract import (
     AuthoredRepositoryTarget,
     compile_repository_target,
+    decode_recorded_repository_history,
     derive_repository_capabilities,
 )
 
@@ -2675,6 +2676,7 @@ def build_canonical_workflow_view(
     job_type: str,
     payload: Mapping[str, Any] | None,
     default_runtime: str = DEFAULT_WORKFLOW_RUNTIME,
+    recorded_history_decoder_version: str | None = None,
 ) -> dict[str, Any]:
     """Return a canonical task-view payload for queue processing."""
 
@@ -2693,10 +2695,36 @@ def build_canonical_workflow_view(
             raise WorkflowContractError(str(exc)) from exc
         canonical = model.model_dump(by_alias=True, exclude_none=False)
     elif normalized_type in LEGACY_WORKFLOW_JOB_TYPES:
-        raise WorkflowContractError(
-            "legacy codex_exec/codex_skill submissions are no longer accepted; "
-            "recorded histories must use decode_legacy_repository_history_v1"
-        )
+        if recorded_history_decoder_version is None:
+            raise WorkflowContractError(
+                "legacy codex_exec/codex_skill submissions are no longer accepted; "
+                "recorded histories require an explicit frozen decoder version"
+            )
+        repository = _clean_optional_str(source.get("repository"))
+        if not repository:
+            inputs = source.get("inputs")
+            if isinstance(inputs, Mapping):
+                repository = _clean_optional_str(
+                    inputs.get("repo") or inputs.get("repository")
+                )
+        try:
+            recorded_target = decode_recorded_repository_history(
+                decoder_version=recorded_history_decoder_version,
+                repository=repository or "",
+                branch=_clean_optional_str(source.get("ref")),
+            )
+        except (RepositoryContractError, ValueError) as exc:
+            raise WorkflowContractError(str(exc)) from exc
+        canonical = {
+            "repository": recorded_target.model_dump(by_alias=True, mode="json"),
+            "targetRuntime": resolved_default_runtime,
+            "auth": _build_auth_from_payload(source),
+            "workflow": (
+                _build_spec_from_codex_exec_payload(source)
+                if normalized_type == "codex_exec"
+                else _build_spec_from_codex_skill_payload(source)
+            ),
+        }
     else:
         canonical = {
             "repository": _clean_optional_str(source.get("repository")) or "",

@@ -155,6 +155,22 @@ def decode_legacy_repository_history_v1(
     )
 
 
+def decode_recorded_repository_history(
+    *,
+    decoder_version: str,
+    repository: str,
+    branch: str | None = None,
+) -> AuthoredGitRepositoryTarget:
+    """Dispatch a persisted history through its frozen decoder version."""
+
+    if decoder_version != LEGACY_REPOSITORY_DECODER_VERSION:
+        raise RepositoryContractError(
+            "REPOSITORY_LEGACY_DECODER_UNSUPPORTED",
+            f"unsupported recorded-history decoder {decoder_version!r}",
+        )
+    return decode_legacy_repository_history_v1(repository, branch)
+
+
 def derive_repository_capabilities(
     target: AuthoredRepositoryTarget,
     *,
@@ -363,6 +379,7 @@ __all__ = [
     "RepositoryConnection",
     "RepositoryContractError",
     "compile_repository_target",
+    "decode_recorded_repository_history",
     "decode_legacy_repository_history_v1",
     "derive_repository_capabilities",
     "ensure_repository_ready",
