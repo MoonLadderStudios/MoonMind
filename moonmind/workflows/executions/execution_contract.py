@@ -29,6 +29,11 @@ from moonmind.workflows.skills.resolver import (
 )
 
 from .job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
+from .repository_contract import (
+    AuthoredRepositoryTarget,
+    compile_repository_target,
+    derive_repository_capabilities,
+)
 
 DEFAULT_WORKFLOW_RUNTIME = "codex"
 SUPPORTED_RUNTIME_MODES = {
@@ -2425,11 +2430,7 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    repository: str | None = Field(
-        None,
-        alias="repository",
-        validation_alias=AliasChoices("repository", "repo"),
-    )
+    repository: AuthoredRepositoryTarget = Field(alias="repository")
     required_capabilities: list[str] | None = Field(
         None,
         alias="requiredCapabilities",
@@ -2451,11 +2452,8 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     @field_validator("repository", mode="before")
     @classmethod
-    def _normalize_repository(cls, value: object) -> str:
-        cleaned = _clean_optional_str(value)
-        if not cleaned:
-            raise WorkflowContractError("repository is required")
-        return cleaned
+    def _normalize_repository(cls, value: object) -> AuthoredRepositoryTarget:
+        return compile_repository_target(value)
 
     @field_validator("target_runtime", mode="before")
     @classmethod
@@ -2471,6 +2469,16 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
             raise WorkflowContractError("requiredCapabilities must be a list")
         normalized = _normalize_capabilities(value)
         return normalized or None
+
+    @model_validator(mode="after")
+    def _validate_repository_revision_publish_mode(
+        self,
+    ) -> "CanonicalWorkflowExecutionPayload":
+        if self.repository.revision is not None and self.task.publish.mode != "none":
+            raise WorkflowContractError(
+                "repository.revision is allowed only when workflow.publish.mode='none'"
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -2684,39 +2692,11 @@ def build_canonical_workflow_view(
         except (ValidationError, WorkflowContractError) as exc:
             raise WorkflowContractError(str(exc)) from exc
         canonical = model.model_dump(by_alias=True, exclude_none=False)
-    elif normalized_type == "codex_exec":
-        repository = _clean_optional_str(source.get("repository")) or ""
-        if not repository:
-            raise WorkflowContractError("repository is required")
-        canonical = {
-            "repository": repository,
-            "targetRuntime": "codex",
-            "auth": _build_auth_from_payload(source),
-            "workflow": _build_spec_from_codex_exec_payload(source),
-        }
-    elif normalized_type == "codex_skill":
-        repository = (
-            _clean_optional_str(source.get("repository"))
-            or _clean_optional_str(
-                (source.get("inputs") or {}).get("repo")
-                if isinstance(source.get("inputs"), Mapping)
-                else None
-            )
-            or _clean_optional_str(
-                (source.get("inputs") or {}).get("repository")
-                if isinstance(source.get("inputs"), Mapping)
-                else None
-            )
-            or ""
+    elif normalized_type in LEGACY_WORKFLOW_JOB_TYPES:
+        raise WorkflowContractError(
+            "legacy codex_exec/codex_skill submissions are no longer accepted; "
+            "recorded histories must use decode_legacy_repository_history_v1"
         )
-        if not repository:
-            raise WorkflowContractError("repository is required")
-        canonical = {
-            "repository": repository,
-            "targetRuntime": "codex",
-            "auth": _build_auth_from_payload(source),
-            "workflow": _build_spec_from_codex_skill_payload(source),
-        }
     else:
         canonical = {
             "repository": _clean_optional_str(source.get("repository")) or "",
@@ -2776,23 +2756,7 @@ def build_canonical_workflow_view(
         required.extend(canonical_existing)
 
     required.append(target_runtime)
-    workflow_git_node = (
-        workflow_node.get("git") if isinstance(workflow_node, Mapping) else None
-    )
-    workflow_git = workflow_git_node if isinstance(workflow_git_node, Mapping) else {}
-    has_git_checkout_context = any(
-        _clean_optional_str(workflow_git.get(key))
-        for key in (
-            "repository",
-            "repo",
-            "branch",
-            "startingBranch",
-            "targetBranch",
-            "ref",
-        )
-    )
-    if _clean_optional_str(canonical.get("repository")) or has_git_checkout_context:
-        required.append("git")
+    repository_target = compile_repository_target(canonical.get("repository"))
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
@@ -2833,11 +2797,9 @@ def build_canonical_workflow_view(
         side_effect_metadata=skill_side_effect_metadata,
     )
     publish_node["mode"] = publish_mode
-    if publish_mode == "pr":
-        required.append("gh")
-
     skill_caps = skill_node.get("requiredCapabilities")
-    required.extend(_skill_metadata_required_capabilities(skill_id))
+    repository_skill_caps = list(_skill_metadata_required_capabilities(skill_id))
+    required.extend(repository_skill_caps)
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
 
@@ -2850,7 +2812,11 @@ def build_canonical_workflow_view(
             step_skill_raw = step_raw.get("skill")
             step_skill = step_skill_raw if isinstance(step_skill_raw, Mapping) else {}
             step_skill_id = step_skill.get("id") or step_skill.get("name")
-            required.extend(_skill_metadata_required_capabilities(step_skill_id))
+            step_metadata_caps = list(
+                _skill_metadata_required_capabilities(step_skill_id)
+            )
+            repository_skill_caps.extend(step_metadata_caps)
+            required.extend(step_metadata_caps)
             step_skill_caps = step_skill.get("requiredCapabilities")
             if isinstance(step_skill_caps, list):
                 required.extend(step_skill_caps)
@@ -2859,6 +2825,14 @@ def build_canonical_workflow_view(
             step_tool_caps = step_tool.get("requiredCapabilities")
             if isinstance(step_tool_caps, list):
                 required.extend(step_tool_caps)
+
+    required.extend(
+        derive_repository_capabilities(
+            repository_target,
+            publish_mode=publish_mode,
+            skill_capabilities=repository_skill_caps,
+        )
+    )
 
     container_node = (canonical.get("workflow") or {}).get("container")
     container = container_node if isinstance(container_node, Mapping) else {}

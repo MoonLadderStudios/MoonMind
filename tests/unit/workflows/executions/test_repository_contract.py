@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from moonmind.workflows.executions.repository_contract import (
+    CapabilityReadinessRegistry,
+    DEFAULT_GIT_CONNECTION_REF,
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryContractError,
+    compile_repository_target,
+    decode_legacy_repository_history_v1,
+    derive_repository_capabilities,
+    reconcile_default_git_connection,
+    resolve_default_git_credential,
+    validate_connection_and_client,
+)
+
+
+def _policy() -> RepositoryClientPolicy:
+    return RepositoryClientPolicy(
+        pinnedVersion="2.46.0",
+        toolBundleRef="tool-bundle:git-2.46",
+        executableSha256="sha256:git",
+    )
+
+
+def test_common_git_draft_injects_default_connection_and_keeps_axes_distinct() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+            "revision": {"kind": "git_commit", "commitSha": "abcdef012345"},
+        }
+    )
+
+    assert target.connection_ref == DEFAULT_GIT_CONNECTION_REF
+    assert target.repository.name == "MoonLadderStudios/MoonMind"
+    assert target.branch.name == "main"
+    assert target.revision is not None
+    assert target.revision.commit_sha == "abcdef012345"
+
+
+@pytest.mark.parametrize("legacy", ["owner/repo", None, 123])
+def test_new_compiler_rejects_legacy_or_missing_repository_shape(legacy: object) -> None:
+    with pytest.raises(RepositoryContractError, match="provider-discriminated"):
+        compile_repository_target(legacy)
+
+
+def test_lore_requires_explicit_connection_and_matching_revision_kind() -> None:
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_TARGET_INVALID"):
+        compile_repository_target(
+            {
+                "provider": "lore",
+                "repository": {"name": "Tactics"},
+                "branch": {"name": "main"},
+                "revision": {"kind": "git_commit", "commitSha": "abcdef0"},
+            }
+        )
+
+
+def test_provider_publish_skill_tool_capabilities_are_additive() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "lore",
+            "connectionRef": "repository-connection:tactics",
+            "repository": {"name": "Tactics"},
+            "branch": {"name": "main"},
+        }
+    )
+    assert derive_repository_capabilities(
+        target,
+        publish_mode="pr",
+        skill_capabilities=["repo.lock"],
+        tool_capabilities=["artifact.read"],
+    ) == [
+        "lore",
+        "repo.read",
+        "repo.write",
+        "repo.branch.write",
+        "repo.review.request",
+        "repo.lock",
+        "artifact.read",
+    ]
+
+
+def test_policy_and_observed_client_must_match_before_mutation() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        }
+    )
+    connection = reconcile_default_git_connection(client_policy=_policy())
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="wrong",
+        executableSha256="sha256:git",
+    )
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        validate_connection_and_client(
+            target, connection, evidence, operation="write"
+        )
+
+
+@pytest.mark.asyncio
+async def test_unknown_capability_fails_closed() -> None:
+    registry = CapabilityReadinessRegistry(runtime_owned_tokens=("codex",))
+    registry.register("repo.read", lambda _context: True)
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNKNOWN"):
+        await registry.check(["codex", "repo.read", "mystery"], {})
+
+
+@pytest.mark.asyncio
+async def test_default_git_connection_invokes_existing_github_resolver() -> None:
+    resolver = AsyncMock(return_value=object())
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential", resolver
+    ):
+        await resolve_default_git_credential("MoonLadderStudios/MoonMind")
+    resolver.assert_awaited_once_with(repo="MoonLadderStudios/MoonMind")
+
+
+def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
+    target = decode_legacy_repository_history_v1("owner/repo", "release")
+    assert target.connection_ref == DEFAULT_GIT_CONNECTION_REF
+    assert target.branch.name == "release"

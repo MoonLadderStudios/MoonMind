@@ -14695,7 +14695,13 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(task.instructions).toBe(
       "Move repository branch publish controls into Steps.",
     );
-    expect(task.git).toEqual({ branch: "feature/mm-641-create-page" });
+    expect(task.git).toBeUndefined();
+    expect((request.payload as Record<string, unknown>).repository).toEqual({
+      provider: "git",
+      connectionRef: "repository-connection:git-default",
+      repository: { name: "MoonLadderStudios/MoonMind" },
+      branch: { name: "feature/mm-641-create-page" },
+    });
     expect(task.publish).toEqual({ mode: "branch" });
     expect(task.dependsOn).toEqual(["mm:dep-641"]);
     expect((task.steps as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -14752,7 +14758,13 @@ describe("Task Create MM-641 authoring validation", () => {
 
     const request = latestCreateRequest();
     const task = (request.payload as { task: Record<string, unknown> }).task;
-    expect(task.git).toEqual({ branch: "feature/pasted-while-loading" });
+    expect(task.git).toBeUndefined();
+    expect((request.payload as Record<string, unknown>).repository).toEqual({
+      provider: "git",
+      connectionRef: "repository-connection:git-default",
+      repository: { name: "MoonLadderStudios/MoonMind" },
+      branch: { name: "feature/pasted-while-loading" },
+    });
   });
 
   it("remembers the Propose Tasks selection across Create page mounts", async () => {
