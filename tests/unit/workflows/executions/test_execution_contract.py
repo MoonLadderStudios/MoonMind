@@ -1990,7 +1990,12 @@ _VALID_RESUME_BLOCK = {
 }
 
 _BASE_TASK_PAYLOAD = {
-    "repository": "test/repo",
+    "repository": {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "test/repo"},
+        "branch": {"name": "main"},
+    },
     "workflow": {"instructions": "Do work"},
 }
 

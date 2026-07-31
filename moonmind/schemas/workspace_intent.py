@@ -160,8 +160,8 @@ class WorkspaceIntentRecord(BaseModel):
     connection_ref: str | None = Field(None, alias="connectionRef", max_length=500)
     checkout_commit: str | None = Field(None, alias="checkoutCommit", max_length=200)
     revision_kind: str | None = Field(None, alias="revisionKind", max_length=50)
-    remote_tip_expectation: str | None = Field(
-        None, alias="remoteTipExpectation", max_length=50
+    remote_tip_expectation: dict[str, Any] | None = Field(
+        None, alias="remoteTipExpectation"
     )
 
     # Requested branch intent.

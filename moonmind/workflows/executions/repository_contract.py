@@ -18,6 +18,7 @@ LEGACY_REPOSITORY_DECODER_VERSION = "moonmind.repository-legacy-history.v1"
 REPOSITORY_CAPABILITY_UNKNOWN = "REPOSITORY_CAPABILITY_UNKNOWN"
 REPOSITORY_CONNECTION_MISMATCH = "REPOSITORY_CONNECTION_MISMATCH"
 REPOSITORY_CLIENT_MISMATCH = "REPOSITORY_CLIENT_MISMATCH"
+REPOSITORY_REMOTE_TIP_MISMATCH = "REPOSITORY_REMOTE_TIP_MISMATCH"
 
 
 class RepositoryContractError(ValueError):
@@ -233,6 +234,16 @@ def validate_connection_and_client(
 
 
 ReadinessCheck = Callable[[Mapping[str, Any]], bool | Awaitable[bool]]
+ConnectionResolver = Callable[
+    [AuthoredRepositoryTarget], RepositoryConnection | Awaitable[RepositoryConnection]
+]
+ClientEvidenceResolver = Callable[
+    [RepositoryConnection], RepositoryClientEvidence | Awaitable[RepositoryClientEvidence]
+]
+CredentialResolver = Callable[[str], object | Awaitable[object]]
+RemoteTipVerifier = Callable[
+    [AuthoredRepositoryTarget], bool | Awaitable[bool]
+]
 
 
 class CapabilityReadinessRegistry:
@@ -279,6 +290,67 @@ async def resolve_default_git_credential(repository: str) -> object:
     return await resolve_github_credential(repo=repository)
 
 
+async def _await_if_needed(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+async def ensure_repository_ready(
+    target: AuthoredRepositoryTarget,
+    *,
+    publish_mode: str,
+    operation: str,
+    skill_capabilities: Sequence[object] = (),
+    tool_capabilities: Sequence[object] = (),
+    connection_resolver: ConnectionResolver,
+    evidence_resolver: ClientEvidenceResolver,
+    readiness_registry: CapabilityReadinessRegistry,
+    credential_resolver: CredentialResolver = resolve_default_git_credential,
+    remote_tip_verifier: RemoteTipVerifier | None = None,
+) -> RepositoryConnection:
+    """Resolve and validate all repository authority before any side effect.
+
+    Callers must complete this composition boundary before workspace
+    preparation, runtime launch, or repository Tool execution.
+    """
+
+    connection = await _await_if_needed(connection_resolver(target))
+    evidence = await _await_if_needed(evidence_resolver(connection))
+    validate_connection_and_client(target, connection, evidence, operation=operation)
+
+    context = {
+        "target": target,
+        "connection": connection,
+        "clientEvidence": evidence,
+        "operation": operation,
+        "publishMode": publish_mode,
+    }
+    required = derive_repository_capabilities(
+        target,
+        publish_mode=publish_mode,
+        skill_capabilities=skill_capabilities,
+        tool_capabilities=tool_capabilities,
+    )
+    await readiness_registry.check(required, context)
+
+    if connection.credential_source == "github_resolver":
+        await _await_if_needed(credential_resolver(target.repository.name))
+
+    if operation != "read":
+        if remote_tip_verifier is None:
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "repository mutation requires an observed remote-tip comparison",
+            )
+        if not await _await_if_needed(remote_tip_verifier(target)):
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "observed remote tip does not match the expected provider revision",
+            )
+    return connection
+
+
 __all__ = [
     "AuthoredGitRepositoryTarget",
     "AuthoredLoreRepositoryTarget",
@@ -293,6 +365,7 @@ __all__ = [
     "compile_repository_target",
     "decode_legacy_repository_history_v1",
     "derive_repository_capabilities",
+    "ensure_repository_ready",
     "reconcile_default_git_connection",
     "resolve_default_git_credential",
     "validate_connection_and_client",

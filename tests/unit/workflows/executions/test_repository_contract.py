@@ -13,6 +13,7 @@ from moonmind.workflows.executions.repository_contract import (
     compile_repository_target,
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
+    ensure_repository_ready,
     reconcile_default_git_connection,
     resolve_default_git_credential,
     validate_connection_and_client,
@@ -129,3 +130,73 @@ def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
     target = decode_legacy_repository_history_v1("owner/repo", "release")
     assert target.connection_ref == DEFAULT_GIT_CONNECTION_REF
     assert target.branch.name == "release"
+
+
+@pytest.mark.asyncio
+async def test_coherent_readiness_boundary_completes_before_mutation() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        }
+    )
+    connection = reconcile_default_git_connection(client_policy=_policy())
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    registry = CapabilityReadinessRegistry()
+    for token in ("git", "repo.read", "repo.write", "repo.branch.write", "gh"):
+        registry.register(token, lambda _context: True)
+    credential = AsyncMock(return_value=object())
+    remote_tip = AsyncMock(return_value=True)
+
+    resolved = await ensure_repository_ready(
+        target,
+        publish_mode="pr",
+        operation="write",
+        connection_resolver=lambda _target: connection,
+        evidence_resolver=lambda _connection: evidence,
+        readiness_registry=registry,
+        credential_resolver=credential,
+        remote_tip_verifier=remote_tip,
+    )
+
+    assert resolved == connection
+    credential.assert_awaited_once_with("MoonLadderStudios/MoonMind")
+    remote_tip.assert_awaited_once_with(target)
+
+
+@pytest.mark.asyncio
+async def test_readiness_boundary_fails_before_resolver_for_unknown_token() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    connection = reconcile_default_git_connection(client_policy=_policy())
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    registry = CapabilityReadinessRegistry()
+    registry.register("git", lambda _context: True)
+    credential = AsyncMock()
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNKNOWN"):
+        await ensure_repository_ready(
+            target,
+            publish_mode="none",
+            operation="read",
+            tool_capabilities=("unknown.tool",),
+            connection_resolver=lambda _target: connection,
+            evidence_resolver=lambda _connection: evidence,
+            readiness_registry=registry,
+            credential_resolver=credential,
+        )
+    credential.assert_not_awaited()

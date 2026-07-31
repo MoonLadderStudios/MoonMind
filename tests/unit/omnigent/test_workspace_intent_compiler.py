@@ -131,7 +131,7 @@ def test_provider_target_persists_connection_revision_and_remote_tip_axes() -> N
     assert intent.starting_branch == "main"
     assert intent.checkout_commit == "abcdef012345"
     assert intent.revision_kind == "git_commit"
-    assert intent.remote_tip_expectation == "read_only"
+    assert intent.remote_tip_expectation == {"kind": "read_only"}
 
 
 def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
