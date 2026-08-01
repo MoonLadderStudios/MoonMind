@@ -329,6 +329,7 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
         current_workflow_id=workflow_id,
         current_step_execution_id=step_id,
         repository_provider="lore",
+        omnigent_isolation_verified=True,
     )
     assert resolved == authority
     assert [call[0] for call in client.calls].count("materialize") == 1

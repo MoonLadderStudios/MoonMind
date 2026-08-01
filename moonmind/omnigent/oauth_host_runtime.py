@@ -246,6 +246,10 @@ class OmnigentOAuthHostRuntime:
             restore_input_refs=restore_input_refs,
             github_token=github_token,
             artifact_gateway=artifact_gateway,
+            omnigent_isolation_verified=(
+                launch.get("hostMode") == "on_demand_docker"
+                and "workspace" in set(launch.get("mountClasses") or ())
+            ),
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -922,6 +926,7 @@ class OmnigentOAuthHostRuntime:
         restore_input_refs: tuple[str, ...] = (),
         github_token: str | None = None,
         artifact_gateway: Any | None = None,
+        omnigent_isolation_verified: bool = False,
     ) -> Path:
         """Resolve, and when required materialize, the authoritative workspace.
 
@@ -981,7 +986,7 @@ class OmnigentOAuthHostRuntime:
                 prepared,
                 runtime_lane="omnigent",
                 omnigent_mount_path="/workspaces/run",
-                omnigent_isolation_verified=True,
+                omnigent_isolation_verified=omnigent_isolation_verified,
             )
             if binding.authority_locator != locator:
                 raise OmnigentOAuthHostError(

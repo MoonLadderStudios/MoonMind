@@ -52,6 +52,10 @@ from moonmind.omnigent.profile_bound_execution import (
 )
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
+from moonmind.repositories.lore_adapter import (
+    LORE_UNSUPPORTED_RUNTIME_LANE,
+    LoreWorkspaceError,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
@@ -66,7 +70,10 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
-from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
+from moonmind.schemas.workspace_locator_models import (
+    SandboxWorkspaceLocator,
+    WorkspaceLocatorResolutionError,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -1257,6 +1264,64 @@ async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) ->
     assert exc_info.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
     runtime._prepare_skill_projection.assert_not_awaited()
     runtime._prepare_workspace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_static_host_rejects_lore_workspace_before_host_mutation(tmp_path) -> None:
+    workflow_id, step_id = "workflow-1", "step-1"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    locator = {
+        "kind": "sandbox",
+        "workspaceId": workspace_id,
+        "relativePath": "repo",
+    }
+    authority = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    authority_locator = SandboxWorkspaceLocator.model_validate(locator)
+    prepared = SimpleNamespace(
+        authority_locator=authority_locator, authority_path=authority
+    )
+    lore_adapter = MagicMock()
+    lore_adapter.load_prepared_workspace.return_value = prepared
+
+    def bind_workspace(_prepared, *, omnigent_isolation_verified, **_kwargs):
+        if not omnigent_isolation_verified:
+            raise LoreWorkspaceError(
+                LORE_UNSUPPORTED_RUNTIME_LANE,
+                "Lore workspace isolation is not verified for this runtime lane",
+            )
+        return SimpleNamespace(authority_locator=authority_locator)
+
+    lore_adapter.bind_workspace.side_effect = bind_workspace
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+        lore_repository_adapter=lore_adapter,
+    )
+    runtime._prepare_skill_projection = AsyncMock(return_value=tmp_path / "skills")
+    runtime._attest_egress = AsyncMock()
+    runtime._compose_static_check = AsyncMock(
+        side_effect=AssertionError("host mutation must not be reached")
+    )
+
+    with pytest.raises(LoreWorkspaceError, match=LORE_UNSUPPORTED_RUNTIME_LANE):
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="run-1",
+            workspace_locator=locator,
+            current_workflow_id=workflow_id,
+            current_step_execution_id=step_id,
+            repository_provider="lore",
+            effective_launch=compile_effective_launch(
+                profile_ref="omnigent-codex@1",
+                policy_ref="codex-static@1",
+                provider_profile_id="codex",
+            ),
+        )
+
+    runtime._compose_static_check.assert_not_awaited()
 
 
 def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) -> None:
