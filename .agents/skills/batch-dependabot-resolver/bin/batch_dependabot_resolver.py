@@ -36,7 +36,8 @@ API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 TERMINAL_FAILURE_STATES = {"failed", "canceled", "terminated"}
 DEFAULT_TITLE_REGEX = (
-    r"^(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+    r"^(?!.* from .* from )(?!.* to .* to )"
+    r"(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
     r".+ from \S+ to \S+(?: in /.+)?$"
 )
 LIKELY_VERSION_BUMP_TITLE_REGEX = re.compile(

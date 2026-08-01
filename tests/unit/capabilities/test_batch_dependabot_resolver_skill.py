@@ -26,7 +26,8 @@ def test_batch_dependabot_resolver_exposes_structured_inputs() -> None:
 
     assert contract["hasInputSchema"] is True
     assert contract["inputSchema"]["properties"]["titleRegex"]["default"] == (
-        r"^(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+        r"^(?!.* from .* from )(?!.* to .* to )"
+        r"(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
         r".+ from \S+ to \S+(?: in /.+)?$"
     )
     assert contract["defaults"] == {}

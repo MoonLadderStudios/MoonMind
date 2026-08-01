@@ -50,7 +50,8 @@ def _args(**overrides: Any) -> Any:
         "priority": 0,
         "package_managers": [],
         "title_regex": (
-            r"^(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+            r"^(?!.* from .* from )(?!.* to .* to )"
+            r"(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
             r".+ from \S+ to \S+(?: in /.+)?$"
         ),
         "include_security_updates": True,
@@ -136,6 +137,9 @@ def test_title_matches_default_regex() -> None:
     assert not module["_title_matches"]("Bump the pip group with 2 updates", pattern)
     assert not module["_title_matches"](
         "Deps: bump anthropic from 0.105.2 to 0.107.1", pattern
+    )
+    assert not module["_title_matches"](
+        "Build(deps): bump foo from 1 to 2 and bar from 3 to 4", pattern
     )
     assert not module["_title_matches"]("Refactor things", pattern)
 

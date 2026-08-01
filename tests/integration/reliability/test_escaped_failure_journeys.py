@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import runpy
 import sqlite3
 import subprocess
 import threading
@@ -277,6 +278,56 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     assert summary["failure"]["terminalContractMissingEvidence"] == expected[
         "missingEvidence"
     ]
+
+
+async def test_dependabot_build_titles_replay_through_portable_skill_classifier() -> (
+    None
+):
+    """Replay mm:c837ff3b through the resolved Skill's classification boundary."""
+    replay_id = "dependabot-build-title-contract"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    repo_root = Path(__file__).resolve().parents[3]
+    skill = runpy.run_path(
+        str(
+            repo_root
+            / ".agents"
+            / "skills"
+            / "batch-dependabot-resolver"
+            / "bin"
+            / "batch_dependabot_resolver.py"
+        )
+    )
+    args = SimpleNamespace(
+        title_regex=skill["DEFAULT_TITLE_REGEX"],
+        package_managers=[],
+        include_security_updates=True,
+        max_prs=None,
+        merge_method="squash",
+        max_iterations=5,
+        priority=0,
+        max_attempts=3,
+    )
+
+    queue_requests, skipped, matched_count = skill["_build_request_records"](
+        manifest["repository"],
+        manifest["pullRequests"],
+        args,
+        skill["RuntimeSelection"](),
+    )
+    drift_prs = [
+        item["pr"]
+        for item in skipped
+        if item.get("reason") == "title-mismatch"
+        and item.get("likelyVersionBump") is True
+    ]
+
+    assert matched_count == expected["matchedCount"]
+    assert [item.pr_number for item in queue_requests] == expected[
+        "matchedPrNumbers"
+    ]
+    assert skipped == expected["skipped"]
+    assert drift_prs == expected["titleContractDriftPrs"]
 
 
 async def test_invalid_batch_range_records_terminal_failure_without_retry(

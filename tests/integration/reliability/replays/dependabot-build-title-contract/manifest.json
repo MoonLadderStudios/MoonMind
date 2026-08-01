@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "escaped-failure-replay/v1",
+  "failureShapeId": "dependabot-build-title-contract",
+  "incidentWorkflowId": "mm:c837ff3b-9967-4e46-b476-4462a2c0cf54",
+  "repository": "MoonLadderStudios/Tactics",
+  "pullRequests": [
+    {
+      "number": 2419,
+      "title": "Build(deps): bump ubuntu from 24.04 to 26.04 in /docker/actions-runner-control",
+      "author": {"login": "dependabot[bot]"},
+      "headRefName": "dependabot/docker/docker/actions-runner-control/ubuntu-26.04",
+      "headRefOid": "replay-head-2419",
+      "headRepository": {"name": "Tactics"},
+      "headRepositoryOwner": {"login": "MoonLadderStudios"},
+      "isCrossRepository": false,
+      "labels": [{"name": "dependencies"}]
+    },
+    {
+      "number": 2420,
+      "title": "Build(deps): bump actions/checkout from 4.4.0 to 7.0.1",
+      "author": {"login": "dependabot[bot]"},
+      "headRefName": "dependabot/github_actions/actions/checkout-7.0.1",
+      "headRefOid": "replay-head-2420",
+      "headRepository": {"name": "Tactics"},
+      "headRepositoryOwner": {"login": "MoonLadderStudios"},
+      "isCrossRepository": false,
+      "labels": [{"name": "dependencies"}]
+    },
+    {
+      "number": 2421,
+      "title": "Build(deps): bump actions/upload-artifact from 4.6.2 to 7.0.1",
+      "author": {"login": "dependabot[bot]"},
+      "headRefName": "dependabot/github_actions/actions/upload-artifact-7.0.1",
+      "headRefOid": "replay-head-2421",
+      "headRepository": {"name": "Tactics"},
+      "headRepositoryOwner": {"login": "MoonLadderStudios"},
+      "isCrossRepository": false,
+      "labels": [{"name": "dependencies"}]
+    },
+    {
+      "number": 2422,
+      "title": "Build(deps): bump actions/github-script from 7.1.0 to 9.0.0",
+      "author": {"login": "dependabot[bot]"},
+      "headRefName": "dependabot/github_actions/actions/github-script-9.0.0",
+      "headRefOid": "replay-head-2422",
+      "headRepository": {"name": "Tactics"},
+      "headRepositoryOwner": {"login": "MoonLadderStudios"},
+      "isCrossRepository": false,
+      "labels": [{"name": "dependencies"}]
+    }
+  ]
+}
