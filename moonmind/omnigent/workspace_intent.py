@@ -344,6 +344,12 @@ def compile_workspace_intent(
         )
 
     repository = authored_repository_source(request) or None
+    resolved_repository = _spec(request).get("resolvedRepositoryTarget")
+    if resolved_repository is not None and not isinstance(resolved_repository, Mapping):
+        raise WorkspaceIntentCompilationError(
+            WORKSPACE_INTENT_UNSAFE_INPUT,
+            "workspaceSpec.resolvedRepositoryTarget must be an object",
+        )
     restore_refs = authored_restore_input_refs(request)
     restore_input_refs, external_state_refs = _partition_restore_refs(restore_refs)
 
@@ -360,6 +366,9 @@ def compile_workspace_intent(
             checkoutCommit=authored_checkout_commit(request),
             revisionKind=authored_revision_kind(request),
             remoteTipExpectation=(
+                resolved_repository.get("remoteTipExpectation")
+                if resolved_repository
+                else
                 {"kind": "read_only"}
                 if authored_revision_kind(request)
                 else {
@@ -376,6 +385,9 @@ def compile_workspace_intent(
                 }
                 if repository
                 else None
+            ),
+            resolvedRepositoryTarget=(
+                dict(resolved_repository) if resolved_repository else None
             ),
             startingBranch=authored_starting_branch(request),
             targetBranch=authored_target_branch(request),

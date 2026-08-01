@@ -14,6 +14,9 @@ from moonmind.workflows.executions.repository_contract import (
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
     ensure_repository_ready,
+    load_repository_connection,
+    materialize_resolved_repository_target,
+    persist_repository_connection,
     reconcile_default_git_connection,
     resolve_default_git_credential,
     validate_connection_and_client,
@@ -130,6 +133,34 @@ def test_frozen_legacy_decoder_is_explicitly_history_only() -> None:
     target = decode_legacy_repository_history_v1("owner/repo", "release")
     assert target.connection_ref == DEFAULT_GIT_CONNECTION_REF
     assert target.branch.name == "release"
+
+
+def test_reconciled_connection_is_persisted_and_resolved(tmp_path) -> None:
+    path = tmp_path / "connections" / "git-default.json"
+    connection = reconcile_default_git_connection(client_policy=_policy())
+    persist_repository_connection(connection, path)
+    assert load_repository_connection(path, DEFAULT_GIT_CONNECTION_REF) == connection
+
+
+def test_resolved_target_freezes_remote_tip_and_client_evidence() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    resolved = materialize_resolved_repository_target(
+        target, observed_revision="abcdef0123456789", evidence=evidence
+    )
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+    assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
+    assert resolved.client_evidence == evidence
 
 
 @pytest.mark.asyncio

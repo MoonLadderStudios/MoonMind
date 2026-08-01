@@ -47,6 +47,7 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     WorkflowProposalPolicy,
     build_canonical_workflow_view,
+    decode_recorded_legacy_workflow_history_v1,
     build_effective_proposal_policy,
     build_workflow_stage_plan,
     is_self_managed_publish_skill,
@@ -1637,9 +1638,15 @@ class CodexWorker:
             return None
 
         try:
-            canonical_payload = build_canonical_workflow_view(
-                job_type=job.type,
-                payload=job.payload,
+            canonical_payload = (
+                decode_recorded_legacy_workflow_history_v1(
+                    job_type=job.type, payload=job.payload
+                )
+                if job.type in LEGACY_WORKFLOW_JOB_TYPES
+                else build_canonical_workflow_view(
+                    job_type=job.type,
+                    payload=job.payload,
+                )
             )
         except WorkflowContractError as exc:
             await self._emit_event(

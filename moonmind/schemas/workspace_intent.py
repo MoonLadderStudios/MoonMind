@@ -163,6 +163,9 @@ class WorkspaceIntentRecord(BaseModel):
     remote_tip_expectation: dict[str, Any] | None = Field(
         None, alias="remoteTipExpectation"
     )
+    resolved_repository_target: dict[str, Any] | None = Field(
+        None, alias="resolvedRepositoryTarget"
+    )
 
     # Requested branch intent.
     starting_branch: str | None = Field(None, alias="startingBranch", max_length=400)
@@ -315,6 +318,7 @@ class WorkspaceIntentRecord(BaseModel):
             "sourceCommit": self.checkout_commit,
             "revisionKind": self.revision_kind,
             "remoteTipExpectation": self.remote_tip_expectation,
+            "resolvedRepositoryTarget": self.resolved_repository_target,
             "startingBranch": self.starting_branch,
             "targetBranch": self.target_branch,
             "publishMode": self.publish_mode,

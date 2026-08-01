@@ -132,7 +132,6 @@ from moonmind.workflows.temporal.workflow_registry import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
-    resolve_deployment_git_client_policy,
 )
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
@@ -2545,11 +2544,16 @@ def _build_agent_runtime_deps(
     artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
+    from moonmind.workflows.temporal.runtime.launcher import (
+        reconcile_deployment_git_connection,
+    )
+
+    reconciled_git_connection = reconcile_deployment_git_connection()
     launcher = ManagedRuntimeLauncher(
         store,
         log_streamer=log_streamer,
         artifact_service=artifact_service,
-        repository_client_policy=resolve_deployment_git_client_policy(),
+        repository_client_policy=reconciled_git_connection.client_policy,
     )
     session_store = ManagedSessionStore(
         os.path.join(

@@ -9,6 +9,7 @@ from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
     build_effective_workflow_skill_selectors,
     build_runtime_command_preview_config,
+    decode_recorded_legacy_workflow_history_v1,
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     SUPPORTED_PUBLISH_MODES,
@@ -21,6 +22,21 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowRecoveryProvenance,
     WorkflowStepSpec,
 )
+
+
+def test_recorded_legacy_decoder_is_separate_from_new_submission_validation() -> None:
+    legacy = {
+        "repository": "owner/repo",
+        "ref": "release",
+        "instruction": "Continue recorded work",
+    }
+    decoded = decode_recorded_legacy_workflow_history_v1(
+        job_type="codex_exec", payload=legacy
+    )
+    assert decoded["repository"]["repository"]["name"] == "owner/repo"
+    assert decoded["repository"]["branch"]["name"] == "release"
+    with pytest.raises(WorkflowContractError, match="no longer accepted"):
+        build_canonical_workflow_view(job_type="codex_exec", payload=legacy)
 from tests.helpers.step_type_payloads import (
     mixed_tool_skill_step,
     preset_step,

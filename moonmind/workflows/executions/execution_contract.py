@@ -33,6 +33,7 @@ from .repository_contract import (
     AuthoredRepositoryTarget,
     compile_repository_target,
     derive_repository_capabilities,
+    decode_legacy_repository_history_v1,
 )
 
 DEFAULT_WORKFLOW_RUNTIME = "codex"
@@ -2862,6 +2863,38 @@ def build_canonical_workflow_view(
     canonical["requiredCapabilities"] = _normalize_capabilities(tuple(required))
     return canonical
 
+
+def decode_recorded_legacy_workflow_history_v1(
+    *, job_type: str, payload: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Frozen adapter used only when executing already-recorded queue history."""
+
+    source = dict(payload or {})
+    if job_type not in LEGACY_WORKFLOW_JOB_TYPES:
+        raise WorkflowContractError("recorded legacy decoder requires a legacy job type")
+    task = (
+        _build_spec_from_codex_exec_payload(source)
+        if job_type == "codex_exec"
+        else _build_spec_from_codex_skill_payload(source)
+    )
+    repository = _clean_optional_str(source.get("repository")) or _clean_optional_str(
+        (task.get("skill") or {}).get("args", {}).get("repo")
+    )
+    legacy_git = task.pop("git", {})
+    canonical_source: dict[str, Any] = {
+        "targetRuntime": "codex",
+        "auth": _build_auth_from_payload(source),
+        "workflow": task,
+    }
+    if repository:
+        branch = _clean_optional_str(legacy_git.get("startingBranch"))
+        canonical_source["repository"] = decode_legacy_repository_history_v1(
+            repository, branch
+        ).model_dump(by_alias=True, mode="json")
+    return build_canonical_workflow_view(
+        job_type=CANONICAL_WORKFLOW_JOB_TYPE, payload=canonical_source
+    )
+
 def build_effective_proposal_policy(
     *,
     policy: WorkflowProposalPolicy | None,
@@ -3279,6 +3312,7 @@ __all__ = [
     "build_runtime_command_preview_config",
     "build_workflow_stage_plan",
     "build_canonical_workflow_view",
+    "decode_recorded_legacy_workflow_history_v1",
     "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",
     "is_non_repository_side_effect_skill",

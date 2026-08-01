@@ -26,12 +26,17 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.workflows.executions.repository_contract import (
     CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
+    REPOSITORY_REMOTE_TIP_MISMATCH,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
     RepositoryConnection,
     RepositoryContractError,
+    ResolvedRepositoryTarget,
     compile_repository_target,
     ensure_repository_ready,
+    load_repository_connection,
+    materialize_resolved_repository_target,
+    persist_repository_connection,
     reconcile_default_git_connection,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
@@ -62,6 +67,17 @@ _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
 )
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_REPOSITORY_CONNECTION_PATH = Path(
+    os.environ.get(
+        "MOONMIND_REPOSITORY_CONNECTION_PATH",
+        os.path.join(
+            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            "repository_connections",
+            "git-default.json",
+        ),
+    )
+)
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 _MODEL_TIER_DIAGNOSTIC_STRING_LIMIT = 1024
@@ -166,6 +182,22 @@ def resolve_deployment_git_client_policy() -> RepositoryClientPolicy:
     )
 
 
+def reconcile_deployment_git_connection(
+    path: Path = _DEFAULT_REPOSITORY_CONNECTION_PATH,
+) -> RepositoryConnection:
+    """Persist the worker deployment's default Git connection at startup."""
+
+    connection = reconcile_default_git_connection(
+        client_policy=resolve_deployment_git_client_policy()
+    )
+    persist_repository_connection(connection, path)
+    return connection
+
+
+def default_repository_connection_path() -> Path:
+    return _DEFAULT_REPOSITORY_CONNECTION_PATH
+
+
 def _compact_string(value: Any) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -263,17 +295,28 @@ class ManagedRuntimeLauncher:
         log_streamer: RuntimeLogStreamer | None = None,
         artifact_service: Any | None = None,
         repository_readiness_boundary: Callable[
-            [AgentExecutionRequest, Mapping[str, str] | None], Awaitable[None]
+            [AgentExecutionRequest, Mapping[str, str] | None],
+            Awaitable[ResolvedRepositoryTarget | None],
         ]
         | None = None,
         repository_client_policy: RepositoryClientPolicy | None = None,
-    ) -> None:
+    ) -> ResolvedRepositoryTarget | None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
         self._repository_client_policy = repository_client_policy
+        if repository_client_policy is not None:
+            # Worker construction is a deployment startup boundary. Reconcile
+            # durably here as well as in the worker factory so alternate worker
+            # entrypoints cannot launch against an ephemeral connection object.
+            persist_repository_connection(
+                reconcile_default_git_connection(
+                    client_policy=repository_client_policy
+                ),
+                _DEFAULT_REPOSITORY_CONNECTION_PATH,
+            )
         self._repository_readiness_boundary = (
             repository_readiness_boundary or self._ensure_repository_ready_for_launch
         )
@@ -343,7 +386,7 @@ class ManagedRuntimeLauncher:
         raw_target = workspace_spec.get("repositoryTarget")
         if raw_target is None:
             # Recorded legacy requests continue through their frozen history path.
-            return
+            return None
         target = compile_repository_target(raw_target)
         if (
             target.provider != "git"
@@ -355,14 +398,9 @@ class ManagedRuntimeLauncher:
                 "the selected connection",
             )
 
-        if self._repository_client_policy is None:
-            raise RepositoryContractError(
-                "REPOSITORY_CONNECTION_UNAVAILABLE",
-                "the default Git connection has no deployment-owned client policy",
-            )
         observed = await self._observe_git_client()
-        connection = reconcile_default_git_connection(
-            client_policy=self._repository_client_policy
+        connection = load_repository_connection(
+            _DEFAULT_REPOSITORY_CONNECTION_PATH, target.connection_ref
         )
         registry = CapabilityReadinessRegistry(
             runtime_owned_tokens=(
@@ -461,6 +499,27 @@ class ManagedRuntimeLauncher:
             evidence_resolver=resolve_evidence,
             readiness_registry=registry,
             remote_tip_verifier=verify_remote_tip,
+        )
+        observed_revision = (
+            target.revision.commit_sha
+            if target.revision is not None
+            else expected_remote_tip
+        )
+        if not observed_revision:
+            observed_revision = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+        if not observed_revision:
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "repository readiness did not observe an immutable prepared revision",
+            )
+        return materialize_resolved_repository_target(
+            target,
+            observed_revision=observed_revision,
+            evidence=observed,
         )
 
     @staticmethod
@@ -1581,7 +1640,13 @@ class ManagedRuntimeLauncher:
             if launch_github_token
             else None
         )
-        await self._repository_readiness_boundary(request, git_host_env)
+        resolved_repository = await self._repository_readiness_boundary(
+            request, git_host_env
+        )
+        if resolved_repository is not None:
+            request.workspace_spec["resolvedRepositoryTarget"] = (
+                resolved_repository.model_dump(by_alias=True, mode="json")
+            )
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
@@ -1991,6 +2056,11 @@ class ManagedRuntimeLauncher:
             pid=process.pid,
             started_at=datetime.now(tz=UTC),
             workspace_path=resolved_workspace_path,
+            resolvedRepositoryTarget=(
+                resolved_repository.model_dump(by_alias=True, mode="json")
+                if resolved_repository is not None
+                else None
+            ),
             live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)

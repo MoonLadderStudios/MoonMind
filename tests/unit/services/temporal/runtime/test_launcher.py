@@ -170,6 +170,36 @@ async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp
 
 
 @pytest.mark.asyncio
+async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=object()),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+    assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
+    assert resolved.client_evidence == evidence
+
+
+@pytest.mark.asyncio
 async def test_default_repository_readiness_rejects_unready_known_capability(tmp_path):
     evidence = RepositoryClientEvidence(
         toolBundleRef="repository-client:git-system",

@@ -9,6 +9,8 @@ drift across authoring and runtime code.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+import json
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -92,6 +94,24 @@ class RepositoryClientEvidence(BaseModel):
     client_version: str = Field(alias="clientVersion", min_length=1)
     executable_sha256: str = Field(alias="executableSha256", min_length=1)
     server_version: str | None = Field(None, alias="serverVersion")
+
+
+class ResolvedRepositoryTarget(BaseModel):
+    """Immutable repository identity observed at the pre-mutation boundary."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    schema_version: Literal["moonmind.resolved-repository-target.v1"] = Field(
+        alias="schemaVersion"
+    )
+    provider: Literal["git", "lore"]
+    connection_ref: str = Field(alias="connectionRef", min_length=1)
+    repository: RepositoryName
+    prepared_revision: GitRevision | LoreRevision = Field(alias="preparedRevision")
+    prepared_branch: RepositoryBranch = Field(alias="preparedBranch")
+    base_branch: RepositoryBranch = Field(alias="baseBranch")
+    work_branch: RepositoryBranch = Field(alias="workBranch")
+    remote_tip_expectation: dict[str, Any] = Field(alias="remoteTipExpectation")
+    client_evidence: RepositoryClientEvidence = Field(alias="clientEvidence")
 
 
 class RepositoryConnection(BaseModel):
@@ -188,6 +208,73 @@ def reconcile_default_git_connection(
         allowedOperations=("read", "write", "branch_write", "review_request"),
         clientPolicy=client_policy,
         credentialSource="github_resolver",
+    )
+
+
+def persist_repository_connection(connection: RepositoryConnection, path: Path) -> None:
+    """Atomically reconcile one deployment-owned connection record."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(connection.model_dump(by_alias=True, mode="json"), sort_keys=True),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def load_repository_connection(path: Path, connection_ref: str) -> RepositoryConnection:
+    """Resolve a previously reconciled connection; never synthesize at launch."""
+
+    try:
+        connection = RepositoryConnection.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"deployment-owned repository connection {connection_ref!r} is unavailable",
+        ) from exc
+    if connection.id != connection_ref:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"stored repository connection does not match {connection_ref!r}",
+        )
+    return connection
+
+
+def materialize_resolved_repository_target(
+    target: AuthoredRepositoryTarget,
+    *,
+    observed_revision: str,
+    evidence: RepositoryClientEvidence,
+    work_branch: str | None = None,
+) -> ResolvedRepositoryTarget:
+    """Freeze exact repository and client observations for durable metadata."""
+
+    revision: GitRevision | LoreRevision
+    if target.provider == "git":
+        revision = GitRevision(kind="git_commit", commitSha=observed_revision)
+    else:
+        revision = LoreRevision(kind="lore_revision", revisionSignature=observed_revision)
+    expected_revision: dict[str, Any] = {
+        "provider": target.provider,
+        "repositoryId": target.repository.name,
+    }
+    if target.provider == "git":
+        expected_revision["commitSha"] = observed_revision
+    else:
+        expected_revision["revisionSignature"] = observed_revision
+    expected = {"kind": "must_equal", "revision": expected_revision}
+    return ResolvedRepositoryTarget(
+        schemaVersion="moonmind.resolved-repository-target.v1",
+        provider=target.provider,
+        connectionRef=target.connection_ref,
+        repository=target.repository,
+        preparedRevision=revision,
+        preparedBranch=target.branch,
+        baseBranch=target.branch,
+        workBranch={"name": work_branch or target.branch.name},
+        remoteTipExpectation=expected,
+        clientEvidence=evidence,
     )
 
 
@@ -362,10 +449,14 @@ __all__ = [
     "RepositoryClientPolicy",
     "RepositoryConnection",
     "RepositoryContractError",
+    "ResolvedRepositoryTarget",
     "compile_repository_target",
     "decode_legacy_repository_history_v1",
     "derive_repository_capabilities",
     "ensure_repository_ready",
+    "load_repository_connection",
+    "materialize_resolved_repository_target",
+    "persist_repository_connection",
     "reconcile_default_git_connection",
     "resolve_default_git_credential",
     "validate_connection_and_client",
