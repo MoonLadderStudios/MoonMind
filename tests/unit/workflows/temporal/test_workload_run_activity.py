@@ -48,7 +48,7 @@ def _helper_profile_payload() -> dict[str, object]:
             }
         ],
         "env_allowlist": ["CI"],
-        "network_policy": "bridge",
+        "network_policy": "restricted_egress",
         "timeout_seconds": 60,
         "max_timeout_seconds": 120,
         "helper_ttl_seconds": 300,

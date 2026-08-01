@@ -687,6 +687,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             assert "run_verify" in {
                 item["name"] for item in github_breakdown_template.inputs_schema
             }
+            publish_mode_input = next(
+                item
+                for item in github_breakdown_template.inputs_schema
+                if item["name"] == "publish_mode"
+            )
+            if slug == "github-issue-breakdown-implement":
+                assert "pr_with_merge_automation" in publish_mode_input["options"]
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
                 for step in github_breakdown_template.steps
@@ -706,15 +713,54 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             assert "Create workflow dependencies with dependsOn" in (
                 github_downstream_step["instructions"]
             )
-            assert github_downstream_step["githubOrchestration"]["task"]["publish"] == {
-                "mode": "{{ inputs.publish_mode }}",
-            }
+            expected_publish = (
+                {
+                    "mode": (
+                        "{{ 'pr' if inputs.publish_mode == "
+                        "'pr_with_merge_automation' else inputs.publish_mode }}"
+                    ),
+                    "mergeAutomation": {
+                        "enabled": (
+                            "{{ inputs.publish_mode == "
+                            "'pr_with_merge_automation' }}"
+                        )
+                    },
+                }
+                if slug == "github-issue-breakdown-implement"
+                else {"mode": "{{ inputs.publish_mode }}"}
+            )
+            assert (
+                github_downstream_step["githubOrchestration"]["task"]["publish"]
+                == expected_publish
+            )
             assert github_downstream_step["githubOrchestration"]["task"]["inputs"] == {
                 "run_verify": "{{ inputs.run_verify }}"
             }
             assert github_downstream_step["githubOrchestration"]["traceability"] == {
                 "sourceIssueKey": "{{ inputs.source_issue_key }}"
             }
+
+        expanded_github_implement = await PresetCatalogService(
+            session
+        ).expand_template(
+            slug="github-issue-breakdown-implement",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "feature_request": "Implement the requested GitHub issue.",
+                "github_repository": "MoonLadderStudios/MoonMind",
+                "publish_mode": "pr_with_merge_automation",
+                "run_verify": True,
+                "source_issue_key": "",
+            },
+            context={
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+            },
+        )
+        assert expanded_github_implement["steps"][3]["githubOrchestration"]["task"][
+            "publish"
+        ] == {"mode": "pr", "mergeAutomation": {"enabled": True}}
 
         result = await session.execute(
             select(Preset)

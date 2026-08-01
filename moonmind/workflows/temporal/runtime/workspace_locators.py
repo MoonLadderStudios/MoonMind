@@ -43,6 +43,36 @@ class SandboxWorkspaceRecordStore:
             )
         return candidate
 
+    def _completion_marker_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.materialized").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace completion marker escapes its authority",
+            )
+        return candidate
+
+    def is_materialized(self, workspace_id: str) -> bool:
+        """Return whether workspace materialization durably completed.
+
+        A completion marker is written only after the full clone, checkout, and
+        restore-input materialization succeeded, so a retry can distinguish a
+        finished workspace from a partially built directory left by a prior
+        attempt that failed mid-materialization.
+        """
+        return self._completion_marker_path(workspace_id).is_file()
+
+    def mark_materialized(self, workspace_id: str) -> None:
+        """Record durable evidence that materialization completed."""
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._completion_marker_path(workspace_id)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write("materialized")
+
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)
         if not path.is_file():

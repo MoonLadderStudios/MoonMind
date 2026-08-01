@@ -5,32 +5,81 @@ import hashlib
 
 import pytest
 
+import json
+
 from moonmind.omnigent.cutover import (
+    ARTIFACT_SCHEMA_VERSION,
     CUTOVER_POLICY_VERSION,
+    MATRIX_VERSION,
+    REQUIRED_EVIDENCE_KINDS,
+    REQUIRED_MATRIX_ROWS,
     REQUIRED_TELEMETRY_GROUPS,
+    ROW_CATALOG,
     CutoverPhase,
     effective_phase,
     evaluate_promotion,
     select_runtime,
 )
-from moonmind.omnigent.conformance import PROFILE_SHA256, PROFILE_VERSION
+from moonmind.omnigent.conformance import (
+    PROFILE_SHA256,
+    PROFILE_VERSION,
+    REQUIRED_EVIDENCE_CHANNELS,
+)
 
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 
+IMAGES = {
+    "server": "example/server@sha256:" + "1" * 64,
+    "host": "example/host@sha256:" + "2" * 64,
+}
+POLICY_VERSION = "codex-static-launch-policy/v1"
+AGENT_PROFILE_VERSION = "codex-agent-profile/v1"
+
+
+def _clean_secret_scan() -> dict[str, object]:
+    return {
+        channel: {"status": "passed", "evidenceRef": f"evidence/{channel}.json"}
+        for channel in REQUIRED_EVIDENCE_CHANNELS
+    }
+
+
+def _observed_row(row_id: str) -> dict[str, object]:
+    row = ROW_CATALOG[row_id]
+    return {
+        "row": row_id,
+        "hostMode": row.host_modes[0],
+        "architecture": "linux/amd64",
+        "images": dict(IMAGES),
+        "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "runtimeProvenance": row.provenance[0],
+        "observedResult": "passed",
+        "secretScan": _clean_secret_scan(),
+    }
+
+
+def _artifact_bytes(kind: str, row_ids: list[str] | None = None) -> bytes:
+    if row_ids is None:
+        row_ids = [r for r in REQUIRED_MATRIX_ROWS if ROW_CATALOG[r].kind == kind]
+    return json.dumps(
+        {
+            "schemaVersion": ARTIFACT_SCHEMA_VERSION,
+            "kind": kind,
+            "producerVersion": "moonmind.codex-omnigent-observer/v1",
+            "rows": [_observed_row(row_id) for row_id in row_ids],
+        },
+        sort_keys=True,
+    ).encode()
+
 
 def _evidence(tmp_path=None) -> dict[str, object]:
-    kinds = (
-        ("submissionMatrix", "submission-matrix"),
-        ("historicalReads", "historical-reads"),
-        ("temporalReplay", "temporal-replay"),
-        ("capacityOwnership", "capacity-ownership"),
-        ("secretScan", "secret-scan"),
-        ("releaseMetadata", "release-metadata"),
-    )
     manifest = []
-    for kind, slug in kinds:
-        content = f"{kind} protected evidence\n".encode()
+    for kind in REQUIRED_EVIDENCE_KINDS:
+        slug = kind
+        content = _artifact_bytes(kind)
         ref = f"artifact://protected-live/codex-omnigent/{slug}"
         if tmp_path is not None:
             path = tmp_path / f"{slug}.json"
@@ -56,10 +105,11 @@ def _evidence(tmp_path=None) -> dict[str, object]:
         "currentPhase": "OPT_IN",
         "profileVersion": PROFILE_VERSION,
         "profileSha256": PROFILE_SHA256,
-        "images": {
-            "server": "example/server@sha256:" + "1" * 64,
-            "host": "example/host@sha256:" + "2" * 64,
-        },
+        "launchPolicyVersion": POLICY_VERSION,
+        "agentProfileVersion": AGENT_PROFILE_VERSION,
+        "matrixVersion": MATRIX_VERSION,
+        "matrixRows": list(REQUIRED_MATRIX_ROWS),
+        "images": dict(IMAGES),
         "architectures": ["linux/amd64"],
         "telemetry": {
             group: {"sampleCount": 10} for group in REQUIRED_TELEMETRY_GROUPS
@@ -263,6 +313,132 @@ def test_effective_phase_rejects_missing_or_tampered_manifest_evidence(
     )
     assert tampered_status.phase is CutoverPhase.OPT_IN
     assert "evidence_manifest_digest_mismatch" in tampered_status.blockers
+
+
+def test_effective_phase_rejects_self_asserted_row_artifact_with_matching_digest(
+    tmp_path,
+) -> None:
+    """A digest-consistent artifact whose observed rows do not pass fails closed.
+
+    This is the MoonLadderStudios/MoonMind#3564 hardening: promotion must not
+    rely on document-level booleans or manifest digest integrity alone. The
+    consumer re-parses each artifact and re-validates the observed per-row
+    result even when the recorded SHA-256 matches the tampered bytes.
+    """
+
+    evidence = _evidence(tmp_path)
+    artifact = tmp_path / str(evidence["evidenceRefs"][0])
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["rows"][0]["observedResult"] = "failed"
+    tampered = json.dumps(payload, sort_keys=True).encode()
+    artifact.write_bytes(tampered)
+    # Re-derive the manifest digest so digest integrity is not what fails.
+    evidence["evidenceManifest"][0]["sha256"] = hashlib.sha256(tampered).hexdigest()
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "evidence_manifest_digest_mismatch" not in status.blockers
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert "matrix_row_coverage_incomplete" in status.blockers
+
+
+def test_effective_phase_rejects_split_evidence_for_one_kind(tmp_path) -> None:
+    """Two digest-valid artifacts sharing a kind cannot union into coverage.
+
+    A hand-authored or mutated promotion document can splice partial results
+    from separate runs or producers into two artifacts of the same evidence
+    kind that own disjoint rows. Row overlap alone would not catch that, so the
+    launch-authority consumer must reject the duplicate kind before unioning
+    its rows.
+    """
+
+    evidence = _evidence(tmp_path)
+    kind = "submissionMatrix"
+    row_ids = [r for r in REQUIRED_MATRIX_ROWS if ROW_CATALOG[r].kind == kind]
+    assert len(row_ids) >= 2
+    first_rows, second_rows = row_ids[:1], row_ids[1:]
+
+    manifest = [
+        item for item in evidence["evidenceManifest"] if item["kind"] != kind
+    ]
+    for index, subset in enumerate((first_rows, second_rows)):
+        content = _artifact_bytes(kind, subset)
+        name = f"{kind}-{index}.json"
+        (tmp_path / name).write_bytes(content)
+        manifest.append(
+            {
+                "kind": kind,
+                "ref": name,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    evidence["evidenceManifest"] = manifest
+    evidence["evidenceRefs"] = [item["ref"] for item in manifest]
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "split_evidence_kind_rejected" in status.blockers
+
+
+def test_effective_phase_requires_evidence_for_every_released_architecture(
+    tmp_path,
+) -> None:
+    """A row observed on only one of several released architectures fails closed."""
+
+    evidence = _evidence(tmp_path)
+    evidence["architectures"] = ["linux/amd64", "linux/arm64"]
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(path),
+        },
+        now=NOW,
+    )
+
+    assert status.phase is CutoverPhase.OPT_IN
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert "matrix_row_coverage_incomplete" in status.blockers
+
+
+def test_effective_phase_exposes_matrix_version_and_rows(tmp_path) -> None:
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(_evidence(tmp_path)), encoding="utf-8")
+
+    status = effective_phase(
+        env={
+            "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "create_default",
+            "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": path.as_uri(),
+        },
+        now=NOW,
+    )
+
+    projection = status.as_dict()
+    assert status.phase is CutoverPhase.CREATE_DEFAULT
+    assert projection["matrixVersion"] == MATRIX_VERSION
+    assert projection["matrixRows"] == list(REQUIRED_MATRIX_ROWS)
+    assert projection["launchPolicyVersion"] == POLICY_VERSION
+    assert projection["agentProfileVersion"] == AGENT_PROFILE_VERSION
 
 
 def test_effective_phase_uses_durable_deployed_phase_for_sequential_promotion(

@@ -52,6 +52,12 @@ WorkloadStatus = Literal[
 WorkloadKind = Literal["one_shot", "bounded_service"]
 WorkloadOwnershipKind = Literal["workload", "bounded_service"]
 WorkloadNetworkPolicy = Literal["none", "bridge"]
+RunnerNetworkPolicy = Literal[
+    "none",
+    "restricted_egress",
+    "docker_proxy",
+    "pentest_approved_lab",
+]
 WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
 WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_docker_cli"]
 WorkloadDeviceMode = Literal["none"]
@@ -372,7 +378,7 @@ class RunnerProfile(BaseModel):
         alias="credentialMounts",
     )
     env_allowlist: tuple[str, ...] = Field(default_factory=tuple, alias="envAllowlist")
-    network_policy: WorkloadNetworkPolicy = Field("none", alias="networkPolicy")
+    network_policy: RunnerNetworkPolicy = Field("none", alias="networkPolicy")
     resources: RunnerResourceProfile = Field(
         default_factory=RunnerResourceProfile,
         alias="resources",
