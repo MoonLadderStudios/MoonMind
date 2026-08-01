@@ -1230,7 +1230,7 @@ class DeploymentUpdateExecutor:
                 before_state = await self.runner.capture_state(
                     stack=parsed["stack"], phase="before"
                 )
-                command_plan = _command_plan_targeting_services(
+                command_plan = _command_plan_targeting_stack_services(
                     command_plan,
                     before_state=before_state,
                     requested_repository=str(parsed["image"]["repository"]),
@@ -1562,7 +1562,7 @@ def _compose_up_target_services(args: Sequence[str]) -> tuple[str, ...]:
     return tuple(services)
 
 
-def _command_plan_targeting_services(
+def _command_plan_targeting_stack_services(
     command_plan: ComposeCommandPlan,
     *,
     before_state: Mapping[str, Any],
@@ -1570,21 +1570,22 @@ def _command_plan_targeting_services(
     excluded_services: Sequence[str],
 ) -> ComposeCommandPlan:
     excluded = _normalized_service_names(excluded_services)
-    target_candidates = _target_service_names_from_state(
+    # Pull only services governed by the requested MoonMind image target.
+    pull_candidates = _target_service_names_from_state(
         before_state,
         requested_repository=requested_repository,
     )
-    if not target_candidates and not excluded and not isinstance(
+    if not pull_candidates and not excluded and not isinstance(
         before_state.get("configuredServiceImages"),
         Mapping,
     ):
         return command_plan
-    services = tuple(
+    pull_services = tuple(
         service_name
-        for service_name in target_candidates
+        for service_name in pull_candidates
         if not _service_is_excluded(service_name, excluded)
     )
-    if not services:
+    if not pull_services:
         raise ToolFailure(
             error_code="DEPLOYMENT_RUNNER_UNSAFE",
             message=(
@@ -1598,10 +1599,34 @@ def _command_plan_targeting_services(
                 "failureClass": "runner_self_recreation_unsafe",
             },
         )
+    # Compose up must still reconcile the active stack so infrastructure-only
+    # configuration, networks, and dependencies required by the new image exist.
+    reconciliation_services = tuple(
+        service_name
+        for service_name in _configured_service_names_from_state(before_state)
+        if not _service_is_excluded(service_name, excluded)
+    )
+    if not reconciliation_services:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RUNNER_UNSAFE",
+            message=(
+                "Deployment update has no configured services to reconcile "
+                "after applying service exclusions."
+            ),
+            retryable=False,
+            details={
+                "excludedServices": sorted(excluded),
+                "failureClass": "runner_self_recreation_unsafe",
+            },
+        )
     return ComposeCommandPlan(
         runner_mode=command_plan.runner_mode,
-        pull_args=(*command_plan.pull_args, *services),
-        up_args=(*command_plan.up_args, "--no-deps", *services),
+        pull_args=(*command_plan.pull_args, *pull_services),
+        up_args=(
+            *command_plan.up_args,
+            "--no-deps",
+            *reconciliation_services,
+        ),
     )
 
 
@@ -1762,6 +1787,20 @@ def _target_service_names_from_state(
             seen.add(key)
             names.append(name)
     return tuple(names)
+
+
+def _configured_service_names_from_state(
+    before_state: Mapping[str, Any],
+) -> tuple[str, ...]:
+    configured_services = _service_names_from_state(
+        before_state.get("configuredServices")
+    )
+    if configured_services:
+        return configured_services
+    configured_images = before_state.get("configuredServiceImages")
+    if isinstance(configured_images, Mapping):
+        return _service_names_from_state(tuple(configured_images))
+    return _service_names_from_state(before_state.get("services"))
 
 
 def _target_service_names_from_configured_images(
