@@ -1,11 +1,13 @@
 import inspect
+from datetime import timedelta
 from typing import Any
 
 import pytest
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
+from moonmind.omnigent.cutover import CutoverPhase, select_runtime
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -14,6 +16,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopState,
     apply_continuation_decision,
 )
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import (
     GateTransitionDecision,
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
@@ -28,6 +31,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -170,6 +174,54 @@ class _CurrentWorkflowOwnedRemediationHeadReplayFixture:
                 "headWorkspaceDigest": "sha256:c1",
             }
         return continuation
+
+
+@workflow.defn(name="MMHeadlessRemediationExecutionReplayFixture")
+class _LegacyHeadlessRemediationExecutionReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+        workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
+        return True
+
+
+@workflow.defn(name="MMHeadlessRemediationExecutionReplayFixture")
+class _CurrentHeadlessRemediationExecutionReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+        workflow.patched(RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH)
+        workflow_instance = MoonMindRunWorkflow()
+        workflow_instance._remediation_workspace_head = None
+        return workflow_instance._remediation_workspace_materialization_required(
+            {
+                "id": "remediation-1",
+                "annotations": {
+                    "issueImplementRole": "moonspec-remediation",
+                },
+            }
+        )
+
+
+@workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
+class _LegacyManagedStatusRolloutTimeoutReplayFixture:
+    @workflow.run
+    async def run(self) -> list[int]:
+        return [180, 180]
+
+
+@workflow.defn(name="MMManagedStatusRolloutTimeoutReplayFixture")
+class _CurrentManagedStatusRolloutTimeoutReplayFixture:
+    @workflow.run
+    async def run(self) -> list[int]:
+        uncapped = MoonMindAgentRun._managed_status_schedule_to_close_override()
+        capped = MoonMindAgentRun._managed_status_schedule_to_close_override(
+            remaining_budget_seconds=45,
+        )
+        return [
+            int(uncapped.total_seconds()) if uncapped is not None else 600,
+            int(capped.total_seconds()) if capped is not None else 600,
+        ]
 
 
 @workflow.defn(name="MMManagedSessionCheckpointLocatorReplayFixture")
@@ -647,6 +699,84 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
 
 
 @pytest.mark.asyncio
+async def test_headless_remediation_execution_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-headless-remediation-legacy-replay",
+            workflows=[_LegacyHeadlessRemediationExecutionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyHeadlessRemediationExecutionReplayFixture.run,
+                id="test-headless-remediation-legacy",
+                task_queue="test-headless-remediation-legacy-replay",
+            )
+            assert await legacy.result() is True
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-headless-remediation-current-replay",
+            workflows=[_CurrentHeadlessRemediationExecutionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentHeadlessRemediationExecutionReplayFixture.run,
+                id="test-headless-remediation-current",
+                task_queue="test-headless-remediation-current-replay",
+            )
+            assert await current.result() is False
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentHeadlessRemediationExecutionReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_managed_status_rollout_timeout_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-managed-status-timeout-legacy-replay",
+            workflows=[_LegacyManagedStatusRolloutTimeoutReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyManagedStatusRolloutTimeoutReplayFixture.run,
+                id="test-managed-status-timeout-legacy",
+                task_queue="test-managed-status-timeout-legacy-replay",
+            )
+            assert await legacy.result() == [180, 180]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-managed-status-timeout-current-replay",
+            workflows=[_CurrentManagedStatusRolloutTimeoutReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentManagedStatusRolloutTimeoutReplayFixture.run,
+                id="test-managed-status-timeout-current",
+                task_queue="test-managed-status-timeout-current-replay",
+            )
+            assert await current.result() == [600, 45]
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentManagedStatusRolloutTimeoutReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
 async def test_managed_session_checkpoint_histories_replay() -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
@@ -813,6 +943,242 @@ async def test_github_3453_pre_change_omnigent_history_replays() -> None:
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+def test_github_3518_cutover_selection_never_runs_inside_workflow_code() -> None:
+    """MoonLadderStudios/MoonMind#3518: keep runtime selection replay-safe.
+
+    ``select_runtime``/``effective_phase`` read process env and a mounted
+    evidence file, so they are non-deterministic submission-boundary side
+    effects.  Recording ``runtimeCutover`` into the workflow start payload is
+    correct; invoking the cutover decision from replayed workflow code would
+    both break determinism and reintroduce an in-workflow fallback path that
+    could silently override an explicit Omnigent selection (AC8 + AC12).  This
+    guard fails fast if a future change moves that decision into the workflow.
+    """
+
+    from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    for module in (run_module, agent_run_module):
+        source = inspect.getsource(module)
+        assert "select_runtime" not in source, module.__name__
+        assert "effective_phase" not in source, module.__name__
+        assert "omnigent.cutover" not in source, module.__name__
+
+
+@pytest.mark.asyncio
+async def test_github_3518_cutover_runtime_parameter_histories_replay(
+    mock_run_environment,  # noqa: F811
+) -> None:
+    """MoonLadderStudios/MoonMind#3518: recorded histories replay across cutover.
+
+    The cutover adds a ``runtimeCutover`` evidence block to the workflow start
+    payload and can change the resolved ``targetRuntime`` default from
+    ``codex_cli`` to ``omnigent``.  In-flight runs started before the cutover
+    landed have neither key; runs started after it carry both.  A single
+    (mixed-version) current worker must replay both recorded histories without a
+    non-determinism error, proving the start-payload shape difference is passive
+    metadata rather than a divergent command source.
+    """
+
+    # Faithful post-cutover evidence: the exact dict persisted into
+    # ``initial_parameters['runtimeCutover']`` by the executions router when the
+    # Create default has advanced to Omnigent.
+    post_cutover_selection = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.CREATE_DEFAULT,
+        submission_kind="create",
+    )
+    assert post_cutover_selection.runtime_id == "omnigent"
+
+    pre_cutover_parameters: dict[str, Any] = {"targetRuntime": "codex_cli"}
+    post_cutover_parameters: dict[str, Any] = {
+        "targetRuntime": post_cutover_selection.runtime_id,
+        "runtimeCutover": post_cutover_selection.as_dict(),
+    }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-pre-cutover-replay",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            pre_cutover = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": pre_cutover_parameters,
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-mm3518-pre-cutover-history",
+                task_queue="test-mm3518-pre-cutover-replay",
+            )
+            assert (await pre_cutover.result())["status"] == "success"
+            pre_cutover_history = await pre_cutover.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-post-cutover-replay",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            post_cutover = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": post_cutover_parameters,
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-mm3518-post-cutover-history",
+                task_queue="test-mm3518-post-cutover-replay",
+            )
+            assert (await post_cutover.result())["status"] == "success"
+            post_cutover_history = await post_cutover.fetch_history()
+
+    # The current worker replays both the pre-cutover (no runtimeCutover) and
+    # post-cutover (runtimeCutover present) histories.
+    replayer = Replayer(
+        workflows=[MoonMindUserWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(pre_cutover_history)
+    await replayer.replay_workflow(post_cutover_history)
+
+
+@activity.defn(name="mm3518_record_runtime_selection")
+async def _mm3518_record_runtime_selection(target_runtime: str) -> str:
+    """Faithful recorded command: both the deployed pre-cutover worker and the
+    current worker persist the resolved ``targetRuntime`` through this same
+    activity, so the runtime value lands in recorded history as a passive
+    command input rather than being mocked away."""
+
+    return f"recorded:{target_runtime}"
+
+
+@workflow.defn(name="MM3518RuntimeCutoverReplayFixture")
+class _LegacyPreCutoverRuntimeReplayFixture:
+    """Faithful *deployed pre-cutover* worker.
+
+    The start payload it receives has no ``runtimeCutover`` block (the cutover
+    had not landed); the runtime comes only from ``targetRuntime`` and is
+    recorded through a real, unmocked activity command.  Workflow code never
+    consults the submission-boundary cutover decision.
+    """
+
+    @workflow.run
+    async def run(self, start: dict[str, Any]) -> dict[str, Any]:
+        params = dict(start.get("initial_parameters") or {})
+        assert "runtimeCutover" not in params
+        recorded = await workflow.execute_activity(
+            _mm3518_record_runtime_selection,
+            params.get("targetRuntime", "codex_cli"),
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        return {"recordedRuntime": recorded}
+
+
+@workflow.defn(name="MM3518RuntimeCutoverReplayFixture")
+class _CurrentRuntimeCutoverReplayFixture:
+    """Current worker: identical workflow code and recorded command sequence.
+
+    The post-cutover start payload additionally carries the ``runtimeCutover``
+    evidence block, which stays passive metadata — it is never used to drive a
+    command or branch inside workflow code.
+    """
+
+    @workflow.run
+    async def run(self, start: dict[str, Any]) -> dict[str, Any]:
+        params = dict(start.get("initial_parameters") or {})
+        recorded = await workflow.execute_activity(
+            _mm3518_record_runtime_selection,
+            params.get("targetRuntime", "codex_cli"),
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        return {"recordedRuntime": recorded}
+
+
+@pytest.mark.asyncio
+async def test_github_3518_pre_cutover_runtime_history_replays_on_current_worker() -> None:
+    """MoonLadderStudios/MoonMind#3518: a faithful pre-cutover history replays.
+
+    ``test_github_3518_cutover_runtime_parameter_histories_replay`` generates
+    both histories from the current ``MoonMindUserWorkflow`` with the planning
+    and execution stages mocked out, so it proves only that the current mocked
+    workflow replays its own histories.  This test closes that gap: the legacy
+    history is generated by a dedicated *pre-cutover* fixture in the deployed
+    shape (no ``runtimeCutover`` in the start payload) whose recorded command
+    sequence is driven by a real, unmocked activity.  Replaying that faithful
+    pre-cutover history on the current worker proves the cutover start-payload
+    difference is passive metadata, not a divergent recorded command source.
+    """
+
+    post_cutover_selection = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.CREATE_DEFAULT,
+        submission_kind="create",
+    )
+    assert post_cutover_selection.runtime_id == "omnigent"
+
+    pre_cutover_start: dict[str, Any] = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "initial_parameters": {"targetRuntime": "codex_cli"},
+        "plan_artifact_ref": "ref-123",
+    }
+    post_cutover_start: dict[str, Any] = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "initial_parameters": {
+            "targetRuntime": post_cutover_selection.runtime_id,
+            "runtimeCutover": post_cutover_selection.as_dict(),
+        },
+        "plan_artifact_ref": "ref-123",
+    }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-pre-cutover-fixture",
+            workflows=[_LegacyPreCutoverRuntimeReplayFixture],
+            activities=[_mm3518_record_runtime_selection],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            pre_cutover = await env.client.start_workflow(
+                _LegacyPreCutoverRuntimeReplayFixture.run,
+                pre_cutover_start,
+                id="test-mm3518-pre-cutover-fixture-history",
+                task_queue="test-mm3518-pre-cutover-fixture",
+            )
+            assert (await pre_cutover.result())["recordedRuntime"] == "recorded:codex_cli"
+            pre_cutover_history = await pre_cutover.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3518-current-fixture",
+            workflows=[_CurrentRuntimeCutoverReplayFixture],
+            activities=[_mm3518_record_runtime_selection],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            post_cutover = await env.client.start_workflow(
+                _CurrentRuntimeCutoverReplayFixture.run,
+                post_cutover_start,
+                id="test-mm3518-current-fixture-history",
+                task_queue="test-mm3518-current-fixture",
+            )
+            assert (await post_cutover.result())["recordedRuntime"] == "recorded:omnigent"
+            post_cutover_history = await post_cutover.fetch_history()
+
+    # The current worker replays the faithful pre-cutover history (generated by
+    # the deployed-shape worker) and its own post-cutover history without a
+    # non-determinism error.
+    replayer = Replayer(
+        workflows=[_CurrentRuntimeCutoverReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(pre_cutover_history)
+    await replayer.replay_workflow(post_cutover_history)
 
 
 @pytest.mark.asyncio

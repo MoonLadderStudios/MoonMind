@@ -1214,6 +1214,40 @@ class OmnigentBridgeSessionStore:
                         "relativePath",
                         "identityVerified",
                         "materialization",
+                        # Unified bounded workspace -> runtime -> publication ->
+                        # terminal -> cleanup -> lease authority-chain projection
+                        # (MoonLadderStudios/MoonMind#3561). Nested under one key so
+                        # the whole compact, secret-scanned structure survives this
+                        # top-level allowlist intact.
+                        "authorityChain",
+                        # Durable workspace-intent compilation evidence. Bounded,
+                        # credential-free, and path-safe by construction
+                        # (``WorkspaceIntentRecord.evidence``); persisted so
+                        # Workflow Detail and recovery receive the advertised
+                        # compilation record instead of only the locator kind.
+                        "schemaVersion",
+                        "producerVersion",
+                        "intentDigest",
+                        "repository",
+                        "repositoryKind",
+                        "sourceCommit",
+                        "startingBranch",
+                        "targetBranch",
+                        "publishMode",
+                        "savedWorkPolicy",
+                        "publicationDestination",
+                        "repositoryMutation",
+                        "requiredCapabilities",
+                        "credentialInjectionPolicy",
+                        "resolvedSkillsetRef",
+                        "attachmentRefCount",
+                        "inputRefCount",
+                        "skillProjectionCount",
+                        "toolProjectionCount",
+                        "restoreInputRefCount",
+                        "externalStateRefCount",
+                        "skillProjectionDigests",
+                        "toolProjectionDigests",
                     }
                 }
             journal.append(entry)

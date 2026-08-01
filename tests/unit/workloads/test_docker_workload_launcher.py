@@ -7,6 +7,11 @@ from typing import Any
 
 import pytest
 
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    PROXY_URL,
+)
 from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
@@ -1835,3 +1840,212 @@ async def test_container_janitor_sweeps_expired_bounded_helpers(
         "--format",
         '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
     ]
+def test_restricted_profile_resolves_to_attested_network(tmp_path: Path) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="restricted_egress")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == EGRESS_NETWORK_REF
+    assert f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}" in args
+    assert f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}" in args
+    assert f"HTTPS_PROXY={PROXY_URL}" in args
+    assert "NO_PROXY=" in args
+    assert "--privileged=false" in args
+    assert args[args.index("--cap-drop") + 1] == "ALL"
+
+
+def test_docker_proxy_profile_preserves_its_target_specific_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "custom_docker_proxy")
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="docker_proxy")],
+    )
+
+    args = DockerWorkloadLauncher().build_run_args(request)
+
+    assert args[args.index("--network") + 1] == "custom_docker_proxy"
+    assert not any(value.startswith("HTTPS_PROXY=") for value in args)
+    assert not any("moonmind.egress.profile=" in value for value in args)
+
+
+def test_pentest_lab_profile_fails_before_a_target_profile_exists(
+    tmp_path: Path,
+) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="pentest_approved_lab")],
+    )
+
+    with pytest.raises(
+        DockerWorkloadLauncherError,
+        match="target-specific reviewed egress profile",
+    ):
+        DockerWorkloadLauncher().build_run_args(request)
+
+
+@pytest.mark.asyncio
+async def test_restricted_launch_fails_before_process_when_egress_is_unattested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _validated_request(
+        tmp_path,
+        profiles=[_profile_payload(network_policy="restricted_egress")],
+    )
+    process_started = False
+
+    async def _fake_create_subprocess_exec(*_args: str, **_kwargs: Any) -> _Process:
+        nonlocal process_started
+        process_started = True
+        return _Process()
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    launcher = DockerWorkloadLauncher()
+
+    async def _unavailable(_args: list[str]) -> tuple[bytes, bytes, int]:
+        return b"", b"not found", 1
+
+    monkeypatch.setattr(launcher._janitor, "_run_control", _unavailable)
+
+    with pytest.raises(RuntimeError, match="network is unavailable"):
+        await launcher.run(request)
+
+    assert process_started is False
+
+
+def _healthy_egress_run_process(args: list[str]) -> _Process:
+    """Fake docker responses that satisfy attest_docker_egress plus the run."""
+
+    from moonmind.security.egress import (
+        DEFAULT_EGRESS_PROFILE,
+        EGRESS_CONFIG_DIGEST,
+        EGRESS_NETWORK_REF,
+        EGRESS_PROFILE_SET_DIGEST,
+        ENFORCER_IMPLEMENTATION,
+        OMNIGENT_EGRESS_NETWORK_REF,
+    )
+
+    subcommand = args[1] if len(args) > 1 else ""
+    if subcommand == "network":
+        return _Process(
+            stdout=json.dumps({"Internal": True, "EnableIPv6": False}).encode()
+        )
+    if subcommand == "inspect":
+        return _Process(
+            stdout=json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                        "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                    },
+                    "networks": {
+                        EGRESS_NETWORK_REF: {},
+                        "moonmind_sandbox-egress-network": {},
+                        OMNIGENT_EGRESS_NETWORK_REF: {},
+                        "local-network": {},
+                    },
+                    "image": "sha256:gateway-image",
+                    "health": "healthy",
+                }
+            ).encode()
+        )
+    if subcommand == "exec":
+        return _Process(
+            stdout=(
+                f"{EGRESS_CONFIG_DIGEST.removeprefix('sha256:')}  "
+                "/etc/squid/squid.conf\n"
+            ).encode()
+        )
+    if subcommand == "run":
+        return _Process(returncode=0, stdout=b"restricted workload ok\n")
+    return _Process(returncode=0)
+
+
+@pytest.mark.asyncio
+async def test_restricted_launch_publishes_egress_attestation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-egress",
+            repoDir=str(workspace_root / "task-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+            profiles=[
+                _profile_payload(
+                    workspace_root=workspace_root,
+                    network_policy="restricted_egress",
+                )
+            ],
+        )
+    )
+
+    assert result.status == "succeeded"
+    attestation = result.metadata["workload"]["egressAttestation"]
+    assert attestation is not None
+    assert attestation["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+    assert attestation["profileDigest"] == DEFAULT_EGRESS_PROFILE.digest
+    assert attestation["appliedRuleDigest"].startswith("sha256:")
+    assert attestation["validationResult"] == "passed"
+    assert "validatedAt" in attestation
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] == attestation
+
+
+@pytest.mark.asyncio
+async def test_none_network_launch_records_no_egress_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-none-egress" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"ok\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-none-egress",
+            repoDir=str(workspace_root / "task-none-egress" / "repo"),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    assert result.metadata["workload"]["egressAttestation"] is None
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["egressAttestation"] is None

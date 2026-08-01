@@ -773,6 +773,13 @@ RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
 RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH = (
     "run-workflow-headless-remediation-v1"
 )
+# Complete the headless-remediation cutover at the execution boundary. The
+# admission patch above allows a remediation attempt without a canonical
+# checkpoint; older histories that already failed the later materialization
+# guard must retain that failure when replayed.
+RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH = (
+    "run-headless-remediation-execution-v1"
+)
 RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
     "run-managed-session-checkpoint-locator-v1"
 )
@@ -6639,6 +6646,21 @@ class MoonMindRunWorkflow:
             "workspaceIdentityDigest": workspace_identity_digest,
         }
 
+    def _remediation_workspace_materialization_required(
+        self,
+        node: Mapping[str, Any],
+    ) -> bool:
+        """Return whether this execution must prove a restored checkpoint head."""
+
+        if not workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH):
+            return False
+        if not self._is_moonspec_remediation_step(node):
+            return False
+        return not (
+            workflow.patched(RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH)
+            and self._remediation_workspace_head is None
+        )
+
     def _inject_remediation_workspace_baseline(
         self,
         *,
@@ -10853,12 +10875,7 @@ class MoonMindRunWorkflow:
                         boundary="before_execution",
                         updated_at=workflow.now(),
                     )
-                    if (
-                        workflow.patched(
-                            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
-                        )
-                        and self._is_moonspec_remediation_step(node)
-                    ):
+                    if self._remediation_workspace_materialization_required(node):
                         self._validate_remediation_workspace_materialization(
                             node_id
                         )

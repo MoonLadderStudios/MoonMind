@@ -2,4 +2,4 @@
 - [MM-954 workflow-list current-page sort](mm954-workflow-list-current-page-sort.md) — why list sorting is intentionally page-only, not global server-side
 - [Frontend vitest colon-path workaround](frontend-vitest-colon-path-workaround.md) — vitest fails on colon in workspace dir; run from a colon-free copy under /tmp
 - [Omnigent #3507 workspace materialization](omnigent-3507-workspace-materialization.md) — done vs remaining for the normal-workflow workspace path
-- [Omnigent #3514 follow-up retrieval authoring](omnigent-3514-followup-retrieval-authoring.md) — UI→snapshot→gateway flow, tenant default, branch-turn inheritance
+- [Omnigent #3561 publication semantics](omnigent-3561-publication-semantics.md) — publication/saved-work/recovery proof + unified authority-chain evidence through the Omnigent path

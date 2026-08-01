@@ -176,6 +176,17 @@ def test_launch_session_timeout_budget_covers_cold_sidecar_startup():
     assert route.heartbeat_required is True
     assert route.retries.max_attempts == 3
 
+def test_managed_status_timeout_budget_covers_worker_fleet_rollout():
+    catalog = build_default_activity_catalog()
+
+    route = catalog.resolve_activity("agent_runtime.status")
+
+    assert route.timeouts.start_to_close_seconds == 60
+    assert route.timeouts.schedule_to_close_seconds == 600
+    assert route.timeouts.heartbeat_timeout_seconds == 30
+    assert route.heartbeat_required is True
+    assert route.retries.max_attempts == 2
+
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     catalog = build_default_activity_catalog()
 

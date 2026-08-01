@@ -20,6 +20,13 @@ from moonmind.schemas.workload_models import (
     WorkloadResourceOverrides,
     WorkloadResult,
 )
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_NETWORK_REF,
+    EgressAttestation,
+    attest_docker_egress,
+    restricted_proxy_env,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
@@ -223,6 +230,35 @@ def _workload_command_args(
             return [workload_command[0]]
         return [shlex.join(workload_command)]
     return list(workload_command)
+
+
+def _profile_network_args(network_policy: str) -> tuple[str, list[str]]:
+    if network_policy == "none":
+        return "none", []
+    if network_policy == "restricted_egress":
+        args = [
+            "--label",
+            f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}",
+            "--label",
+            f"moonmind.egress.profile_digest={DEFAULT_EGRESS_PROFILE.digest}",
+        ]
+        for value in restricted_proxy_env():
+            args.extend(("--env", value))
+        return EGRESS_NETWORK_REF, args
+    if network_policy == "docker_proxy":
+        return (
+            os.environ.get(
+                "MOONMIND_DOCKER_PROXY_NETWORK",
+                "moonmind_docker-proxy-network",
+            ),
+            [],
+        )
+    if network_policy == "pentest_approved_lab":
+        raise DockerWorkloadLauncherError(
+            "pentest_approved_lab requires a target-specific reviewed egress "
+            "profile before launch"
+        )
+    raise DockerWorkloadLauncherError("unsupported workload network policy")
 
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
     normalized = posixpath.normpath(path)
@@ -776,6 +812,45 @@ class DockerWorkloadLauncher:
         )
         self._helper_leases: dict[str, _ConcurrencyLease] = {}
 
+    async def _attest_egress_before_launch(
+        self, request: ValidatedWorkloadRequest
+    ) -> EgressAttestation | None:
+        """Fail closed at the shared process-creation boundary.
+
+        Argument construction is deliberately side-effect free, but a
+        restricted-egress profile must not become a Docker process based on
+        declared network metadata alone. Both one-shot and helper launches
+        pass this boundary.
+
+        The proven attestation is returned to the caller so each workload
+        lifecycle can publish its durable evidence (profile/applied-rule digest
+        and validation time) instead of discarding it.
+        """
+
+        if (
+            request.profile is None
+            or request.profile.network_policy != "restricted_egress"
+        ):
+            return None
+
+        async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:
+            stdout, stderr, code = await self._janitor._run_control(args)
+            return code, stdout, stderr
+
+        return await attest_docker_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref="docker-workload-launcher",
+        )
+
+    @staticmethod
+    def _egress_attestation_evidence(
+        egress_attestation: EgressAttestation | None,
+    ) -> dict[str, object] | None:
+        if egress_attestation is None:
+            return None
+        return egress_attestation.model_dump(by_alias=True, mode="json")
+
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
         _ensure_paths_are_mounted(request)
         profile = request.profile
@@ -785,6 +860,7 @@ class DockerWorkloadLauncher:
                 docker_binary=self._docker_binary,
                 request=request,
             )
+        network_ref, egress_args = _profile_network_args(profile.network_policy)
         args = [
             self._docker_binary,
             "run",
@@ -793,8 +869,9 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network_ref,
             *structured_container_security_args(),
+            *egress_args,
         ]
 
         for key, value in _operational_labels(request).items():
@@ -838,6 +915,7 @@ class DockerWorkloadLauncher:
                 "start_helper requires a bounded_service runner profile"
             )
         _ensure_paths_are_mounted(request)
+        network_ref, egress_args = _profile_network_args(profile.network_policy)
         args = [
             self._docker_binary,
             "run",
@@ -847,8 +925,9 @@ class DockerWorkloadLauncher:
             "--workdir",
             workload.repo_dir,
             "--network",
-            profile.network_policy,
+            network_ref,
             *structured_container_security_args(),
+            *egress_args,
         ]
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])
@@ -894,8 +973,10 @@ class DockerWorkloadLauncher:
             else _request_timeout_seconds(request)
         )
         lease = await self._concurrency_limiter.acquire(request)
+        egress_attestation: EgressAttestation | None = None
 
         try:
+            egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -998,6 +1079,9 @@ class DockerWorkloadLauncher:
         diagnostics["collectedOutputRefs"] = dict(collected_refs)
         diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
+        egress_evidence = self._egress_attestation_evidence(egress_attestation)
+        diagnostics["egressAttestation"] = egress_evidence
+        workload_metadata["egressAttestation"] = egress_evidence
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -1045,7 +1129,9 @@ class DockerWorkloadLauncher:
     ) -> WorkloadResult:
         started_at = datetime.now(UTC)
         lease = await self._concurrency_limiter.acquire(request)
+        egress_attestation: EgressAttestation | None = None
         try:
+            egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
                 *self.build_helper_run_args(request),
                 stdout=asyncio.subprocess.PIPE,
@@ -1066,6 +1152,7 @@ class DockerWorkloadLauncher:
                         "status": "not_started",
                         "reason": "docker run failed",
                     },
+                    egress_attestation=egress_attestation,
                 )
             self._helper_leases[request.container_name] = lease
             lease = None
@@ -1084,6 +1171,7 @@ class DockerWorkloadLauncher:
             stdout=_decode_stream(stdout),
             stderr=_decode_stream(stderr),
             readiness=readiness,
+            egress_attestation=egress_attestation,
         )
 
     async def stop_helper(
@@ -1192,6 +1280,7 @@ class DockerWorkloadLauncher:
         stderr: str,
         readiness: Mapping[str, object],
         teardown: Mapping[str, object] | None = None,
+        egress_attestation: EgressAttestation | None = None,
     ) -> WorkloadResult:
         duration_seconds = (completed_at - started_at).total_seconds()
         helper_metadata = _helper_metadata(
@@ -1227,6 +1316,9 @@ class DockerWorkloadLauncher:
         diagnostics["collectedOutputRefs"] = dict(collected_refs)
         diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
+        egress_evidence = self._egress_attestation_evidence(egress_attestation)
+        diagnostics["egressAttestation"] = egress_evidence
+        helper_metadata["egressAttestation"] = egress_evidence
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,

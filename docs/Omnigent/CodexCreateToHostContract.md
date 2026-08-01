@@ -30,7 +30,7 @@ harness   = codex-native
 
 `codex-native` is a nested harness choice, never a second top-level agent identity. `omnigent_codex`, caller-authored `session.hostId`, and direct-Codex substitution are invalid.
 
-This document owns the product-to-runtime compilation boundary. Detailed contracts remain owned by [Provider Profiles](../Security/ProviderProfiles.md), [Omnigent Host OAuth](./OmnigentHostOAuth.md), [Omnigent Bridge](./OmnigentBridge.md), [Workspace locators](../Workflows/WorkspaceLocators.md), [Settings System](../Security/SettingsSystem.md), and [Workflow Details Page](../UI/WorkflowDetailsPage.md).
+This document owns the product-to-runtime compilation boundary. Detailed contracts remain owned by [Provider Profiles](../Security/ProviderProfiles.md), [Omnigent Host OAuth](./OmnigentHostOAuth.md), [Omnigent Bridge](./OmnigentBridge.md), [Workspace locators](../Workflows/WorkspaceLocators.md), [Settings System](../Security/SettingsSystem.md), and [Workflow Details Page](../UI/WorkflowDetailsPage.md). The single normative end-to-end sequence, complete failure matrix, and evidence-qualified support state across all of these owners are reconciled in [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
 ## 2. Profile, host, and policy selection
 

@@ -1,21 +1,25 @@
 # Codex via Omnigent Support and Cutover
 
 **Contract version:** `moonmind.codex-omnigent-cutover/v1`
-**Source:** MoonLadderStudios/MoonMind#3518
+**Support-matrix version:** `codex-omnigent-support-matrix/v1`
+**Source:** MoonLadderStudios/MoonMind#3518; protected-row binding MoonLadderStudios/MoonMind#3564 (observations from MoonLadderStudios/MoonMind#3563)
 
 This is the canonical support, compatibility, and retirement policy for Codex
 through Omnigent. “Supported” means repository evidence or a protected live
 artifact independently proves the row. Code presence alone is “implemented” or
 “unverified,” never “supported.” The current release phase is **1 — opt-in**:
 the repository does not contain the complete protected-live acceptance artifact,
-so promotion is fail-closed.
+so promotion is fail-closed. The end-to-end product-path sequence, field
+authority, and complete failure matrix that this support state qualifies are
+reconciled in
+[Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
 ## Compatibility inventory
 
 | Direct Codex surface | Classification | Owner and supported behavior | Evidence contract / control | Removal condition | Rollback implication |
 | --- | --- | --- | --- | --- | --- |
-| Persisted sessions, provenance, event journal, artifacts and checkpoints | required historical-read compatibility | API read model and Workflow Detail render truthful `codex_direct_compat` and legacy evidence without a live worker | historical-read tests plus configured retention inventory; always readable | retention has elapsed and lossless migration or approved archival is proven | never rewrite provider, host, or runner identity |
-| Recorded and in-flight workflow/activity payloads | required in-flight Temporal-history compatibility | Temporal workers retain decoders, activity bindings, and patch behavior needed by supported histories | replay fixtures and mixed-version deployment evidence | no open history can schedule/retry the binding and retention policy permits removal | roll back only to a worker version that replays the same histories |
+| Persisted sessions, provenance, event journal, artifacts and checkpoints | required historical-read compatibility | API read model and Workflow Detail render truthful `codex_direct_compat` and legacy evidence without a live worker | `tests/unit/omnigent/test_direct_compat_historical_reads.py` (pure journal read via `OmnigentBridgeSessionStore.list_event_page`) plus configured retention inventory; always readable | retention has elapsed and lossless migration or approved archival is proven | never rewrite provider, host, or runner identity |
+| Recorded and in-flight workflow/activity payloads | required in-flight Temporal-history compatibility | Temporal workers retain decoders, activity bindings, and patch behavior needed by supported histories | `tests/unit/workflows/temporal/test_run_replayer.py::test_github_3518_cutover_runtime_parameter_histories_replay` replays pre-/post-cutover start payloads on one current worker; `::test_github_3518_cutover_selection_never_runs_inside_workflow_code` keeps selection at the submission boundary | no open history can schedule/retry the binding and retention policy permits removal | roll back only to a worker version that replays the same histories |
 | `moonmind.codex_direct_compat.v1` event producer | temporary bridge-event compatibility producer | direct managed-session adapter emits normalized events with direct provenance; it is not Omnigent | explicit `parameters.communication.mode=omnigent_bridge`; parity and deduplication tests | profile-bound Omnigent coverage, projection parity, historical retention, and no schedulable compatibility activity | retain while rollback can restore direct launch |
 | Explicit direct Codex selection | operator-selectable fallback during a bounded migration window | workflow compiler schedules direct only when the operator selected it or an explicit automatic strategy records `selectedPath` and `fallbackReason` | rollout phases 1–4; no implicit fallback from explicit Omnigent | phase 5 promotion evidence passes | phase rollback restores selection for new work without changing existing run snapshots |
 | Direct/Omnigent comparison fixtures | test fixture/comparison substrate | conformance owners retain bounded fixtures and `dual_write` comparison diagnostics | hermetic conformance and replay suites | may be archived after direct retirement; keep minimal historical decoder fixtures | no production scheduling authority |
@@ -83,18 +87,62 @@ changes only future default selection and never rewrites existing run evidence.
 
 ## Support and conformance matrix v1
 
-The stable machine-readable row inventory is
-`moonmind.omnigent.cutover_conformance.REQUIRED_MATRIX_ROWS`. Protected-live
-owners publish one passing
-`moonmind.codex-omnigent-cutover-artifact/v1` document for each required
-evidence kind, with disjoint `matrixRows`. Run
-`tools/build_codex_omnigent_cutover_evidence.py --release RELEASE.json
+The stable machine-readable row inventory is the versioned catalog
+`moonmind.omnigent.cutover.REQUIRED_ROW_CATALOG` (support-matrix version
+`codex-omnigent-support-matrix/v1`). Each `MatrixRow` binds one protected row
+to exactly one owning evidence kind and the host modes and runtime provenances
+under which it may be observed; `REQUIRED_MATRIX_ROWS` is its ordered row-ID
+projection. Row ownership is fixed by this catalog, never by a caller-supplied
+list.
+
+Protected-live owners (MoonLadderStudios/MoonMind#3563) publish one passing
+`moonmind.codex-omnigent-cutover-artifact/v2` document for each required
+evidence kind. Every artifact declares a `producerVersion` and a `rows` array
+of observed-evidence objects; each object carries the owned `row`, `hostMode`,
+`architecture`, immutable `images`, `profileVersion`/`profileSha256`,
+`launchPolicyVersion`, `agentProfileVersion`, `runtimeProvenance`, `observedResult`,
+and `secretScan`. The `secretScan` is per-channel evidence, not a self-asserted
+string: it maps every required conformance evidence channel (`logs`,
+`temporalHistory`, `screenshots`, `archives`) to a `{status: "passed",
+evidenceRef}` object bound to a resolvable ref, mirroring
+`moonmind.omnigent.conformance.build_report`.
+`moonmind.omnigent.cutover.validate_matrix_artifact` rejects
+any artifact whose rows are unknown, foreign to the artifact's kind, observed
+on the wrong host mode or runtime provenance, produced for different images or
+profile/policy/agent-profile versions, carrying a self-asserted or incomplete
+secret scan, or not observed as `passed`. Architecture membership is not enough:
+when the release declares more than one architecture, each owned row must carry
+its own passing observation for **every** released architecture, or the row is
+left unproven and promotion fails closed. A bare `passed` boolean or a
+self-declared row name is never sufficient.
+
+Run `tools/build_codex_omnigent_cutover_evidence.py --release RELEASE.json
 --artifact ARTIFACT.json ... --output promotion.json` to assemble the mounted
-promotion document. The builder fails on a missing row or kind, failed
-artifact, duplicate ownership, incomplete telemetry, or failed threshold and
-derives every artifact URI and SHA-256 digest from deployment-local bytes.
-Generating the document does not turn a pending matrix row into supported
-evidence; its owning artifact must contain the protected observed result.
+promotion document. `RELEASE.json` supplies the immutable images, architecture,
+`launchPolicyVersion`, `agentProfileVersion`, telemetry, and thresholds; the builder
+derives the pass booleans, owned rows, `matrixRows`, evidence URIs, and SHA-256
+digests from the validated observed evidence. It fails on a missing row or
+kind, an artifact that fails per-row validation, duplicate ownership, incomplete
+telemetry, or a failed threshold. Generating the document does not turn a
+pending matrix row into supported evidence; its owning artifact must contain the
+protected observed result.
+
+At promotion time the launch-authority boundary
+(`moonmind.omnigent.cutover.effective_phase`) independently re-resolves every
+manifest ref, binds its bytes to the recorded digest, **and re-parses each
+artifact to re-validate its observed per-row evidence** against the promotion
+document's declared images, architectures, and profile/policy/agent-profile
+versions. It also binds each evidence kind to exactly one artifact: two
+digest-valid artifacts that share a kind but own disjoint rows are rejected as
+split coverage before their rows are unioned, so a hand-authored document cannot
+splice partial results from separate runs into apparent completeness. Digest
+integrity alone never authorizes a phase: a self-asserted, mismatched,
+incomplete, split-kind, or coverage-short artifact leaves the affected rows
+unsupported and the effective phase at the deployed phase. The release-status
+projection additionally publishes the support-matrix version
+(`matrixVersion`), covered `matrixRows`, `launchPolicyVersion`, and
+`agentProfileVersion` alongside the evidence generation, expiry, image digests,
+and architecture already recorded there.
 
 | Capability | Mode(s) | Status | Independently resolvable evidence / gate |
 | --- | --- | --- | --- |
@@ -112,7 +160,7 @@ evidence; its owning artifact must contain the protected observed result.
 | Persistent policy and agent-profile UI | immutable selected versions | partial; unsupported as a complete matrix | persisted policy/profile UI and snapshot evidence required |
 | Enforced egress | host/runtime boundary | partial; unsupported | enforcement and denial evidence required; declarations alone do not qualify |
 | Architecture and images | `linux/amd64`; digest-pinned server/host | amd64 evidence contract implemented; other architectures unsupported until proven | `moonmind/omnigent/conformance.py`; each supported architecture requires immutable-image live evidence |
-| Direct runtime reads and fallback | historical read; phases 1–4 explicit fallback | compatibility supported; retirement gated | [`OmnigentBridge.md`](./OmnigentBridge.md), direct projection/replay tests, compatibility inventory above |
+| Direct runtime reads and fallback | historical read; phases 1–4 explicit fallback | compatibility supported; retirement gated | [`OmnigentBridge.md`](./OmnigentBridge.md), `tests/unit/omnigent/test_direct_compat_historical_reads.py`, `tests/unit/workflows/temporal/test_run_replayer.py` cutover replay tests, compatibility inventory above |
 
 ## Release thresholds and telemetry
 

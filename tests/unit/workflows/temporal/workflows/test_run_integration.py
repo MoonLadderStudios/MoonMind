@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
@@ -4108,6 +4109,62 @@ async def test_dynamic_verifier_admits_headless_attempt_without_checkpoint(
     assert decision_payload["reason"] == "verification_requested_remediation"
     assert decision_payload["nextAttempt"] == 1
     assert decision_payload["nextPhase"] == "remediation_pending"
+
+
+def test_headless_remediation_execution_skips_checkpoint_materialization_guard(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the five headless remediation failures on 2026-07-30."""
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+            RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
+        },
+    )
+    mock_run_workflow._remediation_workspace_head = None
+    node = {
+        "id": "remediation-1",
+        "annotations": {"issueImplementRole": "moonspec-remediation"},
+    }
+
+    assert not mock_run_workflow._remediation_workspace_materialization_required(
+        node
+    )
+
+
+def test_headless_remediation_execution_replays_prior_guard_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+        },
+    )
+    mock_run_workflow._remediation_workspace_head = None
+    node = {
+        "id": "remediation-1",
+        "annotations": {"issueImplementRole": "moonspec-remediation"},
+    }
+
+    assert mock_run_workflow._remediation_workspace_materialization_required(node)
+    with pytest.raises(
+        RemediationHeadError,
+        match="remediation workspace was not checkpointed before execution",
+    ):
+        mock_run_workflow._validate_remediation_workspace_materialization(
+            "remediation-1"
+        )
 
 
 @pytest.mark.asyncio
