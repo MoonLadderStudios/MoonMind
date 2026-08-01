@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -1057,11 +1058,12 @@ class OmnigentOAuthHostRuntime:
                     workspace,
                     attachment_refs=attachment_refs,
                     artifact_gateway=artifact_gateway,
+                    workflow_id=current_workflow_id,
                 )
                 if attachment_evidence:
                     materialization["attachments"] = attachment_evidence
                 record_store.mark_materialized(locator.workspace_id)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 denial = self._workspace_denial_evidence(
                     locator=locator,
                     expected_id=expected_id,
@@ -1213,6 +1215,7 @@ class OmnigentOAuthHostRuntime:
         *,
         attachment_refs: tuple[str, ...],
         artifact_gateway: Any | None,
+        workflow_id: str,
     ) -> list[dict[str, Any]]:
         """Materialize declared input attachments into the workspace.
 
@@ -1224,6 +1227,7 @@ class OmnigentOAuthHostRuntime:
         attachment can never be conflated with a filesystem path.
         """
 
+        self._exclude_materialized_attachments(workspace)
         return await self._materialize_input_bundle(
             workspace,
             refs=attachment_refs,
@@ -1231,7 +1235,25 @@ class OmnigentOAuthHostRuntime:
             subdir="attachments",
             principal=_ATTACHMENT_ARTIFACT_PRINCIPAL,
             noun="attachments",
+            required_workflow_id=workflow_id,
         )
+
+    @staticmethod
+    def _exclude_materialized_attachments(workspace: Path) -> None:
+        """Keep restricted runtime inputs out of repository publication."""
+        info_dir = workspace / ".git" / "info"
+        if not info_dir.is_dir():
+            return
+        exclude_path = info_dir / "exclude"
+        rule = "/.moonmind/attachments/"
+        existing = (
+            exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+        )
+        if rule not in existing.splitlines():
+            with exclude_path.open("a", encoding="utf-8") as stream:
+                if existing and not existing.endswith("\n"):
+                    stream.write("\n")
+                stream.write(f"{rule}\n")
 
     async def _materialize_input_bundle(
         self,
@@ -1242,6 +1264,7 @@ class OmnigentOAuthHostRuntime:
         subdir: str,
         principal: str,
         noun: str,
+        required_workflow_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Materialize a bounded bundle of durable input artifact refs.
 
@@ -1295,13 +1318,23 @@ class OmnigentOAuthHostRuntime:
                     code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
                 )
             await self._reject_oversized_restore_metadata(
-                artifact_service, artifact_id, per_ref_budget, principal
+                artifact_service,
+                artifact_id,
+                per_ref_budget,
+                principal,
+                required_workflow_id=required_workflow_id,
             )
             digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
+            target = bundle_root / digest
+            if target.is_symlink():
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_AUTHORITY_MISMATCH,
+                    f"{noun} target must not be a symlink",
+                )
             written = await self._write_restore_payload(
                 artifact_service,
                 artifact_id=artifact_id,
-                target=bundle_root / digest,
+                target=target,
                 budget_bytes=per_ref_budget,
                 principal=principal,
             )
@@ -1315,6 +1348,7 @@ class OmnigentOAuthHostRuntime:
         artifact_id: str,
         budget_bytes: int,
         principal: str = _RESTORE_ARTIFACT_PRINCIPAL,
+        required_workflow_id: str | None = None,
     ) -> None:
         """Reject an oversized restore artifact from metadata before reading bytes.
 
@@ -1323,6 +1357,11 @@ class OmnigentOAuthHostRuntime:
         """
         get_metadata = getattr(artifact_service, "get_metadata", None)
         if get_metadata is None:
+            if required_workflow_id is not None:
+                raise OmnigentOAuthHostError(
+                    "attachment authorization requires linked artifact metadata",
+                    code=WORKSPACE_AUTHORITY_MISMATCH,
+                )
             return
         try:
             metadata = await get_metadata(
@@ -1330,8 +1369,27 @@ class OmnigentOAuthHostRuntime:
                 principal=principal,
             )
         except TypeError:
+            if required_workflow_id is not None:
+                raise OmnigentOAuthHostError(
+                    "attachment authorization metadata is incompatible",
+                    code=WORKSPACE_AUTHORITY_MISMATCH,
+                )
             return
         artifact = metadata[0] if isinstance(metadata, tuple) else metadata
+        if required_workflow_id is not None:
+            links = (
+                metadata[1]
+                if isinstance(metadata, tuple) and len(metadata) > 1
+                else ()
+            )
+            if not any(
+                str(getattr(link, "workflow_id", "")) == required_workflow_id
+                for link in links
+            ):
+                raise OmnigentOAuthHostError(
+                    "attachment artifact is not linked to the current workflow",
+                    code=WORKSPACE_AUTHORITY_MISMATCH,
+                )
         size_bytes = getattr(artifact, "size_bytes", None)
         if isinstance(size_bytes, int) and size_bytes > budget_bytes:
             raise OmnigentOAuthHostError(
@@ -1358,7 +1416,12 @@ class OmnigentOAuthHostRuntime:
         read_chunks = getattr(artifact_service, "read_chunks", None)
         if read_chunks is not None:
             written = 0
-            with target.open("wb") as stream:
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
                 _artifact, chunks = await read_chunks(
                     artifact_id=artifact_id,
                     principal=principal,
@@ -1386,7 +1449,13 @@ class OmnigentOAuthHostRuntime:
                 "restore input exceeds the authorized workspace bound",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
-        target.write_bytes(payload)
+        descriptor = os.open(
+            target,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
         return len(payload)
 
     @staticmethod
@@ -1513,6 +1582,11 @@ class OmnigentOAuthHostRuntime:
         """
 
         code = str(getattr(error, "code", None) or type(error).__name__)[:96]
+        permanent_codes = {
+            WORKSPACE_AUTHORITY_MISMATCH,
+            WORKSPACE_LOCATOR_UNSUPPORTED,
+            "OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+        }
         return {
             "failedAuthorityClass": "workspace_materialization",
             "locatorKind": locator.kind,
@@ -1520,7 +1594,7 @@ class OmnigentOAuthHostRuntime:
             "relativePath": locator.relative_path,
             "identityVerified": locator.workspace_id == expected_id,
             "reasonCode": code,
-            "retryable": True,
+            "retryable": code not in permanent_codes,
             "ownedPartialStateCreated": bool(owned_partial_state_created),
             "reconciliation": (
                 "rebuild_owned_workspace_on_retry"

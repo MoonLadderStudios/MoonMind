@@ -60,18 +60,21 @@ class SandboxWorkspaceRecordStore:
         finished workspace from a partially built directory left by a prior
         attempt that failed mid-materialization.
         """
-        return self._completion_marker_path(workspace_id).is_file()
+        path = self._completion_marker_path(workspace_id)
+        try:
+            return path.read_text(encoding="utf-8") == "materialized-v2"
+        except OSError:
+            return False
 
     def mark_materialized(self, workspace_id: str) -> None:
         """Record durable evidence that materialization completed."""
         self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._completion_marker_path(workspace_id)
-        try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
+        if self.is_materialized(workspace_id):
             return
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write("materialized")
+            stream.write("materialized-v2")
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)

@@ -860,7 +860,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     metadata={"providerProfileId": profile_id},
                 )
             return result
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
@@ -870,16 +870,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     # materialization was denied: the failed authority class, stable
                     # reason code, whether owned partial state was created, and the
                     # reconciliation requirement for the next retry.
-                    await self._run_store.record_lifecycle_event(
-                        request.idempotency_key,
-                        event_type="workspace_materialization_denied",
-                        status="failed",
-                        event_identity=(
-                            f"{attempt_identity}:workspace_materialization_denied:failed"
-                        ),
+                    await emit(
+                        "workspace_materialization_denied",
+                        "failed",
                         code=code,
                         summary=str(exc),
                         metadata=dict(workspace_denial),
+                        ignore_errors=True,
                     )
                 if isinstance(exc, MountedToolPreflightError):
                     await self._run_store.record_lifecycle_event(
@@ -1286,15 +1283,13 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @classmethod
     def _attachment_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
-        """Declared input attachments authored on the workspace spec.
+        """Return canonical prepared attachment refs from the execution request.
 
         Attachments are durable artifact refs (validated at the owning-worker
         boundary); the ordered, de-duplicated ref list is materialized into the
         authorized workspace alongside the repository and restore inputs.
         """
-        raw = cls._workspace_spec(request).get("attachmentRefs")
-        if not isinstance(raw, (list, tuple)):
-            return ()
+        raw = request.input_refs
         return tuple(
             dict.fromkeys(
                 str(value).strip() for value in raw if str(value).strip()
