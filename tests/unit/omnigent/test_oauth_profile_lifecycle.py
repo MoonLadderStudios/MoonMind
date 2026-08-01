@@ -3126,14 +3126,17 @@ class _FakeArtifactService:
     tests assert the real read contract is honored.
     """
 
-    def __init__(self, payloads: dict[str, bytes]) -> None:
+    def __init__(
+        self, payloads: dict[str, bytes], *, workflow_id: str = "workflow-1"
+    ) -> None:
         self._payloads = payloads
+        self._workflow_id = workflow_id
         self.read_calls: list[dict] = []
 
     async def get_metadata(self, *, artifact_id: str, **_kwargs):
         return (
             SimpleNamespace(size_bytes=len(self._payloads[artifact_id])),
-            [SimpleNamespace(workflow_id="workflow-1")],
+            [SimpleNamespace(workflow_id=self._workflow_id)],
             False,
             None,
         )
@@ -3268,12 +3271,14 @@ async def test_prepare_workspace_rejects_attachment_not_linked_to_workflow(
     source = tmp_path / "source"
     _init_source_repo(source)
     runtime = _runtime_for(tmp_path)
-    service = _FakeArtifactService({"attachments/foreign": b"private"})
+    service = _FakeArtifactService(
+        {"attachments/foreign": b"private"}, workflow_id="foreign-workflow"
+    )
 
     with pytest.raises(OmnigentOAuthHostError) as exc:
         await runtime._prepare_workspace(
             workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
-            current_workflow_id="other-workflow",
+            current_workflow_id="workflow-1",
             current_step_execution_id="step-1",
             repository_source=str(source),
             starting_branch="main",
