@@ -50,7 +50,8 @@ def _args(**overrides: Any) -> Any:
         "priority": 0,
         "package_managers": [],
         "title_regex": (
-            r"^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$"
+            r"^(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+            r".+ from \S+ to \S+(?: in /.+)?$"
         ),
         "include_security_updates": True,
         "max_prs": None,
@@ -124,7 +125,18 @@ def test_title_matches_default_regex() -> None:
     assert module["_title_matches"](
         "chore(deps): bump boto3 from 1.43.46 to 1.43.51", pattern
     )
+    assert module["_title_matches"](
+        "Build(deps): bump ubuntu from 24.04 to 26.04 "
+        "in /docker/actions-runner-control",
+        pattern,
+    )
+    assert module["_title_matches"](
+        "build(deps-dev): bump pytest from 8.0.0 to 9.0.0", pattern
+    )
     assert not module["_title_matches"]("Bump the pip group with 2 updates", pattern)
+    assert not module["_title_matches"](
+        "Deps: bump anthropic from 0.105.2 to 0.107.1", pattern
+    )
     assert not module["_title_matches"]("Refactor things", pattern)
 
 

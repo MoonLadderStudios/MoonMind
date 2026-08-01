@@ -36,7 +36,8 @@ API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 TERMINAL_FAILURE_STATES = {"failed", "canceled", "terminated"}
 DEFAULT_TITLE_REGEX = (
-    r"^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$"
+    r"^(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) "
+    r".+ from \S+ to \S+(?: in /.+)?$"
 )
 LIKELY_VERSION_BUMP_TITLE_REGEX = re.compile(
     r"\bbump\s+.+\s+from\s+\S+\s+to\s+\S+", re.IGNORECASE
@@ -1016,7 +1017,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_TITLE_REGEX,
         help=(
             "Version-bump title matcher (default: Bump <dep> from <old> to <new> "
-            "or Chore(deps): bump <dep> from <old> to <new>)."
+            "or <type>(deps[-dev]): bump <dep> from <old> to <new>)."
         ),
     )
     parser.add_argument(
