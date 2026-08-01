@@ -308,6 +308,38 @@ def test_end_to_end_dry_run_submits_nothing(monkeypatch: Any, tmp_path: Path) ->
     assert not (tmp_path / "artifacts" / "skill_outcome.json").exists()
 
 
+def test_end_to_end_accepts_dependabot_build_scope_title(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    build_scoped_pr = {
+        **_mixed_pr_set()[0],
+        "number": 2419,
+        "title": (
+            "Build(deps): bump ubuntu from 24.04 to 26.04 "
+            "in /docker/actions-runner-control"
+        ),
+        "headRefName": (
+            "dependabot/docker/docker/actions-runner-control/ubuntu-26.04"
+        ),
+        "headRefOid": "build-scope-head-sha",
+    }
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind"],
+        monkeypatch,
+        tmp_path,
+        pr_set=[build_scoped_pr],
+    )
+
+    assert summary["_exit_code"] == 0
+    assert summary["matched"] == 1
+    assert summary["status"] == "queued"
+    assert [item["pr"] for item in summary["queued"]] == [2419]
+    assert summary["diagnostics"]["titleContractDriftPrs"] == []
+
+
 def test_end_to_end_fails_when_default_title_contract_drifts(
     monkeypatch: Any,
     tmp_path: Path,

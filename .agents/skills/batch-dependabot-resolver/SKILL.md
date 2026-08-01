@@ -52,7 +52,7 @@ inputSchema:
     titleRegex:
       type: string
       title: Version-bump title regex
-      default: '^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$'
+      default: '^(?!.* from .* from )(?!.* to .* to )(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) .+ from \S+ to \S+(?: in /.+)?$'
     includeSecurityUpdates:
       type: boolean
       title: Include security updates
@@ -113,10 +113,12 @@ each queued `pr-resolver` child owns its repository publishing outcome.
   `github-actions`. Matched against the Dependabot branch ecosystem segment with alias
   normalization (`npm`↔`npm_and_yarn`, `github-actions`↔`github_actions`). Omit to allow all.
 - `titleRegex` (string, optional): Override for the version-bump title matcher.
-  Default `^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$`
+  Default `^(?!.* from .* from )(?!.* to .* to )(?:Bump|[A-Za-z][A-Za-z0-9_-]*\(deps(?:-dev)?\): bump) .+ from \S+ to \S+(?: in /.+)?$`
   (matches both Dependabot's legacy `Bump anthropic from 0.105.2 to 0.107.1`
-  titles and conventional-commit titles such as `Chore(deps): bump anthropic from
-  0.105.2 to 0.107.1`, including subdirectory suffixes like `in /frontend`).
+  titles and conventional-commit titles whose type is scoped to `deps` or `deps-dev`,
+  such as `Build(deps): bump anthropic from 0.105.2 to 0.107.1`, including
+  subdirectory suffixes like `in /frontend`, while rejecting grouped or edited titles
+  that contain multiple `from ... to ...` update segments).
 - `includeSecurityUpdates` (boolean, optional): Default `true`. When `false`, PRs labeled
   `security` are skipped.
 - `maxPrs` (number, optional): Safety cap on the number of resolver workflows queued per run.
