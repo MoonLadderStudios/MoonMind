@@ -9,6 +9,7 @@ from moonmind.workflows.executions.repository_contract import (
     DEFAULT_GIT_CONNECTION_REF,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
+    RepositoryConnection,
     RepositoryContractError,
     compile_repository_target,
     decode_legacy_repository_history_v1,
@@ -142,6 +143,41 @@ def test_reconciled_connection_is_persisted_and_resolved(tmp_path) -> None:
     assert load_repository_connection(path, DEFAULT_GIT_CONNECTION_REF) == connection
 
 
+def test_lore_connection_persists_trust_projection_and_merge_policy(tmp_path) -> None:
+    path = tmp_path / "connections" / "lore.json"
+    connection = {
+        "schemaVersion": "moonmind.repository-connection.v1",
+        "id": "repository-connection:tactics",
+        "provider": "lore",
+        "displayName": "Tactics Lore",
+        "endpointRef": "lore-endpoint:tactics",
+        "trustBundleRef": "trust-bundle:tactics-ca",
+        "allowedRepositoryIds": ["tactics-id"],
+        "allowedOperations": ["read", "merge_request"],
+        "clientPolicy": {
+            "pinnedVersion": "1.2.3",
+            "compatibleServerVersions": ["2026.08"],
+            "toolBundleRef": "tool-bundle:lore-1.2.3",
+            "executableSha256": "sha256:lore",
+        },
+        "credentialSource": "secret_ref",
+        "projection": {
+            "provider": "github",
+            "repository": "owner/tactics-projection",
+            "authority": "review_only",
+            "statusSourceRef": "projection-status:tactics",
+        },
+        "mergeCoordinator": {
+            "endpointRef": "merge-coordinator:tactics",
+            "policyRef": "merge-policy:protected-main",
+            "supportedProtocolVersion": "v1",
+        },
+    }
+    modeled = RepositoryConnection.model_validate(connection)
+    persist_repository_connection(modeled, path)
+    assert load_repository_connection(path, modeled.id) == modeled
+
+
 def test_resolved_target_freezes_remote_tip_and_client_evidence() -> None:
     target = compile_repository_target(
         {
@@ -155,12 +191,85 @@ def test_resolved_target_freezes_remote_tip_and_client_evidence() -> None:
         clientVersion="2.46.0",
         executableSha256="sha256:git",
     )
+    policy = RepositoryClientPolicy(
+        pinnedVersion="2.46.0",
+        compatibleServerVersions=("2.46",),
+        toolBundleRef="tool-bundle:git-2.46",
+        executableSha256="sha256:git",
+    )
     resolved = materialize_resolved_repository_target(
-        target, observed_revision="abcdef0123456789", evidence=evidence
+        target,
+        observed_revision="abcdef0123456789",
+        evidence=evidence,
+        client_policy=policy,
+        publish_mode="branch",
     )
     assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
     assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
     assert resolved.client_evidence == evidence
+    assert resolved.compatible_server_versions == ("2.46",)
+    assert resolved.base_branch.id == "refs/heads/main"
+    assert resolved.work_branch is not None
+    assert resolved.work_branch.origin == "selected"
+
+
+def test_resolved_exact_revision_is_read_only_without_work_branch() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "lore",
+            "connectionRef": "repository-connection:tactics",
+            "repository": {"name": "tactics-id"},
+            "branch": {"name": "Main"},
+            "revision": {
+                "kind": "lore_revision",
+                "revisionSignature": "lore-revision-123",
+            },
+        }
+    )
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:lore",
+        clientVersion="1.2.3",
+        executableSha256="sha256:lore",
+    )
+    resolved = materialize_resolved_repository_target(
+        target,
+        observed_revision="lore-revision-123",
+        evidence=evidence,
+        branch_id="branch-id-main",
+    )
+    assert resolved.remote_tip_expectation == {"kind": "read_only"}
+    assert resolved.work_branch is None
+    assert resolved.repository.id == "tactics-id"
+    assert resolved.base_branch.id == "branch-id-main"
+    assert resolved.compatible_server_versions == ()
+
+
+def test_resolved_generated_branch_must_not_exist() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    resolved = materialize_resolved_repository_target(
+        target,
+        observed_revision="abcdef0123456789",
+        evidence=evidence,
+        publish_mode="pr",
+        work_branch="feature/mm-1219",
+        work_branch_id="refs/heads/feature/mm-1219",
+        work_branch_origin="generated",
+    )
+    assert resolved.remote_tip_expectation == {"kind": "must_not_exist"}
+    assert resolved.work_branch is not None
+    assert resolved.work_branch.id == "refs/heads/feature/mm-1219"
+    assert resolved.work_branch.origin == "generated"
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -24,6 +24,7 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.executions.repository_contract import (
+    AuthoredLoreRepositoryTarget,
     CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
     REPOSITORY_REMOTE_TIP_MISMATCH,
@@ -67,6 +68,11 @@ _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
 )
 
 logger = logging.getLogger(__name__)
+
+LoreRepositoryReadinessAdapter = Callable[
+    [AuthoredLoreRepositoryTarget, AgentExecutionRequest],
+    Awaitable[ResolvedRepositoryTarget],
+]
 
 _DEFAULT_REPOSITORY_CONNECTION_PATH = Path(
     os.environ.get(
@@ -300,13 +306,15 @@ class ManagedRuntimeLauncher:
         ]
         | None = None,
         repository_client_policy: RepositoryClientPolicy | None = None,
-    ) -> ResolvedRepositoryTarget | None:
+        lore_repository_adapter: LoreRepositoryReadinessAdapter | None = None,
+    ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
         self._repository_client_policy = repository_client_policy
+        self._lore_repository_adapter = lore_repository_adapter
         if repository_client_policy is not None:
             # Worker construction is a deployment startup boundary. Reconcile
             # durably here as well as in the worker factory so alternate worker
@@ -388,10 +396,33 @@ class ManagedRuntimeLauncher:
             # Recorded legacy requests continue through their frozen history path.
             return None
         target = compile_repository_target(raw_target)
-        if (
-            target.provider != "git"
-            or target.connection_ref != DEFAULT_GIT_CONNECTION_REF
-        ):
+        if target.provider == "lore":
+            if self._lore_repository_adapter is None:
+                raise RepositoryContractError(
+                    "LORE_CONNECTION_NOT_READY",
+                    "the selected Lore connection has no configured managed-runtime "
+                    "readiness adapter",
+                )
+            resolved = await self._lore_repository_adapter(target, request)
+            if (
+                resolved.provider != "lore"
+                or resolved.connection_ref != target.connection_ref
+                or resolved.repository.name != target.repository.name
+                or (
+                    target.revision is not None
+                    and getattr(
+                        resolved.prepared_revision, "revision_signature", None
+                    )
+                    != target.revision.revision_signature
+                )
+            ):
+                raise RepositoryContractError(
+                    "LORE_CONNECTION_NOT_READY",
+                    "the Lore adapter returned repository authority that does not "
+                    "match the authored target",
+                )
+            return resolved
+        if target.connection_ref != DEFAULT_GIT_CONNECTION_REF:
             raise RepositoryContractError(
                 "REPOSITORY_CONNECTION_UNAVAILABLE",
                 "the managed-runtime launch boundary has no ready adapter for "
@@ -464,6 +495,29 @@ class ManagedRuntimeLauncher:
             skill_caps = ()
         if not isinstance(tool_caps, (list, tuple)):
             tool_caps = ()
+        work_branch_origin_raw = str(
+            parameters.get("workBranchOrigin") or ""
+        ).strip().lower()
+        allowed_work_branch_origins = {
+            "generated",
+            "selected",
+            "review_mapping",
+            "historical_branch",
+        }
+        if work_branch_origin_raw and (
+            work_branch_origin_raw not in allowed_work_branch_origins
+        ):
+            raise RepositoryContractError(
+                "REPOSITORY_TARGET_INVALID",
+                f"unsupported work branch origin {work_branch_origin_raw!r}",
+            )
+        work_branch_origin = cast(
+            Literal[
+                "generated", "selected", "review_mapping", "historical_branch"
+            ]
+            | None,
+            work_branch_origin_raw or None,
+        )
 
         expected_remote_tip: str | None = None
         if operation != "read":
@@ -520,6 +574,16 @@ class ManagedRuntimeLauncher:
             target,
             observed_revision=observed_revision,
             evidence=observed,
+            client_policy=connection.client_policy,
+            publish_mode=publish_mode,
+            work_branch=(
+                str(parameters.get("workBranch") or "").strip() or None
+            ),
+            work_branch_id=(
+                str(parameters.get("workBranchId") or "").strip() or None
+            ),
+            work_branch_origin=work_branch_origin,
+            projection=connection.projection,
         )
 
     @staticmethod

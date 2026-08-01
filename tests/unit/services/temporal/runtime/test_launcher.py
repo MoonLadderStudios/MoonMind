@@ -14,6 +14,8 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
     RepositoryContractError,
+    compile_repository_target,
+    materialize_resolved_repository_target,
 )
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
@@ -197,6 +199,86 @@ async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_
     assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
     assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
     assert resolved.client_evidence == evidence
+    assert resolved.compatible_server_versions == ()
+
+
+@pytest.mark.asyncio
+async def test_lore_readiness_uses_policy_owned_adapter_and_preserves_exact_identity(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:lore-1.2.3",
+        clientVersion="1.2.3",
+        executableSha256="sha256:lore",
+        serverVersion="2026.08",
+    )
+    target_payload = {
+        "provider": "lore",
+        "connectionRef": "repository-connection:tactics",
+        "repository": {"name": "tactics-id"},
+        "branch": {"name": "Main"},
+        "revision": {
+            "kind": "lore_revision",
+            "revisionSignature": "lore-revision-123",
+        },
+    }
+    adapter = AsyncMock(
+        return_value=materialize_resolved_repository_target(
+            compile_repository_target(target_payload),
+            observed_revision="lore-revision-123",
+            evidence=evidence,
+            client_policy=RepositoryClientPolicy(
+                pinnedVersion="1.2.3",
+                compatibleServerVersions=("2026.08",),
+                toolBundleRef="tool-bundle:lore-1.2.3",
+                executableSha256="sha256:lore",
+            ),
+            repository_id="lore-repository-uuid",
+            branch_id="branch-id-main",
+        )
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        lore_repository_adapter=adapter,
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "tactics-id",
+            "repositoryTarget": target_payload,
+        },
+        parameters={"publishMode": "none"},
+    )
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+
+    assert resolved is not None
+    assert resolved.repository.id == "lore-repository-uuid"
+    assert resolved.prepared_revision.revision_signature == "lore-revision-123"
+    assert resolved.remote_tip_expectation == {"kind": "read_only"}
+    assert resolved.compatible_server_versions == ("2026.08",)
+    adapter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lore_without_configured_adapter_has_structured_readiness_failure(
+    tmp_path,
+):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    request = _make_request(
+        workspace_spec={
+            "repository": "tactics-id",
+            "repositoryTarget": {
+                "provider": "lore",
+                "connectionRef": "repository-connection:tactics",
+                "repository": {"name": "tactics-id"},
+                "branch": {"name": "Main"},
+            },
+        },
+        parameters={"publishMode": "none"},
+    )
+
+    with pytest.raises(RepositoryContractError, match="LORE_CONNECTION_NOT_READY"):
+        await launcher._ensure_repository_ready_for_launch(request, None)
 
 
 @pytest.mark.asyncio

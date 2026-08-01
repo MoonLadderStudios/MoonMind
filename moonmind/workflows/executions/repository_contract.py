@@ -39,6 +39,23 @@ class RepositoryBranch(BaseModel):
     name: str = Field(min_length=1, max_length=400)
 
 
+class ResolvedRepositoryRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: str = Field(min_length=1, max_length=2000)
+    name: str = Field(min_length=1, max_length=2000)
+
+
+class ResolvedRepositoryBranchRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    repository_id: str = Field(alias="repositoryId", min_length=1, max_length=2000)
+    id: str = Field(min_length=1, max_length=1000)
+    name: str = Field(min_length=1, max_length=400)
+
+
+class ResolvedWorkBranchRef(ResolvedRepositoryBranchRef):
+    origin: Literal["generated", "selected", "review_mapping", "historical_branch"]
+
+
 class GitRevision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["git_commit"]
@@ -96,6 +113,23 @@ class RepositoryClientEvidence(BaseModel):
     server_version: str | None = Field(None, alias="serverVersion")
 
 
+class RepositoryProjectionPolicy(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    provider: Literal["github"]
+    repository: str = Field(min_length=1, max_length=2000)
+    authority: Literal["review_only"]
+    status_source_ref: str = Field(alias="statusSourceRef", min_length=1)
+
+
+class RepositoryMergeCoordinatorPolicy(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    endpoint_ref: str = Field(alias="endpointRef", min_length=1)
+    policy_ref: str = Field(alias="policyRef", min_length=1)
+    supported_protocol_version: str = Field(
+        alias="supportedProtocolVersion", min_length=1
+    )
+
+
 class ResolvedRepositoryTarget(BaseModel):
     """Immutable repository identity observed at the pre-mutation boundary."""
 
@@ -105,13 +139,18 @@ class ResolvedRepositoryTarget(BaseModel):
     )
     provider: Literal["git", "lore"]
     connection_ref: str = Field(alias="connectionRef", min_length=1)
-    repository: RepositoryName
+    repository: ResolvedRepositoryRef
     prepared_revision: GitRevision | LoreRevision = Field(alias="preparedRevision")
-    prepared_branch: RepositoryBranch = Field(alias="preparedBranch")
-    base_branch: RepositoryBranch = Field(alias="baseBranch")
-    work_branch: RepositoryBranch = Field(alias="workBranch")
+    prepared_branch: ResolvedRepositoryBranchRef = Field(alias="preparedBranch")
+    base_branch: ResolvedRepositoryBranchRef = Field(alias="baseBranch")
+    work_branch: ResolvedWorkBranchRef | None = Field(None, alias="workBranch")
     remote_tip_expectation: dict[str, Any] = Field(alias="remoteTipExpectation")
     client_evidence: RepositoryClientEvidence = Field(alias="clientEvidence")
+    compatible_server_versions: tuple[str, ...] = Field(
+        default=(), alias="compatibleServerVersions"
+    )
+    authority: Literal["authoritative"] = "authoritative"
+    projection: RepositoryProjectionPolicy | None = None
 
 
 class RepositoryConnection(BaseModel):
@@ -123,6 +162,7 @@ class RepositoryConnection(BaseModel):
     provider: Literal["git", "lore"]
     display_name: str = Field(alias="displayName", min_length=1)
     endpoint_ref: str = Field(alias="endpointRef", min_length=1)
+    trust_bundle_ref: str | None = Field(None, alias="trustBundleRef", min_length=1)
     allowed_repository_ids: tuple[str, ...] = Field(
         default=(), alias="allowedRepositoryIds"
     )
@@ -138,9 +178,28 @@ class RepositoryConnection(BaseModel):
         ...,
     ] = Field(alias="allowedOperations")
     client_policy: RepositoryClientPolicy = Field(alias="clientPolicy")
+    projection: RepositoryProjectionPolicy | None = None
+    merge_coordinator: RepositoryMergeCoordinatorPolicy | None = Field(
+        None, alias="mergeCoordinator"
+    )
     credential_source: Literal[
         "github_resolver", "secret_ref", "trusted_network_development"
     ] = Field(alias="credentialSource")
+
+    @model_validator(mode="after")
+    def _validate_provider_policy(self) -> "RepositoryConnection":
+        if self.provider == "git" and (
+            self.projection is not None or self.merge_coordinator is not None
+        ):
+            raise ValueError("Lore projection and merge policy require provider=lore")
+        if (
+            self.merge_coordinator is not None
+            and "merge_request" not in self.allowed_operations
+        ):
+            raise ValueError(
+                "mergeCoordinator requires the merge_request operation"
+            )
+        return self
 
 
 def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
@@ -246,7 +305,16 @@ def materialize_resolved_repository_target(
     *,
     observed_revision: str,
     evidence: RepositoryClientEvidence,
+    client_policy: RepositoryClientPolicy | None = None,
+    publish_mode: str = "none",
+    repository_id: str | None = None,
+    branch_id: str | None = None,
     work_branch: str | None = None,
+    work_branch_id: str | None = None,
+    work_branch_origin: Literal[
+        "generated", "selected", "review_mapping", "historical_branch"
+    ] | None = None,
+    projection: RepositoryProjectionPolicy | None = None,
 ) -> ResolvedRepositoryTarget:
     """Freeze exact repository and client observations for durable metadata."""
 
@@ -255,26 +323,66 @@ def materialize_resolved_repository_target(
         revision = GitRevision(kind="git_commit", commitSha=observed_revision)
     else:
         revision = LoreRevision(kind="lore_revision", revisionSignature=observed_revision)
+    resolved_repository_id = repository_id or target.repository.name
+    resolved_branch_id = branch_id or (
+        f"refs/heads/{target.branch.name}"
+        if target.provider == "git"
+        else target.branch.name
+    )
     expected_revision: dict[str, Any] = {
         "provider": target.provider,
-        "repositoryId": target.repository.name,
+        "repositoryId": resolved_repository_id,
     }
     if target.provider == "git":
         expected_revision["commitSha"] = observed_revision
     else:
         expected_revision["revisionSignature"] = observed_revision
-    expected = {"kind": "must_equal", "revision": expected_revision}
+    if target.revision is not None:
+        expected: dict[str, Any] = {"kind": "read_only"}
+        resolved_work_branch = None
+    elif work_branch_origin == "generated":
+        expected = {"kind": "must_not_exist"}
+        resolved_work_branch = ResolvedWorkBranchRef(
+            repositoryId=resolved_repository_id,
+            id=work_branch_id or work_branch or "",
+            name=work_branch or "",
+            origin="generated",
+        )
+    else:
+        expected = {"kind": "must_equal", "revision": expected_revision}
+        selected_work_branch = work_branch or (
+            target.branch.name if publish_mode in {"branch", "pr"} else None
+        )
+        resolved_work_branch = (
+            ResolvedWorkBranchRef(
+                repositoryId=resolved_repository_id,
+                id=work_branch_id or resolved_branch_id,
+                name=selected_work_branch,
+                origin=work_branch_origin or "selected",
+            )
+            if selected_work_branch
+            else None
+        )
+    resolved_branch = ResolvedRepositoryBranchRef(
+        repositoryId=resolved_repository_id,
+        id=resolved_branch_id,
+        name=target.branch.name,
+    )
     return ResolvedRepositoryTarget(
         schemaVersion="moonmind.resolved-repository-target.v1",
         provider=target.provider,
         connectionRef=target.connection_ref,
-        repository=target.repository,
+        repository={"id": resolved_repository_id, "name": target.repository.name},
         preparedRevision=revision,
-        preparedBranch=target.branch,
-        baseBranch=target.branch,
-        workBranch={"name": work_branch or target.branch.name},
+        preparedBranch=resolved_branch,
+        baseBranch=resolved_branch,
+        workBranch=resolved_work_branch,
         remoteTipExpectation=expected,
         clientEvidence=evidence,
+        compatibleServerVersions=(
+            client_policy.compatible_server_versions if client_policy else ()
+        ),
+        projection=projection,
     )
 
 
