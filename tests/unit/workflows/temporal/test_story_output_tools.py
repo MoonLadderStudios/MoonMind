@@ -1847,6 +1847,42 @@ async def test_create_github_issue_workflows_from_issue_mappings():
 
 
 @pytest.mark.asyncio
+async def test_create_github_issue_workflow_preserves_merge_automation_publish_shape():
+    creator = _FakeExecutionCreator()
+
+    await create_github_issue_implement_workflows_from_issue_mappings(
+        {
+            "github": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "summary": "Merge automatically",
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "issueNumber": "11",
+                    }
+                ]
+            },
+            "githubOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {"enabled": True},
+                    },
+                }
+            },
+        },
+        execution_creator=creator,
+    )
+
+    workflow = creator.requests[0]["initial_parameters"]["workflow"]
+    assert workflow["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_github_issue_workflows_mark_remaining_after_failure():
     creator = _FakeExecutionCreator(fail_at=2)
 

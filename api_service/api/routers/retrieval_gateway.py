@@ -932,6 +932,26 @@ async def retrieval_capability_diagnostics(
     return registry.status(capability_id)
 
 
+@router.get("/bridge-sessions/{bridge_session_id}/follow-up-retrieval")
+async def bridge_follow_up_retrieval_diagnostics(
+    bridge_session_id: str,
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+) -> Dict[str, object]:
+    """Operator diagnostics for a bridge session's follow-up retrieval activity.
+
+    Returns bounded, secret-free per-capability lifecycle, per-request evidence
+    summaries, and aggregate telemetry for Workflow Detail — never capability
+    tokens or ContextPack bodies. Requires ownership of the bridge's workflow.
+    """
+    await _authorized_bridge_row(
+        bridge_session_id, store=store, user=user, service=service
+    )
+    return registry.summarize_bridge_session(bridge_session_id)
+
+
 @router.get("/capabilities/{capability_id}/results/{tool_call_id}")
 def read_retrieval_result(
     capability_id: str,

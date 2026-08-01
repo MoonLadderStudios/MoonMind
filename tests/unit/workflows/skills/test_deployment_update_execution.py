@@ -20,7 +20,7 @@ from moonmind.workflows.skills.deployment_execution import (
     HostDockerComposeRunner,
     InMemoryDesiredStateStore,
     TemporalDeploymentEvidenceWriter,
-    _command_plan_targeting_services,
+    _command_plan_targeting_stack_services,
     _compose_up_args_for_services,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
@@ -914,12 +914,19 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
         "new-worker",
     )
     assert one_shot_command[-1:] == ("init-db",)
-    assert up_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
+    assert up_command[-6:] == (
+        "postgres",
+        "docker-proxy",
+        "temporal",
+        "temporal-worker-agent-runtime",
+        "api",
+        "new-worker",
+    )
     assert "temporal-worker-deployment-control" not in up_command
     assert "init-db" not in up_command
-    assert "postgres" not in up_command
-    assert "docker-proxy" not in up_command
-    assert "temporal" not in up_command
+    assert "postgres" in up_command
+    assert "docker-proxy" in up_command
+    assert "temporal" in up_command
     assert "-d" not in one_shot_command
     assert "--wait" not in one_shot_command
     assert "--exit-code-from" in one_shot_command
@@ -1120,25 +1127,36 @@ def test_remove_services_from_command_args_preserves_option_values() -> None:
     )
 
 
-def test_targeted_update_plan_skips_compose_dependencies() -> None:
+def test_update_plan_reconciles_configured_infrastructure_without_pulling_it() -> None:
     plan = ComposeCommandPlan(
         runner_mode="privileged_worker",
         pull_args=("docker", "compose", "pull"),
         up_args=("docker", "compose", "up", "-d", "--remove-orphans", "--wait"),
     )
-    targeted = _command_plan_targeting_services(
+    targeted = _command_plan_targeting_stack_services(
         plan,
         before_state={
+            "configuredServices": [
+                "temporal-worker-agent-runtime",
+                "sandbox-egress-proxy",
+            ],
             "configuredServiceImages": {
-                "api": "ghcr.io/moonladderstudios/moonmind:latest",
-                "docker-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+                "temporal-worker-agent-runtime": (
+                    "ghcr.io/moonladderstudios/moonmind:latest"
+                ),
+                "sandbox-egress-proxy": "ubuntu/squid:latest",
             }
         },
         requested_repository="ghcr.io/moonladderstudios/moonmind",
         excluded_services=(),
     )
 
-    assert targeted.pull_args == ("docker", "compose", "pull", "api")
+    assert targeted.pull_args == (
+        "docker",
+        "compose",
+        "pull",
+        "temporal-worker-agent-runtime",
+    )
     assert targeted.up_args == (
         "docker",
         "compose",
@@ -1147,7 +1165,8 @@ def test_targeted_update_plan_skips_compose_dependencies() -> None:
         "--remove-orphans",
         "--wait",
         "--no-deps",
-        "api",
+        "temporal-worker-agent-runtime",
+        "sandbox-egress-proxy",
     )
 
 

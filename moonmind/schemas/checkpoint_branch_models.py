@@ -113,6 +113,13 @@ class CheckpointBranchCreateRequest(BaseModel):
     )
     git_work_branch: str | None = Field(None, alias="gitWorkBranch", max_length=255)
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    # Authored in-session follow-up retrieval override for the branch turn
+    # (MoonMind#3514). Recorded as bounded authored intent and folded into the
+    # branch operation idempotency digest; enforcement inherits the parent run's
+    # compiled policy unless a narrower override is materialized at launch.
+    follow_up_retrieval: dict[str, Any] | None = Field(
+        None, alias="followUpRetrieval"
+    )
 
 
 class CheckpointBranchContinueRequest(BaseModel):
@@ -130,6 +137,10 @@ class CheckpointBranchContinueRequest(BaseModel):
         ..., alias="idempotencyKey", min_length=1, max_length=512
     )
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    # See CheckpointBranchCreateRequest.follow_up_retrieval (MoonMind#3514).
+    follow_up_retrieval: dict[str, Any] | None = Field(
+        None, alias="followUpRetrieval"
+    )
 
 
 class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):

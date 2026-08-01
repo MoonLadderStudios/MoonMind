@@ -582,21 +582,199 @@ class RetrievalCapabilityRegistry:
                          AND lease_expires_at > ?""",
                     (capability_id, now),
                 ).fetchone()["active"]
+            budget = capability.budget
             return {
                 "capabilityId": capability.capability_id,
                 "state": state,
                 "expiresAt": capability.expires_at,
                 "revokedAt": capability.revoked_at,
                 "queryCount": capability.query_count,
-                "maxQueries": capability.budget.max_queries,
+                "maxQueries": budget.max_queries,
                 "activeRequests": active_requests,
-                "maxConcurrency": capability.budget.max_concurrency,
+                "maxConcurrency": budget.max_concurrency,
                 "requestsInCurrentMinute": (
                     rate_row["request_count"] if rate_row is not None else 0
                 ),
-                "maxRequestsPerMinute": capability.budget.max_requests_per_minute,
+                "maxRequestsPerMinute": budget.max_requests_per_minute,
+                "collections": list(budget.collections),
+                "policyVersion": budget.policy_version,
+                "overlayPolicy": budget.overlay_policy,
+                "fallbackAllowed": budget.fallback_allowed,
+                "scope": {
+                    "tenant": budget.tenant_id,
+                    "repository": budget.repository,
+                    "run": budget.run_id,
+                    "workspace": budget.workspace_id,
+                    "step": budget.step_id,
+                },
                 "requests": self._evidence_summaries(capability_id),
             }
+
+    @staticmethod
+    def _delivery_correlation_key(summary: dict[str, Any]) -> str | None:
+        """Return the ``toolCallId`` that ties a delivery update to its request."""
+        delivery = summary.get("delivery")
+        if isinstance(delivery, dict) and delivery.get("toolCallId"):
+            return str(delivery["toolCallId"])
+        correlation = summary.get("correlation")
+        if isinstance(correlation, dict):
+            for key in ("tool_call_id", "toolCallId"):
+                if correlation.get(key):
+                    return str(correlation[key])
+        return None
+
+    @classmethod
+    def _merge_delivery_evidence(
+        cls, requests: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Fold ``delivery_updated`` acknowledgements into their original request.
+
+        A successful retrieval records one evidence row (with a provisional
+        ``delivery_unknown`` state); the bridge's later delivery acknowledgement
+        records a second ``delivery_updated`` row for the same ``toolCallId``.
+        These are two evidence rows for a single logical request, so aggregating
+        them independently would inflate ``requestCount``, double-count the
+        request as both ``delivery_unknown`` and its final delivery outcome, and
+        surface a spurious zero-result request. Project the authoritative delivery
+        update onto the original request and drop the standalone acknowledgement.
+        """
+        merged: list[dict[str, Any]] = []
+        by_key: dict[str, dict[str, Any]] = {}
+        for request in requests:
+            key = cls._delivery_correlation_key(request)
+            if request.get("state") == "delivery_updated":
+                base = by_key.get(key) if key is not None else None
+                if base is not None:
+                    if isinstance(request.get("delivery"), dict):
+                        base["delivery"] = request["delivery"]
+                    continue
+                # Orphan acknowledgement with no retained base request: keep it
+                # once so the delivery outcome is not silently dropped.
+                merged.append(request)
+                continue
+            merged.append(request)
+            if key is not None:
+                by_key[key] = request
+        return merged
+
+    def summarize_bridge_session(self, bridge_session_id: str) -> dict[str, Any]:
+        """Aggregate follow-up retrieval evidence for one bridge session.
+
+        This is the operator-facing diagnostics projection: per-capability
+        lifecycle (active / expired / revoked, budget usage) plus bounded,
+        secret-free aggregate telemetry derived from durable evidence. It never
+        exposes capability tokens; only digests and states already recorded as
+        evidence are surfaced.
+        """
+        bridge_session_id = str(bridge_session_id or "").strip()
+        with self._lock:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT capability_id, budget_json FROM retrieval_capabilities"
+                ).fetchall()
+            capability_ids = []
+            for row in rows:
+                try:
+                    budget = json.loads(row["budget_json"])
+                except (TypeError, ValueError):
+                    continue
+                if str(budget.get("bridge_session_id") or "") == bridge_session_id:
+                    capability_ids.append(row["capability_id"])
+
+            capabilities = [self.status(capability_id) for capability_id in capability_ids]
+
+        aggregate = {
+            "requestCount": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "denied": 0,
+            "empty": 0,
+            "truncated": 0,
+            "fallback": 0,
+            "budgetExhausted": 0,
+            "delivered": 0,
+            "notDelivered": 0,
+            "deliveryUnknown": 0,
+            "cancelled": 0,
+            "timedOut": 0,
+            "totalContextBytes": 0,
+            "maxLatencyMs": 0,
+            "activeCapabilities": 0,
+            "expiredCapabilities": 0,
+            "revokedCapabilities": 0,
+        }
+        budget_exhausted_classes = {
+            "budget_exhausted",
+            "byte_budget_exhausted",
+            "concurrency_exceeded",
+            "rate_exceeded",
+            "source_budget_exhausted",
+            "token_budget_exhausted",
+            "tokens_budget_exhausted",
+        }
+        timeout_classes = {
+            "latency_budget_exhausted",
+            "stage_deadline_exhausted",
+            "latency_ms_budget_exhausted",
+        }
+        for capability in capabilities:
+            state = capability.get("state")
+            if state == "active":
+                aggregate["activeCapabilities"] += 1
+            elif state == "expired":
+                aggregate["expiredCapabilities"] += 1
+            elif state == "revoked":
+                aggregate["revokedCapabilities"] += 1
+            for request in self._merge_delivery_evidence(
+                capability.get("requests", [])
+            ):
+                aggregate["requestCount"] += 1
+                request_state = request.get("state")
+                classification = request.get("classification")
+                result_count = int(request.get("resultCount") or 0)
+                if request_state == "succeeded":
+                    aggregate["succeeded"] += 1
+                    if result_count == 0:
+                        aggregate["empty"] += 1
+                elif request_state == "denied":
+                    aggregate["denied"] += 1
+                elif request_state == "failed":
+                    aggregate["failed"] += 1
+                if request.get("truncated"):
+                    aggregate["truncated"] += 1
+                if classification == "local_fallback" or request.get("fallback"):
+                    aggregate["fallback"] += 1
+                if classification in budget_exhausted_classes:
+                    aggregate["budgetExhausted"] += 1
+                if classification in timeout_classes:
+                    aggregate["timedOut"] += 1
+                aggregate["totalContextBytes"] += int(request.get("contextBytes") or 0)
+                latency = request.get("latencyMs")
+                if isinstance(latency, (int, float)):
+                    aggregate["maxLatencyMs"] = max(
+                        aggregate["maxLatencyMs"], int(latency)
+                    )
+                delivery = request.get("delivery")
+                delivery_state = (
+                    delivery.get("state") if isinstance(delivery, dict) else None
+                )
+                if delivery_state == "delivered":
+                    aggregate["delivered"] += 1
+                elif delivery_state == "not_delivered":
+                    aggregate["notDelivered"] += 1
+                elif delivery_state == "delivery_unknown":
+                    aggregate["deliveryUnknown"] += 1
+                elif delivery_state == "cancelled":
+                    aggregate["cancelled"] += 1
+                elif delivery_state == "timed_out":
+                    aggregate["timedOut"] += 1
+
+        return {
+            "bridgeSessionId": bridge_session_id,
+            "capabilityCount": len(capabilities),
+            "capabilities": capabilities,
+            "aggregate": aggregate,
+        }
 
     def _evidence_summaries(self, capability_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -629,6 +807,8 @@ class RetrievalCapabilityRegistry:
                 "latencyMs": evidence.get("latencyMs"),
                 "delivery": evidence.get("delivery"),
                 "classification": evidence.get("classification"),
+                "truncated": bool(evidence.get("truncated", False)),
+                "contextPackRef": evidence.get("contextPackRef"),
             }
             self._evidence.setdefault(capability.capability_id, []).append(summary)
             with self._connect() as connection:

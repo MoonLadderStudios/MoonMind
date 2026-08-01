@@ -20,6 +20,9 @@ from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
 )
+from moonmind.omnigent.authority_chain import (
+    build_omnigent_authority_chain_evidence,
+)
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
@@ -40,6 +43,18 @@ from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
+)
+from moonmind.omnigent.workspace_intent import (
+    WorkspaceIntentCompilationError,
+    authored_checkout_commit,
+    authored_github_mutation_required,
+    authored_repository_mutation_required,
+    authored_repository_source,
+    authored_required_capabilities,
+    authored_restore_input_refs,
+    authored_starting_branch,
+    authored_target_branch,
+    compile_workspace_intent,
 )
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
@@ -204,10 +219,181 @@ def _bind_candidate_workspace(
     )
 
 
+# Optional positive-integer ceilings an authoring surface may narrow. The
+# retrieval gateway (``_bridge_authoritative_issue``) and the deployment budget
+# snapshot (``_server_policy_snapshot``) clamp any host request against these at
+# issue time, so the compiled block is an *authored* per-run ceiling and can
+# never broaden deployment policy.
+_FOLLOW_UP_RETRIEVAL_INT_FIELDS: tuple[str, ...] = (
+    "topK",
+    "maxSources",
+    "maxQueryBytes",
+    "maxContextBytes",
+    "maxContextTokens",
+    "maxQueries",
+    "latencyMs",
+    "maxConcurrency",
+    "maxRequestsPerMinute",
+    "embeddingTimeoutMs",
+    "searchTimeoutMs",
+    "overlayMaxAgeSeconds",
+    "retentionDays",
+    "maxLifetimeSeconds",
+)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def compile_follow_up_retrieval_policy(
+    policy_snapshot: Mapping[str, Any],
+    parameters: Mapping[str, Any] | None,
+    *,
+    repository: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Compile the runtime ``followUpRetrieval`` block carried by the launch snapshot.
+
+    In-session (follow-up) retrieval grants the host an authorized capability, so
+    it is an authority boundary and stays disabled unless an authoring surface
+    explicitly enables it via ``parameters["followUpRetrieval"]``. Deployment
+    policy (``boundaries.rag``) supplies the default budgets; the gateway and the
+    server budget snapshot enforce the deployment ceilings, so this block is only
+    the authored per-run ceiling and never a broadening of policy.
+    """
+
+    authored: dict[str, Any] = {}
+    if isinstance(parameters, Mapping):
+        raw = parameters.get("followUpRetrieval")
+        if isinstance(raw, Mapping):
+            authored = dict(raw)
+    if authored.get("enabled") is not True:
+        return {"enabled": False}
+
+    rag: dict[str, Any] = {}
+    boundaries = (
+        policy_snapshot.get("boundaries")
+        if isinstance(policy_snapshot, Mapping)
+        else None
+    )
+    if isinstance(boundaries, Mapping) and isinstance(boundaries.get("rag"), Mapping):
+        rag = dict(boundaries["rag"])
+
+    collections = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in authored.get("collections", ())
+            if str(item).strip()
+        )
+    )
+    repository = str(repository or "").strip()
+    tenant_id = str(tenant_id or "").strip()
+    policy_version = (
+        str(policy_snapshot.get("policyRef") or "").strip()
+        if isinstance(policy_snapshot, Mapping)
+        else ""
+    )
+
+    if not (repository and tenant_id and policy_version and collections):
+        # Enabling without a resolvable scope would only yield an auditable 409
+        # from the gateway; keep the capability unavailable with an explicit,
+        # non-fatal reason instead of persisting a broken authority block.
+        return {"enabled": False, "reason": "incomplete_follow_up_retrieval_scope"}
+
+    block: dict[str, Any] = {
+        "enabled": True,
+        "required": bool(authored.get("required", False)),
+        "repository": repository,
+        "tenantId": tenant_id,
+        "policyVersion": policy_version,
+        "collections": collections,
+        "overlayPolicy": (
+            "skip" if str(authored.get("overlayPolicy")) == "skip" else "include"
+        ),
+        "staleOverlayAllowed": bool(authored.get("staleOverlayAllowed", False)),
+        "fallbackAllowed": bool(authored.get("fallbackAllowed", False)),
+    }
+
+    filters = authored.get("filters")
+    if isinstance(filters, Mapping):
+        compiled_filters = {
+            str(key): str(value)
+            for key, value in filters.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if compiled_filters:
+            block["filters"] = compiled_filters
+
+    for field in _FOLLOW_UP_RETRIEVAL_INT_FIELDS:
+        coerced = _coerce_positive_int(authored.get(field))
+        if coerced is not None:
+            block[field] = coerced
+
+    # Clamp the policy-backed budgets to ``boundaries.rag`` so an authored run
+    # override can only ever narrow deployment policy, never broaden it. When the
+    # author omitted the field the policy value becomes the ceiling; when both are
+    # present the tighter (minimum) value wins. The gateway clamps host requests
+    # against deployment *environment* limits, not the selected policy, so the
+    # selected-policy ceiling must be folded in here or a run could receive a
+    # larger retrieval budget than its policy authorizes.
+    for block_field, policy_key in (
+        ("latencyMs", "latencyBudgetMs"),
+        ("maxContextTokens", "tokenBudget"),
+    ):
+        policy_value = _coerce_positive_int(rag.get(policy_key))
+        if policy_value is None:
+            continue
+        authored_value = block.get(block_field)
+        block[block_field] = (
+            min(authored_value, policy_value)
+            if isinstance(authored_value, int)
+            else policy_value
+        )
+
+    return block
+
+
+def enforce_required_follow_up_retrieval(
+    authored_follow_up: Mapping[str, Any] | None,
+    compiled_block: Mapping[str, Any],
+) -> None:
+    """Fail the launch when required follow-up retrieval cannot be made available.
+
+    Follow-up retrieval is an authority boundary. When an operator explicitly
+    enables it with ``required: true`` the advertised guarantee must hold: if the
+    compiled capability is unavailable (for example an incomplete, unresolvable
+    scope), the step must block instead of silently launching with retrieval
+    disabled. Optional retrieval (``required`` unset/false) degrades quietly.
+    """
+
+    if not isinstance(authored_follow_up, Mapping):
+        return
+    if authored_follow_up.get("enabled") is not True:
+        return
+    if not bool(authored_follow_up.get("required")):
+        return
+    if compiled_block.get("enabled") is True:
+        return
+    reason = str(compiled_block.get("reason") or "follow_up_retrieval_unavailable")
+    raise OmnigentOAuthHostError(
+        f"required follow-up retrieval is unavailable: {reason}",
+        code="OMNIGENT_REQUIRED_FOLLOW_UP_RETRIEVAL_UNAVAILABLE",
+    )
+
+
 def _compile_persisted_effective_launch(
     policy_snapshot: Mapping[str, Any],
     *,
     provider_profile_id: str,
+    follow_up_retrieval: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the sole launch carrier from persisted immutable authority."""
 
@@ -265,6 +451,14 @@ def _compile_persisted_effective_launch(
         "boundaries": dict(boundaries),
         "policyAuthority": dict(policy_snapshot),
     }
+    # The retrieval gateway reads follow-up (in-session) retrieval authority from
+    # this top-level block. It must be inside the digest so a mutated capability
+    # policy is rejected by ``validate_effective_launch_snapshot``.
+    payload["followUpRetrieval"] = (
+        dict(follow_up_retrieval)
+        if isinstance(follow_up_retrieval, Mapping)
+        else {"enabled": False}
+    )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
         canonical.encode()
@@ -363,6 +557,14 @@ class OmnigentProfileBoundExecutionCoordinator:
         effective_launch: dict[str, Any] | None = None
         remediation_resolution: Mapping[str, Any] | None = None
         terminal_status = "completed"
+        # Bounded, credential-free evidence accumulated across the run so the
+        # unified authority chain (MoonLadderStudios/MoonMind#3561) can be emitted
+        # once at terminal, covering both success and every failure path.
+        authority_workspace_resolution: Mapping[str, Any] | None = None
+        authority_result: AgentRunResult | None = None
+        authority_bridge_session_id: str | None = None
+        authority_cleanup_mode: str | None = None
+        authority_reasons: list[dict[str, Any]] = []
         try:
             await emit("request_validated", "started")
             if not profile_id:
@@ -464,9 +666,47 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "persisted policy execution profile conflicts with launch selection",
                     code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                 )
+            launch_parameters = (
+                request.parameters if isinstance(request.parameters, dict) else {}
+            )
+            launch_workspace_spec = (
+                request.workspace_spec
+                if isinstance(request.workspace_spec, dict)
+                else {}
+            )
+            authored_follow_up = (
+                launch_parameters.get("followUpRetrieval")
+                if isinstance(launch_parameters.get("followUpRetrieval"), dict)
+                else {}
+            )
+            follow_up_repository = str(
+                authored_follow_up.get("repository")
+                or launch_parameters.get("repository")
+                or launch_workspace_spec.get("repository")
+                or ""
+            ).strip()
+            # MoonMind has no separate tenancy authority today (single-tenant by
+            # default), so fall back to a deployment-configurable tenant rather
+            # than leaving follow-up retrieval permanently unavailable once an
+            # operator opts in. Multi-tenant deployments author an explicit
+            # tenantId, which always takes precedence.
+            follow_up_tenant = str(
+                authored_follow_up.get("tenantId")
+                or launch_parameters.get("tenant")
+                or launch_parameters.get("tenantId")
+                or os.getenv("MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT", "default")
+            ).strip()
+            follow_up_block = compile_follow_up_retrieval_policy(
+                policy_snapshot,
+                launch_parameters,
+                repository=follow_up_repository,
+                tenant_id=follow_up_tenant,
+            )
+            enforce_required_follow_up_retrieval(authored_follow_up, follow_up_block)
             effective_launch = _compile_persisted_effective_launch(
                 policy_snapshot,
                 provider_profile_id=profile_id,
+                follow_up_retrieval=follow_up_block,
             )
             if (
                 self._repository_mutation_required(request)
@@ -547,6 +787,67 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "completed",
                 metadata={"effectiveLaunch": effective_launch},
             )
+            # Compile every normal authoring surface's authored request into one
+            # durable, versioned workspace-intent record before any host binding,
+            # lease, or workspace mutation. Unsafe or inconsistent authored input
+            # (runtime-specific bind paths, Docker authority, arbitrary host ids,
+            # credential-shaped values) fails closed here. Remediation runs carry
+            # a pre-materialized, separately-authorized workspace and are compiled
+            # by their owner, so they are not recompiled here.
+            workspace_intent = None
+            if remediation_resolution is None:
+                current_stage = "workspace_intent_compilation"
+                await emit(current_stage, "started")
+                try:
+                    workspace_intent = compile_workspace_intent(
+                        request,
+                        workflow_id=workflow_id,
+                        step_execution_id=(
+                            step_execution_id or request.idempotency_key
+                        ),
+                        run_id=(
+                            request.step_execution.run_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                        logical_step_id=(
+                            request.step_execution.logical_step_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                    )
+                except WorkspaceIntentCompilationError as exc:
+                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+                # Durable, bounded, credential-free, path-safe compilation
+                # evidence for Workflow Detail. A retry deterministically
+                # reproduces the same intent digest.
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="workspace_intent_compiled",
+                    # Scope the durable event identity to the compiled intent
+                    # digest. A deterministic retry reproduces the same digest and
+                    # deduplicates; a conflicting resubmission under the same
+                    # idempotency key (changed repository, branch, locator, or
+                    # authority) produces a distinct digest and is recorded as a
+                    # new event instead of silently retaining the stale evidence.
+                    event_identity=(
+                        f"workspace_intent_compiled:{workspace_intent.intent_digest}"
+                    ),
+                    metadata=workspace_intent.evidence(),
+                )
+                await emit(
+                    current_stage,
+                    "completed",
+                    metadata={
+                        "workspaceIntentDigest": workspace_intent.intent_digest,
+                        "workspaceIntentSchemaVersion": (
+                            workspace_intent.schema_version
+                        ),
+                        "locatorKind": workspace_intent.workspace_locator.kind,
+                        "repositoryMutation": workspace_intent.repository_mutation,
+                        "publishMode": workspace_intent.publish_mode,
+                    },
+                )
             owner_id = deterministic_lease_owner_id(
                 profile_id=profile_id,
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
@@ -646,6 +947,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 omnigent_host_id=binding.static_host_id,
                 effective_launch_snapshot=effective_launch,
             )
+            authority_bridge_session_id = str(
+                getattr(bridge, "bridge_session_id", "") or ""
+            ) or None
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -664,7 +968,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workspace_locator=(
                     remediation_resolution.get("workspaceLocator")
                     if remediation_resolution is not None
-                    else self._workspace_locator(request)
+                    else workspace_intent.workspace_locator_payload()
                 ),
                 current_workflow_id=workflow_id,
                 current_step_execution_id=(
@@ -686,27 +990,32 @@ class OmnigentProfileBoundExecutionCoordinator:
                 repository_source=(
                     ""
                     if remediation_resolution is not None
-                    else self._repository_source(request)
+                    else (workspace_intent.repository or "")
                 ),
                 starting_branch=(
                     None
                     if remediation_resolution is not None
-                    else self._starting_branch(request)
+                    else workspace_intent.starting_branch
                 ),
                 target_branch=(
                     None
                     if remediation_resolution is not None
-                    else self._target_branch(request)
+                    else workspace_intent.target_branch
                 ),
                 checkout_commit=(
                     None
                     if remediation_resolution is not None
-                    else self._checkout_commit(request)
+                    else workspace_intent.checkout_commit
                 ),
+                # Host artifact materialization accepts only ``artifact://``
+                # restore inputs. The compiler already partitioned provider
+                # external-state refs into ``external_state_refs``; forward only
+                # the artifact-backed restore refs so a checkpoint/continuation
+                # carrying an external-state ref is not rejected before launch.
                 restore_input_refs=(
                     ()
                     if remediation_resolution is not None
-                    else self._restore_input_refs(request)
+                    else tuple(workspace_intent.restore_input_refs)
                 ),
                 # A remediation workspace is already materialized with its own
                 # inputs; only fresh normal runs project declared attachments
@@ -719,6 +1028,11 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")
+            authority_workspace_resolution = (
+                dict(workspace_resolution)
+                if isinstance(workspace_resolution, Mapping)
+                else None
+            )
             if isinstance(workspace_resolution, Mapping) and workspace_resolution:
                 # Durable, bounded, credential-free evidence of which workspace was
                 # resolved and how it was materialized, for Workflow Detail.
@@ -826,9 +1140,35 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            authority_result = result
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"
             terminal_status = result_status
+            if result_failed:
+                # The runner returned a failed ``AgentRunResult`` instead of
+                # raising, so the exception path never runs. Carry the provider
+                # failure code, class, and remediation into the unified authority
+                # chain; otherwise ``harvestState="failed"`` would surface with an
+                # empty reasons list, dropping evidence already on the result.
+                authority_reasons.append(
+                    {
+                        "stage": "resource_harvest",
+                        "code": (
+                            result.provider_error_code
+                            or (
+                                str(result.failure_class)
+                                if result.failure_class
+                                else "provider_run_failed"
+                            )
+                        ),
+                        "failureClass": (
+                            str(result.failure_class)
+                            if result.failure_class
+                            else None
+                        ),
+                        "remediationAction": result.retry_recommendation or None,
+                    }
+                )
             await emit("first_message_prepare", result_status)
             await emit("first_message_post", result_status)
             await emit(
@@ -864,6 +1204,14 @@ class OmnigentProfileBoundExecutionCoordinator:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
+                authority_reasons.append(
+                    {
+                        "stage": current_stage,
+                        "code": code,
+                        "failureClass": failure_class,
+                        "remediationAction": remediation,
+                    }
+                )
                 workspace_denial = getattr(exc, "workspace_denial_evidence", None)
                 if isinstance(workspace_denial, Mapping) and workspace_denial:
                     # Durable, bounded, credential-free evidence that a workspace
@@ -914,6 +1262,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         if binding.host_launch_profile_ref
                         else "static_drain"
                     )
+                    authority_cleanup_mode = cleanup_mode
                     await emit(
                         "host_cleanup",
                         "started",
@@ -957,6 +1306,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                         # Preserve the primary cleanup failure when best-effort
                         # persistence of that failure also becomes unavailable.
                         pass
+                    authority_reasons.append(
+                        {
+                            "stage": "host_cleanup",
+                            "code": type(cleanup_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
                     await emit(
                         "host_cleanup",
                         "failed",
@@ -1013,15 +1370,110 @@ class OmnigentProfileBoundExecutionCoordinator:
                         metadata={"leaseReleased": False, "janitorRequired": True},
                         ignore_errors=True,
                     )
+            janitor_required = provider_lease is not None and not lease_released
+            # Emit the single unified, bounded, credential-free authority chain
+            # (MoonLadderStudios/MoonMind#3561) before terminal so Workflow Detail
+            # exposes one workspace -> runtime -> publication -> terminal ->
+            # cleanup -> lease projection for both success and failure paths.
+            try:
+                release_ordering: list[str] = []
+                if host_lease is not None:
+                    release_ordering.append(
+                        "host_cleanup_completed"
+                        if safe_to_release_provider
+                        else "host_cleanup_incomplete"
+                    )
+                if provider_lease is not None:
+                    release_ordering.append(
+                        "provider_lease_released"
+                        if lease_released
+                        else "provider_lease_release_deferred"
+                    )
+                release_ordering.append("terminal")
+                if janitor_required:
+                    authority_reasons.append(
+                        {
+                            "stage": "profile_lease_release",
+                            "code": "credential_cleanup_incomplete",
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
+                authorization_evidence: dict[str, Any] = {}
+                if profile_id:
+                    authorization_evidence["providerProfileId"] = profile_id
+                if provider_lease is not None:
+                    authorization_evidence["providerLeaseRef"] = provider_lease.lease_id
+                if binding is not None:
+                    authorization_evidence["hostBindingRef"] = binding.binding_ref
+                    authorization_evidence["endpointRef"] = binding.endpoint_ref
+                if host_lease is not None:
+                    authorization_evidence["hostLeaseRef"] = host_lease.lease_id
+                    authorization_evidence["credentialGeneration"] = (
+                        host_lease.credential_generation
+                    )
+                    if host_lease.omnigent_host_id:
+                        authorization_evidence["omnigentHostId"] = (
+                            host_lease.omnigent_host_id
+                        )
+                if effective_launch is not None:
+                    authorization_evidence["effectiveLaunchRef"] = str(
+                        effective_launch.get("snapshotRef") or ""
+                    )
+                if authority_bridge_session_id:
+                    authorization_evidence["bridgeSessionId"] = (
+                        authority_bridge_session_id
+                    )
+                authority_chain = build_omnigent_authority_chain_evidence(
+                    effective_launch=effective_launch,
+                    workspace_resolution=authority_workspace_resolution,
+                    repository=self._repository_source(request) or None,
+                    source_branch=self._starting_branch(request),
+                    output_branch=self._target_branch(request),
+                    publish_mode=str(
+                        (request.parameters or {}).get("publishMode") or "none"
+                    ),
+                    required_capabilities=self._required_capabilities(request),
+                    repository_mutation_required=self._repository_mutation_required(
+                        request
+                    ),
+                    github_mutation_required=self._github_mutation_required(request),
+                    profile_authorization=authorization_evidence,
+                    result_output_refs=(
+                        authority_result.output_refs
+                        if authority_result is not None
+                        else ()
+                    ),
+                    result_metadata=(
+                        authority_result.metadata
+                        if authority_result is not None
+                        else None
+                    ),
+                    terminal_status=terminal_status,
+                    cleanup_mode=authority_cleanup_mode,
+                    cleanup_completed=safe_to_release_provider,
+                    lease_released=lease_released,
+                    janitor_required=janitor_required,
+                    release_ordering=release_ordering,
+                    reasons=authority_reasons,
+                )
+                await emit(
+                    "authority_chain",
+                    "completed",
+                    metadata={"authorityChain": authority_chain},
+                    ignore_errors=True,
+                )
+            except Exception:
+                # Bounded evidence is best-effort and must never mask the primary
+                # run outcome or its terminal record.
+                pass
             await emit(
                 "terminal",
                 terminal_status,
                 metadata={
                     "cleanupCompleted": safe_to_release_provider,
                     "leaseReleased": lease_released,
-                    "janitorRequired": (
-                        provider_lease is not None and not lease_released
-                    ),
+                    "janitorRequired": janitor_required,
                 },
                 ignore_errors=True,
             )
@@ -1207,79 +1659,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                 policy_ref
             )
 
-    @staticmethod
-    def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:
-        if request.remediation_workspace is not None:
-            binding = RemediationWorkspaceBinding.model_validate(
-                request.remediation_workspace
-            )
-            return binding.destination_workspace_locator.model_dump(
-                by_alias=True, mode="json"
-            )
-        locator = request.workspace_spec.get("workspaceLocator")
-        if not isinstance(locator, Mapping):
-            raise OmnigentOAuthHostError(
-                "profile-bound Omnigent execution requires workspaceSpec.workspaceLocator",
-                code="WORKSPACE_LOCATOR_REQUIRED",
-            )
-        return dict(locator)
-
-    @staticmethod
-    def _workspace_spec(request: AgentExecutionRequest) -> Mapping[str, Any]:
-        spec = request.workspace_spec
-        return spec if isinstance(spec, Mapping) else {}
-
     @classmethod
     def _repository_source(cls, request: AgentExecutionRequest) -> str:
-        spec = cls._workspace_spec(request)
-        parameters = request.parameters or {}
-        for candidate in (
-            spec.get("repository"),
-            spec.get("repo"),
-            parameters.get("repository"),
-        ):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return ""
+        return authored_repository_source(request)
 
     @classmethod
     def _starting_branch(cls, request: AgentExecutionRequest) -> str | None:
-        spec = cls._workspace_spec(request)
-        for candidate in (
-            spec.get("startingBranch"),
-            spec.get("branch"),
-            spec.get("baseBranch"),
-        ):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return None
+        return authored_starting_branch(request)
 
     @classmethod
     def _target_branch(cls, request: AgentExecutionRequest) -> str | None:
-        value = str(cls._workspace_spec(request).get("targetBranch") or "").strip()
-        return value or None
+        return authored_target_branch(request)
 
     @classmethod
     def _checkout_commit(cls, request: AgentExecutionRequest) -> str | None:
-        spec = cls._workspace_spec(request)
-        for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
-            value = str(candidate or "").strip()
-            if value:
-                return value
-        return None
+        return authored_checkout_commit(request)
 
     @classmethod
     def _restore_input_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
-        raw = cls._workspace_spec(request).get("restoreInputRefs")
-        if not isinstance(raw, (list, tuple)):
-            return ()
-        return tuple(
-            dict.fromkeys(
-                str(value).strip() for value in raw if str(value).strip()
-            )
-        )
+        return authored_restore_input_refs(request)
 
     @classmethod
     def _attachment_refs(cls, request: AgentExecutionRequest) -> tuple[str, ...]:
@@ -1308,14 +1706,7 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:
-        raw = (request.parameters or {}).get("requiredCapabilities")
-        if not isinstance(raw, list):
-            return ()
-        return tuple(
-            dict.fromkeys(
-                str(value).strip().lower() for value in raw if str(value).strip()
-            )
-        )
+        return authored_required_capabilities(request)
 
     @classmethod
     async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
@@ -1368,38 +1759,11 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _github_mutation_required(request: AgentExecutionRequest) -> bool:
-        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
-            request
-        ):
-            return False
-        parameters = request.parameters or {}
-        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
-        if publish_mode not in {"", "none"}:
-            return True
-        skill = parameters.get("skill")
-        if not isinstance(skill, Mapping):
-            return False
-        side_effect = skill.get("sideEffect")
-        return isinstance(side_effect, Mapping) and bool(
-            str(side_effect.get("kind") or "").strip()
-        )
+        return authored_github_mutation_required(request)
 
     @staticmethod
     def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
-        parameters = request.parameters or {}
-        if bool(parameters.get("repositoryMutationRequired")):
-            return True
-        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
-        if publish_mode not in {"", "none"}:
-            return True
-        skill = parameters.get("skill")
-        if isinstance(skill, Mapping):
-            side_effect = skill.get("sideEffect")
-            if isinstance(side_effect, Mapping) and str(
-                side_effect.get("kind") or ""
-            ).strip():
-                return True
-        return False
+        return authored_repository_mutation_required(request)
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-For **Codex via Omnigent**, the runtime label, lifecycle stages, safe refs, controls, terminal envelope, and post-cleanup evidence are defined by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md).
+For **Codex via Omnigent** (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`), the runtime label, lifecycle stages, safe refs, controls, terminal envelope, and post-cleanup evidence are defined by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md).
 
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
 

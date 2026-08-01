@@ -1,0 +1,12 @@
+{
+  "pullServices": [
+    "temporal-worker-agent-runtime"
+  ],
+  "reconciliationServices": [
+    "temporal-worker-agent-runtime",
+    "sandbox-egress-proxy"
+  ],
+  "excludedServices": [
+    "temporal-worker-deployment-control"
+  ]
+}
