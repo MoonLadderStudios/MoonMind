@@ -10,6 +10,7 @@ import {
   explainRetrievalDenials,
   hasAuthoredContextRetrieval,
   parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
 } from './contextRetrievalAuthoring';
 
 const NARROW_CEILINGS: RetrievalCeilings = {
@@ -21,6 +22,16 @@ const NARROW_CEILINGS: RetrievalCeilings = {
 };
 
 describe('contextRetrievalAuthoring', () => {
+  it('uses deployment-provided collection and budget ceilings', () => {
+    const ceilings = retrievalCeilingsFromRuntimeConfig({
+      collections: ['knowledge'],
+      maxQueries: 3,
+      latencyMs: 1200,
+    });
+    expect(ceilings.collections).toEqual(['knowledge']);
+    expect(ceilings.maxQueries.max).toBe(3);
+    expect(ceilings.latencyMs.max).toBe(1200);
+  });
   it('defaults follow-up retrieval to disabled (authority boundary opt-in)', () => {
     const value = defaultContextRetrievalAuthoring();
     expect(value.followUp.enabled).toBe(false);

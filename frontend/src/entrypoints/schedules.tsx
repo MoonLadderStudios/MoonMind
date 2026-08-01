@@ -22,6 +22,7 @@ import {
   type ContextRetrievalAuthoring,
   compileContextRetrievalParameters,
   parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
 } from '../lib/contextRetrievalAuthoring';
 
 const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
@@ -201,6 +202,7 @@ const SchedulesBootDataSchema = z
           })
           .partial()
           .optional(),
+        system: z.object({ retrievalAuthoring: z.record(z.string(), z.unknown()).optional() }).partial().optional(),
       })
       .partial()
       .optional(),
@@ -1017,6 +1019,9 @@ function ScheduleDetailPage({
   onSidebarRetry?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    scheduleBootData(payload)?.dashboardConfig?.system?.retrievalAuthoring,
+  );
   const [isEditing, setIsEditing] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
@@ -1519,6 +1524,7 @@ function ScheduleDetailPage({
                     <summary>Context retrieval (RAG)</summary>
                     <ContextRetrievalControls
                       value={retrieval.value}
+                      ceilings={retrievalCeilings}
                       onChange={(next) => {
                         const targetJson = writeScheduleContextRetrieval(
                           retrieval.parsed,

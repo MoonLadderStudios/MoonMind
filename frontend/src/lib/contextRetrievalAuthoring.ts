@@ -90,6 +90,30 @@ export const DEFAULT_RETRIEVAL_CEILINGS: RetrievalCeilings = {
   allowFallback: true,
 };
 
+/** Convert the server's effective deployment policy into control ceilings. */
+export function retrievalCeilingsFromRuntimeConfig(
+  raw: Record<string, unknown> | null | undefined,
+): RetrievalCeilings {
+  if (!raw) return DEFAULT_RETRIEVAL_CEILINGS;
+  const numeric = (key: string, fallback: NumericCeiling): NumericCeiling => {
+    const value = raw[key];
+    return typeof value === 'number' && Number.isFinite(value)
+      ? { ...fallback, max: Math.min(fallback.max, Math.max(fallback.min, Math.round(value))), default: Math.min(fallback.default, Math.round(value)) }
+      : fallback;
+  };
+  return {
+    ...DEFAULT_RETRIEVAL_CEILINGS,
+    collections: Array.isArray(raw.collections)
+      ? [...new Set(raw.collections.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()))]
+      : DEFAULT_RETRIEVAL_CEILINGS.collections,
+    topK: numeric('topK', DEFAULT_RETRIEVAL_CEILINGS.topK),
+    maxContextTokens: numeric('maxContextTokens', DEFAULT_RETRIEVAL_CEILINGS.maxContextTokens),
+    maxQueries: numeric('maxQueries', DEFAULT_RETRIEVAL_CEILINGS.maxQueries),
+    latencyMs: numeric('latencyMs', DEFAULT_RETRIEVAL_CEILINGS.latencyMs),
+    maxLifetimeSeconds: numeric('maxLifetimeSeconds', DEFAULT_RETRIEVAL_CEILINGS.maxLifetimeSeconds),
+  };
+}
+
 interface BudgetPresetValues {
   topK: number;
   maxContextTokens: number;

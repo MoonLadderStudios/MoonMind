@@ -274,6 +274,9 @@ def build_checkpoint_branch_turn_context_bundle(
         "boundedSummaries": list(raw_context.get("boundedSummaries") or []),
         "builderMetadata": dict(builder_metadata),
     }
+    follow_up_retrieval = raw_context.get("followUpRetrieval")
+    if isinstance(follow_up_retrieval, Mapping):
+        bundle["followUpRetrieval"] = dict(follow_up_retrieval)
     _reject_forbidden_context_content(bundle)
     return bundle
 

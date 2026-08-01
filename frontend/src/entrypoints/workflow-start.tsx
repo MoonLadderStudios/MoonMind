@@ -41,6 +41,7 @@ import {
   defaultContextRetrievalAuthoring,
   hasAuthoredContextRetrieval,
   parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
 } from "../lib/contextRetrievalAuthoring";
 
 type WorkflowStartDashboardConfig = {
@@ -428,6 +429,7 @@ interface DashboardConfig {
       defaultBoardId?: string;
       rememberLastBoardInSession?: boolean;
     };
+    retrievalAuthoring?: Record<string, unknown>;
   };
 }
 
@@ -5822,6 +5824,9 @@ function StepContextBar({
 function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    dashboardConfig.system?.retrievalAuthoring,
+  );
   const pageMode = useMemo(
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
@@ -13695,6 +13700,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           <ContextRetrievalControls
             value={contextRetrieval}
             onChange={setContextRetrieval}
+            ceilings={retrievalCeilings}
             description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
           />
         </details>
