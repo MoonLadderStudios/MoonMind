@@ -130,7 +130,10 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_workflow_classes,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+from moonmind.workflows.temporal.runtime.launcher import (
+    ManagedRuntimeLauncher,
+    resolve_deployment_git_client_policy,
+)
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
@@ -2546,6 +2549,7 @@ def _build_agent_runtime_deps(
         store,
         log_streamer=log_streamer,
         artifact_service=artifact_service,
+        repository_client_policy=resolve_deployment_git_client_policy(),
     )
     session_store = ManagedSessionStore(
         os.path.join(

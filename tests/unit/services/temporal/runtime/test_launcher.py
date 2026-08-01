@@ -101,15 +101,32 @@ def _repository_readiness_request(
 
 
 @pytest.mark.asyncio
+async def test_default_repository_readiness_requires_deployment_client_policy(tmp_path):
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    launcher._observe_git_client = AsyncMock()
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
+    ):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+
+    launcher._observe_git_client.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_default_repository_readiness_rejects_observed_client_policy_mismatch(
     tmp_path,
 ):
     store = ManagedRunStore(tmp_path / "managed_runs")
-    launcher = ManagedRuntimeLauncher(store)
-    launcher._repository_client_policy = RepositoryClientPolicy(
-        pinnedVersion="2.46.0",
-        toolBundleRef="repository-client:git-system",
-        executableSha256="sha256:expected",
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion="2.46.0",
+            toolBundleRef="repository-client:git-system",
+            executableSha256="sha256:expected",
+        ),
     )
     launcher._observe_git_client = AsyncMock(
         return_value=RepositoryClientEvidence(
@@ -128,11 +145,18 @@ async def test_default_repository_readiness_rejects_observed_client_policy_misma
 @pytest.mark.asyncio
 async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
-    launcher = ManagedRuntimeLauncher(store)
     evidence = RepositoryClientEvidence(
         toolBundleRef="repository-client:git-system",
         clientVersion="2.46.0",
         executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
 
@@ -146,16 +170,49 @@ async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp
 
 
 @pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unready_known_capability(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNREADY"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none", skill_capabilities=["repo.write"]
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tips", [[None], ["aaaa", "bbbb"]])
 async def test_default_repository_readiness_rejects_missing_or_changed_remote_tip(
     tmp_path, tips
 ):
     store = ManagedRunStore(tmp_path / "managed_runs")
-    launcher = ManagedRuntimeLauncher(store)
     evidence = RepositoryClientEvidence(
         toolBundleRef="repository-client:git-system",
         clientVersion="2.46.0",
         executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(side_effect=tips)

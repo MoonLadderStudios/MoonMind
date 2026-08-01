@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -135,6 +136,36 @@ _SECRET_LIKE_PATTERN = re.compile(
 )
 
 
+def resolve_deployment_git_client_policy() -> RepositoryClientPolicy:
+    """Pin the worker deployment's Git client independently of launch evidence."""
+
+    executable = shutil.which("git")
+    if not executable:
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            "the Git executable is unavailable during worker reconciliation",
+        )
+    executable_path = Path(executable).resolve()
+    completed = subprocess.run(
+        (str(executable_path), "--version"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    version = completed.stdout.strip().removeprefix("git version ").strip()
+    if completed.returncode != 0 or not version:
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            "the worker could not reconcile its deployment Git client policy",
+        )
+    digest = hashlib.sha256(executable_path.read_bytes()).hexdigest()
+    return RepositoryClientPolicy(
+        pinnedVersion=version,
+        toolBundleRef="repository-client:git-system",
+        executableSha256=f"sha256:{digest}",
+    )
+
+
 def _compact_string(value: Any) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -235,13 +266,14 @@ class ManagedRuntimeLauncher:
             [AgentExecutionRequest, Mapping[str, str] | None], Awaitable[None]
         ]
         | None = None,
+        repository_client_policy: RepositoryClientPolicy | None = None,
     ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
-        self._repository_client_policy: RepositoryClientPolicy | None = None
+        self._repository_client_policy = repository_client_policy
         self._repository_readiness_boundary = (
             repository_readiness_boundary or self._ensure_repository_ready_for_launch
         )
@@ -323,32 +355,61 @@ class ManagedRuntimeLauncher:
                 "the selected connection",
             )
 
-        observed = await self._observe_git_client()
         if self._repository_client_policy is None:
-            self._repository_client_policy = RepositoryClientPolicy(
-                pinnedVersion=observed.client_version,
-                toolBundleRef=observed.tool_bundle_ref,
-                executableSha256=observed.executable_sha256,
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "the default Git connection has no deployment-owned client policy",
             )
+        observed = await self._observe_git_client()
         connection = reconcile_default_git_connection(
             client_policy=self._repository_client_policy
         )
-        registry = CapabilityReadinessRegistry()
-        for token in (
-            "git",
-            "gh",
+        registry = CapabilityReadinessRegistry(
+            runtime_owned_tokens=(
+                "artifact.read",
+                "artifact.write",
+                "jira",
+                "docker",
+                "container.run",
+            )
+        )
+
+        def git_ready(context: Mapping[str, Any]) -> bool:
+            selected = context["target"]
+            client = context["clientEvidence"]
+            return (
+                selected.provider == "git"
+                and client.tool_bundle_ref == connection.client_policy.tool_bundle_ref
+                and client.client_version == connection.client_policy.pinned_version
+                and client.executable_sha256
+                == connection.client_policy.executable_sha256
+            )
+
+        def operation_ready(operation_name: str) -> Callable[[Mapping[str, Any]], bool]:
+            return lambda context: (
+                context["operation"] == "write"
+                and operation_name in context["connection"].allowed_operations
+            )
+
+        registry.register("git", git_ready)
+        registry.register(
             "repo.read",
-            "repo.write",
-            "repo.branch.write",
-            "repo.review.request",
-            "repo.lock",
-            "artifact.read",
-            "artifact.write",
-            "jira",
-            "docker",
-            "container.run",
-        ):
-            registry.register(token, lambda _context: True)
+            lambda context: "read" in context["connection"].allowed_operations,
+        )
+        registry.register("repo.write", operation_ready("write"))
+        registry.register("repo.branch.write", operation_ready("branch_write"))
+        registry.register("repo.lock", operation_ready("lock"))
+        registry.register(
+            "repo.review.request", operation_ready("review_request")
+        )
+        registry.register(
+            "gh",
+            lambda context: (
+                context["target"].provider == "git"
+                and context["connection"].credential_source == "github_resolver"
+                and context["publishMode"] == "pr"
+            ),
+        )
 
         parameters = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
