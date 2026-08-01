@@ -12,6 +12,10 @@ from moonmind.repositories.lore_adapter import (
     LoreDeltaCheckpoint,
     LoreWorkspaceError,
 )
+from moonmind.repositories.lore_checkpoints import LORE_CHECKPOINT_CONTENT_TYPE
+from moonmind.repositories.lore_runtime import (
+    build_lore_repository_adapter_from_environment,
+)
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
@@ -292,15 +296,29 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
     authority = tmp_path / workspace_id / "repo"
     client = FakeLoreClient()
     adapter = LoreRepositoryProviderAdapter(client)
-    adapter.prepare_workspace(
-        repository="Tactics",
-        branch="main",
-        revision_signature="rev-1",
-        locator=locator,
-        authority_path=authority,
-        connection_ref="repository-connection:lore",
-        client_evidence={},
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        lore_repository_adapter=adapter,
     )
+    managed_path = await launcher._prepare_workspace_path(
+        run_id="managed-run",
+        workspace_path=None,
+        request=AgentExecutionRequest(
+            agentKind="managed",
+            agentId="agent",
+            correlationId="corr",
+            idempotencyKey="key",
+            workspaceSpec={
+                "provider": "lore",
+                "repository": "Tactics",
+                "branch": "main",
+                "revisionSignature": "rev-1",
+                "connectionRef": "repository-connection:lore",
+                "workspaceLocator": locator.model_dump(by_alias=True),
+            },
+        ),
+    )
+    assert managed_path == str(authority)
     runtime = OmnigentOAuthHostRuntime(
         client=object(),
         workspace_root=tmp_path,
@@ -316,4 +334,82 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
     assert [call[0] for call in client.calls].count("materialize") == 1
     assert runtime._last_workspace_evidence["materialization"]["action"] == (
         "reused_lore_authority"
+    )
+
+
+class FakeArtifactService:
+    def __init__(self):
+        self.payloads = {}
+        self.content_types = {}
+
+    async def create(self, *, content_type, **kwargs):
+        artifact = type(
+            "Artifact",
+            (),
+            {"artifact_id": "art_lore", "content_type": content_type},
+        )()
+        self.content_types[artifact.artifact_id] = content_type
+        return artifact, object()
+
+    async def write_complete(self, *, artifact_id, payload, content_type, **kwargs):
+        self.payloads[artifact_id] = payload
+        return type("Artifact", (), {"artifact_id": artifact_id})()
+
+    async def read(self, *, artifact_id, **kwargs):
+        artifact = type(
+            "Artifact",
+            (),
+            {"artifact_id": artifact_id, "content_type": self.content_types[artifact_id]},
+        )()
+        return artifact, self.payloads[artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_durable_lore_checkpoint_round_trip_scans_and_restages(tmp_path):
+    client, adapter, locator, workspace = prepared(tmp_path)
+    client.changed = ["Content/root.uasset"]
+    client.staged = ["Content/root.uasset"]
+    (workspace.authority_path / "Content/root.uasset").write_bytes(b"dirty")
+    artifacts = FakeArtifactService()
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        artifact_service=artifacts,
+        lore_repository_adapter=adapter,
+    )
+
+    checkpoint_ref = await launcher.capture_lore_workspace_checkpoint(
+        locator=locator, authority_path=workspace.authority_path
+    )
+    assert artifacts.content_types[checkpoint_ref] == LORE_CHECKPOINT_CONTENT_TYPE
+    restored = await launcher.restore_lore_workspace_checkpoint(
+        checkpoint_ref,
+        repository="Tactics",
+        branch="main",
+        locator=locator,
+        authority_path=tmp_path / "cold-restored",
+        connection_ref="repository-connection:lore",
+        client_evidence={},
+    )
+
+    assert (restored.authority_path / "Content/root.uasset").read_bytes() == b"dirty"
+    assert [call[0] for call in client.calls].count("materialize") == 2
+    assert client.calls[-2][0] == "scan"
+    assert client.calls[-1] == ("stage", ("Content/root.uasset",))
+
+
+def test_production_lore_factory_requires_complete_pin(monkeypatch, tmp_path):
+    executable = tmp_path / "lore"
+    executable.write_bytes(b"binary")
+    monkeypatch.setenv("MOONMIND_LORE_EXECUTABLE", str(executable))
+    monkeypatch.delenv("MOONMIND_LORE_EXECUTABLE_SHA256", raising=False)
+    with pytest.raises(LoreWorkspaceError, match="both required"):
+        build_lore_repository_adapter_from_environment()
+
+    monkeypatch.setenv(
+        "MOONMIND_LORE_EXECUTABLE_SHA256", hashlib.sha256(b"binary").hexdigest()
+    )
+    monkeypatch.setenv("MOONMIND_LORE_IMMUTABLE_CACHE_ROOT", str(tmp_path / "cache"))
+    assert isinstance(
+        build_lore_repository_adapter_from_environment(),
+        LoreRepositoryProviderAdapter,
     )

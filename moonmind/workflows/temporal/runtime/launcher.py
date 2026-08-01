@@ -12,7 +12,7 @@ import shutil
 import stat
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
@@ -231,6 +231,38 @@ class ManagedRuntimeLauncher:
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
         self._lore_repository_adapter = lore_repository_adapter
+        self._lore_checkpoint_service = None
+        if lore_repository_adapter is not None and artifact_service is not None:
+            from moonmind.repositories.lore_checkpoints import (
+                LoreDurableCheckpointService,
+            )
+
+            self._lore_checkpoint_service = LoreDurableCheckpointService(
+                adapter=lore_repository_adapter,
+                artifact_service=artifact_service,
+            )
+
+    async def capture_lore_workspace_checkpoint(
+        self, *, locator: SandboxWorkspaceLocator, authority_path: Path
+    ) -> str:
+        """Persist provider state from the authoritative sandbox workspace."""
+        if (
+            self._lore_repository_adapter is None
+            or self._lore_checkpoint_service is None
+        ):
+            raise RuntimeError("Lore durable checkpoint support is not configured")
+        prepared = self._lore_repository_adapter.load_prepared_workspace(
+            locator=locator, authority_path=authority_path
+        )
+        return await self._lore_checkpoint_service.capture(prepared)
+
+    async def restore_lore_workspace_checkpoint(
+        self, checkpoint_ref: str, **kwargs: Any
+    ):
+        """Cold-restore a Lore delta before a managed runtime is launched."""
+        if self._lore_checkpoint_service is None:
+            raise RuntimeError("Lore durable checkpoint support is not configured")
+        return await self._lore_checkpoint_service.restore(checkpoint_ref, **kwargs)
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
@@ -786,14 +818,21 @@ class ManagedRuntimeLauncher:
                     "Lore repository work requires the configured provider adapter"
                 )
             workspace_key = self._workspace_key_for_request(run_id=run_id, request=request)
-            workspace_root = (
-                self._store.store_root.parent / "workspaces" / workspace_key
-            ).resolve()
-            authority_path = (workspace_root / "repo").resolve()
             locator = SandboxWorkspaceLocator.model_validate(
                 workspace_spec.get("workspaceLocator")
                 or {"kind": "sandbox", "workspaceId": workspace_key, "relativePath": "repo"}
             )
+            # Resolve the same sandbox-authority path used by the Omnigent owner.
+            # The managed lane must not create a parallel checkout under its
+            # managed-run store when an authored locator already names authority.
+            workspace_root = (
+                self._store.store_root.parent / locator.workspace_id
+            ).resolve()
+            authority_path = workspace_root.joinpath(
+                *PurePosixPath(locator.relative_path).parts
+            ).resolve()
+            if not authority_path.is_relative_to(workspace_root):
+                raise RuntimeError("Lore sandbox locator escapes workspace authority")
             repository = str(workspace_spec.get("repository") or workspace_spec.get("repo") or "").strip()
             branch = str(workspace_spec.get("startingBranch") or workspace_spec.get("branch") or "").strip()
             revision = str(workspace_spec.get("revisionSignature") or workspace_spec.get("preparedRevision") or "").strip()
