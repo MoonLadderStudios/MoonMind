@@ -1,5 +1,8 @@
 """Repository-provider boundaries."""
 
-from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
+from moonmind.repositories.lore_adapter import (
+    LoreImmutableObjectCache,
+    LoreRepositoryProviderAdapter,
+)
 
-__all__ = ["LoreRepositoryProviderAdapter"]
+__all__ = ["LoreImmutableObjectCache", "LoreRepositoryProviderAdapter"]

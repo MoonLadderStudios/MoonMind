@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import pytest
 
@@ -7,9 +8,15 @@ from moonmind.repositories.lore_adapter import (
     LORE_EXTERNAL_SCAN_FAILED,
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreRepositoryProviderAdapter,
+    LoreImmutableObjectCache,
+    LoreDeltaCheckpoint,
     LoreWorkspaceError,
 )
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 
 
 class FakeLoreClient:
@@ -100,6 +107,9 @@ def test_dirty_restore_is_bounded_scanned_and_restages_only_intended_paths(tmp_p
     client.staged = ["Content/root.uasset"]
     (workspace.authority_path / "Plugins/P/Content/plugin.uasset").unlink()
     checkpoint = adapter.capture_checkpoint(workspace)
+    assert (
+        adapter.decode_checkpoint(adapter.encode_checkpoint(checkpoint)) == checkpoint
+    )
     restored = adapter.restore_checkpoint(
         checkpoint,
         repository="Tactics",
@@ -149,3 +159,161 @@ def test_restore_rechecks_symlink_containment(tmp_path):
             connection_ref="repository-connection:lore",
             client_evidence={},
         )
+
+
+@pytest.mark.parametrize("tamper", ["size", "digest", "paths"])
+def test_restore_rejects_tampered_checkpoint_before_materialization(tmp_path, tamper):
+    client, adapter, locator, workspace = prepared(tmp_path)
+    client.changed = ["Content/root.uasset"]
+    checkpoint = adapter.capture_checkpoint(workspace)
+    values = dict(checkpoint.__dict__)
+    if tamper == "size":
+        values["total_bytes"] += 1
+    elif tamper == "digest":
+        values["digest"] = "sha256:" + "0" * 64
+    else:
+        values["changed_paths"] = ("Content/other.uasset",)
+    invalid = LoreDeltaCheckpoint(**values)
+
+    with pytest.raises(LoreWorkspaceError, match=LORE_WORKSPACE_INVALID):
+        adapter.restore_checkpoint(
+            invalid,
+            repository="Tactics",
+            branch="main",
+            locator=locator,
+            authority_path=tmp_path / f"invalid-{tamper}",
+            connection_ref="repository-connection:lore",
+            client_evidence={},
+        )
+    assert [call[0] for call in client.calls].count("materialize") == 1
+
+
+def test_restore_rejects_actual_oversize_when_metadata_claims_small(tmp_path):
+    client, _, locator, _ = prepared(tmp_path)
+    adapter = LoreRepositoryProviderAdapter(client, checkpoint_limit_bytes=2)
+    checkpoint = LoreDeltaCheckpoint(
+        base_revision="rev-1",
+        changed_paths=("Content/root.uasset",),
+        staged_paths=(),
+        files={"Content/root.uasset": b"large"},
+        total_bytes=1,
+        digest="sha256:" + "0" * 64,
+    )
+    with pytest.raises(LoreWorkspaceError, match=LORE_CHECKPOINT_TOO_LARGE):
+        adapter.restore_checkpoint(
+            checkpoint,
+            repository="Tactics",
+            branch="main",
+            locator=locator,
+            authority_path=tmp_path / "oversize",
+            connection_ref="repository-connection:lore",
+            client_evidence={},
+        )
+    assert [call[0] for call in client.calls].count("materialize") == 1
+
+
+def test_immutable_cache_verifies_content_and_excludes_private_state(tmp_path):
+    cache = LoreImmutableObjectCache(tmp_path / "cache")
+    adapter = LoreRepositoryProviderAdapter(FakeLoreClient(), immutable_cache=cache)
+    digest = "sha256:" + __import__("hashlib").sha256(b"object").hexdigest()
+    cached = adapter.publish_cache_object(
+        endpoint="lore.example",
+        repository="Tactics",
+        client_compatibility="1",
+        object_digest=digest,
+        content=b"object",
+    )
+    identity = {
+        "endpoint": "lore.example",
+        "repository": "Tactics",
+        "client_compatibility": "1",
+        "object_digest": digest,
+    }
+    assert adapter.read_cache_object(**identity) == b"object"
+    assert cached.stat().st_mode & 0o222 == 0
+
+    cached.chmod(0o600)
+    cached.write_bytes(b"tampered")
+    with pytest.raises(LoreWorkspaceError, match=LORE_WORKSPACE_INVALID):
+        adapter.read_cache_object(**identity)
+    assert not cached.exists()
+
+    with pytest.raises(LoreWorkspaceError, match="private cache identity"):
+        adapter.publish_cache_object(
+            endpoint="lore.example",
+            repository=".lore/journals",
+            client_compatibility="1",
+            object_digest=digest,
+            content=b"object",
+        )
+
+
+@pytest.mark.asyncio
+async def test_managed_launcher_delegates_lore_preparation_and_reuses_revision(
+    tmp_path,
+):
+    client = FakeLoreClient()
+    adapter = LoreRepositoryProviderAdapter(client)
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        lore_repository_adapter=adapter,
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="agent",
+        correlationId="corr",
+        idempotencyKey="key",
+        workspaceSpec={
+            "provider": "lore",
+            "repository": "Tactics",
+            "branch": "main",
+            "revisionSignature": "rev-1",
+            "connectionRef": "repository-connection:lore",
+            "clientEvidence": {"clientVersion": "1"},
+        },
+    )
+    first = await launcher._prepare_workspace_path(
+        run_id="run-1", request=request, workspace_path=None
+    )
+    second = await launcher._prepare_workspace_path(
+        run_id="run-1", request=request, workspace_path=None
+    )
+    assert first == second
+    assert [call[0] for call in client.calls].count("materialize") == 1
+
+
+@pytest.mark.asyncio
+async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tmp_path):
+    workflow_id, step_id = "workflow", "step"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    locator = SandboxWorkspaceLocator(workspaceId=workspace_id, relativePath="repo")
+    authority = tmp_path / workspace_id / "repo"
+    client = FakeLoreClient()
+    adapter = LoreRepositoryProviderAdapter(client)
+    adapter.prepare_workspace(
+        repository="Tactics",
+        branch="main",
+        revision_signature="rev-1",
+        locator=locator,
+        authority_path=authority,
+        connection_ref="repository-connection:lore",
+        client_evidence={},
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=object(),
+        workspace_root=tmp_path,
+        lore_repository_adapter=adapter,
+    )
+    resolved = await runtime._prepare_workspace(
+        workspace_locator=locator.model_dump(by_alias=True),
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+        repository_provider="lore",
+    )
+    assert resolved == authority
+    assert [call[0] for call in client.calls].count("materialize") == 1
+    assert runtime._last_workspace_evidence["materialization"]["action"] == (
+        "reused_lore_authority"
+    )
