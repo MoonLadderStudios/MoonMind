@@ -1188,6 +1188,7 @@ def _normalized_agent_skill_payload(
             "contentRef",
             "contentDigest",
             "inputContractDigest",
+            "requiredCapabilities",
         )
         if key in skill_payload
     }
@@ -1627,7 +1628,21 @@ def _build_runtime_planner():
             or selected_skill_inputs.get("repository")
             or selected_skill_inputs.get("repo")
         )
-        if isinstance(repository, str) and repository.strip():
+        if isinstance(repository, Mapping):
+            repository_target = dict(repository)
+            repository_identity = _coerce_mapping(
+                repository_target.get("repository")
+            )
+            repository_name = _coerce_non_empty_text(repository_identity.get("name"))
+            branch_identity = _coerce_mapping(repository_target.get("branch"))
+            branch_name = _coerce_non_empty_text(branch_identity.get("name"))
+            if repository_name:
+                node_inputs["repositoryTarget"] = repository_target
+                node_inputs["repository"] = repository_name
+                node_inputs["repo"] = repository_name
+            if branch_name:
+                node_inputs["branch"] = branch_name
+        elif isinstance(repository, str) and repository.strip():
             node_inputs["repository"] = repository.strip()
             node_inputs["repo"] = repository.strip()
         if selected_skill_name:

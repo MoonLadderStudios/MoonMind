@@ -10,6 +10,11 @@ import pytest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryContractError,
+)
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
 )
@@ -38,6 +43,133 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     )
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    readiness = AsyncMock(
+        side_effect=RepositoryContractError(
+            "REPOSITORY_CLIENT_MISMATCH",
+            "observed client does not match deployment policy",
+        )
+    )
+    launcher = ManagedRuntimeLauncher(
+        store,
+        repository_readiness_boundary=readiness,
+    )
+    request = _make_request(
+        workspace_spec={
+            "repository": "file:///tmp/readiness-test-repository",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": "pr"},
+    )
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        await launcher.launch(
+            run_id="readiness-blocked",
+            request=request,
+            profile=_make_profile(command_template=["echo", "hello"]),
+        )
+
+    readiness.assert_awaited_once()
+    assert not (tmp_path / "workspaces").exists()
+
+
+def _repository_readiness_request(
+    *, publish_mode: str = "pr", skill_capabilities: list[str] | None = None
+) -> AgentExecutionRequest:
+    return _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "repositoryTarget": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            },
+        },
+        parameters={"publishMode": publish_mode},
+        skill={"requiredCapabilities": skill_capabilities or []},
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_observed_client_policy_mismatch(
+    tmp_path,
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    launcher._repository_client_policy = RepositoryClientPolicy(
+        pinnedVersion="2.46.0",
+        toolBundleRef="repository-client:git-system",
+        executableSha256="sha256:expected",
+    )
+    launcher._observe_git_client = AsyncMock(
+        return_value=RepositoryClientEvidence(
+            toolBundleRef="repository-client:git-system",
+            clientVersion="2.47.0",
+            executableSha256="sha256:observed",
+        )
+    )
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CLIENT_MISMATCH"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(publish_mode="none"), None
+        )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CAPABILITY_UNKNOWN"):
+        await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none", skill_capabilities=["unknown.repository.tool"]
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tips", [[None], ["aaaa", "bbbb"]])
+async def test_default_repository_readiness_rejects_missing_or_changed_remote_tip(
+    tmp_path, tips
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(side_effect=tips)
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=object()),
+    ):
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_REMOTE_TIP_MISMATCH"
+        ):
+            await launcher._ensure_repository_ready_for_launch(
+                _repository_readiness_request(), None
+            )
 
 
 @pytest.mark.asyncio

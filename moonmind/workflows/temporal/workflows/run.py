@@ -18096,6 +18096,7 @@ class MoonMindRunWorkflow:
                 )
         for ws_key in (
             "repository",
+            "repositoryTarget",
             "repo",
             "startingBranch",
             "targetBranch",

@@ -10,7 +10,7 @@ import re
 import shlex
 import shutil
 import stat
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,17 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
+)
+from moonmind.workflows.executions.repository_contract import (
+    CapabilityReadinessRegistry,
+    DEFAULT_GIT_CONNECTION_REF,
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryConnection,
+    RepositoryContractError,
+    compile_repository_target,
+    ensure_repository_ready,
+    reconcile_default_git_connection,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.skills.run_projection import (
@@ -220,12 +231,176 @@ class ManagedRuntimeLauncher:
         store: ManagedRunStore,
         log_streamer: RuntimeLogStreamer | None = None,
         artifact_service: Any | None = None,
+        repository_readiness_boundary: Callable[
+            [AgentExecutionRequest, Mapping[str, str] | None], Awaitable[None]
+        ]
+        | None = None,
     ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
+        self._repository_client_policy: RepositoryClientPolicy | None = None
+        self._repository_readiness_boundary = (
+            repository_readiness_boundary or self._ensure_repository_ready_for_launch
+        )
+
+    async def _observe_git_client(self) -> RepositoryClientEvidence:
+        executable = shutil.which("git")
+        if not executable:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                "the Git executable is unavailable at the runtime launch boundary",
+            )
+        executable_path = Path(executable).resolve()
+        digest = hashlib.sha256(executable_path.read_bytes()).hexdigest()
+        returncode, stdout_text, stderr_text = await self._run_command(
+            str(executable_path), "--version"
+        )
+        if returncode != 0:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                (stderr_text or stdout_text or "git --version failed").strip(),
+            )
+        version_text = stdout_text.strip()
+        version = version_text.removeprefix("git version ").strip()
+        if not version:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                "git --version returned no version identity",
+            )
+        return RepositoryClientEvidence(
+            toolBundleRef="repository-client:git-system",
+            clientVersion=version,
+            executableSha256=f"sha256:{digest}",
+        )
+
+    async def _observe_git_remote_tip(
+        self,
+        *,
+        repository: str,
+        branch: str,
+        git_env: Mapping[str, str] | None,
+    ) -> str | None:
+        source = self._resolve_repository_source(repository)
+        if source is None:
+            return None
+        returncode, stdout_text, _stderr_text = await self._run_command(
+            "git",
+            "ls-remote",
+            source,
+            f"refs/heads/{self._normalize_clone_branch(branch) or branch}",
+            env=dict(git_env) if git_env is not None else None,
+        )
+        if returncode != 0:
+            return None
+        first_line = next(
+            (line for line in stdout_text.splitlines() if line.strip()), ""
+        )
+        return first_line.split(maxsplit=1)[0] if first_line else None
+
+    async def _ensure_repository_ready_for_launch(
+        self,
+        request: AgentExecutionRequest,
+        git_env: Mapping[str, str] | None,
+    ) -> None:
+        """Enforce the provider readiness contract before checkout or launch."""
+
+        workspace_spec = request.workspace_spec
+        raw_target = workspace_spec.get("repositoryTarget")
+        if raw_target is None:
+            # Recorded legacy requests continue through their frozen history path.
+            return
+        target = compile_repository_target(raw_target)
+        if (
+            target.provider != "git"
+            or target.connection_ref != DEFAULT_GIT_CONNECTION_REF
+        ):
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "the managed-runtime launch boundary has no ready adapter for "
+                "the selected connection",
+            )
+
+        observed = await self._observe_git_client()
+        if self._repository_client_policy is None:
+            self._repository_client_policy = RepositoryClientPolicy(
+                pinnedVersion=observed.client_version,
+                toolBundleRef=observed.tool_bundle_ref,
+                executableSha256=observed.executable_sha256,
+            )
+        connection = reconcile_default_git_connection(
+            client_policy=self._repository_client_policy
+        )
+        registry = CapabilityReadinessRegistry()
+        for token in (
+            "git",
+            "gh",
+            "repo.read",
+            "repo.write",
+            "repo.branch.write",
+            "repo.review.request",
+            "repo.lock",
+            "artifact.read",
+            "artifact.write",
+            "jira",
+            "docker",
+            "container.run",
+        ):
+            registry.register(token, lambda _context: True)
+
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        operation = "write" if publish_mode in {"branch", "pr"} else "read"
+        skill_caps = (
+            request.skill.get("requiredCapabilities", ())
+            if isinstance(request.skill, Mapping)
+            else ()
+        )
+        tool_caps = parameters.get("repositoryToolCapabilities", ())
+        if not isinstance(skill_caps, (list, tuple)):
+            skill_caps = ()
+        if not isinstance(tool_caps, (list, tuple)):
+            tool_caps = ()
+
+        expected_remote_tip: str | None = None
+        if operation != "read":
+            expected_remote_tip = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+
+        async def resolve_connection(_target: object) -> RepositoryConnection:
+            return connection
+
+        async def resolve_evidence(_connection: object) -> RepositoryClientEvidence:
+            return observed
+
+        async def verify_remote_tip(_target: object) -> bool:
+            if expected_remote_tip is None:
+                return False
+            current = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+            return current == expected_remote_tip
+
+        await ensure_repository_ready(
+            target,
+            publish_mode=publish_mode,
+            operation=operation,
+            skill_capabilities=skill_caps,
+            tool_capabilities=tool_caps,
+            connection_resolver=resolve_connection,
+            evidence_resolver=resolve_evidence,
+            readiness_registry=registry,
+            remote_tip_verifier=verify_remote_tip,
+        )
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
@@ -1345,6 +1520,7 @@ class ManagedRuntimeLauncher:
             if launch_github_token
             else None
         )
+        await self._repository_readiness_boundary(request, git_host_env)
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,

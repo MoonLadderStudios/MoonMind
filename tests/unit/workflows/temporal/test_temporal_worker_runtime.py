@@ -324,6 +324,41 @@ def test_runtime_planner_preserves_execution_profile_ref():
     assert runtime_node["mode"] == "claude"
     assert runtime_node["executionProfileRef"] == "claude-minimax-oauth"
 
+
+def test_runtime_planner_preserves_canonical_repository_target_for_launch_readiness():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    repository = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"},
+    }
+
+    plan = planner(
+        inputs={
+            "workflow": {
+                "instructions": "Inspect the repository",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={
+            "repository": repository,
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["codex_cli", "git", "repo.read"],
+        },
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["repositoryTarget"] == repository
+    assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["branch"] == "main"
+
 def test_runtime_planner_preserves_execution_profile_ref_snake_case():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
