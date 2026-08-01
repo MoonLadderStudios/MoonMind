@@ -664,6 +664,18 @@ function modelTiersForProfile(profile: ProviderProfile | undefined): ProviderMod
   ];
 }
 
+function defaultModelTierForProfile(
+  profile: ProviderProfile | undefined,
+): ProviderModelEffortTier | undefined {
+  if (!profile || !Array.isArray(profile.model_tiers)) {
+    return undefined;
+  }
+  const defaultTier = profile.default_model_tier ?? 1;
+  return Number.isInteger(defaultTier) && defaultTier >= 1
+    ? profile.model_tiers[defaultTier - 1]
+    : undefined;
+}
+
 export function previewModelTier(
   profile: ProviderProfile | undefined,
   requestedTierValue: string,
@@ -6479,10 +6491,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const selectedProfile = profiles.find(
       (p) => p.profile_id === profileIdForDefaults,
     );
+    const selectedDefaultTier = defaultModelTierForProfile(selectedProfile);
     if (!modelManualOverride || runtimeChanged || profileChanged) {
       setModel(
         String(
-          selectedProfile?.default_model ||
+          selectedDefaultTier?.model ||
+            selectedProfile?.default_model ||
             defaultTaskModelByRuntime[runtime] ||
             dashboardConfig.system?.defaultModel ||
             dashboardConfig.system?.defaultTaskModel ||
@@ -6493,7 +6507,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!effortManualOverride || runtimeChanged || profileChanged) {
       setEffort(
         String(
-          selectedProfile?.default_effort ||
+          selectedDefaultTier?.effort ||
+            selectedProfile?.default_effort ||
             defaultTaskEffortByRuntime[runtime] ||
             dashboardConfig.system?.defaultEffort ||
             dashboardConfig.system?.defaultTaskEffort ||

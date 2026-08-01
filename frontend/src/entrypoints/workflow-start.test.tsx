@@ -19064,8 +19064,13 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
-                default_model: "gpt-profile-default",
-                default_effort: "high",
+                default_model: null,
+                default_effort: null,
+                model_tiers: [
+                  { label: "Plan", model: "gpt-plan", effort: "medium" },
+                  { label: "Default", model: "gpt-profile-default", effort: "high" },
+                ],
+                default_model_tier: 2,
               },
               {
                 profile_id: "profile:codex-secondary",
