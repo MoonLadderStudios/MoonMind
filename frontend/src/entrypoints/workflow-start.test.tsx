@@ -19064,6 +19064,7 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
+                default_model: "gpt-profile-default",
                 default_effort: "high",
               },
               {
@@ -19234,6 +19235,41 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).not.toHaveProperty("tierFallback");
     expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
+  });
+
+  it("defaults hard overrides from the selected profile until manually changed", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe(
+        "profile:codex-default",
+      );
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-profile-default",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Hard override model"), {
+      target: { value: "gpt-manual" },
+    });
+    fireEvent.change(screen.getByLabelText("Hard override effort"), {
+      target: { value: "xhigh" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Trigger an unrelated form render." },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-manual",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "xhigh",
+      );
+    });
   });
 });
 

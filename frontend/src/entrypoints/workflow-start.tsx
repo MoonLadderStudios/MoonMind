@@ -6474,32 +6474,29 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    setEffort(
-      String(
-        defaultTaskEffortByRuntime[runtime] ||
-          dashboardConfig.system?.defaultEffort ||
-          dashboardConfig.system?.defaultTaskEffort ||
-          "",
-      ),
-    );
-
-    if (modelManualOverride && !runtimeChanged && !profileChanged) {
-      return;
-    }
-
-    const profileIdForModel = runtimeChanged ? "" : providerProfile;
+    const profileIdForDefaults = runtimeChanged ? "" : providerProfile;
     const profiles = providerProfilesQuery.data || [];
     const selectedProfile = profiles.find(
-      (p) => p.profile_id === profileIdForModel,
+      (p) => p.profile_id === profileIdForDefaults,
     );
-    if (selectedProfile?.default_model) {
-      setModel(selectedProfile.default_model);
-    } else {
+    if (!modelManualOverride || runtimeChanged || profileChanged) {
       setModel(
         String(
-          defaultTaskModelByRuntime[runtime] ||
+          selectedProfile?.default_model ||
+            defaultTaskModelByRuntime[runtime] ||
             dashboardConfig.system?.defaultModel ||
             dashboardConfig.system?.defaultTaskModel ||
+            "",
+        ),
+      );
+    }
+    if (!effortManualOverride || runtimeChanged || profileChanged) {
+      setEffort(
+        String(
+          selectedProfile?.default_effort ||
+            defaultTaskEffortByRuntime[runtime] ||
+            dashboardConfig.system?.defaultEffort ||
+            dashboardConfig.system?.defaultTaskEffort ||
             "",
         ),
       );
@@ -6511,6 +6508,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultModel,
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
+    effortManualOverride,
     modelManualOverride,
     pageMode.mode,
     providerProfilesQuery.data,
