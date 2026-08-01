@@ -133,7 +133,13 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
         "sourceIssueKey": "{{ inputs.source_issue_key }}"
     }
     assert downstream_step["githubOrchestration"]["task"]["publish"] == {
-        "mode": "{{ inputs.publish_mode }}",
+        "mode": (
+            "{{ 'pr' if inputs.publish_mode == 'pr_with_merge_automation' "
+            "else inputs.publish_mode }}"
+        ),
+        "mergeAutomation": {
+            "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+        },
     }
     assert downstream_step["githubOrchestration"]["task"]["inputs"] == {
         "run_verify": "{{ inputs.run_verify }}",
