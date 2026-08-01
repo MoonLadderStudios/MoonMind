@@ -176,6 +176,88 @@ def test_daemon_visible_workspace_translation_is_deployment_owned(tmp_path, monk
     )
 
 
+def test_old_materialization_marker_requires_upgrade(tmp_path):
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    marker = store._completion_marker_path("owned")
+    marker.parent.mkdir(parents=True)
+    marker.write_text("materialized", encoding="utf-8")
+
+    assert store.is_materialized("owned") is False
+    store.mark_materialized("owned")
+    assert store.is_materialized("owned") is True
+
+
+def test_daemon_visible_workspace_local_mode_returns_worker_path(tmp_path, monkeypatch):
+    # In the local daemon contract the daemon shares the worker filesystem, so the
+    # worker path is already daemon-visible and returned unchanged.
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
+
+    assert daemon_visible_workspace_path(workspace) == workspace.resolve()
+
+
+def test_daemon_visible_workspace_local_mode_rejects_daemon_root(tmp_path, monkeypatch):
+    # A daemon root remap under the local contract is contradictory and fails closed.
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", str(tmp_path / "daemon"))
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        daemon_visible_workspace_path(workspace)
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+
+
+def test_daemon_visible_workspace_remote_mode_remaps_path(tmp_path, monkeypatch):
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    daemon_root = tmp_path / "daemon"
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", str(daemon_root))
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+
+    assert daemon_visible_workspace_path(workspace) == (
+        daemon_root / "temporal_sandbox" / "owned" / "repo"
+    )
+
+
+def test_daemon_visible_workspace_remote_mode_requires_daemon_root(tmp_path, monkeypatch):
+    # A remote selection without a configured daemon root cannot produce a valid
+    # bind path; it fails closed rather than leaking a worker-only path.
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        daemon_visible_workspace_path(workspace)
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+
+
+def test_daemon_visible_workspace_rejects_unknown_mode(tmp_path, monkeypatch):
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "sidecar")
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        daemon_visible_workspace_path(workspace)
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+
+
 def test_external_locator_satisfies_external_checkpoint_input():
     model = WorkspaceCheckpointCaptureInput.model_validate(
         {

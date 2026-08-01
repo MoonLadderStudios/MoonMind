@@ -60,18 +60,21 @@ class SandboxWorkspaceRecordStore:
         finished workspace from a partially built directory left by a prior
         attempt that failed mid-materialization.
         """
-        return self._completion_marker_path(workspace_id).is_file()
+        path = self._completion_marker_path(workspace_id)
+        try:
+            return path.read_text(encoding="utf-8") == "materialized-v2"
+        except OSError:
+            return False
 
     def mark_materialized(self, workspace_id: str) -> None:
         """Record durable evidence that materialization completed."""
         self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._completion_marker_path(workspace_id)
-        try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
+        if self.is_materialized(workspace_id):
             return
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write("materialized")
+            stream.write("materialized-v2")
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)
@@ -158,12 +161,52 @@ def resolve_sandbox_workspace_locator(
 
 
 def daemon_visible_workspace_path(path: Path) -> Path:
-    """Translate a worker path through the deployment-owned daemon root mapping."""
+    """Translate a worker path to a daemon-visible bind path at the trusted boundary.
+
+    The translation contract is deployment-selected and deterministic:
+
+    - ``local`` (the default when no daemon root is configured): the Docker daemon
+      shares the worker filesystem, so the worker path is already daemon-visible and
+      is returned unchanged. Configuring a daemon root remap in this mode is a
+      contradiction and fails closed.
+    - ``remote``: the daemon runs against a distinct filesystem view, so the worker
+      path is rebased from ``WORKFLOW_WORKSPACE_ROOT`` onto
+      ``WORKFLOW_WORKSPACE_DAEMON_ROOT`` after a containment check. A remote
+      selection without a configured daemon root cannot produce a valid bind path
+      and fails closed rather than leaking a worker-only path to the daemon.
+
+    ``WORKFLOW_DOCKER_DAEMON_MODE`` selects the contract explicitly; when unset it is
+    inferred from whether a daemon root is configured, preserving the prior
+    behavior. Translation only ever runs at this trusted worker/runtime boundary,
+    after authorization and materialization.
+    """
     worker_root_text = os.getenv("WORKFLOW_WORKSPACE_ROOT", "").strip()
     daemon_root_text = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
     resolved = path.resolve()
-    if not daemon_root_text:
+
+    mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
+    if not mode:
+        mode = "remote" if daemon_root_text else "local"
+    if mode not in {"local", "remote"}:
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_AUTHORITY_MISMATCH,
+            "WORKFLOW_DOCKER_DAEMON_MODE must be 'local' or 'remote'",
+        )
+
+    if mode == "local":
+        if daemon_root_text:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "local daemon mode must not configure a daemon root remap",
+            )
         return resolved
+
+    # Remote daemon translation contract.
+    if not daemon_root_text:
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_AUTHORITY_MISMATCH,
+            "remote daemon mode requires WORKFLOW_WORKSPACE_DAEMON_ROOT",
+        )
     if not worker_root_text:
         raise WorkspaceLocatorResolutionError(
             WORKSPACE_AUTHORITY_MISMATCH,
