@@ -2151,7 +2151,6 @@ class WorkflowExecutionSpec(BaseModel):
     runtime: WorkflowRuntimeSelection = Field(
         default_factory=WorkflowRuntimeSelection, alias="runtime"
     )
-    git: WorkflowGitSelection = Field(default_factory=WorkflowGitSelection, alias="git")
     publish: WorkflowPublishSelection = Field(
         default_factory=WorkflowPublishSelection, alias="publish"
     )
@@ -2170,6 +2169,16 @@ class WorkflowExecutionSpec(BaseModel):
     recovery: WorkflowRecoveryProvenance | None = Field(None, alias="recovery")
     resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
     depends_on: list[str] | None = Field(None, alias="dependsOn")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_git_authoring(cls, value: object) -> object:
+        if isinstance(value, Mapping) and "git" in value:
+            raise WorkflowContractError(
+                "workflow.git is not accepted for new submissions; use the "
+                "top-level provider-discriminated repository target"
+            )
+        return value
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -2799,9 +2808,18 @@ def build_canonical_workflow_view(
     publish_node["mode"] = publish_mode
     skill_caps = skill_node.get("requiredCapabilities")
     repository_skill_caps = list(_skill_metadata_required_capabilities(skill_id))
+    repository_tool_caps: list[object] = []
     required.extend(repository_skill_caps)
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
+    workflow_tool_raw = workflow_payload.get("tool")
+    workflow_tool = (
+        workflow_tool_raw if isinstance(workflow_tool_raw, Mapping) else {}
+    )
+    workflow_tool_caps = workflow_tool.get("requiredCapabilities")
+    if isinstance(workflow_tool_caps, list):
+        repository_tool_caps.extend(workflow_tool_caps)
+        required.extend(workflow_tool_caps)
 
     steps_node = (canonical.get("workflow") or {}).get("steps")
     if isinstance(steps_node, list):
@@ -2824,6 +2842,7 @@ def build_canonical_workflow_view(
             step_tool = step_tool_raw if isinstance(step_tool_raw, Mapping) else {}
             step_tool_caps = step_tool.get("requiredCapabilities")
             if isinstance(step_tool_caps, list):
+                repository_tool_caps.extend(step_tool_caps)
                 required.extend(step_tool_caps)
 
     required.extend(
@@ -2831,6 +2850,7 @@ def build_canonical_workflow_view(
             repository_target,
             publish_mode=publish_mode,
             skill_capabilities=repository_skill_caps,
+            tool_capabilities=repository_tool_caps,
         )
     )
 
