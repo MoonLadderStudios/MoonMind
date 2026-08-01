@@ -160,7 +160,10 @@ def test_lore_connection_persists_trust_projection_and_merge_policy(tmp_path) ->
             "toolBundleRef": "tool-bundle:lore-1.2.3",
             "executableSha256": "sha256:lore",
         },
-        "credentialSource": "secret_ref",
+        "credential": {
+            "source": "secret_ref",
+            "credentialRef": {"provider": "env", "key": "LORE_TOKEN"},
+        },
         "projection": {
             "provider": "github",
             "repository": "owner/tactics-projection",
@@ -176,6 +179,75 @@ def test_lore_connection_persists_trust_projection_and_merge_policy(tmp_path) ->
     modeled = RepositoryConnection.model_validate(connection)
     persist_repository_connection(modeled, path)
     assert load_repository_connection(path, modeled.id) == modeled
+
+
+@pytest.mark.parametrize(
+    ("provider", "credential"),
+    [
+        ("git", {"source": "github_resolver"}),
+        (
+            "git",
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "GIT_TOKEN"},
+            },
+        ),
+        (
+            "lore",
+            {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "LORE_TOKEN"},
+            },
+        ),
+        ("lore", {"source": "trusted_network_development"}),
+    ],
+)
+def test_repository_connection_credential_variants_round_trip(
+    provider, credential
+) -> None:
+    payload = {
+        "schemaVersion": "moonmind.repository-connection.v1",
+        "id": f"repository-connection:{provider}",
+        "provider": provider,
+        "displayName": f"{provider} connection",
+        "endpointRef": f"{provider}-endpoint:default",
+        "allowedOperations": ["read"],
+        "clientPolicy": _policy().model_dump(by_alias=True),
+        "credential": credential,
+    }
+    modeled = RepositoryConnection.model_validate(payload)
+    assert modeled.model_dump(by_alias=True, mode="json")["credential"] == credential
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        {"source": "secret_ref"},
+        {
+            "source": "github_resolver",
+            "credentialRef": {"provider": "env", "key": "TOKEN"},
+        },
+        {
+            "source": "trusted_network_development",
+            "credentialRef": {"provider": "env", "key": "TOKEN"},
+        },
+    ],
+)
+def test_repository_connection_rejects_invalid_credential_reference_rules(
+    credential,
+) -> None:
+    payload = {
+        "schemaVersion": "moonmind.repository-connection.v1",
+        "id": "repository-connection:test",
+        "provider": "lore",
+        "displayName": "Lore connection",
+        "endpointRef": "lore-endpoint:test",
+        "allowedOperations": ["read"],
+        "clientPolicy": _policy().model_dump(by_alias=True),
+        "credential": credential,
+    }
+    with pytest.raises(ValueError):
+        RepositoryConnection.model_validate(payload)
 
 
 def test_resolved_target_freezes_remote_tip_and_client_evidence() -> None:

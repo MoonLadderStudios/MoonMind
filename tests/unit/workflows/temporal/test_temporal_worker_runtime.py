@@ -3259,6 +3259,21 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
 
+
+def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv(
+        "MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(tmp_path / "artifacts")
+    )
+
+    dependencies = _build_agent_runtime_deps()
+    launcher = dependencies[2]
+
+    assert launcher._lore_repository_adapter is not None
+
+
 def test_build_agent_runtime_deps_reuses_global_session_network(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -13,14 +14,19 @@ from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
+    RepositoryConnection,
     RepositoryContractError,
     compile_repository_target,
     materialize_resolved_repository_target,
+    persist_repository_connection,
 )
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
+    LoreCliReadinessAdapter,
+)
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
@@ -257,6 +263,81 @@ async def test_lore_readiness_uses_policy_owned_adapter_and_preserves_exact_iden
     assert resolved.remote_tip_expectation == {"kind": "read_only"}
     assert resolved.compatible_server_versions == ("2026.08",)
     adapter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_portable_lore_adapter_validates_connection_and_exact_cli_evidence(
+    tmp_path,
+):
+    executable = tmp_path / "lore"
+    executable.write_bytes(b"fake-lore-client")
+    executable.chmod(0o755)
+    digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+    connection = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "repository-connection:tactics",
+            "provider": "lore",
+            "displayName": "Tactics Lore",
+            "endpointRef": "lore-endpoint:tactics",
+            "allowedRepositoryIds": ["tactics"],
+            "allowedOperations": ["read"],
+            "clientPolicy": {
+                "pinnedVersion": "1.2.3",
+                "compatibleServerVersions": ["2026.08"],
+                "toolBundleRef": "tool-bundle:lore-1.2.3",
+                "executableSha256": f"sha256:{digest}",
+            },
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": "env", "key": "LORE_TOKEN"},
+            },
+        }
+    )
+    connections_dir = tmp_path / "connections"
+    persist_repository_connection(connection, connections_dir / "tactics.json")
+    adapter = LoreCliReadinessAdapter(
+        connections_dir=connections_dir,
+        executable=str(executable),
+        tool_bundle_ref="tool-bundle:lore-1.2.3",
+    )
+    adapter._run = AsyncMock(
+        side_effect=[
+            (0, "lore 1.2.3\n", ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repositoryId": "lore-repository-uuid",
+                        "repositoryName": "tactics",
+                        "branchId": "branch-main-id",
+                        "branchName": "Main",
+                        "revisionSignature": "lore-revision-123",
+                        "serverVersion": "2026.08",
+                    }
+                ),
+                "",
+            ),
+        ]
+    )
+    target = compile_repository_target(
+        {
+            "provider": "lore",
+            "connectionRef": connection.id,
+            "repository": {"name": "tactics"},
+            "branch": {"name": "Main"},
+        }
+    )
+
+    resolved = await adapter(
+        target,
+        _make_request(parameters={"publishMode": "none"}),
+    )
+
+    assert resolved.repository.id == "lore-repository-uuid"
+    assert resolved.prepared_branch.id == "branch-main-id"
+    assert resolved.prepared_revision.revision_signature == "lore-revision-123"
+    assert resolved.client_evidence.server_version == "2026.08"
 
 
 @pytest.mark.asyncio

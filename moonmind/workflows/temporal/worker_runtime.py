@@ -2547,6 +2547,9 @@ def _build_agent_runtime_deps(
     from moonmind.workflows.temporal.runtime.launcher import (
         reconcile_deployment_git_connection,
     )
+    from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
+        LoreCliReadinessAdapter,
+    )
 
     reconciled_git_connection = reconcile_deployment_git_connection()
     launcher = ManagedRuntimeLauncher(
@@ -2554,6 +2557,7 @@ def _build_agent_runtime_deps(
         log_streamer=log_streamer,
         artifact_service=artifact_service,
         repository_client_policy=reconciled_git_connection.client_policy,
+        lore_repository_adapter=LoreCliReadinessAdapter.from_environment(),
     )
     session_store = ManagedSessionStore(
         os.path.join(

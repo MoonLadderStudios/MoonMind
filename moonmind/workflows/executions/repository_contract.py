@@ -15,6 +15,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from moonmind.schemas.manifest_models import SecretRef
+
 DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default"
 LEGACY_REPOSITORY_DECODER_VERSION = "moonmind.repository-legacy-history.v1"
 REPOSITORY_CAPABILITY_UNKNOWN = "REPOSITORY_CAPABILITY_UNKNOWN"
@@ -130,6 +132,30 @@ class RepositoryMergeCoordinatorPolicy(BaseModel):
     )
 
 
+class GitHubResolverCredential(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source: Literal["github_resolver"]
+
+
+class SecretRefCredential(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+    source: Literal["secret_ref"]
+    credential_ref: SecretRef = Field(alias="credentialRef")
+
+
+class TrustedNetworkDevelopmentCredential(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source: Literal["trusted_network_development"]
+
+
+RepositoryCredential = Annotated[
+    GitHubResolverCredential
+    | SecretRefCredential
+    | TrustedNetworkDevelopmentCredential,
+    Field(discriminator="source"),
+]
+
+
 class ResolvedRepositoryTarget(BaseModel):
     """Immutable repository identity observed at the pre-mutation boundary."""
 
@@ -182,12 +208,19 @@ class RepositoryConnection(BaseModel):
     merge_coordinator: RepositoryMergeCoordinatorPolicy | None = Field(
         None, alias="mergeCoordinator"
     )
-    credential_source: Literal[
-        "github_resolver", "secret_ref", "trusted_network_development"
-    ] = Field(alias="credentialSource")
+    credential: RepositoryCredential
 
     @model_validator(mode="after")
     def _validate_provider_policy(self) -> "RepositoryConnection":
+        if (
+            self.provider == "git"
+            and self.credential.source == "trusted_network_development"
+        ):
+            raise ValueError("Git connections do not support trusted-network credentials")
+        if self.provider == "lore" and self.credential.source == "github_resolver":
+            raise ValueError(
+                "Lore connections do not support GitHub resolver credentials"
+            )
         if self.provider == "git" and (
             self.projection is not None or self.merge_coordinator is not None
         ):
@@ -266,7 +299,7 @@ def reconcile_default_git_connection(
         endpointRef="https://github.com",
         allowedOperations=("read", "write", "branch_write", "review_request"),
         clientPolicy=client_policy,
-        credentialSource="github_resolver",
+        credential={"source": "github_resolver"},
     )
 
 
@@ -529,7 +562,7 @@ async def ensure_repository_ready(
     )
     await readiness_registry.check(required, context)
 
-    if connection.credential_source == "github_resolver":
+    if connection.credential.source == "github_resolver":
         await _await_if_needed(credential_resolver(target.repository.name))
 
     if operation != "read":
@@ -555,6 +588,7 @@ __all__ = [
     "LEGACY_REPOSITORY_DECODER_VERSION",
     "RepositoryClientEvidence",
     "RepositoryClientPolicy",
+    "RepositoryCredential",
     "RepositoryConnection",
     "RepositoryContractError",
     "ResolvedRepositoryTarget",

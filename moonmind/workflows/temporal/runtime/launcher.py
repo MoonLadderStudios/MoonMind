@@ -475,7 +475,7 @@ class ManagedRuntimeLauncher:
             "gh",
             lambda context: (
                 context["target"].provider == "git"
-                and context["connection"].credential_source == "github_resolver"
+                and context["connection"].credential.source == "github_resolver"
                 and context["publishMode"] == "pr"
             ),
         )
