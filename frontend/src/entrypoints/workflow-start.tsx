@@ -34,6 +34,15 @@ import {
   readRemediationCreateDraft,
   type RemediationCreateDraft,
 } from "../lib/remediationCreateDraft";
+import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
+import {
+  type ContextRetrievalAuthoring,
+  compileContextRetrievalParameters,
+  defaultContextRetrievalAuthoring,
+  hasAuthoredContextRetrieval,
+  parseContextRetrievalParameters,
+  retrievalCeilingsFromRuntimeConfig,
+} from "../lib/contextRetrievalAuthoring";
 
 type WorkflowStartDashboardConfig = {
   features?: {
@@ -420,6 +429,7 @@ interface DashboardConfig {
       defaultBoardId?: string;
       rememberLastBoardInSession?: boolean;
     };
+    retrievalAuthoring?: Record<string, unknown>;
   };
 }
 
@@ -1542,6 +1552,16 @@ export function buildEditParametersPatch({
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
+  }
+  // Context retrieval authority (#3514) is an operator-cleared control. When the
+  // submission does not carry `rag` / `followUpRetrieval` the operator disabled
+  // that authoring, so the inherited base value must be explicitly removed
+  // rather than silently preserved (mirrors the `mergeAutomation` clear above).
+  if (!("rag" in submittedPayload)) {
+    delete parametersPatch.rag;
+  }
+  if (!("followUpRetrieval" in submittedPayload)) {
+    delete parametersPatch.followUpRetrieval;
   }
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
@@ -5816,6 +5836,9 @@ function StepContextBar({
 function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    dashboardConfig.system?.retrievalAuthoring,
+  );
   const pageMode = useMemo(
     () => resolveTaskSubmitPageMode(window.location.search),
     [],
@@ -6033,6 +6056,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
+  const [contextRetrieval, setContextRetrieval] =
+    useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
@@ -6600,6 +6625,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       );
     }
     setProduceReport(draft.reportOutputEnabled);
+    setContextRetrieval(
+      parseContextRetrievalParameters(
+        recordValue(temporalDraftQuery.data.execution.inputParameters),
+      ),
+    );
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
     setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
@@ -11056,6 +11086,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         schedulePayload;
     }
 
+    // Context retrieval (RAG) authoring (#3514). Placed at the payload level so
+    // `rag` / `followUpRetrieval` are lifted into the run's initial parameters
+    // (and, for scheduled runs, into target.initialParameters) server-side.
+    if (hasAuthoredContextRetrieval(contextRetrieval)) {
+      const compiledRetrieval =
+        compileContextRetrievalParameters(contextRetrieval);
+      const submittedRetrievalPayload = requestBody.payload as Record<
+        string,
+        unknown
+      >;
+      if (compiledRetrieval.rag) {
+        submittedRetrievalPayload.rag = compiledRetrieval.rag;
+      }
+      if (compiledRetrieval.followUpRetrieval) {
+        submittedRetrievalPayload.followUpRetrieval =
+          compiledRetrieval.followUpRetrieval;
+      }
+    }
+
     try {
       let inputArtifactRef: string | null = null;
       const submittedPayload = requestBody.payload as Record<string, unknown>;
@@ -11138,6 +11187,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
+      // Context retrieval authoring (#3514) is submitted via the payload, not the
+      // workflow draft, so it must be compared explicitly or an exact rerun that
+      // only changes retrieval controls is classified as unchanged and its
+      // `parametersPatch` is dropped to null. Compare the compiled submission
+      // against the compiled source parameters.
+      const submittedRetrievalConfig = hasAuthoredContextRetrieval(contextRetrieval)
+        ? compileContextRetrievalParameters(contextRetrieval)
+        : {};
+      const sourceRetrievalAuthoring = parseContextRetrievalParameters(
+        recordValue(temporalDraftData?.execution?.inputParameters),
+      );
+      const sourceRetrievalConfig = hasAuthoredContextRetrieval(
+        sourceRetrievalAuthoring,
+      )
+        ? compileContextRetrievalParameters(sourceRetrievalAuthoring)
+        : {};
+      const retrievalConfigChanged =
+        JSON.stringify(submittedRetrievalConfig) !==
+        JSON.stringify(sourceRetrievalConfig);
       const currentPublishModeSelection = normalizePublishModeSelection(publishMode);
       const rerunDraftPublishModeSelection = normalizePublishModeSelection(
         rerunDraft?.publishMode,
@@ -11180,7 +11248,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               })),
             ) ||
           JSON.stringify(taskLevelAttachmentRefs) !==
-            JSON.stringify(rerunDraft.inputAttachments)
+            JSON.stringify(rerunDraft.inputAttachments) ||
+          retrievalConfigChanged
         : false;
       const isExactRerun = isExactRerunRequest && !rerunFormChanged;
       const artifactWorkflowPayload = mergeRecordValues(
@@ -13639,6 +13708,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </p>
           </div>
         ) : null}
+        <details className="queue-context-retrieval-disclosure">
+          <summary>Context retrieval (RAG)</summary>
+          <ContextRetrievalControls
+            value={contextRetrieval}
+            onChange={setContextRetrieval}
+            ceilings={retrievalCeilings}
+            description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
+          />
+        </details>
         </section>
 
         {pageMode.mode === "create" ? (

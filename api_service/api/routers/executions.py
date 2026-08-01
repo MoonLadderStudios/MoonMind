@@ -986,7 +986,11 @@ async def _prepare_checkpoint_branch_launch(
     source_run_id: str | None = None,
     source_execution_ordinal: int | None = None,
     source_checkpoint_boundary: str = "after_execution",
+    follow_up_retrieval: Mapping[str, Any] | None = None,
 ) -> None:
+    bounded_follow_up_retrieval = _bound_branch_follow_up_retrieval(
+        follow_up_retrieval
+    )
     git_context = _checkpoint_branch_git_context(record)
     try:
         await prepare_checkpoint_branch_workspace(
@@ -1020,12 +1024,52 @@ async def _prepare_checkpoint_branch_launch(
             parent_branch_id=parent_branch_id,
             parent_turn_id=parent_turn_id,
             runtime_context_policy=runtime_context_policy,
+            follow_up_retrieval=bounded_follow_up_retrieval,
         )
     except CheckpointBranchGitBindingError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.failure_code, "reason": exc.failure_code},
         ) from exc
+
+
+def _bound_branch_follow_up_retrieval(
+    authored: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Narrow a branch-turn override to deployment-owned retrieval ceilings."""
+
+    if authored is None:
+        return None
+    bounded = dict(authored)
+    allowed = tuple(
+        item.strip()
+        for item in os.getenv(
+            "MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs"
+        ).split(",")
+        if item.strip()
+    )
+    requested = list(dict.fromkeys(bounded.get("collections") or []))
+    if not all(isinstance(item, str) and item in allowed for item in requested):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "retrieval_collections_exceed_server_policy"},
+        )
+    bounded["collections"] = requested
+    ceilings = {
+        "topK": ("MAX_TOP_K", 8),
+        "maxContextTokens": ("MAX_CONTEXT_TOKENS", 8192),
+        "maxQueries": ("MAX_QUERIES", 12),
+        "latencyMs": ("MAX_LATENCY_MS", 5000),
+        "maxLifetimeSeconds": ("MAX_LIFETIME_SECONDS", 900),
+    }
+    for field, (env_suffix, default) in ceilings.items():
+        value = bounded.get(field)
+        if isinstance(value, int) and not isinstance(value, bool):
+            bounded[field] = min(
+                value,
+                int(os.getenv(f"MOONMIND_FOLLOWUP_RETRIEVAL_{env_suffix}", default)),
+            )
+    return bounded
 
 
 def _branch_comparison_record(
@@ -1365,6 +1409,7 @@ def _branch_turn_launch_manifest_payload(
     payload: CheckpointBranchTurnLaunchRequest,
     context_bundle_ref: str,
 ) -> dict[str, Any]:
+    follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
     return {
         "workflowId": workflow_id,
         "runId": branch.source_run_id,
@@ -1388,6 +1433,11 @@ def _branch_turn_launch_manifest_payload(
             "instructionRef": turn.instruction_ref,
             "instructionDigest": turn.instruction_digest,
             "contextBundleRef": context_bundle_ref,
+            **(
+                {"followUpRetrieval": dict(follow_up_retrieval)}
+                if isinstance(follow_up_retrieval, Mapping)
+                else {}
+            ),
         },
     }
 
@@ -10455,6 +10505,13 @@ async def _create_execution_from_workflow_request(
     }
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
+    # Context retrieval (RAG) authoring: initial ContextPack overrides (#3513)
+    # and in-session follow-up retrieval policy (#3514). Lifted here next to the
+    # omnigent block so the authored values reach the run's initial parameters.
+    if isinstance(payload.get("rag"), Mapping):
+        initial_parameters["rag"] = dict(payload["rag"])
+    if isinstance(payload.get("followUpRetrieval"), Mapping):
+        initial_parameters["followUpRetrieval"] = dict(payload["followUpRetrieval"])
     if "modelTier" in runtime_payload:
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:
@@ -13171,6 +13228,7 @@ async def create_checkpoint_branch(
         source_run_id=payload.source.run_id,
         source_execution_ordinal=payload.source.execution_ordinal,
         source_checkpoint_boundary=payload.source.checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     branch = await session.get(WorkflowCheckpointBranch, branch_id)
     if branch is None:
@@ -13346,6 +13404,9 @@ async def launch_checkpoint_branch_turn(
             "digest": "sha256:checkpoint-branch-launch-api-v1",
         },
     }
+    follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
+    if isinstance(follow_up_retrieval, Mapping):
+        context_payload["followUpRetrieval"] = dict(follow_up_retrieval)
     try:
         context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
     except CheckpointBranchContextBundleError as exc:
@@ -13509,6 +13570,7 @@ async def _record_branch_turn_operation(
         source_run_id=branch.source_run_id,
         source_execution_ordinal=branch.source_execution_ordinal,
         source_checkpoint_boundary=branch.source_checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
     if turn is None:
@@ -13670,6 +13732,7 @@ async def fork_checkpoint_branch(
         source_run_id=parent.source_run_id,
         source_execution_ordinal=parent.source_execution_ordinal,
         source_checkpoint_boundary=parent.source_checkpoint_boundary,
+        follow_up_retrieval=payload.follow_up_retrieval,
     )
     forked = await session.get(WorkflowCheckpointBranch, forked_branch_id)
     if forked is None:

@@ -15,6 +15,7 @@ from api_service.api.routers.retrieval_gateway import (
     _server_policy_snapshot,
     issue_bridge_retrieval_capability,
     authorize_retrieval_request,
+    bridge_follow_up_retrieval_diagnostics,
     get_retrieval_service,
     revoke_bridge_retrieval_capabilities,
     router,
@@ -1231,3 +1232,168 @@ async def test_bridge_capability_issuance_denied_for_non_owner(tmp_path) -> None
 
     assert denied.value.status_code == 403
     assert denied.value.detail["code"] == "workflow_ownership_denied"
+
+
+def _record_evidence(registry, capability, **evidence) -> None:
+    """Record a bounded evidence summary the way the gateway would."""
+    base = {
+        "state": "succeeded",
+        "correlation": {"toolCallId": "tool-x"},
+        "resultCount": 1,
+        "contextBytes": 100,
+        "latencyMs": 42,
+        "delivery": {"state": "delivery_unknown"},
+        "classification": None,
+        "truncated": False,
+    }
+    base.update(evidence)
+    registry.record(capability, base)
+
+
+def test_summarize_bridge_session_aggregates_follow_up_evidence(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    token, capability = registry.issue(_session_budget(), lifetime_seconds=60)
+
+    _record_evidence(registry, capability, state="succeeded", resultCount=3)
+    _record_evidence(
+        registry,
+        capability,
+        state="succeeded",
+        resultCount=0,
+        truncated=True,
+        delivery={"state": "delivered"},
+    )
+    _record_evidence(
+        registry,
+        capability,
+        state="failed",
+        classification="token_budget_exhausted",
+        delivery={"state": "not_delivered"},
+    )
+    _record_evidence(
+        registry,
+        capability,
+        state="succeeded",
+        classification="local_fallback",
+        latencyMs=999,
+        delivery={"state": "timed_out"},
+    )
+
+    summary = registry.summarize_bridge_session("bridge-1")
+
+    assert summary["bridgeSessionId"] == "bridge-1"
+    assert summary["capabilityCount"] == 1
+    agg = summary["aggregate"]
+    assert agg["requestCount"] == 4
+    assert agg["succeeded"] == 3
+    assert agg["failed"] == 1
+    assert agg["empty"] == 1
+    assert agg["truncated"] == 1
+    assert agg["fallback"] == 1
+    assert agg["budgetExhausted"] == 1
+    assert agg["delivered"] == 1
+    assert agg["notDelivered"] == 1
+    assert agg["timedOut"] == 1
+    assert agg["maxLatencyMs"] == 999
+    assert agg["activeCapabilities"] == 1
+    # Capability-level scope/collections are exposed for operator diagnostics.
+    cap = summary["capabilities"][0]
+    assert cap["collections"] == ["repo"]
+    assert cap["scope"]["repository"] == "MoonMind"
+    assert cap["policyVersion"] == "policy-7"
+
+
+def test_summarize_bridge_session_merges_delivery_acknowledgement(tmp_path) -> None:
+    """A delivery ack for a request is folded into it, not counted separately."""
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(_session_budget(), lifetime_seconds=60)
+
+    # Original successful retrieval records a provisional delivery_unknown row.
+    _record_evidence(
+        registry,
+        capability,
+        state="succeeded",
+        resultCount=2,
+        correlation={"toolCallId": "tool-ack"},
+        delivery={"state": "delivery_unknown", "toolCallId": "tool-ack"},
+    )
+    # The bridge later acknowledges delivery: a second evidence row for the same
+    # toolCallId. It must project onto the original request, not inflate counts.
+    _record_evidence(
+        registry,
+        capability,
+        state="delivery_updated",
+        classification="delivered",
+        resultCount=0,
+        correlation={"toolCallId": "tool-ack"},
+        delivery={"state": "delivered", "toolCallId": "tool-ack"},
+    )
+
+    summary = registry.summarize_bridge_session("bridge-1")
+    agg = summary["aggregate"]
+    # One logical request, counted once, with the authoritative delivery state.
+    assert agg["requestCount"] == 1
+    assert agg["succeeded"] == 1
+    assert agg["delivered"] == 1
+    assert agg["deliveryUnknown"] == 0
+    # No spurious zero-result request surfaced by the acknowledgement row.
+    assert agg["empty"] == 0
+
+
+def test_summarize_bridge_session_excludes_other_bridge(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    registry.issue(_session_budget(), lifetime_seconds=60)
+    registry.issue(
+        _session_budget(bridge_session_id="bridge-2", session_id="session-2"),
+        lifetime_seconds=60,
+    )
+
+    summary = registry.summarize_bridge_session("bridge-1")
+    assert summary["capabilityCount"] == 1
+    assert all(
+        cap["scope"]["repository"] == "MoonMind"
+        for cap in summary["capabilities"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_bridge_follow_up_diagnostics_requires_ownership(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    registry.issue(_session_budget(), lifetime_seconds=60)
+
+    class Store:
+        async def get_bridge_session(self, bridge_session_id):
+            return _bridge_row()
+
+    with pytest.raises(HTTPException) as denied:
+        await bridge_follow_up_retrieval_diagnostics(
+            "bridge-1",
+            registry=registry,
+            store=Store(),
+            user=SimpleNamespace(id="intruder"),
+            service=_UnownedExecutionService(),
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bridge_follow_up_diagnostics_returns_projection(tmp_path) -> None:
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    _, capability = registry.issue(_session_budget(), lifetime_seconds=60)
+    _record_evidence(registry, capability, state="succeeded", resultCount=2)
+
+    class Store:
+        async def get_bridge_session(self, bridge_session_id):
+            assert bridge_session_id == "bridge-1"
+            return _bridge_row()
+
+    result = await bridge_follow_up_retrieval_diagnostics(
+        "bridge-1",
+        registry=registry,
+        store=Store(),
+        user=SimpleNamespace(id="user-1"),
+        service=_OwnedExecutionService(),
+    )
+    assert result["capabilityCount"] == 1
+    assert result["aggregate"]["requestCount"] == 1
+    assert result["aggregate"]["succeeded"] == 1

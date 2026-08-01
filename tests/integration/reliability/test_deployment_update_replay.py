@@ -20,7 +20,6 @@ from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 
@@ -184,7 +183,7 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
     requested_repository = manifest["requestedRepository"]
     requested_image = f"{requested_repository}:latest"
     real_docker = shutil.which("docker")
-    assert real_docker is not None, "integration_ci image must provide Docker Compose"
+    assert real_docker is not None, "reliability journey image must provide Docker Compose"
 
     compose_path = tmp_path / "docker-compose.yaml"
     compose_path.write_text(

@@ -3974,6 +3974,66 @@ def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_
     service.create_execution.assert_not_awaited()
 
 
+def test_create_execution_lifts_context_retrieval_authoring(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#3514: payload-level rag / followUpRetrieval reach initial parameters."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    async def _identity_validate_skill_step_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(
+            valid=True,
+            parameters=initial_parameters,
+            error_dicts=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.validate_skill_step_inputs",
+        _identity_validate_skill_step_inputs,
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "rag": {"collections": ["docs"], "allowStale": True},
+                "followUpRetrieval": {
+                    "enabled": True,
+                    "collections": ["repo", "docs"],
+                    "topK": 6,
+                },
+                "workflow": {
+                    "instructions": "Run with context retrieval authoring.",
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Step",
+                            "type": "skill",
+                            "skill": {
+                                "id": "noop",
+                                "inputs": {},
+                                "inputContractDigest": "sha256:saved",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert initial_parameters["rag"] == {"collections": ["docs"], "allowStale": True}
+    assert initial_parameters["followUpRetrieval"] == {
+        "enabled": True,
+        "collections": ["repo", "docs"],
+        "topK": 6,
+    }
+
+
 def test_create_task_shaped_execution_normalizes_skill_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

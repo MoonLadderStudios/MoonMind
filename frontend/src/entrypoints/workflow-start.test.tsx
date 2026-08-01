@@ -199,6 +199,58 @@ describe("buildEditParametersPatch", () => {
       },
     });
   });
+
+  it("clears inherited rag/followUpRetrieval when the submission omits them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-clear",
+        inputParameters: {
+          rag: { collections: ["repo"], required: true },
+          followUpRetrieval: { enabled: true, collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    // The operator disabled retrieval authoring, so the inherited authority must
+    // not silently persist through the edit patch.
+    expect("rag" in patch).toBe(false);
+    expect("followUpRetrieval" in patch).toBe(false);
+  });
+
+  it("keeps rag/followUpRetrieval when the submission carries them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-keep",
+        inputParameters: {
+          rag: { collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        rag: { collections: ["docs"] },
+        followUpRetrieval: { enabled: true, collections: ["docs"] },
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    expect(patch.rag).toEqual({ collections: ["docs"] });
+    expect(patch.followUpRetrieval).toEqual({
+      enabled: true,
+      collections: ["docs"],
+    });
+  });
 });
 
 describe("WorkflowStartPage loading placeholders", () => {

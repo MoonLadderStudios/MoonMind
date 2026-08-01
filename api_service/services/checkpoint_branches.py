@@ -66,6 +66,7 @@ async def prepare_checkpoint_branch_workspace(
     parent_branch_id: str | None = None,
     parent_turn_id: str | None = None,
     runtime_context_policy: str | None = None,
+    follow_up_retrieval: Mapping[str, Any] | None = None,
     step_execution_manifest_ref: str | None = None,
     created_step_execution_id: str | None = None,
     created_at: datetime | None = None,
@@ -117,6 +118,7 @@ async def prepare_checkpoint_branch_workspace(
         parent_branch_id=parent_branch_id,
         parent_turn_id=parent_turn_id,
         runtime_context_policy=runtime_context_policy,
+        follow_up_retrieval=follow_up_retrieval,
         step_execution_manifest_ref=step_execution_manifest_ref,
         created_step_execution_id=created_step_execution_id,
     )
@@ -180,6 +182,7 @@ async def _persist_prepared_checkpoint_branch(
     parent_branch_id: str | None,
     parent_turn_id: str | None,
     runtime_context_policy: str | None,
+    follow_up_retrieval: Mapping[str, Any] | None,
     step_execution_manifest_ref: str | None,
     created_step_execution_id: str | None,
 ) -> None:
@@ -291,6 +294,7 @@ async def _persist_prepared_checkpoint_branch(
             parent_turn_id=parent_turn_id,
             step_execution_manifest_ref=step_execution_manifest_ref,
             created_step_execution_id=created_step_execution_id,
+            follow_up_retrieval=follow_up_retrieval,
         )
 
     await _upsert_artifact_ref(
@@ -325,12 +329,15 @@ async def _persist_branch_turn(
     parent_turn_id: str | None,
     step_execution_manifest_ref: str | None,
     created_step_execution_id: str | None,
+    follow_up_retrieval: Mapping[str, Any] | None,
 ) -> None:
     binding = prepared.binding
     assert binding.branch_turn_id is not None
     turn = await session.get(WorkflowCheckpointBranchTurn, binding.branch_turn_id)
     diagnostics = dict(prepared.branch_turn_metadata or {})
     diagnostics["gitBinding"] = prepared.diagnostics["gitBinding"]
+    if follow_up_retrieval is not None:
+        diagnostics["followUpRetrieval"] = dict(follow_up_retrieval)
     if turn is None:
         turn = WorkflowCheckpointBranchTurn(
             branch_turn_id=binding.branch_turn_id,
