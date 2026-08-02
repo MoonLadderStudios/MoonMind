@@ -622,6 +622,13 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_UPDATE_AUTHORITATIVE_PATCH = (
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-termination-v4"
 )
+# Keep the managed-session child alive after its parent closes so API-owned
+# cancellation cleanup can still invoke its idempotent termination update.
+# The patch preserves replay compatibility for histories that recorded the
+# prior default parent-close policy.
+RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH = (
+    "run-task-scoped-session-abandon-on-parent-close-v1"
+)
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 # Replay-stable patch id for emitting a failed-run recovery manifest before
 # terminal failure is reported (MM-881). Gated so in-flight histories that
@@ -14160,18 +14167,27 @@ class MoonMindRunWorkflow:
             workflow_id=session_workflow_id,
             session_input=session_input,
         )
+        session_child_options: dict[str, Any] = {
+            "id": session_workflow_id,
+            "task_queue": self._workflow_child_task_queue(),
+            "search_attributes": self._workflow_scoped_session_visibility(
+                binding=initial_binding
+            ),
+            "static_summary": "Workflow-scoped managed runtime session",
+            "static_details": self._workflow_scoped_session_static_details(
+                binding=initial_binding
+            ),
+        }
+        if workflow.patched(
+            RUN_WORKFLOW_SCOPED_SESSION_ABANDON_ON_PARENT_CLOSE_PATCH
+        ):
+            session_child_options["parent_close_policy"] = (
+                workflow.ParentClosePolicy.ABANDON
+            )
         self._codex_session_handle = await workflow.start_child_workflow(
             "MoonMind.AgentSession",
             session_input,
-            id=session_workflow_id,
-            task_queue=self._workflow_child_task_queue(),
-            search_attributes=self._workflow_scoped_session_visibility(
-                binding=initial_binding
-            ),
-            static_summary="Workflow-scoped managed runtime session",
-            static_details=self._workflow_scoped_session_static_details(
-                binding=initial_binding
-            ),
+            **session_child_options,
         )
         self._codex_session_binding = initial_binding
         return self._codex_session_binding

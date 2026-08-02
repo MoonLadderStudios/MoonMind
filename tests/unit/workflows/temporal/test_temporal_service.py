@@ -5720,6 +5720,74 @@ async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanu
 
 
 @pytest.mark.asyncio
+async def test_cancel_execution_terminal_retry_retries_managed_session_cleanup(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        store.save(
+            CodexManagedSessionRecord(
+                sessionId=f"sess:{created.workflow_id}:codex_cli",
+                sessionEpoch=1,
+                agentRunId=created.workflow_id,
+                containerId="container-1",
+                threadId="thread-1",
+                runtimeId="codex_cli",
+                imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+                controlUrl="docker-exec://container-1",
+                status="ready",
+                workspacePath=f"/work/agent_jobs/{created.workflow_id}/repo",
+                sessionWorkspacePath=f"/work/agent_jobs/{created.workflow_id}/session",
+                artifactSpoolPath=f"/work/agent_jobs/{created.workflow_id}/artifacts",
+                startedAt=datetime.now(tz=UTC),
+            )
+        )
+        service._fan_out_dependency_resolution = AsyncMock(
+            side_effect=RuntimeError("dependency fan-out interrupted")
+        )
+
+        with pytest.raises(RuntimeError, match="dependency fan-out interrupted"):
+            await service.cancel_execution(
+                workflow_id=created.workflow_id,
+                reason="stop",
+                graceful=True,
+            )
+
+        service._fan_out_dependency_resolution = AsyncMock()
+        retried = await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="stop",
+            graceful=True,
+        )
+
+        assert retried.state is MoonMindWorkflowState.CANCELED
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
+        )
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            f"{created.workflow_id}:session:codex_cli",
+            "TerminateSession",
+            {"reason": "stop"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_cancel_execution_prefers_direct_session_record_load_for_codex_task_session(
     tmp_path, mock_client_adapter, monkeypatch
 ):

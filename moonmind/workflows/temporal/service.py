@@ -2580,6 +2580,15 @@ class TemporalExecutionService:
         reason_text = (reason or default_reason).strip() or default_reason
 
         if record.state in TERMINAL_STATES:
+            if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+                # The Temporal close may have committed before auxiliary
+                # managed-session cleanup ran. Retrying cancel against a
+                # terminal execution must therefore remain an idempotent
+                # cleanup opportunity instead of returning immediately.
+                await self._best_effort_terminate_workflow_scoped_managed_sessions(
+                    workflow_id=record.workflow_id,
+                    reason=reason_text,
+                )
             if isinstance(record, TemporalExecutionCanonicalRecord):
                 return await self._sync_projection_best_effort(record)
             return record
