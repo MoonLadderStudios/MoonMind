@@ -10,6 +10,32 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
+def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
+    """Return validated coordinator inputs for an evidence-gated resume."""
+
+    from moonmind.omnigent.checkpoints import (
+        CandidateWorkspaceAuthority,
+        OmnigentCheckpointIdentity,
+    )
+
+    recovery = (request.parameters or {}).get("checkpointRecovery")
+    if not isinstance(recovery, dict):
+        return None
+    checkpoint_payload = recovery.get("omnigentCheckpoint")
+    if checkpoint_payload is None:
+        return None
+    checkpoint = OmnigentCheckpointIdentity.model_validate(checkpoint_payload)
+    candidate_workspace = CandidateWorkspaceAuthority(
+        loopId=f"{checkpoint.workflow_id}:{checkpoint.logical_step_id}",
+        attemptOrdinal=checkpoint.attempt_ordinal,
+        headRef=checkpoint.head_ref,
+        headDigest=checkpoint.head_digest,
+        checkpointRef=checkpoint.workspace_checkpoint_ref,
+        checkpointDigest=checkpoint.workspace_checkpoint_digest,
+    )
+    return checkpoint, candidate_workspace
+
+
 @activity.defn(name="integration.omnigent.execute")
 async def omnigent_execute_activity(
     request: AgentExecutionRequest,
@@ -138,6 +164,25 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
+        recovery_inputs = _checkpoint_recovery_from_request(request)
+        if recovery_inputs is not None:
+            checkpoint, candidate_workspace = recovery_inputs
+            # Live reattachment is intentionally fail-closed here. The
+            # Activity has validated durable restore evidence, but no
+            # authoritative proof that every original live lease/session
+            # is still current; recover_from_checkpoint therefore selects
+            # cold restore and reacquires capacity through the coordinator.
+            return await coordinator.recover_from_checkpoint(
+                request=request,
+                checkpoint=checkpoint,
+                provider_lease=None,
+                host_lease=None,
+                host_registered=False,
+                session_valid=False,
+                first_message_consistent=False,
+                current_credential_generation=checkpoint.credential_generation,
+                candidate_workspace=candidate_workspace,
+            )
         return await coordinator.execute(request)
 
 
@@ -204,6 +249,7 @@ async def omnigent_oauth_host_janitor_activity(
 
 
 __all__ = [
+    "_checkpoint_recovery_from_request",
     "omnigent_execute_activity",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",

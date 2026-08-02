@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
 from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _checkpoint_recovery_from_request,
     omnigent_execute_activity,
 )
 
@@ -59,3 +60,34 @@ def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:
         "GITHUB_TOKEN",
     ):
         assert disallowed not in source
+
+
+def test_checkpoint_recovery_request_builds_validated_candidate_workspace() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    checkpoint = _checkpoint()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="recovery-workflow",
+        idempotencyKey="recovery-step",
+        parameters={
+            "checkpointRecovery": {
+                "omnigentCheckpoint": checkpoint.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                )
+            }
+        },
+    )
+
+    parsed = _checkpoint_recovery_from_request(request)
+
+    assert parsed is not None
+    parsed_checkpoint, candidate = parsed
+    assert parsed_checkpoint == checkpoint
+    assert candidate.loop_id == (
+        f"{checkpoint.workflow_id}:{checkpoint.logical_step_id}"
+    )
+    assert candidate.head_ref == checkpoint.head_ref
+    assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref

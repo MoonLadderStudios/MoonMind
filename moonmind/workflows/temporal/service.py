@@ -3942,6 +3942,25 @@ class TemporalExecutionService:
                 ],
             }
         recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
+        # Preserve the validated Omnigent authority snapshot at the Activity
+        # boundary.  The resumed workflow must not silently turn an Omnigent
+        # checkpoint into a fresh profile-bound execution.
+        omnigent_checkpoint = checkpoint_payload.get("omnigentCheckpoint")
+        if omnigent_checkpoint is None:
+            omnigent_checkpoint = checkpoint_payload.get("omnigent_checkpoint")
+        if omnigent_checkpoint is not None:
+            try:
+                from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+
+                recovery_source_payload["omnigentCheckpoint"] = (
+                    OmnigentCheckpointIdentity.model_validate(
+                        omnigent_checkpoint
+                    ).model_dump(by_alias=True, mode="json", exclude_none=True)
+                )
+            except ValidationError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Omnigent recovery checkpoint identity is invalid."
+                ) from exc
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary
         )
