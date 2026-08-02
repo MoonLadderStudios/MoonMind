@@ -2155,9 +2155,7 @@ class WorkflowExecutionSpec(BaseModel):
     publish: WorkflowPublishSelection = Field(
         default_factory=WorkflowPublishSelection, alias="publish"
     )
-    git: WorkflowGitSelection = Field(
-        default_factory=WorkflowGitSelection, alias="git"
-    )
+    git: WorkflowGitSelection | None = Field(None, alias="git")
     propose_tasks: bool = Field(
         default_factory=_default_propose_tasks, alias="proposeTasks"
     )
@@ -2751,6 +2749,8 @@ def build_canonical_workflow_view(
     if not isinstance(workflow_node, dict):
         workflow_node = {}
         canonical["workflow"] = workflow_node
+    if workflow_node.get("git") is None:
+        workflow_node.pop("git", None)
 
     target_runtime = (
         _normalize_runtime_value(
