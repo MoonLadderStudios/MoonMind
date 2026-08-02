@@ -929,6 +929,40 @@ defaults:
     assert item["inputContractRef"] is None
 
 
+def test_skills_api_exposes_pr_resolver_selector_contract(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository_root = Path(__file__).resolve().parents[4]
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(tmp_path / "local"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(repository_root / ".agents" / "skills"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("pr-resolver",),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    item = response.json()["legacyItems"][0]
+    assert item["id"] == "pr-resolver"
+    assert item["hasInputSchema"] is True
+    assert item["inputSchema"]["required"] == ["pr"]
+    assert item["inputSchema"]["properties"]["pr"] == {
+        "type": "string",
+        "title": "Pull request",
+        "description": (
+            "PR number, PR URL, or head branch. MoonMind requires an explicit "
+            "selector so the resolver cannot target the wrong PR."
+        ),
+    }
+
+
 def test_skills_api_large_schema_uses_input_contract_ref(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

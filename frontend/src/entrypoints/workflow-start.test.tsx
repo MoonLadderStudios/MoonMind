@@ -16658,7 +16658,14 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill", "schema.other", "no-schema.skill"] },
+          items: {
+            worker: [
+              "schema.skill",
+              "schema.other",
+              "no-schema.skill",
+              "pr-resolver",
+            ],
+          },
           legacyItems: [
             {
               id: "schema.skill",
@@ -16777,6 +16784,24 @@ describe("Task Create schema-driven capability inputs", () => {
               id: "no-schema.skill",
               description: "Instruction-driven Skill fixture.",
               inputSchema: {},
+              uiSchema: {},
+              defaults: {},
+            },
+            {
+              id: "pr-resolver",
+              description: "Resolve a pull request.",
+              inputSchema: {
+                type: "object",
+                required: ["pr"],
+                properties: {
+                  pr: {
+                    type: "string",
+                    title: "Pull request",
+                    description:
+                      "PR number, PR URL, or head branch. MoonMind requires an explicit selector so the resolver cannot target the wrong PR.",
+                  },
+                },
+              },
               uiSchema: {},
               defaults: {},
             },
@@ -17410,6 +17435,50 @@ describe("Task Create schema-driven capability inputs", () => {
         "Widget external.lookup is unavailable; using a text field.",
       ),
     ).toBeTruthy();
+  });
+
+  it("gives pr-resolver an actionable required PR selector and submits it structurally", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "pr-resolver" },
+    });
+
+    const selector = await within(step).findByLabelText("Pull request");
+    expect(
+      within(step).getByText(
+        "PR number, PR URL, or head branch. MoonMind requires an explicit selector so the resolver cannot target the wrong PR.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(await within(step).findByText("Pull request is required.")).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+
+    fireEvent.change(selector, { target: { value: "2733" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          inputs?: Record<string, unknown>;
+          skill?: { inputs?: Record<string, unknown> };
+          tool?: { inputs?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.inputs?.pr).toBe("2733");
+    expect(request.payload.task.skill?.inputs?.pr).toBe("2733");
+    expect(request.payload.task.tool?.inputs?.pr).toBe("2733");
   });
 
   it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {

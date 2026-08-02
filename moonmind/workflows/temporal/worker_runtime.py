@@ -785,9 +785,10 @@ def _derive_pr_branch_prefix(
 
 
 _PR_RESOLVER_SELECTOR_ERROR = (
-    "pr-resolver workflow requires workflow.tool.inputs.pr, "
-    "workflow.tool.inputs.branch, workflow.git.startingBranch, "
-    "or a non-default workflow.git.branch"
+    "pr-resolver requires an explicit pull request selector. Set inputs.pr (or "
+    "Skill/Tool inputs named pr or branch) to a PR number, PR URL, or head "
+    "branch; git.startingBranch and a non-default git.branch are also accepted. "
+    "A default checkout branch such as main does not identify a PR."
 )
 _PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
     {"main", "master", "develop", "development", "trunk"}

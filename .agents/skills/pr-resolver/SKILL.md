@@ -22,6 +22,19 @@ metadata:
     supportedHosts:
       - cli
     nativeHostEligible: false
+inputSchema:
+  type: object
+  required:
+    - pr
+  properties:
+    pr:
+      type: string
+      title: Pull request
+      description: >-
+        PR number, PR URL, or head branch. MoonMind requires an explicit
+        selector so the resolver cannot target the wrong PR.
+uiSchema: {}
+defaults: {}
 ---
 
 # PR Resolver Skill
