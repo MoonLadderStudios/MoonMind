@@ -5629,6 +5629,26 @@ async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_jso
             assert persisted_payload["nextVerificationRequired"] is True
 
 
+async def test_remaining_work_digest_is_independent_of_entry_order() -> None:
+    first = {
+        "requirement": "artifact linkage",
+        "gapType": "implementation",
+    }
+    second = {
+        "requirement": "workflow routing",
+        "gapType": "behavior",
+    }
+
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) == activity_runtime_module._unordered_json_list_digest([second, first])
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) != activity_runtime_module._unordered_json_list_digest(
+        [first, {**second, "gapType": "contract"}]
+    )
+
+
 async def test_agent_runtime_publish_artifacts_links_remediation_verification_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5726,6 +5746,14 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert result.metadata["gateResultRef"] == verification_ref
             assert result.metadata["moonSpecVerifyArtifactRef"] == verification_ref
             assert result.metadata["sourceMoonSpecVerifyArtifactRef"] != verification_ref
+            assert result.metadata["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
+            )
+            evidence = result.metadata["moonSpecVerify"]["validatedRefs"]
+            assert evidence["progressEvidenceSchemaVersion"] == (
+                "remediation-progress-evidence/v1"
+            )
+            assert evidence["authoritativeEvidenceDigest"].startswith("sha256:")
             artifact, artifact_path = await service.read_path(
                 artifact_id=verification_ref,
                 principal="system:agent_runtime",
@@ -5744,6 +5772,9 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             ] == result.metadata["sourceMoonSpecVerifyArtifactRef"]
             assert persisted_payload["remainingGaps"][0]["requirement"] == (
                 "artifact linkage"
+            )
+            assert persisted_payload["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
             )
 
 
