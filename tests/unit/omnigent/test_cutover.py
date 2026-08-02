@@ -205,7 +205,9 @@ def test_fresh_complete_evidence_allows_next_phase_and_rollback_is_unconditional
     assert rolled_back.allowed is True
 
 
-def test_disable_new_selection_and_rollback_preserve_historical_runtime_identity() -> None:
+def test_disable_new_selection_and_rollback_preserve_historical_runtime_identity(
+    tmp_path,
+) -> None:
     """Rollback gates new defaults without rewriting durable authored history."""
 
     historical = select_runtime(
@@ -213,6 +215,8 @@ def test_disable_new_selection_and_rollback_preserve_historical_runtime_identity
         configured_default="codex_cli",
         phase=CutoverPhase.BROAD_DEFAULT,
     ).as_dict()
+    history_path = tmp_path / "persisted-execution.json"
+    history_path.write_text(json.dumps(historical), encoding="utf-8")
 
     rollback = evaluate_promotion(
         current_phase=CutoverPhase.BROAD_DEFAULT,
@@ -225,10 +229,11 @@ def test_disable_new_selection_and_rollback_preserve_historical_runtime_identity
         configured_default="codex_cli",
         phase=CutoverPhase.OPT_IN,
     )
+    reloaded_history = json.loads(history_path.read_text(encoding="utf-8"))
 
     assert rollback.allowed is True
     assert new_unselected.runtime_id == "codex_cli"
-    assert historical == {
+    assert reloaded_history == {
         "policyVersion": CUTOVER_POLICY_VERSION,
         "runtimeId": "omnigent",
         "authored": True,

@@ -36,6 +36,7 @@ from moonmind.workflows.executions.execution_contract import build_canonical_wor
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     resolve_sandbox_workspace_locator,
 )
+from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.omnigent.test_oauth_profile_lifecycle import (
     _run_coordinator_failure_case,
@@ -51,7 +52,7 @@ pytest_plugins = (
 )
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
 
 def _browser_payload() -> dict[str, object]:
@@ -61,8 +62,8 @@ def _browser_payload() -> dict[str, object]:
         "repository": "MoonLadderStudios/MoonMind",
         "targetRuntime": "omnigent",
         "omnigent": {
-            "executionTargetRef": "omnigent-codex-default",
-            "launchPolicyRef": "on-demand-v1",
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
         },
         "task": {
             "instructions": "Make the bounded deterministic change.",
@@ -90,6 +91,16 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         for forbidden in ("hostId", "leaseId", "registrationToken")
     )
 
+    # Reload the persisted Create payload and send it through the production
+    # runtime planner. This is the API-to-Temporal handoff that owns node inputs.
+    persisted = json.loads(json.dumps(canonical))
+    plan = _build_runtime_planner()(
+        inputs=persisted,
+        parameters=persisted,
+        snapshot=object(),
+    )
+    node_inputs = plan["nodes"][0]["inputs"]
+
     compiler = MoonMindRunWorkflow()
     with patch(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -100,23 +111,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         ),
     ):
         request = compiler._build_agent_execution_request(
-            node_inputs={
-                "runtime": {
-                    "mode": "omnigent",
-                    "profileId": "oauth-1",
-                    "workspaceSpec": {
-                        "repository": authored["repository"],
-                        "branch": "main",
-                        "workspaceLocator": {
-                            "kind": "sandbox",
-                            "workspaceId": "browser-product-path",
-                            "relativePath": "repo",
-                        },
-                    },
-                    "omnigent": authored["omnigent"],
-                },
-                "instructions": canonical["workflow"]["instructions"],
-            },
+            node_inputs=node_inputs,
             node_id="implement",
             tool_name="omnigent",
             workflow_parameters=canonical,
@@ -127,9 +122,8 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     assert request.agent_id == "omnigent"
     assert request.execution_profile_ref == "oauth-1"
     assert request.parameters["omnigent"] == authored["omnigent"]
-    assert request.workspace_spec["workspaceLocator"]["workspaceId"] == (
-        "browser-product-path"
-    )
+    assert request.workspace_spec["repository"] == authored["repository"]
+    assert request.workspace_spec["branch"] == "main"
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
     async with engine.begin() as connection:
@@ -157,7 +151,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     # provider transports are controlled; lifecycle, cleanup, release, and
     # terminalization remain owned by the real coordinator.
     lifecycle, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at="none", code="unused"
+        fail_at="none", code="unused", request=request
     )
     assert actions.count("envelope_created") == 1
     assert actions.count("provider_released") == 1

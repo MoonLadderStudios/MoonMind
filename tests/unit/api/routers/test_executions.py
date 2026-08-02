@@ -5759,13 +5759,13 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     response = test_client.post(
         "/api/executions",
         json={
-            "type": "workflow",
+            "type": "task",
             "payload": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "targetRuntime": "omnigent",
                 "omnigent": {
-                    "executionTargetRef": "omnigent-codex-default",
-                    "launchPolicyRef": "on-demand-v1",
+                    "executionTargetRef": "omnigent-codex@1",
+                    "launchPolicyRef": "codex-on-demand@1",
                 },
                 "task": {
                     "instructions": "Make the bounded deterministic change.",
@@ -5781,9 +5781,10 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         "initial_parameters"
     ]
     assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["requestType"] == "task"
     assert initial_parameters["omnigent"] == {
-        "executionTargetRef": "omnigent-codex-default",
-        "launchPolicyRef": "on-demand-v1",
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
     }
     assert initial_parameters["workflow"]["runtime"] == {"mode": "omnigent"}
     assert initial_parameters["workflow"]["git"] == {"branch": "main"}
