@@ -11018,13 +11018,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             },
           }
         : {}),
-      ...(normalizedRepository && effectiveBranch
-        ? {
-            git: {
-              branch: effectiveBranch,
-            },
-          }
-        : {}),
       ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
       ...(submissionAppliedTemplates.length > 0
         ? { appliedStepTemplates: submissionAppliedTemplates }
@@ -11045,7 +11038,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        ...(normalizedRepository ? { repository: normalizedRepository } : {}),
+        ...(normalizedRepository && effectiveBranch
+          ? {
+              repository: {
+                provider: "git",
+                connectionRef: "repository-connection:git-default",
+                repository: { name: normalizedRepository },
+                branch: { name: effectiveBranch },
+              },
+            }
+          : {}),
         ...(mergedCapabilities.length > 0
           ? { requiredCapabilities: mergedCapabilities }
           : {}),

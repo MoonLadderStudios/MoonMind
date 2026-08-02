@@ -157,7 +157,15 @@ class WorkspaceIntentRecord(BaseModel):
     # Repository identity and immutable source evidence.
     repository: str | None = Field(None, alias="repository", max_length=2000)
     repository_kind: str | None = Field(None, alias="repositoryKind", max_length=50)
+    connection_ref: str | None = Field(None, alias="connectionRef", max_length=500)
     checkout_commit: str | None = Field(None, alias="checkoutCommit", max_length=200)
+    revision_kind: str | None = Field(None, alias="revisionKind", max_length=50)
+    remote_tip_expectation: dict[str, Any] | None = Field(
+        None, alias="remoteTipExpectation"
+    )
+    resolved_repository_target: dict[str, Any] | None = Field(
+        None, alias="resolvedRepositoryTarget"
+    )
 
     # Requested branch intent.
     starting_branch: str | None = Field(None, alias="startingBranch", max_length=400)
@@ -306,7 +314,11 @@ class WorkspaceIntentRecord(BaseModel):
             "stepExecutionId": self.step_execution_id,
             "repository": repository_evidence,
             "repositoryKind": self.repository_kind,
+            "connectionRef": self.connection_ref,
             "sourceCommit": self.checkout_commit,
+            "revisionKind": self.revision_kind,
+            "remoteTipExpectation": self.remote_tip_expectation,
+            "resolvedRepositoryTarget": self.resolved_repository_target,
             "startingBranch": self.starting_branch,
             "targetBranch": self.target_branch,
             "publishMode": self.publish_mode,

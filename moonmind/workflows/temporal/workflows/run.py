@@ -18096,6 +18096,7 @@ class MoonMindRunWorkflow:
                 )
         for ws_key in (
             "repository",
+            "repositoryTarget",
             "repo",
             "startingBranch",
             "targetBranch",
@@ -18280,6 +18281,7 @@ class MoonMindRunWorkflow:
                     "contentRef",
                     "contentDigest",
                     "inputContractDigest",
+                    "requiredCapabilities",
                     "inputs",
                     "sideEffect",
                 ):

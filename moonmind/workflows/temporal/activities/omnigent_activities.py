@@ -33,6 +33,9 @@ async def omnigent_execute_activity(
         resolved_server_url,
     )
     from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
+    from moonmind.repositories.lore_runtime import (
+        build_lore_repository_adapter_from_environment,
+    )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.artifacts import (
@@ -116,11 +119,15 @@ async def omnigent_execute_activity(
             artifact_service=artifact_service,
         )
 
+        lore_repository_adapter = build_lore_repository_adapter_from_environment()
         coordinator = OmnigentProfileBoundExecutionCoordinator(
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
             host_repository=OmnigentOAuthHostRepository(async_session_maker),
-            host_runtime=OmnigentOAuthHostRuntime(client=omnigent_client),
+            host_runtime=OmnigentOAuthHostRuntime(
+                client=omnigent_client,
+                lore_repository_adapter=lore_repository_adapter,
+            ),
             run_store=run_store,
             execution_runner=run_omnigent_execution,
             artifact_gateway=artifact_gateway,
