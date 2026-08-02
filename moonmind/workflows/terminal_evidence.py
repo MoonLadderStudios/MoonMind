@@ -23,6 +23,16 @@ class TerminalEvidenceEvaluation:
     outcome: TerminalEvidenceOutcome = "terminal_failure"
 
 
+@dataclass(frozen=True)
+class TerminalEvidenceSource:
+    """Resolved, workspace-confined source for terminal contract evidence."""
+
+    relative_path: str
+    path: Path | None = None
+    failure_code: str | None = None
+    missing_evidence: tuple[str, ...] = ()
+
+
 def _failure(
     failure_code: str,
     missing_evidence: tuple[str, ...] = (),
@@ -36,6 +46,48 @@ def _failure(
 def _success(metadata: dict[str, Any] | None = None) -> TerminalEvidenceEvaluation:
     return TerminalEvidenceEvaluation(
         True, metadata=metadata or {}, outcome="terminal_success"
+    )
+
+
+def resolve_terminal_evidence_source(
+    contract: Mapping[str, Any],
+    *,
+    workspace_path: str,
+    artifact_spool_path: str = "",
+) -> TerminalEvidenceSource:
+    """Resolve the declared evidence file without escaping trusted run roots."""
+
+    relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
+    normalized_relative = relative.replace("\\", "/")
+    relative_path = Path(normalized_relative)
+    workspace = Path(workspace_path).resolve()
+    if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
+        return TerminalEvidenceSource(
+            relative_path=normalized_relative,
+            failure_code="INVALID_TERMINAL_EVIDENCE_PATH",
+        )
+    evidence_root = workspace
+    evidence_relative = relative_path
+    if artifact_spool_path and relative_path.parts[:1] == ("artifacts",):
+        evidence_root = Path(artifact_spool_path).resolve()
+        evidence_relative = Path(*relative_path.parts[1:])
+    evidence_path = (evidence_root / evidence_relative).resolve()
+    try:
+        evidence_path.relative_to(evidence_root)
+    except ValueError:
+        return TerminalEvidenceSource(
+            relative_path=normalized_relative,
+            failure_code="INVALID_TERMINAL_EVIDENCE_PATH",
+        )
+    if not evidence_path.is_file():
+        return TerminalEvidenceSource(
+            relative_path=normalized_relative,
+            failure_code="INCOMPLETE_TERMINAL_CONTRACT",
+            missing_evidence=(relative,),
+        )
+    return TerminalEvidenceSource(
+        relative_path=normalized_relative,
+        path=evidence_path,
     )
 
 
@@ -129,25 +181,19 @@ def evaluate_terminal_evidence(
     }:
         return _failure("UNSUPPORTED_TERMINAL_CONTRACT")
     relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
-    normalized_relative = relative.replace("\\", "/")
-    relative_path = Path(normalized_relative)
-    workspace = Path(workspace_path).resolve()
-    if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
-        return _failure("INVALID_TERMINAL_EVIDENCE_PATH")
-    evidence_root = workspace
-    evidence_relative = relative_path
-    if artifact_spool_path and relative_path.parts[:1] == ("artifacts",):
-        evidence_root = Path(artifact_spool_path).resolve()
-        evidence_relative = Path(*relative_path.parts[1:])
-    evidence_path = (evidence_root / evidence_relative).resolve()
-    try:
-        evidence_path.relative_to(evidence_root)
-    except ValueError:
-        return _failure("INVALID_TERMINAL_EVIDENCE_PATH")
-    if not evidence_path.is_file():
+    source = resolve_terminal_evidence_source(
+        contract,
+        workspace_path=workspace_path,
+        artifact_spool_path=artifact_spool_path,
+    )
+    normalized_relative = source.relative_path
+    if source.failure_code:
+        return _failure(source.failure_code, source.missing_evidence)
+    if source.path is None:
         return _failure("INCOMPLETE_TERMINAL_CONTRACT", (relative,))
+    workspace = Path(workspace_path).resolve()
     try:
-        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload = json.loads(source.path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return _failure("MALFORMED_TERMINAL_EVIDENCE")
     if not isinstance(payload, dict):

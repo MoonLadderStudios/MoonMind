@@ -607,6 +607,7 @@ async def test_publish_terminal_result_compacts_large_fanout_before_activity_dec
             "queuedChildCount": len(queued_children),
             "queuedChildren": queued_children,
             "terminalContractId": "batch_workflows_fanout.v1",
+            "terminalContractEvidenceRef": "art_terminal_evidence",
             "terminalContractSatisfied": True,
             "terminalContractOutcome": "terminal_success",
         },
@@ -643,6 +644,7 @@ async def test_publish_terminal_result_compacts_large_fanout_before_activity_dec
         "ref": queued_children[0]["ref"],
     }
     assert result.metadata["queuedChildCount"] == len(queued_children)
+    assert result.metadata["terminalContractEvidenceRef"] == "art_terminal_evidence"
     assert result.metadata["terminalContractSatisfied"] is True
     assert run._terminal_result_payload_compacted_for_history is False
 

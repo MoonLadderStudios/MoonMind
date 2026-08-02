@@ -37,6 +37,9 @@ with workflow.unsafe.imports_passed_through():
         ExternalAgentRunInput,
     )
     from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
+    from moonmind.workflows.temporal.agent_result_payloads import (
+        compact_agent_run_result_payload_for_workflow_history,
+    )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
         ManagedAgentAdapter,
@@ -150,183 +153,6 @@ def _setdefault_compact_ref_metadata(
 ) -> None:
     for key, compact_value in compact_temporal_ref_metadata(field_name, value).items():
         metadata.setdefault(key, compact_value)
-
-
-def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if len(text) > max_chars:
-        return text[: max_chars - 3].rstrip() + "..."
-    return text
-
-
-def _compact_workflow_scalar(value: Any) -> Any:
-    if isinstance(value, str):
-        return _compact_workflow_text(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return None
-
-
-def _compact_workflow_text_list(
-    value: Any,
-    *,
-    max_items: int = 20,
-    max_chars: int = 400,
-) -> list[str]:
-    if not isinstance(value, (list, tuple)):
-        return []
-    compact: list[str] = []
-    for item in value:
-        text = _compact_workflow_text(item, max_chars=max_chars)
-        if text:
-            compact.append(text)
-        if len(compact) >= max_items:
-            break
-    return compact
-
-
-def _compact_workflow_text_mapping(value: Any) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {}
-    compact: dict[str, str] = {}
-    for raw_key, raw_value in value.items():
-        key = _compact_workflow_text(str(raw_key), max_chars=120)
-        text = _compact_workflow_text(raw_value, max_chars=400)
-        if key and text:
-            compact[key] = text
-        if len(compact) >= 20:
-            break
-    return compact
-
-
-def _compact_moonspec_verify_for_workflow_history(
-    value: Mapping[str, Any],
-) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    scalar_keys = (
-        "schemaVersion",
-        "verdict",
-        "gateVerdict",
-        "gate_verdict",
-        "moonSpecVerdict",
-        "moonspecVerdict",
-        "verificationVerdict",
-        "verification_verdict",
-        "confidence",
-        "recommendedNextAction",
-        "recommended_next_action",
-        "targetLogicalStepId",
-        "target_logical_step_id",
-        "workspacePolicyRecommendation",
-        "workspace_policy_recommendation",
-        "recoverableInCurrentRuntime",
-        "recoverable_in_current_runtime",
-        "invalid",
-        "degraded",
-        "remainingWorkRef",
-        "remaining_work_ref",
-        "diagnosticsRef",
-        "diagnostics_ref",
-        "verificationReportRef",
-        "verification_report_ref",
-        "reportRef",
-        "report_ref",
-        "gateResultRef",
-        "gate_result_ref",
-        "artifactRef",
-        "artifact_ref",
-    )
-    for key in scalar_keys:
-        field_value = _compact_workflow_scalar(value.get(key))
-        if field_value is not None:
-            compact[key] = field_value
-
-    for key in ("feedback", "summary", "message", "downgradeReason"):
-        text = _compact_workflow_text(value.get(key), max_chars=900)
-        if text:
-            compact[key] = text
-
-    for key in ("invalidatedRefs", "invalidated_refs"):
-        refs = _compact_workflow_text_list(value.get(key))
-        if refs:
-            compact[key] = refs
-            break
-    for key in ("blockingEvidenceRefs", "blocking_evidence_refs"):
-        refs = _compact_workflow_text_list(value.get(key))
-        if refs:
-            compact[key] = refs
-            break
-
-    validated_refs = _compact_workflow_text_mapping(
-        value.get("validatedRefs") or value.get("validated_refs")
-    )
-    if validated_refs:
-        compact["validatedRefs"] = validated_refs
-
-    contract_violations = _compact_workflow_text_list(
-        value.get("contractViolations") or value.get("contract_violations"),
-        max_items=10,
-        max_chars=700,
-    )
-    if contract_violations:
-        compact["contractViolations"] = contract_violations
-
-    return compact
-
-
-def _compact_agent_run_result_payload_for_workflow_history(
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    compact_payload = dict(payload)
-    metadata = compact_payload.get("metadata")
-    if not isinstance(metadata, Mapping):
-        return compact_payload
-
-    compact_metadata = dict(metadata)
-    for key in (
-        "moonSpecVerify",
-        "moonspecVerify",
-        "moonspec_verify",
-        "verificationResult",
-        "verification_result",
-    ):
-        value = compact_metadata.get(key)
-        if isinstance(value, Mapping):
-            compact_metadata[key] = _compact_moonspec_verify_for_workflow_history(
-                value
-            )
-
-    queued_children = compact_metadata.get("queuedChildren")
-    if isinstance(queued_children, (list, tuple)):
-        compact_children: list[dict[str, str]] = []
-        for child in queued_children:
-            if not isinstance(child, Mapping):
-                continue
-            compact_child: dict[str, str] = {}
-            workflow_id = _compact_workflow_text(
-                child.get("workflowId"), max_chars=400
-            )
-            execution_id = _compact_workflow_text(
-                child.get("executionId"), max_chars=400
-            )
-            if workflow_id:
-                compact_child["workflowId"] = workflow_id
-            if execution_id and execution_id != workflow_id:
-                compact_child["executionId"] = execution_id
-            reference = _compact_workflow_text(
-                child.get("ref") or child.get("targetRef"), max_chars=400
-            )
-            if reference:
-                compact_child["ref"] = reference
-            if compact_child:
-                compact_children.append(compact_child)
-        compact_metadata["queuedChildren"] = compact_children
-    compact_payload["metadata"] = compact_metadata
-    return compact_payload
 
 
 # Default workflow-level execution timeouts
@@ -1649,7 +1475,7 @@ class MoonMindAgentRun:
             self.final_result = AgentRunResult(**publish_payload)
         except ValueError:
             compacted_payload = (
-                _compact_agent_run_result_payload_for_workflow_history(
+                compact_agent_run_result_payload_for_workflow_history(
                     publish_payload
                 )
             )
@@ -1678,7 +1504,7 @@ class MoonMindAgentRun:
                 self.final_result = AgentRunResult(**enriched_result)
             except ValueError:
                 compacted_result = (
-                    _compact_agent_run_result_payload_for_workflow_history(
+                    compact_agent_run_result_payload_for_workflow_history(
                         enriched_result
                     )
                 )
