@@ -19,6 +19,8 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.executions.prepared_context import (
     build_durable_retrieval_manifest_artifact,
 )
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal.activity_runtime import TemporalCheckpointActivities
 from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationWorkspaceHead,
 )
@@ -136,6 +138,147 @@ def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
         },
         "diagnosticRefs": ["artifact://managed/manifest"],
         "idempotencyKey": payload["idempotencyKey"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the normal AgentRun metadata -> workflow -> activity journey."""
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    store = InMemoryArtifactStore()
+    checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
+    external_ref = "artifact://omnigent/external-state"
+    external_bytes = json.dumps(
+        {
+            "omnigentSessionId": "session-3509",
+            "firstMessage": {
+                "digest": "sha256:" + "1" * 64,
+                "responseIdentifiers": {"itemId": "message-3509"},
+            },
+            "lastCommittedBridgeEventCursor": "event-9",
+        },
+        sort_keys=True,
+    ).encode()
+
+    async def read_checkpoint_artifact(artifact_ref: str) -> bytes:
+        if artifact_ref == external_ref:
+            return external_bytes
+        return store.get_bytes(artifact_ref)
+
+    monkeypatch.setattr(checkpoint_activities, "_read_bytes", read_checkpoint_artifact)
+    workflow_instance = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    workflow_instance._input_ref = "artifact://task/input"
+    workflow_instance._plan_ref = "artifact://plan/current"
+    workflow_instance._prepared_artifact_refs = ["artifact://instructions/current"]
+    workflow_instance._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow_instance._mark_step_running(
+        "implement", updated_at=now, summary="Implementing"
+    )
+    normal_result = {
+        "agentKind": "external",
+        "agentId": "omnigent",
+        "workloadResult": {
+            "metadata": {
+                "omnigentCheckpointCapture": {
+                    "providerProfileId": "codex",
+                    "credentialRef": "credential://provider-profile/codex/generation/3",
+                    "credentialGeneration": 3,
+                    "providerLeaseRef": "provider-lease-1",
+                    "hostBindingRef": "binding-1",
+                    "hostLeaseRef": "host-lease-1",
+                    "endpointRef": "endpoint-1",
+                    "omnigentHostId": "host-1",
+                    "bridgeSessionId": "bridge-1",
+                    "effectiveLaunchRef": "omnigent-launch:sha256:" + "3" * 64,
+                    "executionProfileRef": "profile://codex",
+                    "launchPolicyRef": "policy://default",
+                    "externalStateRef": external_ref,
+                    "idempotencyKey": "agent-run-3509",
+                    "sourceBranch": "main",
+                    "publicationState": "none",
+                },
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "replacement-workspace",
+                    "relativePath": "repo",
+                },
+            }
+        },
+    }
+    workflow_instance._record_step_workspace_capture_input("implement", normal_result)
+
+    async def execute_activity(
+        activity: str, payload: dict[str, Any], **_kwargs: Any
+    ) -> dict[str, Any]:
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": "abc123",
+                    "headCommit": "def456",
+                    "archiveRef": "artifact://workspace/archive",
+                    "manifestRef": "artifact://workspace/manifest",
+                    "archiveDigest": "sha256:" + "2" * 64,
+                    "createdAt": now.isoformat(),
+                },
+                "diagnosticRefs": [],
+            }
+        assert activity == "step_checkpoint.create_v2"
+        return await checkpoint_activities.step_checkpoint_create(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", execute_activity)
+
+    first_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+    retry_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+
+    assert retry_ref == first_ref
+    checkpoint = json.loads(store.get_bytes(first_ref))
+    identity = checkpoint["omnigentCheckpoint"]
+    assert identity["schemaVersion"] == "v2"
+    assert identity["boundary"] == "after_execution"
+    assert identity["externalStateRef"] == external_ref
+    assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    assert identity["instructionRefs"] == ["artifact://instructions/current"]
+    assert identity["validation"]["valid"] is True
+
+    incomplete = dict(normal_result)
+    incomplete["workloadResult"] = {
+        "metadata": {
+            **normal_result["workloadResult"]["metadata"],
+            "omnigentCheckpointCapture": {
+                **normal_result["workloadResult"]["metadata"][
+                    "omnigentCheckpointCapture"
+                ],
+                "externalStateRef": None,
+            },
+        }
+    }
+    workflow_instance._record_step_workspace_capture_input("implement", incomplete)
+    terminal_ref = await workflow_instance._record_canonical_step_checkpoint(
+        "implement", boundary="before_publication", updated_at=now
+    )
+    terminal = json.loads(store.get_bytes(terminal_ref))
+    assert "omnigentCheckpoint" not in terminal
+    assert terminal["stepOutputs"]["omnigentCheckpointValidation"] == {
+        "valid": False,
+        "reasons": ["capture_incomplete_or_unresolvable"],
+        "liveReattachAvailable": False,
+        "workspaceColdRestoreAvailable": False,
+        "branchCreationAvailable": False,
     }
 
 
@@ -4042,7 +4185,7 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
             assert payload["kind"] == "worktree_archive"
             assert payload["workspaceLocator"]["kind"] == "sandbox"
             return _managed_checkpoint_capture_result(payload)
-        assert activity == "step_checkpoint.create"
+        assert activity == "step_checkpoint.create_v2"
         return _checkpoint_create_result(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
@@ -4064,7 +4207,7 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert result == "artifact://checkpoint/before_execution"
     assert [(call["activity"], call["payload"]["boundary"]) for call in captured] == [
         ("workspace.capture_checkpoint", "before_execution"),
-        ("step_checkpoint.create", "before_execution"),
+        ("step_checkpoint.create_v2", "before_execution"),
     ]
     assert captured[0]["payload"]["kind"] == "worktree_archive"
     assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"

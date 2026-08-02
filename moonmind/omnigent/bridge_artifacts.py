@@ -1710,6 +1710,9 @@ async def _build_capture_bundle(
             "bridgeSessionId": external_state.get("bridgeSessionId"),
             "omnigentAgentId": agent_id,
             "terminalStatus": terminal_status,
+            "lastCommittedBridgeEventCursor": (
+                str(len(normalized_events)) if normalized_events else None
+            ),
             "firstMessage": first_message_state,
             "retry": external_state.get("retry", {}),
             "reattachState": {

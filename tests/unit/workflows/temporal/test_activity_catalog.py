@@ -311,6 +311,7 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
         "workspace.apply_policy": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "workspace.classify_git_effect": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "step_checkpoint.create": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
+        "step_checkpoint.create_v2": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
         "step_checkpoint.validate": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
     }
 
@@ -328,3 +329,4 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
     )
     assert "workspace.capture_checkpoint" in fleets[SANDBOX_FLEET].activity_types
     assert "step_checkpoint.create" in fleets[ARTIFACTS_FLEET].activity_types
+    assert "step_checkpoint.create_v2" in fleets[ARTIFACTS_FLEET].activity_types
