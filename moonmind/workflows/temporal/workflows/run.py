@@ -91,6 +91,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.repository_contract import (
+        repository_name_from_value,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
@@ -10070,9 +10073,9 @@ class MoonMindRunWorkflow:
         ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
         self._repo = (
             self._string_from_mapping(parameters, "repo")
-            or self._string_from_mapping(parameters, "repository")
+            or repository_name_from_value(parameters.get("repository"))
             or self._string_from_mapping(ws, "repo")
-            or self._string_from_mapping(ws, "repository")
+            or repository_name_from_value(ws.get("repository"))
         )
         self._record_integration_from_parameters(parameters)
 

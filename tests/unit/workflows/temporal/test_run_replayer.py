@@ -505,6 +505,55 @@ async def test_workflow_determinism_replay(mock_run_environment):  # noqa: F811
             await replayer.replay_workflow(history)
 
 
+@pytest.mark.asyncio
+async def test_repository_target_input_shapes_execute_and_replay(
+    mock_run_environment,  # noqa: F811
+) -> None:
+    """Canonical repository targets run while legacy scalar histories still replay."""
+
+    repository_parameters = [
+        {"repository": "MoonLadderStudios/Tactics"},
+        {
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/Tactics"},
+                "branch": {"name": "main"},
+            }
+        },
+    ]
+    histories = []
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        for index, initial_parameters in enumerate(repository_parameters):
+            task_queue = f"test-repository-target-replay-{index}"
+            async with Worker(
+                env.client,
+                task_queue=task_queue,
+                workflows=[MoonMindUserWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    MoonMindUserWorkflow.run,
+                    {
+                        "workflow_type": "MoonMind.UserWorkflow",
+                        "initial_parameters": initial_parameters,
+                        "plan_artifact_ref": "ref-123",
+                    },
+                    id=f"test-repository-target-history-{index}",
+                    task_queue=task_queue,
+                )
+                assert (await handle.result())["status"] == "success"
+                histories.append(await handle.fetch_history())
+
+    replayer = Replayer(
+        workflows=[MoonMindUserWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    for history in histories:
+        await replayer.replay_workflow(history)
+
+
 def test_plan_routed_moonspec_patch_is_snapshotted_before_node_execution() -> None:
     """MoonLadderStudios/MoonMind#3238 keeps the cutover replay-stable."""
 

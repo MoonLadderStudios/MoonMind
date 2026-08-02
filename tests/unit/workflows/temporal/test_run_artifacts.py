@@ -166,6 +166,37 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     assert plan_ref == "art_plan_1"
     assert workflow._input_ref == "art_input_1"
     assert workflow._plan_ref == "art_plan_1"
+    assert workflow._repo == "MoonLadderStudios/MoonMind"
+
+
+def test_initialize_from_payload_projects_canonical_repository_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {"instructions": "Resolve GitHub issues."},
+            },
+        }
+    )
+
+    assert workflow._repo == "MoonLadderStudios/Tactics"
+
 
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
