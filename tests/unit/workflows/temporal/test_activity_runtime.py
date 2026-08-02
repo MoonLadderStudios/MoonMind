@@ -5726,6 +5726,14 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert result.metadata["gateResultRef"] == verification_ref
             assert result.metadata["moonSpecVerifyArtifactRef"] == verification_ref
             assert result.metadata["sourceMoonSpecVerifyArtifactRef"] != verification_ref
+            assert result.metadata["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
+            )
+            evidence = result.metadata["moonSpecVerify"]["validatedRefs"]
+            assert evidence["progressEvidenceSchemaVersion"] == (
+                "remediation-progress-evidence/v1"
+            )
+            assert evidence["authoritativeEvidenceDigest"].startswith("sha256:")
             artifact, artifact_path = await service.read_path(
                 artifact_id=verification_ref,
                 principal="system:agent_runtime",
@@ -5744,6 +5752,9 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             ] == result.metadata["sourceMoonSpecVerifyArtifactRef"]
             assert persisted_payload["remainingGaps"][0]["requirement"] == (
                 "artifact linkage"
+            )
+            assert persisted_payload["moonSpecVerify"]["remainingWorkRef"] == (
+                result.metadata["sourceMoonSpecVerifyArtifactRef"]
             )
 
 

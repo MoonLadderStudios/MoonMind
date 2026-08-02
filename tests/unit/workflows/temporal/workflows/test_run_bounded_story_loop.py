@@ -95,6 +95,35 @@ async def test_terminal_remaining_work_persistence_failure_fails_closed(
         )
 
 
+@pytest.mark.asyncio
+async def test_terminal_remaining_work_reuses_authoritative_verifier_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    async def unexpected_write(**_kwargs: Any) -> str:
+        raise AssertionError("authoritative verifier evidence must be reused")
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", unexpected_write)
+    monkeypatch.setattr(
+        workflow,
+        "_patched_or_false_outside_workflow",
+        lambda _patch_id: True,
+    )
+
+    ref = await workflow._materialize_remaining_work_artifact(
+        gate=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="high",
+            remaining_work_ref="artifact://verification/final",
+        ),
+        gate_result_ref="artifact://gate/final",
+        workspace_head_ref="artifact://workspace/final",
+    )
+
+    assert ref == "artifact://verification/final"
+
+
 def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
     instructions = tuple(dis.get_instructions(MoonMindRunWorkflow._run_execution_stage))
 
@@ -1349,3 +1378,28 @@ def test_moonspec_gate_context_records_invalidated_refs_as_typed_data() -> None:
     assert context["remainingWorkRef"] == "artifact://remaining-work/attempt-1"
     assert context["recommendedNextAction"] == "reattempt_current_step"
     assert context["targetLogicalStepId"] == "remediate-1"
+
+
+def test_moonspec_gate_context_uses_gate_artifact_for_legacy_remaining_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        workflow,
+        "_patched_or_false_outside_workflow",
+        lambda _patch_id: True,
+    )
+
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-legacy",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "medium",
+                "gateResultRef": "art_verify_legacy",
+            }
+        },
+    )
+
+    context = workflow._publish_context["moonSpecGate"]
+    assert context["remainingWorkRef"] == "artifact://art_verify_legacy"

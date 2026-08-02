@@ -9450,6 +9450,53 @@ class TemporalAgentRuntimeActivities:
                 )
                 return {}
             gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
+            declared_verdict = _first_non_empty_text(
+                gate_payload,
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+            )
+            additional_work_declared = (
+                recommended_next_action_for_verdict(declared_verdict)
+                == "reattempt_current_step"
+            )
+            remaining_work = gate_payload.get("remainingWork")
+            if additional_work_declared and isinstance(remaining_work, list):
+                # Workflow history carries only a stable semantic digest; the
+                # resolved verifier's full structured gaps remain in its
+                # artifact. This lets the progress gate compare attempts
+                # without duplicating Skill semantics or large payloads.
+                validated_refs_value = gate_payload.get(
+                    "validatedRefs",
+                    gate_payload.get("validated_refs"),
+                )
+                validated_refs = (
+                    dict(validated_refs_value)
+                    if isinstance(validated_refs_value, Mapping)
+                    else {}
+                )
+                validated_refs.setdefault(
+                    "progressEvidenceSchemaVersion",
+                    "remediation-progress-evidence/v1",
+                )
+                validated_refs.setdefault(
+                    "authoritativeEvidenceDigest",
+                    "sha256:"
+                    + hashlib.sha256(
+                        json.dumps(
+                            remaining_work,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                )
+                gate_payload["validatedRefs"] = validated_refs
+                gate_payload.pop("validated_refs", None)
             contract_violations = step_gate_contract_violations(gate_payload)
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
@@ -9481,6 +9528,16 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
+            if not _first_non_empty_text(
+                gate_payload,
+                "remainingWorkRef",
+                "remaining_work_ref",
+            ) and additional_work_declared:
+                # The resolved verifier bundle owns the remaining-work
+                # semantics. Its published JSON is therefore the durable
+                # evidence when the portable contract emits structured
+                # remainingWork inline but no separate artifact ref.
+                gate_payload["remainingWorkRef"] = verify_ref.artifact_id
             authoritative_ref = verify_ref.artifact_id
             remediation_verify_ref = (
                 await _publish_moonspec_remediation_verification_artifact(

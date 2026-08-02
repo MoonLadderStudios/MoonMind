@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
+    RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
@@ -3781,6 +3782,46 @@ async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
     assert state.latest_verification_ref == "artifact://art_verification_V0"
     assert state.latest_progress_ref == "artifact://art_remaining_R0"
     assert state.continuation_decision_ref == "artifact://art_decision_D0"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_uses_gate_artifact_for_legacy_remaining_work(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="art_decision_legacy"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        ),
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="art_verification_legacy",
+        remaining_work_ref=None,
+    )
+
+    assert admitted is True
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.latest_progress_ref == "artifact://art_verification_legacy"
+    decision_payload = mock_run_workflow._write_json_artifact.await_args.kwargs[
+        "payload"
+    ]
+    assert decision_payload["remainingWorkRef"] == (
+        "artifact://art_verification_legacy"
+    )
 
 
 @pytest.mark.asyncio
