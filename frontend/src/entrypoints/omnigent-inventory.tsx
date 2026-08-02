@@ -3,6 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { ContextRetrievalControls } from '../components/ContextRetrievalControls';
+import {
+  type ContextRetrievalAuthoring,
+  defaultContextRetrievalAuthoring,
+  retrievalCeilingsFromRuntimeConfig,
+} from '../lib/contextRetrievalAuthoring';
 
 type InventoryKind = 'agents' | 'policies';
 type InventoryRow = {
@@ -40,6 +46,68 @@ type AgentProfile = {
   defaultForRuntime?: boolean;
   versions: ProfileVersion[];
 };
+
+/**
+ * Assisted RAG editor for a policy document (MoonMind#3514). The policy `rag`
+ * block (RagPolicy) is the deployment authority that feeds the per-run
+ * follow-up retrieval budget: `collectionRefs` is the allowed collection set and
+ * `tokenBudget` / `latencyBudgetMs` become the compiled budget ceilings. This
+ * maps only the RagPolicy-valid fields so the edited document stays valid; the
+ * remaining controls preview the per-run authoring experience.
+ */
+function readPolicyContextRetrieval(
+  documentJson: string,
+): { value: ContextRetrievalAuthoring; parsed: Record<string, unknown> } | null {
+  try {
+    const parsed = JSON.parse(documentJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const document = parsed as Record<string, unknown>;
+    const rag =
+      document.rag && typeof document.rag === 'object' && !Array.isArray(document.rag)
+        ? (document.rag as Record<string, unknown>)
+        : null;
+    if (!rag) return null;
+    const collections = Array.isArray(rag.collectionRefs)
+      ? rag.collectionRefs.map((item) => String(item)).filter(Boolean)
+      : [];
+    const value = defaultContextRetrievalAuthoring();
+    value.initial.collections = collections;
+    value.followUp.enabled = true;
+    value.followUp.collections = collections;
+    value.followUp.budgetPreset = 'custom';
+    if (typeof rag.tokenBudget === 'number') {
+      value.followUp.maxContextTokens = rag.tokenBudget;
+    }
+    if (typeof rag.latencyBudgetMs === 'number') {
+      value.followUp.latencyMs = rag.latencyBudgetMs;
+    }
+    value.followUp.fallbackAllowed = rag.fallback === 'empty';
+    return { value, parsed: document };
+  } catch {
+    return null;
+  }
+}
+
+function writePolicyContextRetrieval(
+  document: Record<string, unknown>,
+  value: ContextRetrievalAuthoring,
+): string {
+  const rag: Record<string, unknown> = {
+    ...(document.rag && typeof document.rag === 'object' && !Array.isArray(document.rag)
+      ? (document.rag as Record<string, unknown>)
+      : {}),
+  };
+  const collections = Array.from(
+    new Set([...value.followUp.collections, ...value.initial.collections]),
+  );
+  if (collections.length > 0) {
+    rag.collectionRefs = collections;
+  }
+  rag.tokenBudget = value.followUp.maxContextTokens;
+  rag.latencyBudgetMs = value.followUp.latencyMs;
+  rag.fallback = value.followUp.fallbackAllowed ? 'empty' : 'deny';
+  return JSON.stringify({ ...document, rag }, null, 2);
+}
 
 function text(record: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
@@ -97,7 +165,10 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const queryKey = kind === 'agents' ? 'omnigent_agents_q' : 'omnigent_policies_q';
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const filter = params.get(queryKey) ?? '';
-  const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown> } | undefined;
+  const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown>; dashboardConfig?: { system?: { retrievalAuthoring?: Record<string, unknown> } } } | undefined;
+  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
+    initialData?.dashboardConfig?.system?.retrievalAuthoring,
+  );
   const endpoints = initialData?.uiEndpoints;
   const enabled = payload.features?.[featureKey] === true;
   const discoveredEndpoint = endpoints?.[kind === 'agents' ? 'omnigentAgents' : 'omnigentPolicies'];
@@ -268,6 +339,33 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <label><span>Policy id</span><input value={editor.id} disabled={editor.mode === 'version'} onChange={(event) => setEditor({ ...editor, id: event.target.value })} required /></label>
         <label><span>Name</span><input value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} required /></label>
         <label><span>Complete policy document (JSON)</span><textarea rows={18} value={editor.document} onChange={(event) => setEditor({ ...editor, document: event.target.value })} required /></label>
+        {(() => {
+          const retrieval = readPolicyContextRetrieval(editor.document);
+          if (!retrieval) {
+            return (
+              <p className="small">
+                Add a <code>rag</code> block to the document above to configure
+                context retrieval defaults with assisted controls.
+              </p>
+            );
+          }
+          return (
+            <details className="omnigent-policy-context-retrieval">
+              <summary>Context retrieval (RAG) defaults</summary>
+              <ContextRetrievalControls
+                value={retrieval.value}
+                ceilings={retrievalCeilings}
+                onChange={(next) =>
+                  setEditor({
+                    ...editor,
+                    document: writePolicyContextRetrieval(retrieval.parsed, next),
+                  })
+                }
+                description="Policy defaults set the allowed collections and the budget ceilings that per-run and workflow authoring narrow within. Only collections and budget ceilings persist to the policy document."
+              />
+            </details>
+          );
+        })()}
         {savePolicy.isError ? <p role="alert">{savePolicy.error.message}</p> : null}
         <button type="submit" disabled={savePolicy.isPending}>Validate and save draft</button>
         <button type="button" onClick={() => setEditor(null)}>Cancel</button>

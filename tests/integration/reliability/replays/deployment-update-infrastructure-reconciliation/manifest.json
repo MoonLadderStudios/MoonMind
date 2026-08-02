@@ -1,0 +1,43 @@
+{
+  "failureShapeId": "deployment-update-infrastructure-reconciliation",
+  "incidentWorkflowId": "mm:d7803775-e018-45c4-a17e-47aa303245d8",
+  "activityType": "mm.tool.execute",
+  "toolName": "deployment.update_compose_stack",
+  "requestedRepository": "ghcr.io/moonladderstudios/moonmind",
+  "excludedServices": [
+    "temporal-worker-deployment-control"
+  ],
+  "commandPlan": {
+    "runnerMode": "privileged_worker",
+    "pullArgs": [
+      "docker",
+      "compose",
+      "pull",
+      "--policy",
+      "always",
+      "--ignore-buildable"
+    ],
+    "upArgs": [
+      "docker",
+      "compose",
+      "up",
+      "-d",
+      "--remove-orphans",
+      "--wait"
+    ]
+  },
+  "beforeState": {
+    "configuredServices": [
+      "temporal-worker-agent-runtime",
+      "sandbox-egress-proxy",
+      "temporal-worker-deployment-control"
+    ],
+    "configuredServiceImages": {
+      "temporal-worker-agent-runtime": "ghcr.io/moonladderstudios/moonmind:latest",
+      "sandbox-egress-proxy": "ubuntu/squid:latest",
+      "temporal-worker-deployment-control": "ghcr.io/moonladderstudios/moonmind:latest"
+    }
+  },
+  "observedFailure": "The update recreated the agent-runtime worker but skipped sandbox-egress-proxy, so the required restricted-egress network was absent and the worker restarted with exit code 1.",
+  "invariant": "Compose up reconciles every configured stack service except the deployment-control runner, even when infrastructure services use a different image repository."
+}

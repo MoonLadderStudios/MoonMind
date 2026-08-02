@@ -47,6 +47,7 @@ def test_status_maps_returns_copy() -> None:
     assert dashboard_view_model.status_maps()["temporal"]["queued"] == "queued"
 
 def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
+    monkeypatch.delenv("MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", raising=False)
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
@@ -60,6 +61,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     )
 
     config = dashboard_view_model.build_runtime_config("/workflows")
+    assert config["system"]["retrievalAuthoring"]["collections"] == ["repo", "docs"]
     assert config["initialPath"] == "/workflows"
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["temporal"]["list"] == "/api/executions"

@@ -808,6 +808,8 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
 
     assert test_stage < production_stage < omnigent_copy
     assert "USER app" in dockerfile[test_stage:production_stage]
+    assert "docker-buildx-plugin" in dockerfile[:test_stage]
+    assert "docker buildx version" in dockerfile[:test_stage]
 
     compose = _load_compose()
     services = compose["services"]

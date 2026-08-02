@@ -132,9 +132,18 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
     assert downstream_step["githubOrchestration"]["traceability"] == {
         "sourceIssueKey": "{{ inputs.source_issue_key }}"
     }
-    assert downstream_step["githubOrchestration"]["task"]["publish"] == {
-        "mode": "{{ inputs.publish_mode }}",
-    }
+    expected_publish = {"mode": "{{ inputs.publish_mode }}"}
+    if slug == "github-issue-breakdown-implement":
+        expected_publish = {
+            "mode": (
+                "{{ 'pr' if inputs.publish_mode == 'pr_with_merge_automation' "
+                "else inputs.publish_mode }}"
+            ),
+            "mergeAutomation": {
+                "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+            },
+        }
+    assert downstream_step["githubOrchestration"]["task"]["publish"] == expected_publish
     assert downstream_step["githubOrchestration"]["task"]["inputs"] == {
         "run_verify": "{{ inputs.run_verify }}",
     }

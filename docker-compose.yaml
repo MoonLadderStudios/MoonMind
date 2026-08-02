@@ -607,6 +607,9 @@ services:
       # Keep these values identical to the API service. This worker applies the
       # retention and deletion policy selected by the startup reconciler.
       - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
+      - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
+      - WORKFLOW_DOCKER_DAEMON_MODE=remote
+      - WORKFLOW_WORKSPACE_DAEMON_ROOT=${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/${COMPOSE_PROJECT_NAME:-moonmind}_agent_workspaces/_data}
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
