@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
@@ -5638,15 +5639,153 @@ async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_ses
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.cancel_workflow(created.workflow_id),
             ],
             any_order=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanup_finishes(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.service._BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS",
+            0.01,
+        )
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        store.save(
+            CodexManagedSessionRecord(
+                sessionId=f"sess:{created.workflow_id}:codex_cli",
+                sessionEpoch=1,
+                agentRunId=created.workflow_id,
+                containerId="container-1",
+                threadId="thread-1",
+                runtimeId="codex_cli",
+                imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+                controlUrl="docker-exec://container-1",
+                status="ready",
+                workspacePath=f"/work/agent_jobs/{created.workflow_id}/repo",
+                sessionWorkspacePath=f"/work/agent_jobs/{created.workflow_id}/session",
+                artifactSpoolPath=f"/work/agent_jobs/{created.workflow_id}/artifacts",
+                startedAt=datetime.now(tz=UTC),
+            )
+        )
+
+        cleanup_started = asyncio.Event()
+        cancel_dispatched = asyncio.Event()
+
+        async def _blocking_session_cleanup(*_args, **_kwargs):
+            cleanup_started.set()
+            await asyncio.Event().wait()
+
+        async def _record_temporal_cancel(*_args, **_kwargs):
+            cancel_dispatched.set()
+
+        mock_client_adapter.update_workflow.side_effect = _blocking_session_cleanup
+        mock_client_adapter.cancel_workflow.side_effect = _record_temporal_cancel
+
+        canceled = await asyncio.wait_for(
+            service.cancel_execution(
+                workflow_id=created.workflow_id, reason="stop", graceful=True
+            ),
+            timeout=0.2,
+        )
+
+        assert cancel_dispatched.is_set()
+        assert cleanup_started.is_set()
+        assert canceled.state is MoonMindWorkflowState.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_terminal_retry_retries_managed_session_cleanup(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        store.save(
+            CodexManagedSessionRecord(
+                sessionId=f"sess:{created.workflow_id}:codex_cli",
+                sessionEpoch=1,
+                agentRunId=created.workflow_id,
+                containerId="container-1",
+                threadId="thread-1",
+                runtimeId="codex_cli",
+                imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+                controlUrl="docker-exec://container-1",
+                status="ready",
+                workspacePath=f"/work/agent_jobs/{created.workflow_id}/repo",
+                sessionWorkspacePath=f"/work/agent_jobs/{created.workflow_id}/session",
+                artifactSpoolPath=f"/work/agent_jobs/{created.workflow_id}/artifacts",
+                startedAt=datetime.now(tz=UTC),
+            )
+        )
+        service._fan_out_dependency_resolution = AsyncMock(
+            side_effect=RuntimeError("dependency fan-out interrupted")
+        )
+
+        with pytest.raises(RuntimeError, match="dependency fan-out interrupted"):
+            await service.cancel_execution(
+                workflow_id=created.workflow_id,
+                reason="stop",
+                graceful=True,
+            )
+
+        service._fan_out_dependency_resolution = AsyncMock()
+        retried = await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="stop",
+            graceful=True,
+        )
+
+        assert retried.state is MoonMindWorkflowState.CANCELED
+        mock_client_adapter.cancel_workflow.assert_awaited_once_with(
+            created.workflow_id
+        )
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            f"{created.workflow_id}:session:codex_cli",
+            "TerminateSession",
+            {"reason": "stop"},
+        )
+
 
 @pytest.mark.asyncio
 async def test_cancel_execution_prefers_direct_session_record_load_for_codex_task_session(
@@ -5703,12 +5842,12 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.cancel_workflow(created.workflow_id),
             ],
             any_order=False,
         )
@@ -5765,12 +5904,12 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
 
         mock_client_adapter.assert_has_calls(
             [
+                call.cancel_workflow(created.workflow_id),
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.cancel_workflow(created.workflow_id),
             ],
             any_order=False,
         )
