@@ -3272,6 +3272,7 @@ def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
     launcher = dependencies[2]
 
     assert launcher._lore_repository_adapter is not None
+    assert launcher._lore_repository_readiness_adapter is not None
 
 
 def test_build_agent_runtime_deps_reuses_global_session_network(

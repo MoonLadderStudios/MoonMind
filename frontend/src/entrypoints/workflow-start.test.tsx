@@ -199,6 +199,58 @@ describe("buildEditParametersPatch", () => {
       },
     });
   });
+
+  it("clears inherited rag/followUpRetrieval when the submission omits them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-clear",
+        inputParameters: {
+          rag: { collections: ["repo"], required: true },
+          followUpRetrieval: { enabled: true, collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    // The operator disabled retrieval authoring, so the inherited authority must
+    // not silently persist through the edit patch.
+    expect("rag" in patch).toBe(false);
+    expect("followUpRetrieval" in patch).toBe(false);
+  });
+
+  it("keeps rag/followUpRetrieval when the submission carries them", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-retrieval-keep",
+        inputParameters: {
+          rag: { collections: ["repo"] },
+          workflow: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+        },
+      },
+      submittedPayload: {
+        rag: { collections: ["docs"] },
+        followUpRetrieval: { enabled: true, collections: ["docs"] },
+        task: { instructions: "Keep going.", runtime: { mode: "codex_cli" } },
+      },
+      submittedWorkflow: {
+        instructions: "Keep going.",
+        runtime: { mode: "codex_cli" },
+      },
+    });
+
+    expect(patch.rag).toEqual({ collections: ["docs"] });
+    expect(patch.followUpRetrieval).toEqual({
+      enabled: true,
+      collections: ["docs"],
+    });
+  });
 });
 
 describe("WorkflowStartPage loading placeholders", () => {
@@ -19076,7 +19128,13 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
-                default_effort: "high",
+                default_model: null,
+                default_effort: null,
+                model_tiers: [
+                  { label: "Plan", model: "gpt-plan", effort: "medium" },
+                  { label: "Default", model: "gpt-profile-default", effort: "high" },
+                ],
+                default_model_tier: 2,
               },
               {
                 profile_id: "profile:codex-secondary",
@@ -19246,6 +19304,41 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).not.toHaveProperty("tierFallback");
     expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
+  });
+
+  it("defaults hard overrides from the selected profile until manually changed", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe(
+        "profile:codex-default",
+      );
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-profile-default",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText("Hard override model"), {
+      target: { value: "gpt-manual" },
+    });
+    fireEvent.change(screen.getByLabelText("Hard override effort"), {
+      target: { value: "xhigh" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Trigger an unrelated form render." },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Hard override model") as HTMLInputElement).value).toBe(
+        "gpt-manual",
+      );
+      expect((screen.getByLabelText("Hard override effort") as HTMLInputElement).value).toBe(
+        "xhigh",
+      );
+    });
   });
 });
 

@@ -97,6 +97,35 @@ def test_run_request_preserves_model_tier_intent_for_launch_resolution() -> None
     assert request.parameters["tierFallback"] == "strict"
 
 
+def test_run_request_forwards_context_retrieval_authoring() -> None:
+    """Authored RAG / follow-up retrieval policy reaches request.parameters (#3514)."""
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": _task_payload(),
+                "repository": "MoonMind",
+                "rag": {"collections": ["docs"], "allowStale": True},
+                "followUpRetrieval": {
+                    "enabled": True,
+                    "collections": ["repo", "docs"],
+                    "topK": 6,
+                },
+            },
+        )
+
+    assert request.parameters["repository"] == "MoonMind"
+    assert request.parameters["rag"] == {"collections": ["docs"], "allowStale": True}
+    assert request.parameters["followUpRetrieval"]["enabled"] is True
+    assert request.parameters["followUpRetrieval"]["collections"] == ["repo", "docs"]
+
+
 def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     request = _build_request_for_step("collect-evidence")
 

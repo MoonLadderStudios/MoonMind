@@ -245,7 +245,7 @@ async def test_lore_readiness_uses_policy_owned_adapter_and_preserves_exact_iden
     )
     launcher = ManagedRuntimeLauncher(
         ManagedRunStore(tmp_path / "managed_runs"),
-        lore_repository_adapter=adapter,
+        lore_repository_readiness_adapter=adapter,
     )
     request = _make_request(
         workspace_spec={

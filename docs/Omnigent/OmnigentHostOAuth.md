@@ -305,6 +305,15 @@ boundary.
 
 The workspace source is resolved from canonical workflow authority. Durable payloads use `WorkspaceLocator`; only the owning worker resolves it and translates it to a daemon-visible bind source after containment and identity validation.
 
+Every declared input state materializes through the one owning-worker boundary before any host, volume, or bind mutation: the repository and authored branch/commit, checkpoint/external-state restore inputs, and declared input attachments. Restore inputs and attachments are durable `artifact://` refs — each is dereferenced through the artifact contract under its own dedicated service principal (`service:omnigent_workspace_restore`, `service:omnigent_workspace_attachment`), bounded per ref and cumulatively, and landed under bounded `.moonmind/restore` and `.moonmind/attachments` areas inside the already-containment-checked workspace. A ref that looks like a local path is rejected so an artifact ref is never conflated with a filesystem path.
+
+Daemon-visible translation is a deployment-selected, deterministic contract applied only at the trusted worker/runtime boundary after authorization and materialization, selected by `WORKFLOW_DOCKER_DAEMON_MODE`:
+
+- `local` (default when no daemon root is configured): the daemon shares the worker filesystem, so the worker path is already daemon-visible and returned unchanged; configuring a daemon root remap in this mode fails closed.
+- `remote`: the worker path is rebased from `WORKFLOW_WORKSPACE_ROOT` onto `WORKFLOW_WORKSPACE_DAEMON_ROOT` after a containment check; a remote selection without a configured daemon root fails closed rather than leaking a worker-only path to the daemon.
+
+A denied or interrupted materialization leaves bounded, credential-free reconciliation evidence — the failed authority class, a stable reason code, retryability, whether owned partial state was created, and the reconciliation requirement. Because the durable completion marker is written only after a full materialization, a partially built workspace is rebuilt on the next retry rather than reused, and a retry can never author a second workspace or mutate another run's state.
+
 The current private hashed workspace materialization is an implementation compatibility path, not a second durable workspace model. Convergence with shared `WorkspaceLocator`, daemon-visible resolution, artifact handoff, and cache primitives must preserve the separate long-lived host/session lease.
 
 ---

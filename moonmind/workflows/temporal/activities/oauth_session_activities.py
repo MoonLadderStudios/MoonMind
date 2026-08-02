@@ -54,6 +54,9 @@ async def oauth_session_prepare_credential_maintenance(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
+    from moonmind.repositories.lore_runtime import (
+        build_lore_repository_adapter_from_environment,
+    )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
     profile_id = str(request.get("profile_id") or "").strip()
@@ -71,7 +74,10 @@ async def oauth_session_prepare_credential_maintenance(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        runtime = OmnigentOAuthHostRuntime(client=client)
+        runtime = OmnigentOAuthHostRuntime(
+            client=client,
+            lore_repository_adapter=build_lore_repository_adapter_from_environment(),
+        )
         drained = 0
         if not binding.host_launch_profile_ref:
             # The static host can remain intentionally idle after its prior
@@ -111,6 +117,9 @@ async def oauth_session_revalidate_bound_host(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
+    from moonmind.repositories.lore_runtime import (
+        build_lore_repository_adapter_from_environment,
+    )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
     profile_id = str(request.get("profile_id") or "").strip()
@@ -147,7 +156,10 @@ async def oauth_session_revalidate_bound_host(
                 client=http_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
-            runtime = OmnigentOAuthHostRuntime(client=client)
+            runtime = OmnigentOAuthHostRuntime(
+                client=client,
+                lore_repository_adapter=build_lore_repository_adapter_from_environment(),
+            )
             preflight = await runtime.prepare_host(
                 binding=binding,
                 host_lease=lease,

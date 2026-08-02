@@ -96,6 +96,11 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
             "artifact://MM-1090/output.branch_turn.step_execution_manifest.json"
         ),
         created_step_execution_id="step-MM-1090",
+        follow_up_retrieval={
+            "enabled": True,
+            "collections": ["repo"],
+            "maxQueries": 4,
+        },
     )
     await session.commit()
 
@@ -132,6 +137,11 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
     assert turn.step_execution_manifest_ref == (
         "artifact://MM-1090/output.branch_turn.step_execution_manifest.json"
     )
+    assert turn.diagnostics["followUpRetrieval"] == {
+        "enabled": True,
+        "collections": ["repo"],
+        "maxQueries": 4,
+    }
 
     binding = await session.get(WorkflowCheckpointBranchGitBinding, "cbr_MM-1090")
     assert binding is not None
