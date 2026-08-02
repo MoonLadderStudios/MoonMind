@@ -171,6 +171,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
+        docker-buildx-plugin \
         docker-ce-cli \
         docker-compose-plugin
 
@@ -192,7 +193,7 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && claude --version && npm --version && rg --version'
+    sh -c 'codex --version && claude --version && npm --version && rg --version && docker buildx version && docker compose version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals and managed sandbox defaults. The template is merged into the
