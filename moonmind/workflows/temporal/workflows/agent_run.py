@@ -299,6 +299,32 @@ def _compact_agent_run_result_payload_for_workflow_history(
             compact_metadata[key] = _compact_moonspec_verify_for_workflow_history(
                 value
             )
+
+    queued_children = compact_metadata.get("queuedChildren")
+    if isinstance(queued_children, (list, tuple)):
+        compact_children: list[dict[str, str]] = []
+        for child in queued_children:
+            if not isinstance(child, Mapping):
+                continue
+            compact_child: dict[str, str] = {}
+            workflow_id = _compact_workflow_text(
+                child.get("workflowId"), max_chars=400
+            )
+            execution_id = _compact_workflow_text(
+                child.get("executionId"), max_chars=400
+            )
+            if workflow_id:
+                compact_child["workflowId"] = workflow_id
+            if execution_id and execution_id != workflow_id:
+                compact_child["executionId"] = execution_id
+            reference = _compact_workflow_text(
+                child.get("ref") or child.get("targetRef"), max_chars=400
+            )
+            if reference:
+                compact_child["ref"] = reference
+            if compact_child:
+                compact_children.append(compact_child)
+        compact_metadata["queuedChildren"] = compact_children
     compact_payload["metadata"] = compact_metadata
     return compact_payload
 
@@ -1618,6 +1644,23 @@ class MoonMindAgentRun:
             request=request,
             result=result,
         )
+        publish_payload = self.final_result.model_dump(mode="json", by_alias=True)
+        try:
+            self.final_result = AgentRunResult(**publish_payload)
+        except ValueError:
+            compacted_payload = (
+                _compact_agent_run_result_payload_for_workflow_history(
+                    publish_payload
+                )
+            )
+            if compacted_payload == publish_payload:
+                raise
+            # Validate before scheduling the typed activity. Pydantic model_copy
+            # intentionally skips validation, so metadata accumulated across
+            # fetch-result, terminal-evidence, and workflow enrichment can exceed
+            # the AgentRunResult boundary even though every individual producer
+            # returned a valid result.
+            self.final_result = AgentRunResult(**compacted_payload)
         enriched_result = await self._execute_routed_activity(
             "agent_runtime.publish_artifacts",
             self.final_result,

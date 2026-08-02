@@ -574,6 +574,79 @@ async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadat
     AgentRunResult(**result.model_dump(mode="json", by_alias=True))
 
 
+async def test_publish_terminal_result_compacts_large_fanout_before_activity_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a successful fan-out result inside the typed activity boundary."""
+
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request()
+    queued_children = []
+    for index in range(23):
+        issue_number = 2347 + index
+        execution_id = f"mm:00000000-0000-0000-0000-{index:012d}"
+        target_ref = f"MoonLadderStudios/Tactics#{issue_number}"
+        queued_children.append(
+            {
+                "provider": "github",
+                "ref": target_ref,
+                "workflowId": execution_id,
+                "executionId": execution_id,
+                "targetRef": target_ref,
+                "idempotencyKey": (
+                    f"batch-workflows:github:{target_ref}:sha256:" + "a" * 64
+                ),
+            }
+        )
+    provider_result = AgentRunResult(
+        summary="Completed with status completed",
+        metadata={
+            "lastAssistantText": "A" * 5000,
+            "operator_summary": "B" * 1410,
+            "queuedChildCount": len(queued_children),
+            "queuedChildren": queued_children,
+            "terminalContractId": "batch_workflows_fanout.v1",
+            "terminalContractSatisfied": True,
+            "terminalContractOutcome": "terminal_success",
+        },
+    )
+    unbounded = run._enrich_result_metadata(request=request, result=provider_result)
+    assert unbounded is not None
+    with pytest.raises(ValueError, match="metadata must serialize"):
+        AgentRunResult(**unbounded.model_dump(mode="json", by_alias=True))
+
+    published_payloads: list[AgentRunResult] = []
+
+    async def fake_publish_activity(
+        name: str,
+        payload: AgentRunResult,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        assert name == "agent_runtime.publish_artifacts"
+        AgentRunResult(**payload.model_dump(mode="json", by_alias=True))
+        published_payloads.append(payload)
+        return payload
+
+    run._execute_routed_activity = fake_publish_activity  # type: ignore[method-assign]
+
+    result = await run._publish_terminal_result(
+        request=request,
+        result=provider_result,
+    )
+
+    assert len(published_payloads) == 1
+    compact_children = published_payloads[0].metadata["queuedChildren"]
+    assert len(compact_children) == len(queued_children)
+    assert compact_children[0] == {
+        "workflowId": queued_children[0]["workflowId"],
+        "ref": queued_children[0]["ref"],
+    }
+    assert result.metadata["queuedChildCount"] == len(queued_children)
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert run._terminal_result_payload_compacted_for_history is False
+
+
 async def test_publish_terminal_result_releases_slot_after_compacted_replay_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

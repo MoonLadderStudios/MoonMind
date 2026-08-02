@@ -280,6 +280,144 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     ]
 
 
+async def test_successful_batch_fanout_is_compacted_before_publish_activity_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:dc7271dd at the AgentRun-to-publish activity boundary."""
+
+    replay_id = "agent-run-publish-metadata-overflow"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    shape = manifest["resultShape"]
+    request = AgentExecutionRequest.model_validate(manifest["request"])
+    assert request.managed_session is not None
+    queued_children = []
+    for index in range(shape["queuedChildCount"]):
+        issue_number = shape["firstIssueNumber"] + index
+        execution_id = f"mm:00000000-0000-0000-0000-{index:012d}"
+        target_ref = f"{shape['repository']}#{issue_number}"
+        queued_children.append(
+            {
+                "provider": "github",
+                "ref": target_ref,
+                "workflowId": execution_id,
+                "executionId": execution_id,
+                "targetRef": target_ref,
+                "idempotencyKey": (
+                    f"batch-workflows:github:{target_ref}:sha256:"
+                    + "a" * shape["idempotencyDigestChars"]
+                ),
+            }
+        )
+
+    provider_result = AgentRunResult(
+        summary=shape["summary"],
+        metadata={
+            "agentRunId": request.managed_session.agent_run_id,
+            "diagnosticsRef": "sess:" + "d" * 66,
+            "lastAssistantText": "A" * shape["lastAssistantTextChars"],
+            "operator_summary": "B" * shape["operatorSummaryChars"],
+            "queuedChildCount": len(queued_children),
+            "queuedChildren": queued_children,
+            "stderrArtifactRef": "sess:" + "e" * 60,
+            "stdoutArtifactRef": "sess:" + "o" * 60,
+            "instructionRefOmitted": True,
+            "instructionRefSha256": "f" * 64,
+            "instructionRefLengthChars": 2247,
+            "terminalContractAuthority": "MoonMind.AgentRun",
+            "terminalContractEvidencePath": manifest[
+                "workspaceArtifactManifest"
+            ]["terminalEvidencePath"],
+            "terminalContractExecutionRef": "execution:" + "e" * 118,
+            "terminalContractId": manifest["workspaceArtifactManifest"][
+                "contractId"
+            ],
+            "terminalContractOutcome": expected["terminalOutcome"],
+            "terminalContractSatisfied": True,
+        },
+    )
+    agent_run = MoonMindAgentRun()
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": (
+                "mm:replay-parent:agent:tpl:batch-github-workflows:01:replay"
+            ),
+            "run_id": "00000000-0000-0000-0000-000000000001",
+            "search_attributes": {},
+            "parent": None,
+        },
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+
+    prepublication_result = agent_run._enrich_result_metadata(
+        request=request,
+        result=provider_result,
+    )
+    assert prepublication_result is not None
+    prepublication_metadata = dict(prepublication_result.metadata)
+    prepublication_metadata["resiliencyPolicy"] = {
+        "noProgressTimeoutSeconds": 1800,
+        "retryPolicy": {},
+        "runtime": "codex_cli",
+        "stuckAction": "request_intervention",
+    }
+    prepublication_result = prepublication_result.model_copy(
+        update={"metadata": prepublication_metadata}
+    )
+    with pytest.raises(ValueError, match="metadata must serialize"):
+        AgentRunResult.model_validate(
+            prepublication_result.model_dump(mode="json", by_alias=True)
+        )
+
+    published_payloads: list[AgentRunResult] = []
+
+    async def execute_activity(
+        name: str,
+        payload: AgentRunResult,
+        **kwargs: object,
+    ) -> dict:
+        assert name == manifest["activityName"]
+        assert kwargs["task_queue"] == manifest["expectedTaskQueue"]
+        validated = AgentRunResult.model_validate(
+            payload.model_dump(mode="json", by_alias=True)
+        )
+        metadata_bytes = len(
+            json.dumps(
+                validated.metadata,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        assert metadata_bytes <= expected["maxMetadataBytes"]
+        published_payloads.append(validated)
+        return validated.model_dump(mode="json", by_alias=True)
+
+    # Patch only the Temporal SDK handoff so production activity routing remains
+    # part of the escaped-failure replay.
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+
+    result = await agent_run._publish_terminal_result(
+        request=request,
+        result=prepublication_result,
+    )
+
+    assert result.failure_class is None
+    assert expected["parentState"] == "succeeded"
+    assert result.metadata["terminalContractOutcome"] == expected["terminalOutcome"]
+    assert result.metadata["queuedChildCount"] == expected["queuedChildCount"]
+    assert len(published_payloads) == 1
+    projected_children = published_payloads[0].metadata["queuedChildren"]
+    assert len(projected_children) == expected["queuedChildCount"]
+    assert set(projected_children[0]) == set(expected["preservedQueuedChildFields"])
+    assert not set(projected_children[0]).intersection(
+        expected["artifactOnlyQueuedChildFields"]
+    )
+
+
 async def test_dependabot_build_titles_replay_through_portable_skill_classifier() -> (
     None
 ):

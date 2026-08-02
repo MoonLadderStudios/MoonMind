@@ -1,0 +1,83 @@
+{
+  "failureShapeId": "agent-run-publish-metadata-overflow",
+  "incidentWorkflowId": "mm:dc7271dd-64b5-4f98-8da5-081d12f13442",
+  "runtime": {
+    "runtimeId": "codex_cli",
+    "protocol": "codex_app_server",
+    "executionLane": "direct_managed_session"
+  },
+  "activityName": "agent_runtime.publish_artifacts",
+  "expectedTaskQueue": "mm.activity.agent_runtime",
+  "eventScript": [
+    {
+      "event": "agent_runtime.fetch_result",
+      "metadataBytes": 4894,
+      "outcome": "completed"
+    },
+    {
+      "event": "agent_runtime.evaluate_terminal_evidence",
+      "metadataBytes": 13668,
+      "outcome": "terminal_success",
+      "queuedChildCount": 23
+    },
+    {
+      "event": "MoonMind.AgentRun.enrich_result_metadata",
+      "metadataBytes": 16656,
+      "outcome": "activity_input_rejected_before_fix"
+    }
+  ],
+  "workspaceArtifactManifest": {
+    "terminalEvidencePath": "artifacts/batch-workflows-result.json",
+    "schemaVersion": "moonmind.batch-workflows-result.v1",
+    "contractId": "batch_workflows_fanout.v1",
+    "status": "queued",
+    "requested": 23,
+    "created": 23,
+    "skipped": 0,
+    "errors": 0
+  },
+  "request": {
+    "agentKind": "managed",
+    "agentId": "codex_cli",
+    "executionProfileRef": "codex-openai-oauth",
+    "correlationId": "replay-agent-run-publish-metadata-overflow",
+    "idempotencyKey": "replay-agent-run-publish-metadata-overflow:1",
+    "instructionRef": "artifact:replay-instructions",
+    "resolvedSkillsetRef": "art_01REPLAYRESOLVEDSKILLSET000",
+    "managedSession": {
+      "workflowId": "mm:replay-parent:session:codex_cli",
+      "agentRunId": "mm:00000000-0000-0000-0000-000000000002",
+      "sessionId": "sess:mm:replay-parent:codex_cli",
+      "sessionEpoch": 1,
+      "runtimeId": "codex_cli",
+      "executionProfileRef": "codex-openai-oauth"
+    },
+    "workspaceSpec": {
+      "repository": "MoonLadderStudios/Tactics",
+      "repo": "MoonLadderStudios/Tactics",
+      "branch": "main"
+    },
+    "parameters": {
+      "publishMode": "none",
+      "metadata": {
+        "moonmind": {
+          "selectedSkill": "batch-workflows",
+          "stepLedger": {
+            "logicalStepId": "tpl:batch-github-workflows:01:replay",
+            "scope": "step",
+            "executionOrdinal": 1
+          }
+        }
+      }
+    }
+  },
+  "resultShape": {
+    "summary": "Completed with status completed",
+    "lastAssistantTextChars": 3112,
+    "operatorSummaryChars": 1414,
+    "queuedChildCount": 23,
+    "firstIssueNumber": 2347,
+    "repository": "MoonLadderStudios/Tactics",
+    "idempotencyDigestChars": 64
+  }
+}
