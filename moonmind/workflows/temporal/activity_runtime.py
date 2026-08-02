@@ -3662,9 +3662,11 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
-            head = (
-                await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
-            ).stdout.strip()
+            head = model.base_commit
+            if (workspace / ".git").exists():
+                head = (
+                    await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+                ).stdout.strip()
             archive_payload, entries = self._build_worktree_archive(workspace)
             workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
