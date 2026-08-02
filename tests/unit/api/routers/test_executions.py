@@ -5754,6 +5754,61 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "branch": "codex/pr-resolver",
     }
 
+
+def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Exercise the exact Create page request through POST /api/executions."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "omnigent",
+                "omnigent": {
+                    "executionTargetRef": "omnigent-codex@1",
+                    "launchPolicyRef": "codex-on-demand@1",
+                },
+                "task": {
+                    "instructions": "Make the bounded deterministic change.",
+                    "git": {"branch": "main"},
+                    "runtime": {"mode": "omnigent"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert initial_parameters["workflow"]["runtime"] == {"mode": "omnigent"}
+    assert initial_parameters["workflow"]["git"] == {"branch": "main"}
+    assert initial_parameters["instructions"] == (
+        "Make the bounded deterministic change."
+    )
+    serialized = json.dumps(initial_parameters)
+    assert all(
+        forbidden not in serialized
+        for forbidden in (
+            "hostId",
+            "leaseId",
+            "registrationToken",
+            "direct_codex",
+        )
+    )
+
 def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
