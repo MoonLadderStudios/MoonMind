@@ -3945,6 +3945,84 @@ class TemporalExecutionService:
                 ],
             }
         recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
+        # Preserve the validated Omnigent authority snapshot at the Activity
+        # boundary.  The resumed workflow must not silently turn an Omnigent
+        # checkpoint into a fresh profile-bound execution.
+        omnigent_checkpoint = checkpoint_payload.get("omnigentCheckpoint")
+        if omnigent_checkpoint is None:
+            omnigent_checkpoint = checkpoint_payload.get("omnigent_checkpoint")
+        if omnigent_checkpoint is not None:
+            try:
+                from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+
+                validated_omnigent = OmnigentCheckpointIdentity.model_validate(
+                    omnigent_checkpoint
+                )
+                if (
+                    recovery_mode == "selected_step"
+                    and validated_omnigent.logical_step_id != failed_step_id
+                ):
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step has no matching Omnigent checkpoint evidence."
+                    )
+                recovery_source_payload["omnigentCheckpoint"] = (
+                    validated_omnigent.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                )
+                task_payload = _workflow_payload(params)
+                runtime_payload = _mapping_payload(task_payload.get("runtime"))
+                instruction_identity = hashlib.sha256(
+                    source_snapshot_ref.encode("utf-8")
+                ).hexdigest()
+                immutable_snapshot = {
+                    "instructionDigest": f"sha256:{instruction_identity}",
+                    "runtimeId": eligibility.target_runtime_id,
+                    "model": str(
+                        runtime_payload.get("model")
+                        or task_payload.get("model")
+                        or params.get("model")
+                        or "default"
+                    ),
+                    "effort": str(
+                        runtime_payload.get("effort")
+                        or task_payload.get("effort")
+                        or params.get("effort")
+                        or "default"
+                    ),
+                    "providerProfileId": validated_omnigent.provider_profile_id,
+                    "launchPolicyRef": validated_omnigent.launch_policy_ref,
+                    "repositoryBranch": validated_omnigent.source_branch,
+                    "publishMode": str(
+                        task_payload.get("publishMode")
+                        or params.get("publishMode")
+                        or "none"
+                    ),
+                }
+                # Pin the checkpoint's validated selection into the authored
+                # launch. A later profile/default lookup must not silently alter
+                # a recovery after the immutable comparison has admitted it.
+                pinned_runtime_payload = dict(runtime_payload)
+                pinned_runtime_payload["model"] = immutable_snapshot["model"]
+                pinned_runtime_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["runtime"] = pinned_runtime_payload
+                task_payload["model"] = immutable_snapshot["model"]
+                task_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["publishMode"] = immutable_snapshot["publishMode"]
+                params[
+                    "workflow" if _mapping_payload(params.get("workflow")) else "task"
+                ] = task_payload
+                # This command preserves the source workflow inputs. Branch
+                # APIs construct a distinct requested snapshot when an operator
+                # changes any immutable dimension.
+                recovery_source_payload["immutableSource"] = immutable_snapshot
+                recovery_source_payload["immutableRequested"] = dict(
+                    immutable_snapshot
+                )
+            except ValidationError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "Omnigent recovery checkpoint identity is invalid."
+                ) from exc
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary
         )

@@ -414,6 +414,8 @@ def recovery_mode(
     )
     if all(
         (
+            checkpoint.validation.valid,
+            checkpoint.validation.live_reattach_available,
             provider_active,
             provider_ref_matches,
             host_active,

@@ -642,6 +642,9 @@ class AgentExecutionRequest(BaseModel):
     remediation_workspace: dict[str, Any] | None = Field(
         None, alias="remediationWorkspace"
     )
+    checkpoint_recovery: dict[str, Any] | None = Field(
+        None, alias="checkpointRecovery"
+    )
     terminal_contract: AgentTerminalContract | None = Field(
         None, alias="terminalContract"
     )
@@ -728,6 +731,11 @@ class AgentExecutionRequest(BaseModel):
             )
             self.remediation_workspace = binding.model_dump(
                 by_alias=True, mode="json", exclude_none=True
+            )
+        if self.checkpoint_recovery is not None:
+            self.checkpoint_recovery = validate_compact_temporal_mapping(
+                self.checkpoint_recovery,
+                field_name="checkpointRecovery",
             )
         self.input_refs = [
             require_non_blank(item, field_name="inputRefs[]")

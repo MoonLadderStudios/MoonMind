@@ -2005,6 +2005,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
+    fireEvent.change(await screen.findByLabelText('Provider profile'), { target: { value: 'profile-oauth-2' } });
+    fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), { target: { value: 'omnigent-isolated' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5.6-sol' } });
+    fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Create branch from checkpoint' }));
 
     await waitFor(() => {
@@ -2018,6 +2022,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(body.workspacePolicy).toBe('apply_previous_execution_diff_to_clean_baseline');
       expect(body.runtimeContextPolicy).toBe('fresh_agent_run');
       expect(body.publishMode).toBe('none');
+      expect(body.providerProfileRef).toBe('profile-oauth-2');
+      expect(body.executionProfileRef).toBe('omnigent-isolated');
+      expect(body.model).toBe('gpt-5.6-sol');
+      expect(body.effort).toBe('high');
       expect(body.instructions.text).toContain('bounded alternative implementation');
       expect(body.idempotencyKey).toMatch(/^dashboard:create:test-123:apply:1:/);
     });

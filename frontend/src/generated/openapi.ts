@@ -5916,6 +5916,14 @@ export interface components {
             gitWorkBranch?: string | null;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Executionprofileref */
+            executionProfileRef?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
             /** Followupretrieval */
             followUpRetrieval?: {
                 [key: string]: unknown;
