@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from temporalio import activity
 
@@ -34,6 +36,119 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
         checkpointDigest=checkpoint.workspace_checkpoint_digest,
     )
     return checkpoint, candidate_workspace
+
+
+async def _resolve_live_recovery_authority(
+    *, checkpoint: Any, session_factory: Any, host_repository: Any, run_store: Any
+) -> dict[str, Any]:
+    """Resolve every mutable authority used by the live-reattach gate.
+
+    Missing, expired, ambiguous, or mismatched state is represented as false
+    evidence so ``recovery_mode`` fails closed to cold restore.  Credential
+    generation is always loaded from the current Provider Profile and is never
+    copied from checkpoint evidence.
+    """
+
+    from sqlalchemy import func, select
+
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        OmnigentBridgeSessionEvent,
+        ProviderProfileSlotLease,
+    )
+
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, checkpoint.provider_profile_id
+        )
+        current_generation = int(profile.credential_generation) if profile else 0
+        provider_row = None
+        if checkpoint.provider_lease_ref:
+            provider_row = (
+                await session.execute(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id
+                        == checkpoint.provider_lease_ref,
+                        ProviderProfileSlotLease.profile_id
+                        == checkpoint.provider_profile_id,
+                    )
+                )
+            ).scalar_one_or_none()
+        latest_sequence = int(
+            (
+                await session.execute(
+                    select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                        OmnigentBridgeSessionEvent.bridge_session_id
+                        == checkpoint.bridge_session_id
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+
+    provider_lease = None
+    if provider_row is not None:
+        expires_at = provider_row.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        provider_lease = {
+            "leaseId": provider_row.lease_id,
+            "active": expires_at is None or expires_at > now,
+        }
+
+    host = (
+        await host_repository.get_host_lease(checkpoint.host_lease_ref)
+        if checkpoint.host_lease_ref
+        else None
+    )
+    host_lease = (
+        host.model_dump(by_alias=True, mode="json", exclude_none=True)
+        if host is not None
+        else None
+    )
+    bridge = await run_store.get_bridge_session(checkpoint.bridge_session_id)
+    host_expires_at = host.expires_at if host is not None else None
+    if host_expires_at is not None and host_expires_at.tzinfo is None:
+        host_expires_at = host_expires_at.replace(tzinfo=UTC)
+    host_registered = bool(
+        host
+        and host.omnigent_host_id == checkpoint.omnigent_host_id
+        and host.omnigent_session_id == checkpoint.omnigent_session_id
+        and host.bridge_session_id == checkpoint.bridge_session_id
+        and host.status in {"ready", "assigned"}
+        and host_expires_at
+        and host_expires_at > now
+    )
+    session_valid = bool(
+        bridge
+        and bridge.omnigent_host_id == checkpoint.omnigent_host_id
+        and bridge.omnigent_session_id == checkpoint.omnigent_session_id
+        and bridge.status == "active"
+        and (
+            checkpoint.last_bridge_event_cursor is None
+            or (
+                checkpoint.last_bridge_event_cursor.isdecimal()
+                and latest_sequence >= int(checkpoint.last_bridge_event_cursor)
+            )
+        )
+    )
+    first_message_consistent = bool(
+        bridge
+        and checkpoint.first_message_digest
+        and bridge.first_message_digest == checkpoint.first_message_digest
+        and checkpoint.first_message_id
+        in {bridge.first_message_item_id, bridge.first_message_pending_id}
+        and bridge.first_message_state in {"posted", "terminal"}
+    )
+    return {
+        "provider_lease": provider_lease,
+        "host_lease": host_lease,
+        "host_registered": host_registered,
+        "session_valid": session_valid,
+        "first_message_consistent": first_message_consistent,
+        "current_credential_generation": current_generation,
+    }
 
 
 @activity.defn(name="integration.omnigent.execute")
@@ -146,10 +261,11 @@ async def omnigent_execute_activity(
         )
 
         lore_repository_adapter = build_lore_repository_adapter_from_environment()
+        host_repository = OmnigentOAuthHostRepository(async_session_maker)
         coordinator = OmnigentProfileBoundExecutionCoordinator(
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            host_repository=OmnigentOAuthHostRepository(async_session_maker),
+            host_repository=host_repository,
             host_runtime=OmnigentOAuthHostRuntime(
                 client=omnigent_client,
                 lore_repository_adapter=lore_repository_adapter,
@@ -167,21 +283,17 @@ async def omnigent_execute_activity(
         recovery_inputs = _checkpoint_recovery_from_request(request)
         if recovery_inputs is not None:
             checkpoint, candidate_workspace = recovery_inputs
-            # Live reattachment is intentionally fail-closed here. The
-            # Activity has validated durable restore evidence, but no
-            # authoritative proof that every original live lease/session
-            # is still current; recover_from_checkpoint therefore selects
-            # cold restore and reacquires capacity through the coordinator.
+            authority = await _resolve_live_recovery_authority(
+                checkpoint=checkpoint,
+                session_factory=async_session_maker,
+                host_repository=host_repository,
+                run_store=run_store,
+            )
             return await coordinator.recover_from_checkpoint(
                 request=request,
                 checkpoint=checkpoint,
-                provider_lease=None,
-                host_lease=None,
-                host_registered=False,
-                session_valid=False,
-                first_message_consistent=False,
-                current_credential_generation=checkpoint.credential_generation,
                 candidate_workspace=candidate_workspace,
+                **authority,
             )
         return await coordinator.execute(request)
 
@@ -250,6 +362,7 @@ async def omnigent_oauth_host_janitor_activity(
 
 __all__ = [
     "_checkpoint_recovery_from_request",
+    "_resolve_live_recovery_authority",
     "omnigent_execute_activity",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",
