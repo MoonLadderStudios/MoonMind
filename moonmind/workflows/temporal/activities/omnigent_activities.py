@@ -29,6 +29,7 @@ def _checkpoint_recovery_decision(
     *,
     live_authority: dict[str, Any] | None = None,
     cold_restore_authorized: bool | None = None,
+    live_reattach_authorized: bool | None = None,
 ) -> dict[str, Any]:
     """Classify recovery from bounded, caller-independent authority evidence.
 
@@ -73,7 +74,8 @@ def _checkpoint_recovery_decision(
     # cursor, and first-message state.  Payload booleans are deliberately
     # ignored: callers may request recovery, but cannot attest authority.
     live_valid = bool(
-        live_authority
+        live_reattach_authorized is True
+        and live_authority
         and live_authority.get("provider_lease")
         and live_authority["provider_lease"].get("active") is True
         and live_authority.get("host_registered") is True
@@ -442,6 +444,10 @@ async def omnigent_execute_activity(
             decision = _checkpoint_recovery_decision(
                 recovery_payload,
                 live_authority=authority,
+                live_reattach_authorized=bool(
+                    checkpoint.validation.valid
+                    and checkpoint.validation.live_reattach_available
+                ),
                 cold_restore_authorized=bool(
                     checkpoint.validation.valid
                     and checkpoint.validation.workspace_cold_restore_available
@@ -460,6 +466,11 @@ async def omnigent_execute_activity(
                 raise ValueError(
                     "checkpoint resume unavailable: "
                     + ",".join(map(str, reasons[:20]))
+                )
+            if decision["recoveryAction"] == "cold_restore":
+                raise ValueError(
+                    "checkpoint cold restore requires an owned workspace restoration "
+                    "boundary before Omnigent launch"
                 )
             return await coordinator.recover_from_checkpoint(
                 request=request,

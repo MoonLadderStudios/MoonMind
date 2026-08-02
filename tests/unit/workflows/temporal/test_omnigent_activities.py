@@ -104,6 +104,7 @@ def test_checkpoint_recovery_decision_selects_live_or_cold_with_bounded_rational
             "checkpoint_credential_generation": 4,
         },
         cold_restore_authorized=True,
+        live_reattach_authorized=True,
     ) == {"recoveryAction": "live_reattach", "reasonCodes": ["all_authority_valid"]}
     assert _checkpoint_recovery_decision(
         {

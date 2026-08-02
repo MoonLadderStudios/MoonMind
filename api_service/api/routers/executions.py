@@ -1410,6 +1410,7 @@ def _branch_turn_launch_manifest_payload(
     context_bundle_ref: str,
 ) -> dict[str, Any]:
     follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
+    runtime_selection = (branch.diagnostics or {}).get("runtimeSelection")
     return {
         "workflowId": workflow_id,
         "runId": branch.source_run_id,
@@ -1418,6 +1419,11 @@ def _branch_turn_launch_manifest_payload(
         "stepExecutionId": payload.created_step_execution_id,
         "reason": "checkpoint_branch",
         "status": "running",
+        "runtimeSelection": (
+            dict(runtime_selection)
+            if isinstance(runtime_selection, Mapping)
+            else {}
+        ),
         "branch": {
             "branchId": branch.branch_id,
             "branchTurnId": turn.branch_turn_id,
@@ -13404,6 +13410,9 @@ async def launch_checkpoint_branch_turn(
             "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
         },
         "workspacePolicy": turn.workspace_policy,
+        "runtimeSelection": dict(
+            (branch.diagnostics or {}).get("runtimeSelection") or {}
+        ),
         "workspaceBaseline": payload.workspace_baseline
         or {
             "kind": "checkpoint_ref",

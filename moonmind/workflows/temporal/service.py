@@ -3955,6 +3955,13 @@ class TemporalExecutionService:
                 validated_omnigent = OmnigentCheckpointIdentity.model_validate(
                     omnigent_checkpoint
                 )
+                if (
+                    recovery_mode == "selected_step"
+                    and validated_omnigent.logical_step_id != failed_step_id
+                ):
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Selected start step has no matching Omnigent checkpoint evidence."
+                    )
                 recovery_source_payload["omnigentCheckpoint"] = (
                     validated_omnigent.model_dump(
                         by_alias=True, mode="json", exclude_none=True
@@ -3989,6 +3996,19 @@ class TemporalExecutionService:
                         or "none"
                     ),
                 }
+                # Pin the checkpoint's validated selection into the authored
+                # launch. A later profile/default lookup must not silently alter
+                # a recovery after the immutable comparison has admitted it.
+                pinned_runtime_payload = dict(runtime_payload)
+                pinned_runtime_payload["model"] = immutable_snapshot["model"]
+                pinned_runtime_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["runtime"] = pinned_runtime_payload
+                task_payload["model"] = immutable_snapshot["model"]
+                task_payload["effort"] = immutable_snapshot["effort"]
+                task_payload["publishMode"] = immutable_snapshot["publishMode"]
+                params[
+                    "workflow" if _mapping_payload(params.get("workflow")) else "task"
+                ] = task_payload
                 # This command preserves the source workflow inputs. Branch
                 # APIs construct a distinct requested snapshot when an operator
                 # changes any immutable dimension.
