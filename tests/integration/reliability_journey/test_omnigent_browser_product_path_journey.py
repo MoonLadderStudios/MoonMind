@@ -160,9 +160,14 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         fail_at="none", code="unused"
     )
     assert actions.count("envelope_created") == 1
-    assert owner_calls.count("session_create") == 1
-    assert owner_calls.count("resource_harvest") == 1
     assert actions.count("provider_released") == 1
+    assert actions.count("host_stopped") == 1
+    assert actions.count("alternate_profile") == 0
+    assert actions.count("direct_codex") == 0
+    assert owner_calls.count("session_create") == 1
+    assert owner_calls.count("first_message_digest") == 1
+    assert owner_calls.count("first_message_reconcile") == 1
+    assert owner_calls.count("resource_harvest") == 1
     assert lifecycle[-1][0] == "terminal"
     terminal = lifecycle[-1][1]["metadata"]
     assert terminal["cleanupCompleted"] is True
@@ -324,6 +329,29 @@ async def test_product_path_failures_never_fallback_and_preserve_release_order(
         "resource_harvest",
     }:
         assert actions.index("host_stopped") < actions.index("provider_released")
+
+
+@pytest.mark.asyncio
+async def test_product_path_unavailable_worker_dispatch_fails_closed() -> None:
+    """Unavailable Docker worker authority cannot reroute an Omnigent request."""
+
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="host_lease",
+        code="docker_worker_unavailable",
+    )
+
+    assert actions == ["envelope_created", "provider_released"]
+    assert owner_calls == []
+    assert "direct_codex" not in actions
+    assert "alternate_profile" not in actions
+    assert "host_stopped" not in actions
+    terminal = events[-1]
+    assert terminal[0] == "terminal"
+    assert terminal[1]["status"] == "failed"
+    assert terminal[1]["metadata"]["cleanupCompleted"] is True
+    assert terminal[1]["metadata"]["leaseReleased"] is True
+    assert terminal[1]["metadata"]["janitorRequired"] is False
+    assert "docker_worker_unavailable" in json.dumps(events)
 
 
 async def test_controlling_bridge_failure_and_recovery_owners(
