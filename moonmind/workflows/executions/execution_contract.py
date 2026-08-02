@@ -2440,7 +2440,7 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    repository: AuthoredRepositoryTarget | None = Field(None, alias="repository")
+    repository: AuthoredRepositoryTarget | str | None = Field(None, alias="repository")
     required_capabilities: list[str] | None = Field(
         None,
         alias="requiredCapabilities",
@@ -2462,9 +2462,16 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     @field_validator("repository", mode="before")
     @classmethod
-    def _normalize_repository(cls, value: object) -> AuthoredRepositoryTarget | None:
+    def _normalize_repository(
+        cls, value: object
+    ) -> AuthoredRepositoryTarget | str | None:
         if value is None:
             return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                raise WorkflowContractError("repository must be non-empty")
+            return cleaned
         return compile_repository_target(value)
 
     @field_validator("target_runtime", mode="before")
@@ -2488,6 +2495,7 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
     ) -> "CanonicalWorkflowExecutionPayload":
         if (
             self.repository is not None
+            and not isinstance(self.repository, str)
             and self.repository.revision is not None
             and self.task.publish.mode != "none"
         ):
@@ -2708,11 +2716,33 @@ def build_canonical_workflow_view(
         except (ValidationError, WorkflowContractError) as exc:
             raise WorkflowContractError(str(exc)) from exc
         canonical = model.model_dump(by_alias=True, exclude_none=False)
-    elif normalized_type in LEGACY_WORKFLOW_JOB_TYPES:
-        raise WorkflowContractError(
-            "legacy codex_exec/codex_skill submissions are no longer accepted; "
-            "recorded histories must use decode_legacy_repository_history_v1"
+    elif normalized_type == "codex_exec":
+        repository = _clean_optional_str(source.get("repository")) or ""
+        if not repository:
+            raise WorkflowContractError("repository is required")
+        canonical = {
+            "repository": repository,
+            "targetRuntime": "codex",
+            "auth": _build_auth_from_payload(source),
+            "workflow": _build_spec_from_codex_exec_payload(source),
+        }
+    elif normalized_type == "codex_skill":
+        inputs = source.get("inputs")
+        input_mapping = inputs if isinstance(inputs, Mapping) else {}
+        repository = (
+            _clean_optional_str(source.get("repository"))
+            or _clean_optional_str(input_mapping.get("repo"))
+            or _clean_optional_str(input_mapping.get("repository"))
+            or ""
         )
+        if not repository:
+            raise WorkflowContractError("repository is required")
+        canonical = {
+            "repository": repository,
+            "targetRuntime": "codex",
+            "auth": _build_auth_from_payload(source),
+            "workflow": _build_spec_from_codex_skill_payload(source),
+        }
     else:
         canonical = {
             "repository": _clean_optional_str(source.get("repository")) or "",
@@ -2773,11 +2803,19 @@ def build_canonical_workflow_view(
 
     required.append(target_runtime)
     repository_raw = canonical.get("repository")
-    repository_target = (
-        compile_repository_target(repository_raw)
-        if repository_raw is not None
-        else None
-    )
+    if isinstance(repository_raw, str):
+        git_node = workflow_node.get("git")
+        git_mapping = git_node if isinstance(git_node, Mapping) else {}
+        repository_target = decode_legacy_repository_history_v1(
+            repository_raw,
+            _clean_optional_str(git_mapping.get("startingBranch")),
+        )
+    else:
+        repository_target = (
+            compile_repository_target(repository_raw)
+            if repository_raw is not None
+            else None
+        )
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
@@ -2857,7 +2895,11 @@ def build_canonical_workflow_view(
                 repository_tool_caps.extend(step_tool_caps)
                 required.extend(step_tool_caps)
 
-    if repository_target is not None:
+    if isinstance(repository_raw, str):
+        required.append("git")
+        if publish_mode == "pr":
+            required.append("gh")
+    elif repository_target is not None:
         required.extend(
             derive_repository_capabilities(
                 repository_target,

@@ -191,20 +191,35 @@ def resolve_deployment_git_client_policy() -> RepositoryClientPolicy:
     )
 
 
+def _current_default_repository_connection_path() -> Path:
+    return Path(
+        os.environ.get(
+            "MOONMIND_REPOSITORY_CONNECTION_PATH",
+            os.path.join(
+                os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+                "repository_connections",
+                "git-default.json",
+            ),
+        )
+    )
+
+
 def reconcile_deployment_git_connection(
-    path: Path = _DEFAULT_REPOSITORY_CONNECTION_PATH,
+    path: Path | None = None,
 ) -> RepositoryConnection:
     """Persist the worker deployment's default Git connection at startup."""
 
     connection = reconcile_default_git_connection(
         client_policy=resolve_deployment_git_client_policy()
     )
-    persist_repository_connection(connection, path)
+    persist_repository_connection(
+        connection, path or _current_default_repository_connection_path()
+    )
     return connection
 
 
 def default_repository_connection_path() -> Path:
-    return _DEFAULT_REPOSITORY_CONNECTION_PATH
+    return _current_default_repository_connection_path()
 
 
 def _compact_string(value: Any) -> str:
@@ -339,7 +354,7 @@ class ManagedRuntimeLauncher:
                 reconcile_default_git_connection(
                     client_policy=repository_client_policy
                 ),
-                _DEFAULT_REPOSITORY_CONNECTION_PATH,
+                _current_default_repository_connection_path(),
             )
         self._repository_readiness_boundary = (
             repository_readiness_boundary or self._ensure_repository_ready_for_launch
@@ -445,12 +460,12 @@ class ManagedRuntimeLauncher:
                     "REPOSITORY_CONNECTION_UNAVAILABLE",
                     "the current deployment Git client policy was not supplied",
                 )
-            connection_path = _DEFAULT_REPOSITORY_CONNECTION_PATH
+            connection_path = _current_default_repository_connection_path()
         else:
             connections_dir = Path(
                 os.environ.get(
                     "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
-                    str(_DEFAULT_REPOSITORY_CONNECTION_PATH.parent),
+                    str(_current_default_repository_connection_path().parent),
                 )
             )
             connection_path = next(

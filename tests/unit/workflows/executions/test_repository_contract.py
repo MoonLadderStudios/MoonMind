@@ -216,7 +216,13 @@ def test_repository_connection_credential_variants_round_trip(
         "credential": credential,
     }
     modeled = RepositoryConnection.model_validate(payload)
-    assert modeled.model_dump(by_alias=True, mode="json")["credential"] == credential
+    expected = credential
+    if credential["source"] == "secret_ref":
+        expected = {
+            **credential,
+            "credentialRef": {**credential["credentialRef"], "extra": {}},
+        }
+    assert modeled.model_dump(by_alias=True, mode="json")["credential"] == expected
 
 
 @pytest.mark.parametrize(
