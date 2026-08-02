@@ -173,7 +173,9 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         agent_name="Codex",
         target_metadata={"hostType": "on_demand_docker"},
     )
-    assert same_row.id == row.id  # retry/worker restart keeps one session
+    assert (
+        same_row.bridge_session_id == row.bridge_session_id
+    )  # retry/worker restart keeps one session
 
     # Execute the production profile-bound coordinator.  Only its Docker and
     # provider transports are controlled; lifecycle, cleanup, release, and
@@ -204,7 +206,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         step_execution_id=request.step_execution.step_execution_id
     )
     assert replay is not None
-    assert replay.id == row.id
+    assert replay.bridge_session_id == row.bridge_session_id
     assert replay.endpoint_ref == "controlled-fake"
     await engine.dispose()
 
