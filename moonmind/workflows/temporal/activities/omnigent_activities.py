@@ -24,7 +24,12 @@ _IMMUTABLE_RECOVERY_DIMENSIONS = (
 )
 
 
-def _checkpoint_recovery_decision(recovery: dict[str, Any]) -> dict[str, Any]:
+def _checkpoint_recovery_decision(
+    recovery: dict[str, Any],
+    *,
+    live_authority: dict[str, Any] | None = None,
+    cold_restore_authorized: bool | None = None,
+) -> dict[str, Any]:
     """Classify recovery from bounded, caller-independent authority evidence.
 
     The decision is intentionally compact so the request/history can retain the
@@ -63,12 +68,26 @@ def _checkpoint_recovery_decision(recovery: dict[str, Any]) -> dict[str, Any]:
                 f"immutable_{dimension}_changed" for dimension in changed[:20]
             ],
         }
-    if recovery.get("liveReattachAvailable") is True:
+    # Availability is authority-sensitive and must be supplied by the trusted
+    # Activity after it has re-resolved current profile, lease, host, session,
+    # cursor, and first-message state.  Payload booleans are deliberately
+    # ignored: callers may request recovery, but cannot attest authority.
+    live_valid = bool(
+        live_authority
+        and live_authority.get("provider_lease")
+        and live_authority["provider_lease"].get("active") is True
+        and live_authority.get("host_registered") is True
+        and live_authority.get("session_valid") is True
+        and live_authority.get("first_message_consistent") is True
+        and live_authority.get("current_credential_generation")
+        == live_authority.get("checkpoint_credential_generation")
+    )
+    if live_valid:
         return {
             "recoveryAction": "live_reattach",
             "reasonCodes": ["all_authority_valid"],
         }
-    if recovery.get("coldRestoreAvailable") is True:
+    if cold_restore_authorized is True:
         return {
             "recoveryAction": "cold_restore",
             "reasonCodes": ["live_authority_unavailable"],
@@ -258,6 +277,7 @@ async def _resolve_live_recovery_authority(
         "session_valid": session_valid,
         "first_message_consistent": first_message_consistent,
         "current_credential_generation": current_generation,
+        "checkpoint_credential_generation": checkpoint.credential_generation,
     }
 
 
@@ -393,21 +413,6 @@ async def omnigent_execute_activity(
         recovery_inputs = _checkpoint_recovery_from_request(request)
         branch_inputs = _checkpoint_branch_from_request(request)
         recovery_payload = (request.parameters or {}).get("checkpointRecovery")
-        recovery_decision = (
-            recovery_payload.get("recoveryDecision")
-            if isinstance(recovery_payload, dict)
-            else None
-        )
-        if (
-            isinstance(recovery_decision, dict)
-            and recovery_decision.get("recoveryAction") == "resume_unavailable"
-        ):
-            reasons = recovery_decision.get("reasonCodes") or [
-                "checkpoint_authority_unavailable"
-            ]
-            raise ValueError(
-                "checkpoint resume unavailable: " + ",".join(map(str, reasons[:20]))
-            )
         if branch_inputs is not None:
             checkpoint, candidate_workspace = branch_inputs
             authority = await _resolve_live_recovery_authority(
@@ -432,6 +437,30 @@ async def omnigent_execute_activity(
                 host_repository=host_repository,
                 run_store=run_store,
             )
+            if not isinstance(recovery_payload, dict):
+                raise ValueError("checkpoint recovery payload is invalid")
+            decision = _checkpoint_recovery_decision(
+                recovery_payload,
+                live_authority=authority,
+                cold_restore_authorized=bool(
+                    checkpoint.validation.valid
+                    and checkpoint.validation.workspace_cold_restore_available
+                    and authority["current_credential_generation"]
+                    == checkpoint.credential_generation
+                    and request.execution_profile_ref
+                    == checkpoint.provider_profile_id
+                ),
+            )
+            recovery_payload["recoveryDecision"] = decision
+            recovery_payload["recoveryAction"] = decision["recoveryAction"]
+            if decision["recoveryAction"] == "resume_unavailable":
+                reasons = decision.get("reasonCodes") or [
+                    "checkpoint_authority_unavailable"
+                ]
+                raise ValueError(
+                    "checkpoint resume unavailable: "
+                    + ",".join(map(str, reasons[:20]))
+                )
             return await coordinator.recover_from_checkpoint(
                 request=request,
                 checkpoint=checkpoint,

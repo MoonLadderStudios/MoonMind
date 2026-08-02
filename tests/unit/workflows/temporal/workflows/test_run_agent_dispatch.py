@@ -26,6 +26,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
+    RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
@@ -136,6 +137,22 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         injection_index = source.index(
             "self._ensure_assessment_parameters(",
             guard_index,
+        )
+
+        self.assertLess(guard_index, injection_index)
+
+    def test_checkpoint_recovery_request_shape_is_replay_patch_guarded(self) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._build_agent_execution_request)
+        self.assertEqual(
+            RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
+            "run-checkpoint-recovery-state-machine-v1",
+        )
+
+        guard_index = source.index(
+            "RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH"
+        )
+        injection_index = source.index(
+            'parameters["checkpointRecovery"]', guard_index
         )
 
         self.assertLess(guard_index, injection_index)

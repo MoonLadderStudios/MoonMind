@@ -92,20 +92,63 @@ def test_checkpoint_recovery_decision_selects_live_or_cold_with_bounded_rational
         {
             "immutableSource": immutable,
             "immutableRequested": immutable,
-            "liveReattachAvailable": True,
-            "coldRestoreAvailable": True,
-        }
+            "liveReattachAvailable": False,
+            "coldRestoreAvailable": False,
+        },
+        live_authority={
+            "provider_lease": {"active": True},
+            "host_registered": True,
+            "session_valid": True,
+            "first_message_consistent": True,
+            "current_credential_generation": 4,
+            "checkpoint_credential_generation": 4,
+        },
+        cold_restore_authorized=True,
     ) == {"recoveryAction": "live_reattach", "reasonCodes": ["all_authority_valid"]}
     assert _checkpoint_recovery_decision(
         {
             "immutableSource": immutable,
             "immutableRequested": immutable,
-            "liveReattachAvailable": False,
-            "coldRestoreAvailable": True,
-        }
+            "liveReattachAvailable": True,
+            "coldRestoreAvailable": False,
+        },
+        live_authority={
+            "provider_lease": None,
+            "host_registered": False,
+            "session_valid": False,
+            "first_message_consistent": False,
+            "current_credential_generation": 4,
+            "checkpoint_credential_generation": 4,
+        },
+        cold_restore_authorized=True,
     ) == {
         "recoveryAction": "cold_restore",
         "reasonCodes": ["live_authority_unavailable"],
+    }
+
+
+def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -> None:
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": immutable,
+            "liveReattachAvailable": True,
+            "coldRestoreAvailable": True,
+        }
+    ) == {
+        "recoveryAction": "resume_unavailable",
+        "reasonCodes": ["checkpoint_authority_unavailable"],
     }
 
 

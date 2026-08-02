@@ -3952,10 +3952,49 @@ class TemporalExecutionService:
             try:
                 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 
+                validated_omnigent = OmnigentCheckpointIdentity.model_validate(
+                    omnigent_checkpoint
+                )
                 recovery_source_payload["omnigentCheckpoint"] = (
-                    OmnigentCheckpointIdentity.model_validate(
-                        omnigent_checkpoint
-                    ).model_dump(by_alias=True, mode="json", exclude_none=True)
+                    validated_omnigent.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                )
+                task_payload = _workflow_payload(params)
+                runtime_payload = _mapping_payload(task_payload.get("runtime"))
+                instruction_identity = hashlib.sha256(
+                    source_snapshot_ref.encode("utf-8")
+                ).hexdigest()
+                immutable_snapshot = {
+                    "instructionDigest": f"sha256:{instruction_identity}",
+                    "runtimeId": eligibility.target_runtime_id,
+                    "model": str(
+                        runtime_payload.get("model")
+                        or task_payload.get("model")
+                        or params.get("model")
+                        or "default"
+                    ),
+                    "effort": str(
+                        runtime_payload.get("effort")
+                        or task_payload.get("effort")
+                        or params.get("effort")
+                        or "default"
+                    ),
+                    "providerProfileId": validated_omnigent.provider_profile_id,
+                    "launchPolicyRef": validated_omnigent.launch_policy_ref,
+                    "repositoryBranch": validated_omnigent.source_branch,
+                    "publishMode": str(
+                        task_payload.get("publishMode")
+                        or params.get("publishMode")
+                        or "none"
+                    ),
+                }
+                # This command preserves the source workflow inputs. Branch
+                # APIs construct a distinct requested snapshot when an operator
+                # changes any immutable dimension.
+                recovery_source_payload["immutableSource"] = immutable_snapshot
+                recovery_source_payload["immutableRequested"] = dict(
+                    immutable_snapshot
                 )
             except ValidationError as exc:
                 raise TemporalExecutionRecoveryCheckpointError(
