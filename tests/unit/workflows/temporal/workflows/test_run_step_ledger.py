@@ -269,7 +269,7 @@ async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_b
     }
     workflow_instance._record_step_workspace_capture_input("implement", incomplete)
     terminal_ref = await workflow_instance._record_canonical_step_checkpoint(
-        "implement", boundary="terminal_harvest", updated_at=now
+        "implement", boundary="before_publication", updated_at=now
     )
     terminal = json.loads(store.get_bytes(terminal_ref))
     assert "omnigentCheckpoint" not in terminal
