@@ -111,7 +111,7 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
         OmnigentCheckpointIdentity,
     )
 
-    recovery = (request.parameters or {}).get("checkpointRecovery")
+    recovery = request.checkpoint_recovery
     if not isinstance(recovery, dict):
         return None
     checkpoint_payload = recovery.get("omnigentCheckpoint")
@@ -138,7 +138,7 @@ def _checkpoint_branch_from_request(request: AgentExecutionRequest):
     Activity a typed call site for ``branch_from_checkpoint``.
     """
 
-    recovery = (request.parameters or {}).get("checkpointRecovery")
+    recovery = request.checkpoint_recovery
     if not isinstance(recovery, dict):
         return None
     if "immutableSource" in recovery or "immutableRequested" in recovery:
@@ -414,7 +414,7 @@ async def omnigent_execute_activity(
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
         branch_inputs = _checkpoint_branch_from_request(request)
-        recovery_payload = (request.parameters or {}).get("checkpointRecovery")
+        recovery_payload = request.checkpoint_recovery
         if branch_inputs is not None:
             checkpoint, candidate_workspace = branch_inputs
             authority = await _resolve_live_recovery_authority(

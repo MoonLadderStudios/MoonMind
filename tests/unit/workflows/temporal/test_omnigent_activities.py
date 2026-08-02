@@ -208,12 +208,10 @@ def test_checkpoint_recovery_request_builds_validated_candidate_workspace() -> N
         executionProfileRef=checkpoint.provider_profile_id,
         correlationId="recovery-workflow",
         idempotencyKey="recovery-step",
-        parameters={
-            "checkpointRecovery": {
-                "omnigentCheckpoint": checkpoint.model_dump(
-                    by_alias=True, mode="json", exclude_none=True
-                )
-            }
+        checkpointRecovery={
+            "omnigentCheckpoint": checkpoint.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
         },
     )
 
@@ -239,13 +237,11 @@ def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -
         executionProfileRef=checkpoint.provider_profile_id,
         correlationId="branch-workflow",
         idempotencyKey="branch-turn-1",
-        parameters={
-            "checkpointRecovery": {
-                "recoveryAction": "branch_required",
-                "omnigentCheckpoint": checkpoint.model_dump(
-                    by_alias=True, mode="json", exclude_none=True
-                ),
-            }
+        checkpointRecovery={
+            "recoveryAction": "branch_required",
+            "omnigentCheckpoint": checkpoint.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
         },
     )
 
@@ -277,24 +273,22 @@ def test_checkpoint_branch_request_is_derived_from_immutable_input_change() -> N
         executionProfileRef=checkpoint.provider_profile_id,
         correlationId="branch-workflow",
         idempotencyKey="branch-turn-derived",
-        parameters={
-            "checkpointRecovery": {
-                "omnigentCheckpoint": checkpoint.model_dump(
-                    by_alias=True, mode="json", exclude_none=True
-                ),
-                "immutableSource": source,
-                "immutableRequested": {
-                    **source,
-                    "instructionDigest": "sha256:new",
-                },
-                "liveReattachAvailable": True,
-                "coldRestoreAvailable": True,
-            }
+        checkpointRecovery={
+            "omnigentCheckpoint": checkpoint.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+            "immutableSource": source,
+            "immutableRequested": {
+                **source,
+                "instructionDigest": "sha256:new",
+            },
+            "liveReattachAvailable": True,
+            "coldRestoreAvailable": True,
         },
     )
 
     assert _checkpoint_branch_from_request(request) is not None
-    assert request.parameters["checkpointRecovery"]["recoveryDecision"] == {
+    assert request.checkpoint_recovery["recoveryDecision"] == {
         "recoveryAction": "branch_required",
         "reasonCodes": ["immutable_instructionDigest_changed"],
     }
@@ -310,13 +304,11 @@ def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None
         executionProfileRef=checkpoint.provider_profile_id,
         correlationId="branch-workflow",
         idempotencyKey=checkpoint.idempotency_key,
-        parameters={
-            "checkpointRecovery": {
-                "recoveryAction": "branch_required",
-                "omnigentCheckpoint": checkpoint.model_dump(
-                    by_alias=True, mode="json", exclude_none=True
-                ),
-            }
+        checkpointRecovery={
+            "recoveryAction": "branch_required",
+            "omnigentCheckpoint": checkpoint.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
         },
     )
 
