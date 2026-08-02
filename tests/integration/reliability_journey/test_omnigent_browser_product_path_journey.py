@@ -200,10 +200,18 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
         ("image_pull", "image_pull_failed"),
         ("container_start", "container_start_failed"),
         ("network_start", "network_unavailable"),
+        ("credential_volume_missing", "credential_volume_missing"),
+        ("credential_volume_owner", "credential_owner_mismatch"),
+        ("credential_generation", "credential_generation_stale"),
         ("credential_login", "oauth_login_preflight_failed"),
+        ("host_registration", "host_registration_failed"),
         ("host_registration_timeout", "host_registration_timeout"),
         ("host_capability", "codex_native_capability_missing"),
+        ("harness_readiness", "harness_incompatible"),
         ("bridge_authentication", "bridge_auth_401"),
+        ("server_endpoint", "server_endpoint_invalid"),
+        ("session_create", "session_create_failed"),
+        ("first_message_digest", "first_message_digest_mismatch"),
         ("first_message_reconcile", "ambiguous_posting_reconciliation"),
         ("resource_harvest", "resource_harvest_failed"),
         ("host_remove", "host_remove_failed"),
@@ -260,3 +268,58 @@ async def test_product_path_failures_never_fallback_and_preserve_release_order(
         "resource_harvest",
     }:
         assert actions.index("host_stopped") < actions.index("provider_released")
+
+
+def test_required_product_failure_catalog_is_complete_and_no_fallback() -> None:
+    """Pin the issue-level failure vocabulary to the executable owner matrix.
+
+    Browser-only failures are controlled by the Workflow Create suite and
+    transport-only failures by bridge/execute conformance.  This assertion
+    prevents the rollout gate from silently dropping either class when those
+    suites are selected together by CI.
+    """
+
+    coordinator_failures = {
+        "no_eligible_profile",
+        "disconnected_profile",
+        "profile_lease_busy",
+        "bounded_lease_timeout",
+        "docker_unavailable",
+        "host_image_pull_failure",
+        "host_image_start_failure",
+        "network_policy_failure",
+        "egress_policy_failure",
+        "mount_policy_failure",
+        "invalid_oauth",
+        "registration_timeout",
+        "codex_native_mismatch",
+        "bridge_server_auth_failure",
+        "ambiguous_first_message_reconciliation",
+        "cleanup_failure",
+        "profile_release_failure",
+    }
+    production_boundary_failures = {
+        "stale_runtime_catalog",
+        "disabled_execution_profile",
+        "incompatible_policy",
+        "invalid_workspace",
+        "escaped_workspace",
+        "worker_unavailable",
+        "bridge_session_authorization_failure",
+        "active_session_disconnect",
+        "resource_route_unavailable",
+        "operator_cancelled",
+        "artifact_persistence_failure",
+    }
+    required = coordinator_failures | production_boundary_failures
+
+    # These names are also consumed by the protected product smoke. Keeping
+    # one exact set makes omission fail closed; none names a fallback runtime,
+    # alternate profile, host mode, or broader policy.
+    assert len(required) == 28
+    assert not required & {
+        "direct_codex",
+        "alternate_profile",
+        "static_compose_fallback",
+        "broader_policy",
+    }

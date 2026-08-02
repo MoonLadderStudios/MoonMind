@@ -205,6 +205,40 @@ def test_fresh_complete_evidence_allows_next_phase_and_rollback_is_unconditional
     assert rolled_back.allowed is True
 
 
+def test_disable_new_selection_and_rollback_preserve_historical_runtime_identity() -> None:
+    """Rollback gates new defaults without rewriting durable authored history."""
+
+    historical = select_runtime(
+        authored_runtime="omnigent",
+        configured_default="codex_cli",
+        phase=CutoverPhase.BROAD_DEFAULT,
+    ).as_dict()
+
+    rollback = evaluate_promotion(
+        current_phase=CutoverPhase.BROAD_DEFAULT,
+        requested_phase=CutoverPhase.OPT_IN,
+        evidence=None,
+        now=NOW,
+    )
+    new_unselected = select_runtime(
+        authored_runtime=None,
+        configured_default="codex_cli",
+        phase=CutoverPhase.OPT_IN,
+    )
+
+    assert rollback.allowed is True
+    assert new_unselected.runtime_id == "codex_cli"
+    assert historical == {
+        "policyVersion": CUTOVER_POLICY_VERSION,
+        "runtimeId": "omnigent",
+        "authored": True,
+        "phase": "broad_default",
+        "fallbackReason": None,
+        "evidenceRef": None,
+        "evidenceSha256": None,
+    }
+
+
 def test_create_and_schedule_defaults_advance_in_separate_phases() -> None:
     create = select_runtime(
         authored_runtime=None,
