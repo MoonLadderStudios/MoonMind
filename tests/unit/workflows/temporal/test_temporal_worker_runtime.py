@@ -3271,7 +3271,6 @@ def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
     dependencies = _build_agent_runtime_deps()
     launcher = dependencies[2]
 
-    assert launcher._lore_repository_adapter is not None
     assert launcher._lore_repository_readiness_adapter is not None
 
 

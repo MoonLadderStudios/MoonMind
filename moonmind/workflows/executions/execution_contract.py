@@ -2171,16 +2171,6 @@ class WorkflowExecutionSpec(BaseModel):
     resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
     depends_on: list[str] | None = Field(None, alias="dependsOn")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_legacy_git_authoring(cls, value: object) -> object:
-        if isinstance(value, Mapping) and "git" in value:
-            raise WorkflowContractError(
-                "workflow.git is not accepted for new submissions; use the "
-                "top-level provider-discriminated repository target"
-            )
-        return value
-
     @field_validator("instructions", mode="before")
     @classmethod
     def _normalize_instructions(cls, value: object) -> str | None:
@@ -2513,6 +2503,16 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
         workflow_node = payload.get("workflow")
         task_node = payload.get("task")
         body_node = workflow_node if isinstance(workflow_node, Mapping) else task_node
+        repository_node = payload.get("repository")
+        if (
+            isinstance(repository_node, Mapping)
+            and isinstance(body_node, Mapping)
+            and "git" in body_node
+        ):
+            raise WorkflowContractError(
+                "workflow.git is not accepted with a provider-discriminated "
+                "repository target"
+            )
         if not isinstance(body_node, Mapping):
             legacy_instruction = (
                 payload.get("instructions") or payload.get("instruction") or ""
@@ -2716,33 +2716,11 @@ def build_canonical_workflow_view(
         except (ValidationError, WorkflowContractError) as exc:
             raise WorkflowContractError(str(exc)) from exc
         canonical = model.model_dump(by_alias=True, exclude_none=False)
-    elif normalized_type == "codex_exec":
-        repository = _clean_optional_str(source.get("repository")) or ""
-        if not repository:
-            raise WorkflowContractError("repository is required")
-        canonical = {
-            "repository": repository,
-            "targetRuntime": "codex",
-            "auth": _build_auth_from_payload(source),
-            "workflow": _build_spec_from_codex_exec_payload(source),
-        }
-    elif normalized_type == "codex_skill":
-        inputs = source.get("inputs")
-        input_mapping = inputs if isinstance(inputs, Mapping) else {}
-        repository = (
-            _clean_optional_str(source.get("repository"))
-            or _clean_optional_str(input_mapping.get("repo"))
-            or _clean_optional_str(input_mapping.get("repository"))
-            or ""
+    elif normalized_type in LEGACY_WORKFLOW_JOB_TYPES:
+        raise WorkflowContractError(
+            "legacy codex_exec/codex_skill submissions are no longer accepted; "
+            "recorded histories must use decode_legacy_repository_history_v1"
         )
-        if not repository:
-            raise WorkflowContractError("repository is required")
-        canonical = {
-            "repository": repository,
-            "targetRuntime": "codex",
-            "auth": _build_auth_from_payload(source),
-            "workflow": _build_spec_from_codex_skill_payload(source),
-        }
     else:
         canonical = {
             "repository": _clean_optional_str(source.get("repository")) or "",
@@ -2947,9 +2925,14 @@ def decode_recorded_legacy_workflow_history_v1(
         canonical_source["repository"] = decode_legacy_repository_history_v1(
             repository, branch
         ).model_dump(by_alias=True, mode="json")
-    return build_canonical_workflow_view(
+    canonical = build_canonical_workflow_view(
         job_type=CANONICAL_WORKFLOW_JOB_TYPE, payload=canonical_source
     )
+    legacy_required = ["codex", "git"]
+    if task.get("publish", {}).get("mode") == "pr":
+        legacy_required.append("gh")
+    canonical["requiredCapabilities"] = legacy_required
+    return canonical
 
 def build_effective_proposal_policy(
     *,

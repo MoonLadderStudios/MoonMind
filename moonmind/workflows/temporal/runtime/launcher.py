@@ -354,7 +354,9 @@ class ManagedRuntimeLauncher:
                 reconcile_default_git_connection(
                     client_policy=repository_client_policy
                 ),
-                _current_default_repository_connection_path(),
+                self._store.store_root.parent
+                / "repository_connections"
+                / "git-default.json",
             )
         self._repository_readiness_boundary = (
             repository_readiness_boundary or self._ensure_repository_ready_for_launch
@@ -460,12 +462,16 @@ class ManagedRuntimeLauncher:
                     "REPOSITORY_CONNECTION_UNAVAILABLE",
                     "the current deployment Git client policy was not supplied",
                 )
-            connection_path = _current_default_repository_connection_path()
+            connection_path = (
+                self._store.store_root.parent
+                / "repository_connections"
+                / "git-default.json"
+            )
         else:
             connections_dir = Path(
                 os.environ.get(
                     "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
-                    str(_current_default_repository_connection_path().parent),
+                    str(self._store.store_root.parent / "repository_connections"),
                 )
             )
             connection_path = next(

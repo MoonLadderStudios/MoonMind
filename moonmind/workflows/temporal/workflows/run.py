@@ -18281,6 +18281,7 @@ class MoonMindRunWorkflow:
                     "contentRef",
                     "contentDigest",
                     "inputContractDigest",
+                    "requiredCapabilities",
                     "inputs",
                     "sideEffect",
                 ):
