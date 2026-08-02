@@ -10,10 +10,11 @@ import re
 import shlex
 import shutil
 import stat
-from collections.abc import Mapping
+import subprocess
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal, cast
 
 from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
@@ -24,6 +25,23 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
+)
+from moonmind.workflows.executions.repository_contract import (
+    AuthoredLoreRepositoryTarget,
+    CapabilityReadinessRegistry,
+    DEFAULT_GIT_CONNECTION_REF,
+    REPOSITORY_REMOTE_TIP_MISMATCH,
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
+    RepositoryConnection,
+    RepositoryContractError,
+    ResolvedRepositoryTarget,
+    compile_repository_target,
+    ensure_repository_ready,
+    load_repository_connection,
+    materialize_resolved_repository_target,
+    persist_repository_connection,
+    reconcile_default_git_connection,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.workflows.skills.run_projection import (
@@ -53,6 +71,11 @@ _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
 )
 
 logger = logging.getLogger(__name__)
+
+LoreRepositoryReadinessAdapter = Callable[
+    [AuthoredLoreRepositoryTarget, AgentExecutionRequest],
+    Awaitable[ResolvedRepositoryTarget],
+]
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 _MODEL_TIER_DIAGNOSTIC_STRING_LIMIT = 1024
@@ -125,6 +148,67 @@ _SECRET_LIKE_PATTERN = re.compile(
     r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AIza[A-Za-z0-9_-]+|ATATT[A-Za-z0-9_-]+|AKIA[A-Za-z0-9]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password)=\S+)",
     re.IGNORECASE,
 )
+
+
+def resolve_deployment_git_client_policy() -> RepositoryClientPolicy:
+    """Pin the worker deployment's Git client independently of launch evidence."""
+
+    executable = shutil.which("git")
+    if not executable:
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            "the Git executable is unavailable during worker reconciliation",
+        )
+    executable_path = Path(executable).resolve()
+    completed = subprocess.run(
+        (str(executable_path), "--version"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    version = completed.stdout.strip().removeprefix("git version ").strip()
+    if completed.returncode != 0 or not version:
+        raise RepositoryContractError(
+            "REPOSITORY_CLIENT_UNAVAILABLE",
+            "the worker could not reconcile its deployment Git client policy",
+        )
+    digest = hashlib.sha256(executable_path.read_bytes()).hexdigest()
+    return RepositoryClientPolicy(
+        pinnedVersion=version,
+        toolBundleRef="repository-client:git-system",
+        executableSha256=f"sha256:{digest}",
+    )
+
+
+def _current_default_repository_connection_path() -> Path:
+    return Path(
+        os.environ.get(
+            "MOONMIND_REPOSITORY_CONNECTION_PATH",
+            os.path.join(
+                os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+                "repository_connections",
+                "git-default.json",
+            ),
+        )
+    )
+
+
+def reconcile_deployment_git_connection(
+    path: Path | None = None,
+) -> RepositoryConnection:
+    """Persist the worker deployment's default Git connection at startup."""
+
+    connection = reconcile_default_git_connection(
+        client_policy=resolve_deployment_git_client_policy()
+    )
+    persist_repository_connection(
+        connection, path or _current_default_repository_connection_path()
+    )
+    return connection
+
+
+def default_repository_connection_path() -> Path:
+    return _current_default_repository_connection_path()
 
 
 def _compact_string(value: Any) -> str:
@@ -223,6 +307,14 @@ class ManagedRuntimeLauncher:
         store: ManagedRunStore,
         log_streamer: RuntimeLogStreamer | None = None,
         artifact_service: Any | None = None,
+        repository_readiness_boundary: Callable[
+            [AgentExecutionRequest, Mapping[str, str] | None],
+            Awaitable[ResolvedRepositoryTarget | None],
+        ]
+        | None = None,
+        repository_client_policy: RepositoryClientPolicy | None = None,
+        lore_repository_readiness_adapter: LoreRepositoryReadinessAdapter
+        | None = None,
         lore_repository_adapter: LoreRepositoryProviderAdapter | None = None,
     ) -> None:
         self._store = store
@@ -230,6 +322,8 @@ class ManagedRuntimeLauncher:
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
+        self._repository_client_policy = repository_client_policy
+        self._lore_repository_readiness_adapter = lore_repository_readiness_adapter
         self._lore_repository_adapter = lore_repository_adapter
         self._lore_checkpoint_service = None
         if lore_repository_adapter is not None and artifact_service is not None:
@@ -241,6 +335,312 @@ class ManagedRuntimeLauncher:
                 adapter=lore_repository_adapter,
                 artifact_service=artifact_service,
             )
+        if repository_client_policy is not None:
+            # Worker construction is a deployment startup boundary. Reconcile
+            # durably here as well as in the worker factory so alternate worker
+            # entrypoints cannot launch against an ephemeral connection object.
+            persist_repository_connection(
+                reconcile_default_git_connection(
+                    client_policy=repository_client_policy
+                ),
+                self._store.store_root.parent
+                / "repository_connections"
+                / "git-default.json",
+            )
+        self._repository_readiness_boundary = (
+            repository_readiness_boundary or self._ensure_repository_ready_for_launch
+        )
+
+    async def _observe_git_client(self) -> RepositoryClientEvidence:
+        executable = shutil.which("git")
+        if not executable:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                "the Git executable is unavailable at the runtime launch boundary",
+            )
+        executable_path = Path(executable).resolve()
+        digest = hashlib.sha256(executable_path.read_bytes()).hexdigest()
+        returncode, stdout_text, stderr_text = await self._run_command(
+            str(executable_path), "--version"
+        )
+        if returncode != 0:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                (stderr_text or stdout_text or "git --version failed").strip(),
+            )
+        version_text = stdout_text.strip()
+        version = version_text.removeprefix("git version ").strip()
+        if not version:
+            raise RepositoryContractError(
+                "REPOSITORY_CLIENT_UNAVAILABLE",
+                "git --version returned no version identity",
+            )
+        return RepositoryClientEvidence(
+            toolBundleRef="repository-client:git-system",
+            clientVersion=version,
+            executableSha256=f"sha256:{digest}",
+        )
+
+    async def _observe_git_remote_tip(
+        self,
+        *,
+        repository: str,
+        branch: str,
+        git_env: Mapping[str, str] | None,
+    ) -> str | None:
+        source = self._resolve_repository_source(repository)
+        if source is None:
+            return None
+        returncode, stdout_text, _stderr_text = await self._run_command(
+            "git",
+            "ls-remote",
+            source,
+            f"refs/heads/{self._normalize_clone_branch(branch) or branch}",
+            env=dict(git_env) if git_env is not None else None,
+        )
+        if returncode != 0:
+            return None
+        first_line = next(
+            (line for line in stdout_text.splitlines() if line.strip()), ""
+        )
+        return first_line.split(maxsplit=1)[0] if first_line else None
+
+    async def _ensure_repository_ready_for_launch(
+        self,
+        request: AgentExecutionRequest,
+        git_env: Mapping[str, str] | None,
+    ) -> None:
+        """Enforce the provider readiness contract before checkout or launch."""
+
+        workspace_spec = request.workspace_spec
+        raw_target = workspace_spec.get("repositoryTarget")
+        if raw_target is None:
+            # Recorded legacy requests continue through their frozen history path.
+            return None
+        target = compile_repository_target(raw_target)
+        if target.provider == "lore":
+            if self._lore_repository_readiness_adapter is None:
+                raise RepositoryContractError(
+                    "LORE_CONNECTION_NOT_READY",
+                    "the selected Lore connection has no configured managed-runtime "
+                    "readiness adapter",
+                )
+            resolved = await self._lore_repository_readiness_adapter(target, request)
+            if (
+                resolved.provider != "lore"
+                or resolved.connection_ref != target.connection_ref
+                or resolved.repository.name != target.repository.name
+                or (
+                    target.revision is not None
+                    and getattr(
+                        resolved.prepared_revision, "revision_signature", None
+                    )
+                    != target.revision.revision_signature
+                )
+            ):
+                raise RepositoryContractError(
+                    "LORE_CONNECTION_NOT_READY",
+                    "the Lore adapter returned repository authority that does not "
+                    "match the authored target",
+                )
+            return resolved
+
+        if target.connection_ref == DEFAULT_GIT_CONNECTION_REF:
+            if self._repository_client_policy is None:
+                raise RepositoryContractError(
+                    "REPOSITORY_CONNECTION_UNAVAILABLE",
+                    "the current deployment Git client policy was not supplied",
+                )
+            connection_path = (
+                self._store.store_root.parent
+                / "repository_connections"
+                / "git-default.json"
+            )
+        else:
+            connections_dir = Path(
+                os.environ.get(
+                    "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
+                    str(self._store.store_root.parent / "repository_connections"),
+                )
+            )
+            connection_path = next(
+                (
+                    path
+                    for path in sorted(connections_dir.glob("*.json"))
+                    if self._connection_file_matches(path, target.connection_ref)
+                ),
+                None,
+            )
+        if connection_path is None:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "the selected Git connection is absent from the deployment registry",
+            )
+
+        observed = await self._observe_git_client()
+        connection = load_repository_connection(
+            connection_path, target.connection_ref
+        )
+        registry = CapabilityReadinessRegistry(
+            runtime_owned_tokens=(
+                "artifact.read",
+                "artifact.write",
+                "jira",
+                "docker",
+                "container.run",
+            )
+        )
+
+        def git_ready(context: Mapping[str, Any]) -> bool:
+            selected = context["target"]
+            client = context["clientEvidence"]
+            return (
+                selected.provider == "git"
+                and client.tool_bundle_ref == connection.client_policy.tool_bundle_ref
+                and client.client_version == connection.client_policy.pinned_version
+                and client.executable_sha256
+                == connection.client_policy.executable_sha256
+            )
+
+        def operation_ready(operation_name: str) -> Callable[[Mapping[str, Any]], bool]:
+            return lambda context: (
+                context["operation"] == "write"
+                and operation_name in context["connection"].allowed_operations
+            )
+
+        registry.register("git", git_ready)
+        registry.register(
+            "repo.read",
+            lambda context: "read" in context["connection"].allowed_operations,
+        )
+        registry.register("repo.write", operation_ready("write"))
+        registry.register("repo.branch.write", operation_ready("branch_write"))
+        registry.register("repo.lock", operation_ready("lock"))
+        registry.register(
+            "repo.review.request", operation_ready("review_request")
+        )
+        registry.register(
+            "gh",
+            lambda context: (
+                context["target"].provider == "git"
+                and context["connection"].credential.source == "github_resolver"
+                and context["publishMode"] == "pr"
+            ),
+        )
+
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        operation = "write" if publish_mode in {"branch", "pr"} else "read"
+        skill_caps = (
+            request.skill.get("requiredCapabilities", ())
+            if isinstance(request.skill, Mapping)
+            else ()
+        )
+        tool_caps = parameters.get("repositoryToolCapabilities", ())
+        if not isinstance(skill_caps, (list, tuple)):
+            skill_caps = ()
+        if not isinstance(tool_caps, (list, tuple)):
+            tool_caps = ()
+        work_branch_origin_raw = str(
+            parameters.get("workBranchOrigin") or ""
+        ).strip().lower()
+        allowed_work_branch_origins = {
+            "generated",
+            "selected",
+            "review_mapping",
+            "historical_branch",
+        }
+        if work_branch_origin_raw and (
+            work_branch_origin_raw not in allowed_work_branch_origins
+        ):
+            raise RepositoryContractError(
+                "REPOSITORY_TARGET_INVALID",
+                f"unsupported work branch origin {work_branch_origin_raw!r}",
+            )
+        work_branch_origin = cast(
+            Literal[
+                "generated", "selected", "review_mapping", "historical_branch"
+            ]
+            | None,
+            work_branch_origin_raw or None,
+        )
+
+        expected_remote_tip: str | None = None
+        if operation != "read":
+            expected_remote_tip = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+
+        async def resolve_connection(_target: object) -> RepositoryConnection:
+            return connection
+
+        async def resolve_evidence(_connection: object) -> RepositoryClientEvidence:
+            return observed
+
+        async def verify_remote_tip(_target: object) -> bool:
+            if expected_remote_tip is None:
+                return False
+            current = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+            return current == expected_remote_tip
+
+        await ensure_repository_ready(
+            target,
+            publish_mode=publish_mode,
+            operation=operation,
+            skill_capabilities=skill_caps,
+            tool_capabilities=tool_caps,
+            connection_resolver=resolve_connection,
+            evidence_resolver=resolve_evidence,
+            readiness_registry=registry,
+            remote_tip_verifier=verify_remote_tip,
+        )
+        observed_revision = (
+            target.revision.commit_sha
+            if target.revision is not None
+            else expected_remote_tip
+        )
+        if not observed_revision:
+            observed_revision = await self._observe_git_remote_tip(
+                repository=target.repository.name,
+                branch=target.branch.name,
+                git_env=git_env,
+            )
+        if not observed_revision:
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "repository readiness did not observe an immutable prepared revision",
+            )
+        return materialize_resolved_repository_target(
+            target,
+            observed_revision=observed_revision,
+            evidence=observed,
+            client_policy=connection.client_policy,
+            publish_mode=publish_mode,
+            work_branch=(
+                str(parameters.get("workBranch") or "").strip() or None
+            ),
+            work_branch_id=(
+                str(parameters.get("workBranchId") or "").strip() or None
+            ),
+            work_branch_origin=work_branch_origin,
+            projection=connection.projection,
+        )
+
+    @staticmethod
+    def _connection_file_matches(path: Path, connection_ref: str) -> bool:
+        try:
+            connection = load_repository_connection(path, connection_ref)
+        except RepositoryContractError:
+            return False
+        return connection.provider == "git"
 
     async def capture_lore_workspace_checkpoint(
         self, *, locator: SandboxWorkspaceLocator, authority_path: Path
@@ -811,7 +1211,13 @@ class ManagedRuntimeLauncher:
             if isinstance(request.workspace_spec, dict)
             else {}
         )
-        provider = str(workspace_spec.get("provider") or "").strip().lower()
+        repository_target = workspace_spec.get("repositoryTarget")
+        target_mapping = (
+            repository_target if isinstance(repository_target, Mapping) else {}
+        )
+        provider = str(
+            workspace_spec.get("provider") or target_mapping.get("provider") or ""
+        ).strip().lower()
         if provider == "lore":
             if self._lore_repository_adapter is None:
                 raise RuntimeError(
@@ -842,9 +1248,40 @@ class ManagedRuntimeLauncher:
             ).resolve()
             if not authority_path.is_relative_to(workspace_root):
                 raise RuntimeError("Lore sandbox locator escapes workspace authority")
-            repository = str(workspace_spec.get("repository") or workspace_spec.get("repo") or "").strip()
-            branch = str(workspace_spec.get("startingBranch") or workspace_spec.get("branch") or "").strip()
-            revision = str(workspace_spec.get("revisionSignature") or workspace_spec.get("preparedRevision") or "").strip()
+            target_repository = target_mapping.get("repository")
+            target_repository_mapping = (
+                target_repository if isinstance(target_repository, Mapping) else {}
+            )
+            target_branch = target_mapping.get("branch")
+            target_branch_mapping = (
+                target_branch if isinstance(target_branch, Mapping) else {}
+            )
+            resolved_target = workspace_spec.get("resolvedRepositoryTarget")
+            resolved_mapping = (
+                resolved_target if isinstance(resolved_target, Mapping) else {}
+            )
+            prepared_revision = resolved_mapping.get("preparedRevision")
+            prepared_revision_mapping = (
+                prepared_revision if isinstance(prepared_revision, Mapping) else {}
+            )
+            repository = str(
+                workspace_spec.get("repository")
+                or workspace_spec.get("repo")
+                or target_repository_mapping.get("name")
+                or ""
+            ).strip()
+            branch = str(
+                workspace_spec.get("startingBranch")
+                or workspace_spec.get("branch")
+                or target_branch_mapping.get("name")
+                or ""
+            ).strip()
+            revision = str(
+                workspace_spec.get("revisionSignature")
+                or workspace_spec.get("preparedRevision")
+                or prepared_revision_mapping.get("revisionSignature")
+                or ""
+            ).strip()
             if not repository or not branch or not revision:
                 raise RuntimeError(
                     "Lore workspaceSpec requires repository, branch, and revisionSignature"
@@ -869,8 +1306,16 @@ class ManagedRuntimeLauncher:
                     revision_signature=revision,
                     locator=locator,
                     authority_path=authority_path,
-                    connection_ref=str(workspace_spec.get("connectionRef") or ""),
-                    client_evidence=dict(workspace_spec.get("clientEvidence") or {}),
+                    connection_ref=str(
+                        workspace_spec.get("connectionRef")
+                        or target_mapping.get("connectionRef")
+                        or ""
+                    ),
+                    client_evidence=dict(
+                        workspace_spec.get("clientEvidence")
+                        or resolved_mapping.get("clientEvidence")
+                        or {}
+                    ),
                 )
             return self._lore_repository_adapter.bind_workspace(
                 prepared, runtime_lane="managed_runtime"
@@ -890,6 +1335,11 @@ class ManagedRuntimeLauncher:
         repo_path = (workspace_root / "repo").resolve()
         workspace_root.mkdir(parents=True, exist_ok=True)
         if repo_path.exists():
+            await self._checkout_resolved_read_only_revision(
+                repo_path=repo_path,
+                workspace_spec=workspace_spec,
+                git_env=git_env,
+            )
             return str(repo_path)
 
         source = self._resolve_repository_source(repository)
@@ -909,6 +1359,12 @@ class ManagedRuntimeLauncher:
             *clone_cmd,
             cwd=str(workspace_root),
             env=command_env,
+        )
+
+        await self._checkout_resolved_read_only_revision(
+            repo_path=repo_path,
+            workspace_spec=workspace_spec,
+            git_env=git_env,
         )
 
         new_branch = str(workspace_spec.get("targetBranch") or "").strip()
@@ -959,6 +1415,48 @@ class ManagedRuntimeLauncher:
                 )
 
         return str(repo_path)
+
+    async def _checkout_resolved_read_only_revision(
+        self,
+        *,
+        repo_path: Path,
+        workspace_spec: Mapping[str, Any],
+        git_env: Mapping[str, str] | None,
+    ) -> None:
+        resolved = workspace_spec.get("resolvedRepositoryTarget")
+        if not isinstance(resolved, Mapping):
+            return
+        expectation = resolved.get("remoteTipExpectation")
+        revision = resolved.get("preparedRevision")
+        if (
+            not isinstance(expectation, Mapping)
+            or expectation.get("kind") != "read_only"
+            or not isinstance(revision, Mapping)
+        ):
+            return
+        commit_sha = str(revision.get("commitSha") or "").strip()
+        if not commit_sha:
+            return
+        await self._run_checked_command(
+            "git",
+            "-C",
+            str(repo_path),
+            "checkout",
+            "--detach",
+            commit_sha,
+            env=dict(git_env) if git_env is not None else None,
+        )
+        returncode, stdout_text, _stderr_text = await self._run_command(
+            "git", "-C", str(repo_path), "rev-parse", "HEAD"
+        )
+        observed_sha = stdout_text.strip()
+        if returncode != 0 or not observed_sha.startswith(commit_sha):
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "prepared workspace does not match the resolved pinned revision",
+            )
+        if isinstance(revision, dict):
+            revision["commitSha"] = observed_sha
 
     @staticmethod
     def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
@@ -1446,6 +1944,13 @@ class ManagedRuntimeLauncher:
             if launch_github_token
             else None
         )
+        resolved_repository = await self._repository_readiness_boundary(
+            request, git_host_env
+        )
+        if resolved_repository is not None:
+            request.workspace_spec["resolvedRepositoryTarget"] = (
+                resolved_repository.model_dump(by_alias=True, mode="json")
+            )
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
@@ -1855,6 +2360,11 @@ class ManagedRuntimeLauncher:
             pid=process.pid,
             started_at=datetime.now(tz=UTC),
             workspace_path=resolved_workspace_path,
+            resolvedRepositoryTarget=(
+                resolved_repository.model_dump(by_alias=True, mode="json")
+                if resolved_repository is not None
+                else None
+            ),
             live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)

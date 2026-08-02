@@ -324,6 +324,41 @@ def test_runtime_planner_preserves_execution_profile_ref():
     assert runtime_node["mode"] == "claude"
     assert runtime_node["executionProfileRef"] == "claude-minimax-oauth"
 
+
+def test_runtime_planner_preserves_canonical_repository_target_for_launch_readiness():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    repository = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"},
+    }
+
+    plan = planner(
+        inputs={
+            "workflow": {
+                "instructions": "Inspect the repository",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={
+            "repository": repository,
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["codex_cli", "git", "repo.read"],
+        },
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["repositoryTarget"] == repository
+    assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["branch"] == "main"
+
 def test_runtime_planner_preserves_execution_profile_ref_snake_case():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -3223,6 +3258,21 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert workload_launcher is not None
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
+
+
+def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv(
+        "MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(tmp_path / "artifacts")
+    )
+
+    dependencies = _build_agent_runtime_deps()
+    launcher = dependencies[2]
+
+    assert launcher._lore_repository_readiness_adapter is not None
+
 
 def test_build_agent_runtime_deps_reuses_global_session_network(
     tmp_path,

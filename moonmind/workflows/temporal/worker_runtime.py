@@ -130,7 +130,9 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_workflow_classes,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+from moonmind.workflows.temporal.runtime.launcher import (
+    ManagedRuntimeLauncher,
+)
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
@@ -1188,6 +1190,7 @@ def _normalized_agent_skill_payload(
             "contentRef",
             "contentDigest",
             "inputContractDigest",
+            "requiredCapabilities",
         )
         if key in skill_payload
     }
@@ -1620,14 +1623,28 @@ def _build_runtime_planner():
             node_inputs["publishBaseBranch"] = publish_base_branch
 
         repository = (
-            task_payload.get("repository")
+            parameter_payload.get("repository")
             or input_payload.get("repository")
-            or parameter_payload.get("repository")
+            or task_payload.get("repository")
             or parameter_payload.get("repo")
             or selected_skill_inputs.get("repository")
             or selected_skill_inputs.get("repo")
         )
-        if isinstance(repository, str) and repository.strip():
+        if isinstance(repository, Mapping):
+            repository_target = dict(repository)
+            repository_identity = _coerce_mapping(
+                repository_target.get("repository")
+            )
+            repository_name = _coerce_non_empty_text(repository_identity.get("name"))
+            branch_identity = _coerce_mapping(repository_target.get("branch"))
+            branch_name = _coerce_non_empty_text(branch_identity.get("name"))
+            if repository_name:
+                node_inputs["repositoryTarget"] = repository_target
+                node_inputs["repository"] = repository_name
+                node_inputs["repo"] = repository_name
+            if branch_name:
+                node_inputs["branch"] = branch_name
+        elif isinstance(repository, str) and repository.strip():
             node_inputs["repository"] = repository.strip()
             node_inputs["repo"] = repository.strip()
         if selected_skill_name:
@@ -2530,10 +2547,20 @@ def _build_agent_runtime_deps(
     artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
+    from moonmind.workflows.temporal.runtime.launcher import (
+        reconcile_deployment_git_connection,
+    )
+    from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
+        LoreCliReadinessAdapter,
+    )
+
+    reconciled_git_connection = reconcile_deployment_git_connection()
     launcher = ManagedRuntimeLauncher(
         store,
         log_streamer=log_streamer,
         artifact_service=artifact_service,
+        repository_client_policy=reconciled_git_connection.client_policy,
+        lore_repository_readiness_adapter=LoreCliReadinessAdapter.from_environment(),
         lore_repository_adapter=build_lore_repository_adapter_from_environment(),
     )
     session_store = ManagedSessionStore(
