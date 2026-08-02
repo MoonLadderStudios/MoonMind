@@ -122,7 +122,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     plan = _build_runtime_planner()(
         inputs=persisted,
         parameters=persisted,
-        snapshot=object(),
+        snapshot=SimpleNamespace(digest="registry-snapshot:test"),
     )
     node_inputs = plan["nodes"][0]["inputs"]
 
