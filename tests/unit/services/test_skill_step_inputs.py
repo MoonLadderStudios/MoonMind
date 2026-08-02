@@ -45,9 +45,13 @@ class _ArtifactMetadataSession:
 
 def _parameters(skill_payload: dict[str, object]) -> dict[str, object]:
     return {
-        "repository": "Moon/Mind",
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "Moon/Mind"},
+            "branch": {"name": "feature/mm-1052"},
+        },
         "workflow": {
-            "git": {"branch": "feature/mm-1052"},
             "steps": [
                 {
                     "id": "step-1",

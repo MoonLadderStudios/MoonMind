@@ -82,6 +82,9 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
+from moonmind.workflows.executions.repository_contract import (
+    repository_name_from_value,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -3286,7 +3289,7 @@ class TemporalExecutionService:
         next_input_ref = input_artifact_ref or record.input_ref
         next_plan_ref = plan_artifact_ref or record.plan_ref
         task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
-        repository = str(params.get("repository") or "").strip() or None
+        repository = repository_name_from_value(params.get("repository")) or None
         title = (
             str(task_params.get("title") or "").strip()
             or str((record.memo or {}).get("title") or "").strip()
@@ -3594,7 +3597,7 @@ class TemporalExecutionService:
             failure_policy=None,
             initial_parameters=params,
             idempotency_key=target.destination.creation_key,
-            repository=str(params.get("repository") or "").strip() or None,
+            repository=repository_name_from_value(params.get("repository")) or None,
             integration=None,
             summary=(
                 f"Typed {target.target.kind} recovery from {record.workflow_id}."
@@ -4100,7 +4103,7 @@ class TemporalExecutionService:
             or str((record.memo or {}).get("title") or "").strip()
             or None
         )
-        repository = str(params.get("repository") or "").strip() or None
+        repository = repository_name_from_value(params.get("repository")) or None
         created = await self.create_execution(
             workflow_type=record.workflow_type.value,
             owner_id=record.owner_id,

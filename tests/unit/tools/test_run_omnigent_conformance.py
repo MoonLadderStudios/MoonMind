@@ -18,14 +18,17 @@ def _load_runner():
     return module
 
 
-def test_cumulative_remediation_case_is_reserved_for_live_provider_evidence() -> None:
+def test_cumulative_remediation_stays_pending_until_production_shaped_proof() -> None:
     runner = _load_runner()
 
     assert "product.cumulative-remediation" not in runner.DETERMINISTIC_CASES
+    assert runner.PENDING_PRODUCTION_SHAPED_CASES == {
+        "product.cumulative-remediation"
+    }
+    assert runner.PENDING_EVIDENCE_GROUPS == {"cumulativeJourney"}
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
-        "tests/integration/reliability/test_checkpoint_cold_resume.py",
-        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
-        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
     )
     flattened_commands = {
         argument
@@ -46,6 +49,8 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
         "MoonLadderStudios/MoonMind#3456",
     )
     assert runner.EVIDENCE_GROUPS["failureAndRestartMatrix"] == (
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
     )
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
@@ -79,6 +84,7 @@ def test_runner_derives_group_results_from_executed_commands(
         "EVIDENCE_GROUPS",
         {"journey": ("proof-a.py",), "undeclared": ("proof-b.py",)},
     )
+    monkeypatch.setattr(runner, "PENDING_EVIDENCE_GROUPS", {"journey"})
     monkeypatch.setattr(
         runner.subprocess,
         "run",
@@ -107,9 +113,18 @@ def test_runner_derives_group_results_from_executed_commands(
 
     assert runner.main() == 1
     evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["deterministicCoverage"][
+        "pendingProductionShapedCaseIds"
+    ] == ["product.cumulative-remediation"]
+    cumulative = next(
+        case
+        for case in evidence["cases"]
+        if case["caseId"] == "product.cumulative-remediation"
+    )
+    assert cumulative["status"] == "skipped"
     assert evidence["deterministicCoverage"]["evidenceGroupResults"]["journey"][
         "status"
-    ] == "passed"
+    ] == "pending"
     missing = evidence["deterministicCoverage"]["evidenceGroupResults"]["undeclared"]
     assert missing == {
         "status": "failed",

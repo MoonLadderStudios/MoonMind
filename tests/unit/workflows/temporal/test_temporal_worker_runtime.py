@@ -701,12 +701,16 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
                             "inputs": {"issueKey": "MM-1057"},
                             "inputSchema": {
                                 "type": "object",
-                                "required": ["issueKey", "repository"],
+                                "required": ["issueKey", "repository", "branch"],
                                 "properties": {
                                     "issueKey": {"type": "string"},
                                     "repository": {
                                         "type": "string",
                                         "x-moonmind-context-default": "repository",
+                                    },
+                                    "branch": {
+                                        "type": "string",
+                                        "x-moonmind-context-default": "branch",
                                     },
                                 },
                             },
@@ -718,7 +722,14 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
                 ],
             }
         },
-        parameters={"repository": "MoonLadderStudios/MoonMind"},
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1219"},
+            }
+        },
         snapshot=snapshot,
     )
 
@@ -726,9 +737,11 @@ def test_runtime_planner_validates_skill_step_contract_and_carries_evidence():
     assert node_inputs["inputs"] == {
         "issueKey": "MM-1057",
         "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature/mm-1219",
     }
     assert node_inputs["issueKey"] == "MM-1057"
     assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["branch"] == "feature/mm-1219"
     assert node_inputs["inputContractDigest"] == "sha256:contract"
     assert node_inputs["contentDigest"] == "sha256:content"
     assert node_inputs["contentRef"] == "artifact:skill"

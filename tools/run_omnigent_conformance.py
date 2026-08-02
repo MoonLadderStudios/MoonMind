@@ -32,6 +32,13 @@ DETERMINISTIC_CASES = {
     "events.replay-overlap-schema-drift",
     "resources.bounds-and-secret-scan",
 }
+# This case stays critical in the profile, but it must remain skipped in the
+# partial deterministic report until one production-shaped journey proves the
+# persisted Temporal, profile-bound host/session, publication, cleanup, and
+# Workflow Detail boundaries plus the complete fault/restart matrix.  A green
+# exit from the narrower checkpoint test is useful evidence, but is not enough
+# to classify the product case as passed.
+PENDING_PRODUCTION_SHAPED_CASES = {"product.cumulative-remediation"}
 ISSUE_LINKS = (
     "MoonLadderStudios/MoonMind#3480",
     "MoonLadderStudios/MoonMind#3471",
@@ -39,11 +46,12 @@ ISSUE_LINKS = (
 )
 EVIDENCE_GROUPS = {
     "cumulativeJourney": (
-        "tests/integration/reliability/test_checkpoint_cold_resume.py",
-        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
-        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
     ),
     "failureAndRestartMatrix": (
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
     ),
     "rolloutAndReplay": (
@@ -53,6 +61,7 @@ EVIDENCE_GROUPS = {
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
 }
+PENDING_EVIDENCE_GROUPS = {"cumulativeJourney"}
 COMMANDS = (
     (
         sys.executable,
@@ -73,6 +82,8 @@ COMMANDS = (
         "-m",
         "pytest",
         "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
         "tests/unit/workflows/temporal/workflows/test_run_integration.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
@@ -145,7 +156,10 @@ def main() -> int:
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
     profile_case_ids = {case["id"] for case in profile["cases"]}
     missing_deterministic = DETERMINISTIC_CASES - profile_case_ids
+    missing_pending = PENDING_PRODUCTION_SHAPED_CASES - profile_case_ids
     if missing_deterministic:
+        failed = True
+    if missing_pending:
         failed = True
     evidence_group_results: dict[str, dict[str, object]] = {}
     for name, paths in EVIDENCE_GROUPS.items():
@@ -169,10 +183,13 @@ def main() -> int:
                 }
             )
             failed |= not passed
+        paths_passed = all(result["status"] == "passed" for result in path_results)
         evidence_group_results[name] = {
             "status": (
-                "passed"
-                if all(result["status"] == "passed" for result in path_results)
+                "pending"
+                if name in PENDING_EVIDENCE_GROUPS and paths_passed
+                else "passed"
+                if paths_passed
                 else "failed"
             ),
             "paths": path_results,
@@ -221,6 +238,10 @@ def main() -> int:
         "deterministicCoverage": {
             "requiredCaseIds": sorted(DETERMINISTIC_CASES),
             "missingCaseIds": sorted(missing_deterministic),
+            "pendingProductionShapedCaseIds": sorted(
+                PENDING_PRODUCTION_SHAPED_CASES
+            ),
+            "missingPendingCaseIds": sorted(missing_pending),
             "issueLinks": list(ISSUE_LINKS),
             "evidenceGroups": {
                 name: list(paths) for name, paths in EVIDENCE_GROUPS.items()

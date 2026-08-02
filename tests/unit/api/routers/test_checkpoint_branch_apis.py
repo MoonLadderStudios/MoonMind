@@ -58,9 +58,13 @@ def _record_like(user: SimpleNamespace) -> SimpleNamespace:
             "repository": "MoonLadderStudios/MoonMind",
         },
         parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1101-source"},
+            },
             "git": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "startingBranch": "feature/mm-1101-source",
                 "baseCommit": "abc1234",
                 "knownRefs": ["feature/mm-1101-source"],
                 "currentRef": "feature/mm-1101-source",
@@ -131,9 +135,13 @@ async def checkpoint_branch_client(tmp_path):
             "repository": "MoonLadderStudios/MoonMind",
         },
         parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/mm-1101-source"},
+            },
             "git": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "startingBranch": "feature/mm-1101-source",
                 "baseCommit": "abc1234",
                 "knownRefs": ["feature/mm-1101-source"],
                 "currentRef": "feature/mm-1101-source",
@@ -293,6 +301,27 @@ def test_checkpoint_branch_git_context_reads_workflow_shaped_payload() -> None:
     assert context["resolvedBaseCommit"] == "abc1234def5678"
     assert context["currentRef"] == "feature/from-workflow"
     assert context["knownRefs"] == {"feature/from-workflow"}
+
+
+def test_checkpoint_branch_git_context_reads_provider_repository_target() -> None:
+    record = SimpleNamespace(
+        parameters={
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:git-default",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "feature/provider-target"},
+            }
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    context = _checkpoint_branch_git_context(record)
+
+    assert context["repository"] == "MoonLadderStudios/MoonMind"
+    assert context["baseBranch"] == "feature/provider-target"
+    assert context["currentRef"] == "feature/provider-target"
 
 
 def test_checkpoint_branch_git_context_does_not_synthesize_known_refs() -> None:

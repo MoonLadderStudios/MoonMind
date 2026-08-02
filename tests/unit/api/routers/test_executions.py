@@ -1071,7 +1071,14 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
             }
             await _expand_goal_preset_for_workflow_submission(
                 task_payload=task_payload,
-                request_payload={"repository": "MoonLadderStudios/MoonMind"},
+                request_payload={
+                    "repository": {
+                        "provider": "git",
+                        "connectionRef": "repository-connection:git-default",
+                        "repository": {"name": "MoonLadderStudios/MoonMind"},
+                        "branch": {"name": "main"},
+                    }
+                },
                 session=session,
                 user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
@@ -5747,6 +5754,61 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "branch": "codex/pr-resolver",
     }
 
+
+def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Exercise the exact Create page request through POST /api/executions."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "omnigent",
+                "omnigent": {
+                    "executionTargetRef": "omnigent-codex@1",
+                    "launchPolicyRef": "codex-on-demand@1",
+                },
+                "task": {
+                    "instructions": "Make the bounded deterministic change.",
+                    "git": {"branch": "main"},
+                    "runtime": {"mode": "omnigent"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert initial_parameters["workflow"]["runtime"] == {"mode": "omnigent"}
+    assert initial_parameters["workflow"]["git"] == {"branch": "main"}
+    assert initial_parameters["instructions"] == (
+        "Make the bounded deterministic change."
+    )
+    serialized = json.dumps(initial_parameters)
+    assert all(
+        forbidden not in serialized
+        for forbidden in (
+            "hostId",
+            "leaseId",
+            "registrationToken",
+            "direct_codex",
+        )
+    )
+
 def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -8169,7 +8231,53 @@ def test_create_task_shaped_execution_rejects_legacy_target_branch_aliases(
     assert "targetBranch" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-def test_create_task_shaped_execution_rejects_non_string_repository(
+@pytest.mark.parametrize(
+    ("skill_name", "publish_mode", "inputs"),
+    [
+        ("batch-pr-resolver", "none", {"repo": "Moon/Mind"}),
+        ("pr-resolver", "auto", {"repo": "Moon/Mind", "pr": 123}),
+    ],
+)
+def test_create_task_shaped_execution_accepts_provider_repository_for_resolvers(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    skill_name: str,
+    publish_mode: str,
+    inputs: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    repository_target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "Moon/Mind"},
+        "branch": {"name": "main"},
+    }
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": repository_target,
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Resolve pull requests.",
+                    "skill": {"name": skill_name},
+                    "inputs": inputs,
+                    "publish": {"mode": publish_mode},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    create_kwargs = service.create_execution.await_args.kwargs
+    assert create_kwargs["repository"] == "Moon/Mind"
+    assert create_kwargs["initial_parameters"]["repository"] == repository_target
+
+
+def test_create_task_shaped_execution_rejects_malformed_repository_target(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -8188,7 +8296,164 @@ def test_create_task_shaped_execution_rejects_non_string_repository(
     )
 
     assert response.status_code == 422
-    assert "repository" in response.json()["detail"]["message"]
+    assert response.json()["detail"]["message"].startswith(
+        "payload.repository is invalid: REPOSITORY_TARGET_INVALID:"
+    )
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
+@pytest.mark.parametrize("recurring", [False, True])
+def test_create_execution_rejects_publishing_from_repository_revision(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    recurring: bool,
+    publish_mode: str,
+) -> None:
+    test_client, service, _user = client
+    payload: dict[str, Any] = {
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "Moon/Mind"},
+            "branch": {"name": "main"},
+            "revision": {"kind": "git_commit", "commitSha": "abcdef012345"},
+        },
+        "targetRuntime": "codex",
+        "workflow": {
+            "instructions": "Mutate an immutable revision.",
+            "publish": {"mode": publish_mode},
+        },
+    }
+    if recurring:
+        payload["schedule"] = {
+            "mode": "recurring",
+            "cron": "0 1 * * *",
+            "timezone": "UTC",
+        }
+
+    response = test_client.post(
+        "/api/executions",
+        json={"type": "workflow", "payload": payload},
+    )
+
+    assert response.status_code == 422
+    assert "repository.revision" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ["repository", "branch"])
+def test_create_execution_rejects_whitespace_only_repository_identity(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    field: str,
+) -> None:
+    test_client, service, _user = client
+    repository_target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "Moon/Mind"},
+        "branch": {"name": "main"},
+    }
+    repository_target[field] = {"name": "   "}
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_target,
+                "workflow": {"instructions": "Reject blank identity."},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "REPOSITORY_TARGET_INVALID" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_structured_repository_with_legacy_git(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {
+                    "instructions": "Run conflicting branch authority.",
+                    "git": {"branch": "other"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "workflow.git" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("skill_name", ["batch-pr-resolver", "pr-resolver"])
+def test_create_execution_rejects_github_resolver_skills_for_lore(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    skill_name: str,
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "lore",
+                    "connectionRef": "repository-connection:tactics",
+                    "repository": {"name": "Tactics"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {
+                    "instructions": "Resolve GitHub PRs against Lore.",
+                    "skill": {"name": skill_name},
+                    "publish": {"mode": "none"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "GitHub-only Skills" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_nested_repository_target(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Bypass top-level repository authority.",
+                    "repository": {
+                        "repository": {"name": "Moon/Mind"},
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "use payload.repository" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_targets(

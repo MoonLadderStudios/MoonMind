@@ -244,6 +244,20 @@ def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
             "repository must be a provider-discriminated object",
         )
     draft = dict(value)
+    repository = draft.get("repository")
+    if isinstance(repository, Mapping):
+        repository = dict(repository)
+        name = repository.get("name")
+        if isinstance(name, str):
+            repository["name"] = name.strip()
+        draft["repository"] = repository
+    branch = draft.get("branch")
+    if isinstance(branch, Mapping):
+        branch = dict(branch)
+        name = branch.get("name")
+        if isinstance(name, str):
+            branch["name"] = name.strip()
+        draft["branch"] = branch
     if draft.get("provider") == "git" and not str(
         draft.get("connectionRef") or ""
     ).strip():
@@ -252,6 +266,32 @@ def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
         return _TARGET_ADAPTER.validate_python(draft)
     except ValueError as exc:
         raise RepositoryContractError("REPOSITORY_TARGET_INVALID", str(exc)) from exc
+
+
+def repository_name_from_value(value: object) -> str:
+    """Project a legacy scalar or authored target to its repository name."""
+
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, Mapping):
+        return ""
+    repository = value.get("repository")
+    if not isinstance(repository, Mapping):
+        return ""
+    name = repository.get("name")
+    return name.strip() if isinstance(name, str) else ""
+
+
+def repository_branch_from_value(value: object) -> str:
+    """Project an authored target to its branch name."""
+
+    if not isinstance(value, Mapping):
+        return ""
+    branch = value.get("branch")
+    if not isinstance(branch, Mapping):
+        return ""
+    name = branch.get("name")
+    return name.strip() if isinstance(name, str) else ""
 
 
 def decode_legacy_repository_history_v1(
@@ -600,6 +640,8 @@ __all__ = [
     "load_repository_connection",
     "materialize_resolved_repository_target",
     "persist_repository_connection",
+    "repository_branch_from_value",
+    "repository_name_from_value",
     "reconcile_default_git_connection",
     "resolve_default_git_credential",
     "validate_connection_and_client",

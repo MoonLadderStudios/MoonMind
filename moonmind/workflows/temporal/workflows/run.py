@@ -766,6 +766,21 @@ RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = (
 RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
     "run-remediation-loop-artifact-ref-normalization-v1"
 )
+# Verifier bundles author the structured remaining-work semantics, while the
+# runtime publishes their JSON as durable evidence. Preserve that artifact as
+# remainingWorkRef when an older verifier payload omits a separate ref, and do
+# not replace it with an empty terminal handoff. Replay-gate the workflow-side
+# fallback because it changes remediation inputs and terminal side effects.
+RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH = (
+    "run-moonspec-verify-remaining-work-evidence-v1"
+)
+# A verifier artifact receives a new opaque ref on every publication, even
+# when its structured remaining-work payload is unchanged. Compare the stable
+# content digest while retaining the artifact ref as durable handoff evidence.
+# Gate the state and Continue-As-New payload change for replay safety.
+RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH = (
+    "run-remediation-stable-progress-identity-v1"
+)
 # Promote canonical checkpoint Activity evidence into cumulative remediation
 # authority and carry that compact head through Continue-As-New. Histories that
 # already admitted remediation without this evidence retain their prior command
@@ -1779,6 +1794,19 @@ class MoonMindRunWorkflow:
                 "terminal incomplete finalization requires gate and workspace head refs"
             )
         issues = [dict(issue) for issue in gate.issues]
+        if (
+            not issues
+            and self._patched_or_false_outside_workflow(
+                RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+            )
+        ):
+            # Compact workflow history intentionally omits the verifier's
+            # structured remainingWork array. Reuse its authoritative artifact
+            # instead of publishing an apparently valid but empty handoff.
+            return (
+                self._bounded_story_loop_artifact_ref(gate.remaining_work_ref)
+                or gate_ref
+            )
 
         def items(key: str) -> tuple[str, ...]:
             return tuple(
@@ -3974,9 +4002,12 @@ class MoonMindRunWorkflow:
         if state is None:
             raise ValueError("remediation loop is not initialized")
         payload = dict(self._original_input_payload)
+        state_payload = state.model_dump(by_alias=True, mode="json")
+        if not workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH):
+            state_payload.pop("latestProgressSignature", None)
         continuation: dict[str, Any] = {
             "schemaVersion": 1,
-            "state": state.model_dump(by_alias=True, mode="json"),
+            "state": state_payload,
             "orderedNodes": [dict(node) for node in ordered_nodes],
             "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
         }
@@ -4069,6 +4100,7 @@ class MoonMindRunWorkflow:
         verdict: str,
         gate_result_ref: str | None,
         remaining_work_ref: str | None,
+        progress_signature: str | None = None,
         current_index: int | None = None,
         logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
@@ -4085,8 +4117,12 @@ class MoonMindRunWorkflow:
         state = self._remediation_loop_state
         if spec is None or state is None:
             return False
-        normalize_artifact_refs = workflow.patched(
-            RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH
+        verifier_evidence_fallback = workflow.patched(
+            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        )
+        normalize_artifact_refs = (
+            workflow.patched(RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH)
+            or verifier_evidence_fallback
         )
         if normalize_artifact_refs:
             normalized_gate_result_ref = self._bounded_story_loop_artifact_ref(
@@ -4107,6 +4143,15 @@ class MoonMindRunWorkflow:
                         "remaining-work result"
                     )
                 remaining_work_ref = normalized_remaining_work_ref
+        if (
+            verifier_evidence_fallback
+            and verdict.strip().upper() == "ADDITIONAL_WORK_NEEDED"
+            and not remaining_work_ref
+        ):
+            # Compatibility path for compact verifier payloads produced before
+            # the publication activity stamped remainingWorkRef. The gate
+            # artifact itself contains the resolved Skill's structured gaps.
+            remaining_work_ref = gate_result_ref
         workflow_owned_head_enabled = workflow.patched(
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
         )
@@ -4153,6 +4198,13 @@ class MoonMindRunWorkflow:
         state = record_semantic_progress(
             state,
             progress_ref=remaining_work_ref,
+            progress_signature=(
+                progress_signature
+                if workflow.patched(
+                    RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
+                )
+                else None
+            ),
         )
         decision = decide_remediation_continuation(
             spec=spec,
@@ -7406,6 +7458,18 @@ class MoonMindRunWorkflow:
             )
             if declared_verdict:
                 break
+        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
+        remaining_work_ref = gate_result.remaining_work_ref
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        ):
+            remaining_work_ref = self._bounded_story_loop_artifact_ref(
+                remaining_work_ref
+            ) or (
+                self._bounded_story_loop_artifact_ref(gate_result_ref)
+                if verdict == "ADDITIONAL_WORK_NEEDED"
+                else None
+            )
         gate_context: dict[str, Any] = {
             "logicalStepId": node_id,
             "verdict": verdict,
@@ -7413,7 +7477,7 @@ class MoonMindRunWorkflow:
             "confidence": gate_result.confidence,
             "validatedRefs": dict(gate_result.validated_refs or {}),
             "invalidatedRefs": list(gate_result.invalidated_refs),
-            "remainingWorkRef": gate_result.remaining_work_ref,
+            "remainingWorkRef": remaining_work_ref,
             "recommendedNextAction": gate_result.recommended_next_action,
             "targetLogicalStepId": gate_result.target_logical_step_id,
             "workspacePolicyRecommendation": (
@@ -7427,7 +7491,6 @@ class MoonMindRunWorkflow:
         }
         if gate_result.downgrade_reason:
             gate_context["downgradeReason"] = gate_result.downgrade_reason
-        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
         if gate_result_ref:
             gate_context["gateResultRef"] = gate_result_ref
         if reason:
@@ -12339,6 +12402,12 @@ class MoonMindRunWorkflow:
                                 gate_result_ref=step_gate_result_ref,
                                 remaining_work_ref=(
                                     step_gate_result.remaining_work_ref
+                                ),
+                                progress_signature=self._coerce_text(
+                                    (
+                                        step_gate_result.validated_refs or {}
+                                    ).get("authoritativeEvidenceDigest"),
+                                    max_chars=200,
                                 ),
                                 current_index=index,
                                 logical_step_id=node_id,
