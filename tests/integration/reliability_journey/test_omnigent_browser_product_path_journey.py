@@ -205,7 +205,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     )
     assert replay is not None
     assert replay.bridge_session_id == row.bridge_session_id
-    assert replay.endpoint_ref == "controlled-fake"
+    assert replay.omnigent_endpoint_ref == "controlled-fake"
     await engine.dispose()
 
 
