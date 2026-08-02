@@ -24,15 +24,24 @@ metadata:
     nativeHostEligible: false
 inputSchema:
   type: object
-  required:
-    - pr
   properties:
     pr:
       type: string
       title: Pull request
       description: >-
-        PR number, PR URL, or head branch. MoonMind requires an explicit
-        selector so the resolver cannot target the wrong PR.
+        PR number or PR URL. MoonMind requires either this value or a head
+        branch so the resolver cannot target the wrong PR.
+    branch:
+      type: string
+      title: Head branch
+      description: >-
+        PR head branch. MoonMind requires either this value or a PR number or
+        URL so the resolver cannot target the wrong PR.
+  anyOf:
+    - required:
+        - pr
+    - required:
+        - branch
 uiSchema: {}
 defaults: {}
 ---

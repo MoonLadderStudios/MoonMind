@@ -952,13 +952,24 @@ def test_skills_api_exposes_pr_resolver_selector_contract(
     item = response.json()["legacyItems"][0]
     assert item["id"] == "pr-resolver"
     assert item["hasInputSchema"] is True
-    assert item["inputSchema"]["required"] == ["pr"]
+    assert item["inputSchema"]["anyOf"] == [
+        {"required": ["pr"]},
+        {"required": ["branch"]},
+    ]
     assert item["inputSchema"]["properties"]["pr"] == {
         "type": "string",
         "title": "Pull request",
         "description": (
-            "PR number, PR URL, or head branch. MoonMind requires an explicit "
-            "selector so the resolver cannot target the wrong PR."
+            "PR number or PR URL. MoonMind requires either this value or a head "
+            "branch so the resolver cannot target the wrong PR."
+        ),
+    }
+    assert item["inputSchema"]["properties"]["branch"] == {
+        "type": "string",
+        "title": "Head branch",
+        "description": (
+            "PR head branch. MoonMind requires either this value or a PR number "
+            "or URL so the resolver cannot target the wrong PR."
         ),
     }
 

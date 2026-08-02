@@ -95,9 +95,9 @@ reimplements resolver behavior.
 ### 4.1 Inputs (Skill Args)
 
 MoonMind workflow submissions require an explicit structured PR selector. The
-dashboard renders the Skill's required **Pull request** field from the
-`SKILL.md` input schema; enter a PR number, PR URL, or head branch. API callers
-may provide the same value through Skill/Tool `pr` or `branch` inputs,
+dashboard renders the Skill's **Pull request** and **Head branch** fields from
+the `SKILL.md` input schema and requires either a PR number/URL or a head branch.
+API callers may provide the selector through Skill/Tool `pr` or `branch` inputs,
 top-level task inputs, `git.startingBranch`, or a non-default `git.branch`.
 The repository's default checkout branch (for example, `main`) is not a PR
 selector. This boundary deliberately avoids inferring merge authority from
