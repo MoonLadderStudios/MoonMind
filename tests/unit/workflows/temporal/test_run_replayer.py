@@ -5,9 +5,12 @@ from typing import Any
 import pytest
 from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.omnigent.cutover import CutoverPhase, select_runtime
+from moonmind.workflows.executions.repository_contract import (
+    repository_name_from_value,
+)
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -18,21 +21,22 @@ from moonmind.workflows.temporal.remediation_loop import (
 )
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import (
-    GateTransitionDecision,
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+    RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
-    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    GateTransitionDecision,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
@@ -383,6 +387,22 @@ class _CurrentCanonicalNoCommitReplayFixture:
         return [run_workflow._publish_status, status, publish_failure]
 
 
+@workflow.defn(name="MMCanonicalGitRepositoryProjectionReplayFixture")
+class _LegacyCanonicalGitRepositoryProjectionReplayFixture:
+    @workflow.run
+    async def run(self, _repository: dict[str, Any]) -> str:
+        return ""
+
+
+@workflow.defn(name="MMCanonicalGitRepositoryProjectionReplayFixture")
+class _CurrentCanonicalGitRepositoryProjectionReplayFixture:
+    @workflow.run
+    async def run(self, repository: dict[str, Any]) -> str:
+        if not workflow.patched(RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH):
+            return ""
+        return repository_name_from_value(repository, provider="git")
+
+
 @workflow.defn(name="MM3453OmnigentCompilerReplayFixture")
 class _LegacyOmnigentCompilerReplayFixture:
     @workflow.run
@@ -552,6 +572,64 @@ async def test_repository_target_input_shapes_execute_and_replay(
     )
     for history in histories:
         await replayer.replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_canonical_repository_projection_pre_and_post_patch_histories_replay(
+) -> None:
+    repository = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/Tactics"},
+        "branch": {"name": "main"},
+    }
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-canonical-repository-projection-legacy",
+            workflows=[_LegacyCanonicalGitRepositoryProjectionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyCanonicalGitRepositoryProjectionReplayFixture.run,
+                repository,
+                id="test-canonical-repository-projection-legacy",
+                task_queue="test-canonical-repository-projection-legacy",
+            )
+            assert await legacy.result() == ""
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-canonical-repository-projection-current",
+            workflows=[_CurrentCanonicalGitRepositoryProjectionReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentCanonicalGitRepositoryProjectionReplayFixture.run,
+                repository,
+                id="test-canonical-repository-projection-current",
+                task_queue="test-canonical-repository-projection-current",
+            )
+            assert await current.result() == "MoonLadderStudios/Tactics"
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentCanonicalGitRepositoryProjectionReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+def test_canonical_repository_projection_patch_is_snapshotted_before_input_parse(
+) -> None:
+    source = inspect.getsource(MoonMindRunWorkflow.run)
+    patch_name = "RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH"
+
+    assert RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH.endswith("-v1")
+    assert source.count(patch_name) == 1
+    assert source.index(patch_name) < source.index("_initialize_from_payload")
 
 
 def test_plan_routed_moonspec_patch_is_snapshotted_before_node_execution() -> None:

@@ -22,6 +22,7 @@ LEGACY_REPOSITORY_DECODER_VERSION = "moonmind.repository-legacy-history.v1"
 REPOSITORY_CAPABILITY_UNKNOWN = "REPOSITORY_CAPABILITY_UNKNOWN"
 REPOSITORY_CONNECTION_MISMATCH = "REPOSITORY_CONNECTION_MISMATCH"
 REPOSITORY_CLIENT_MISMATCH = "REPOSITORY_CLIENT_MISMATCH"
+REPOSITORY_CREDENTIAL_UNAVAILABLE = "REPOSITORY_CREDENTIAL_UNAVAILABLE"
 REPOSITORY_REMOTE_TIP_MISMATCH = "REPOSITORY_REMOTE_TIP_MISMATCH"
 
 
@@ -268,12 +269,18 @@ def compile_repository_target(value: object) -> AuthoredRepositoryTarget:
         raise RepositoryContractError("REPOSITORY_TARGET_INVALID", str(exc)) from exc
 
 
-def repository_name_from_value(value: object) -> str:
+def repository_name_from_value(
+    value: object,
+    *,
+    provider: Literal["git", "lore"] | None = None,
+) -> str:
     """Project a legacy scalar or authored target to its repository name."""
 
     if isinstance(value, str):
         return value.strip()
     if not isinstance(value, Mapping):
+        return ""
+    if provider is not None and value.get("provider") != provider:
         return ""
     repository = value.get("repository")
     if not isinstance(repository, Mapping):
@@ -604,7 +611,18 @@ async def ensure_repository_ready(
     await readiness_registry.check(required, context)
 
     if connection.credential.source == "github_resolver":
-        await _await_if_needed(credential_resolver(target.repository.name))
+        credential = await _await_if_needed(
+            credential_resolver(target.repository.name)
+        )
+        if not bool(getattr(credential, "resolved", False)):
+            safe_summary = str(
+                getattr(credential, "safe_summary", "")
+                or "GitHub credential resolution returned no usable credential."
+            )
+            raise RepositoryContractError(
+                REPOSITORY_CREDENTIAL_UNAVAILABLE,
+                safe_summary,
+            )
 
     if operation != "read":
         if remote_tip_verifier is None:
