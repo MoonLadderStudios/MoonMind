@@ -151,20 +151,25 @@ async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_b
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
     store = InMemoryArtifactStore()
     checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
-    external_ref = store.put_bytes(
-        json.dumps(
-            {
-                "omnigentSessionId": "session-3509",
-                "firstMessage": {
-                    "digest": "sha256:" + "1" * 64,
-                    "responseIdentifiers": {"itemId": "message-3509"},
-                },
-                "lastCommittedBridgeEventCursor": "event-9",
+    external_ref = "artifact://omnigent/external-state"
+    external_bytes = json.dumps(
+        {
+            "omnigentSessionId": "session-3509",
+            "firstMessage": {
+                "digest": "sha256:" + "1" * 64,
+                "responseIdentifiers": {"itemId": "message-3509"},
             },
-            sort_keys=True,
-        ).encode(),
-        content_type="application/json",
-    ).artifact_ref
+            "lastCommittedBridgeEventCursor": "event-9",
+        },
+        sort_keys=True,
+    ).encode()
+
+    async def read_checkpoint_artifact(artifact_ref: str) -> bytes:
+        if artifact_ref == external_ref:
+            return external_bytes
+        return store.get_bytes(artifact_ref)
+
+    monkeypatch.setattr(checkpoint_activities, "_read_bytes", read_checkpoint_artifact)
     workflow_instance = MoonMindRunWorkflow()
     now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
     workflow_instance._input_ref = "artifact://task/input"
