@@ -117,6 +117,10 @@ from moonmind.workflows.executions.prepared_context import (
     build_prepared_input_manifest,
     select_step_prepared_context,
 )
+from moonmind.workflows.temporal.agent_result_payloads import (
+    compact_agent_run_result_payload_for_workflow_history,
+    compact_published_agent_run_result_payload,
+)
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -9855,48 +9859,55 @@ class TemporalAgentRuntimeActivities:
                     ).strip()
                     if primary_report_id:
                         published_refs["primaryReportRef"] = primary_report_id
-            # Enrich result with the diagnostics ref
-            if isinstance(result, Mapping):
-                enriched = dict(result)
-                if "diagnosticsRef" in enriched:
-                    enriched["diagnosticsRef"] = agent_result_ref.artifact_id
-                else:
-                    enriched["diagnostics_ref"] = agent_result_ref.artifact_id
-                enriched_metadata = (
-                    dict(enriched.get("metadata") or {})
-                    if isinstance(enriched.get("metadata"), Mapping)
-                    else {}
+            # Enrich and revalidate the real Activity output. Publication can
+            # push a valid near-limit input over the compact metadata boundary.
+            # The full pre-enrichment result is already durable at
+            # outputAgentResultRef, so oversized inline annotations may be
+            # projected out while all authoritative refs remain linkable.
+            if not isinstance(result, (Mapping, BaseModel)):
+                if hasattr(result, "diagnostics_ref"):
+                    result.diagnostics_ref = agent_result_ref.artifact_id
+                if hasattr(result, "metadata"):
+                    metadata_obj = getattr(result, "metadata", None)
+                    enriched_metadata = (
+                        dict(metadata_obj)
+                        if isinstance(metadata_obj, Mapping)
+                        else {}
+                    )
+                    enriched_metadata.update(
+                        {
+                            **published_refs,
+                            "outputSummaryRef": summary_ref.artifact_id,
+                            "outputAgentResultRef": agent_result_ref.artifact_id,
+                        }
+                    )
+                    result.metadata = enriched_metadata
+                await _notify_terminal_result(result)
+                return result
+            enriched = dict(result_dict)
+            enriched["diagnosticsRef"] = agent_result_ref.artifact_id
+            enriched.pop("diagnostics_ref", None)
+            enriched_metadata = (
+                dict(enriched.get("metadata") or {})
+                if isinstance(enriched.get("metadata"), Mapping)
+                else {}
+            )
+            enriched_metadata.update(
+                {
+                    **published_refs,
+                    "outputSummaryRef": summary_ref.artifact_id,
+                    "outputAgentResultRef": agent_result_ref.artifact_id,
+                }
+            )
+            enriched["metadata"] = enriched_metadata
+            try:
+                published_result = AgentRunResult.model_validate(enriched)
+            except ValueError:
+                published_result = AgentRunResult.model_validate(
+                    compact_published_agent_run_result_payload(enriched)
                 )
-                enriched_metadata.update(
-                    {
-                        **published_refs,
-                        "outputSummaryRef": summary_ref.artifact_id,
-                        "outputAgentResultRef": agent_result_ref.artifact_id,
-                    }
-                )
-                enriched["metadata"] = enriched_metadata
-                # Remove snake_case if alias is present to avoid Pydantic validation errors
-                if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
-                    del enriched["diagnostics_ref"]
-                await _notify_terminal_result(enriched)
-                return enriched
-            if hasattr(result, "diagnostics_ref"):
-                result.diagnostics_ref = agent_result_ref.artifact_id
-            if hasattr(result, "metadata"):
-                metadata_obj = getattr(result, "metadata", None)
-                enriched_metadata = (
-                    dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
-                )
-                enriched_metadata.update(
-                    {
-                        **published_refs,
-                        "outputSummaryRef": summary_ref.artifact_id,
-                        "outputAgentResultRef": agent_result_ref.artifact_id,
-                    }
-                )
-                result.metadata = enriched_metadata
-            await _notify_terminal_result(result)
-            return result
+            await _notify_terminal_result(published_result)
+            return published_result
         except Exception as exc:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
@@ -12745,7 +12756,10 @@ class TemporalAgentRuntimeActivities:
         /,
     ) -> AgentRunResult:
         """Apply an execution-bound terminal contract above provider adapters."""
-        from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+        from moonmind.workflows.terminal_evidence import (
+            evaluate_terminal_evidence,
+            resolve_terminal_evidence_source,
+        )
 
         result = AgentRunResult.model_validate(request.get("result") or {})
         contract = request.get("terminalContract")
@@ -12760,10 +12774,12 @@ class TemporalAgentRuntimeActivities:
             record = self._run_store.load(run_id)
             workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
 
+        artifact_spool_path = str(request.get("artifactSpoolPath") or "").strip()
+        contract_payload = dict(contract)
         evaluation = evaluate_terminal_evidence(
-            dict(contract),
+            contract_payload,
             workspace_path=workspace_path,
-            artifact_spool_path=str(request.get("artifactSpoolPath") or "").strip(),
+            artifact_spool_path=artifact_spool_path,
         )
         metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
         metadata["terminalContractId"] = str(contract.get("contractId") or "")
@@ -12771,9 +12787,74 @@ class TemporalAgentRuntimeActivities:
         metadata["terminalContractOutcome"] = evaluation.outcome
         if evaluation.failure_code:
             metadata["failureCode"] = evaluation.failure_code
+
+        # Terminal evidence is the authoritative full result for fan-out and
+        # merge automation. Publish the validated run-scoped file here, before
+        # the workflow projects large child records out of its result metadata.
+        if evaluation.metadata.get("terminalContractEvidencePath"):
+            source = resolve_terminal_evidence_source(
+                contract_payload,
+                workspace_path=workspace_path,
+                artifact_spool_path=artifact_spool_path,
+            )
+            if source.path is not None and self._artifact_service is not None:
+                payload = source.path.read_bytes()
+                try:
+                    info = temporal_activity.info()
+                except RuntimeError:
+                    info = None
+                execution_ref = (
+                    ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=info.workflow_id,
+                        run_id=info.workflow_run_id,
+                        link_type="output.terminal_evidence",
+                    )
+                    if info is not None
+                    else None
+                )
+                artifact, _upload = await self._artifact_service.create(
+                    principal="system:agent_runtime",
+                    content_type="application/json",
+                    size_bytes=len(payload),
+                    link=execution_ref,
+                    metadata_json={
+                        "name": source.path.name,
+                        "path": source.relative_path,
+                        "producer": (
+                            "activity:agent_runtime.evaluate_terminal_evidence"
+                        ),
+                        "labels": ["agent_runtime", "output.terminal_evidence"],
+                        "terminalContractId": metadata["terminalContractId"],
+                    },
+                )
+                completed = await self._artifact_service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="system:agent_runtime",
+                    payload=payload,
+                    content_type="application/json",
+                )
+                metadata["terminalContractEvidenceRef"] = completed.artifact_id
+            elif source.path is not None:
+                logger.warning(
+                    "Terminal evidence artifact service is unavailable; evidence "
+                    "remains run-scoped at %s",
+                    source.relative_path,
+                )
+
+        def _validated_result(update: Mapping[str, Any]) -> AgentRunResult:
+            updated = result.model_copy(update=dict(update))
+            payload = updated.model_dump(mode="json", by_alias=True)
+            try:
+                return AgentRunResult.model_validate(payload)
+            except ValueError:
+                return AgentRunResult.model_validate(
+                    compact_agent_run_result_payload_for_workflow_history(payload)
+                )
+
         if evaluation.satisfied:
             metadata["terminalContractSatisfied"] = True
-            return result.model_copy(update={"metadata": metadata})
+            return _validated_result({"metadata": metadata})
 
         if evaluation.outcome == "continuation_requested":
             metadata.update(
@@ -12784,9 +12865,9 @@ class TemporalAgentRuntimeActivities:
                 }
             )
             if result.failure_class is not None:
-                return result.model_copy(update={"metadata": metadata})
-            return result.model_copy(
-                update={
+                return _validated_result({"metadata": metadata})
+            return _validated_result(
+                {
                     "summary": "Agent completed an authoritative durable continuation handoff.",
                     "failure_class": "execution_error",
                     "provider_error_code": "PR_RESOLVER_REENTER_GATE",
@@ -12809,8 +12890,8 @@ class TemporalAgentRuntimeActivities:
             metadata.get("terminalFailureCode") or evaluation.failure_code or ""
         ).strip()
         if evaluation.failure_code == "BATCH_FANOUT_INPUT_INVALID":
-            return result.model_copy(
-                update={
+            return _validated_result(
+                {
                     "summary": terminal_failure_message
                     or "Batch fan-out input validation failed.",
                     "failure_class": "user_error",
@@ -12819,16 +12900,16 @@ class TemporalAgentRuntimeActivities:
                 }
             )
         if result.failure_class is not None:
-            return result.model_copy(
-                update={
+            return _validated_result(
+                {
                     "provider_error_code": result.provider_error_code
                     or evaluation.failure_code
                     or "missing_terminal_evidence",
                     "metadata": metadata,
                 }
             )
-        return result.model_copy(
-            update={
+        return _validated_result(
+            {
                 "summary": f"Agent completed without required terminal evidence: {missing}",
                 "failure_class": "execution_error",
                 "provider_error_code": evaluation.failure_code
@@ -12836,6 +12917,7 @@ class TemporalAgentRuntimeActivities:
                 "metadata": metadata,
             }
         )
+
     async def _managed_session_summary_metadata(
         self,
         record: ManagedRunRecord,

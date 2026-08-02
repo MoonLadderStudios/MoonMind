@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel
@@ -6358,6 +6358,74 @@ async def test_terminal_evidence_activity_enriches_existing_helper_failure(
     assert result.provider_error_code == "process_exit_1"
     assert result.metadata["failureCode"] == "BATCH_FANOUT_PARTIAL_FAILURE"
     assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_publishes_full_fanout_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    targets = workspace / "artifacts/batch-workflows-targets.json"
+    targets.parent.mkdir(parents=True)
+    targets.write_text('[{"ref":"MoonMind#1"}]', encoding="utf-8")
+    spool.mkdir()
+    queued_child = {
+        "provider": "github",
+        "ref": "MoonMind#1",
+        "workflowId": "mm:child-1",
+        "executionId": "mm:child-1",
+        "idempotencyKey": "batch-workflows:github:MoonMind#1:sha256:abc",
+    }
+    manifest = {
+        "schemaVersion": "moonmind.batch-workflows-result.v1",
+        "contractId": "batch_workflows_fanout.v1",
+        "executionRef": "step-1",
+        "targetsSha256": hashlib.sha256(targets.read_bytes()).hexdigest(),
+        "status": "queued",
+        "requested": 1,
+        "created": 1,
+        "queued": [queued_child],
+        "skipped": [],
+        "errors": [],
+    }
+    evidence_path = spool / "batch-workflows-result.json"
+    evidence_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    artifact_service = MagicMock()
+    artifact_service.create = AsyncMock(
+        return_value=(SimpleNamespace(artifact_id="art-terminal-evidence"), None)
+    )
+    artifact_service.write_complete = AsyncMock(
+        return_value=SimpleNamespace(artifact_id="art-terminal-evidence")
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {"summary": "Queued one child."},
+        }
+    )
+
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert result.metadata["terminalContractEvidenceRef"] == "art-terminal-evidence"
+    assert result.metadata["queuedChildren"] == [queued_child]
+    published = json.loads(
+        artifact_service.write_complete.await_args.kwargs["payload"].decode("utf-8")
+    )
+    assert published["queued"][0]["provider"] == "github"
+    assert published["queued"][0]["idempotencyKey"] == queued_child["idempotencyKey"]
+    assert artifact_service.create.await_args.kwargs["metadata_json"]["path"] == (
+        "artifacts/batch-workflows-result.json"
+    )
 
 
 @pytest.mark.asyncio
