@@ -152,7 +152,7 @@ class TestSlotContinuityMetadata(unittest.TestCase):
             "RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH"
         )
         injection_index = source.index(
-            'parameters["checkpointRecovery"]', guard_index
+            "checkpoint_recovery = dict(self._recovery_source)", guard_index
         )
 
         self.assertLess(guard_index, injection_index)
