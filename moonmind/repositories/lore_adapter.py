@@ -47,16 +47,16 @@ class LoreClient(Protocol):
         connection_ref: str,
         client_evidence: Mapping[str, str],
     ) -> Mapping[str, object]:
-        ...
+        pass
 
     def scan_external_changes(self, *, workspace: Path) -> Mapping[str, object]:
-        ...
+        pass
 
     def status(self, *, workspace: Path) -> Mapping[str, object]:
-        ...
+        pass
 
     def stage_paths(self, *, workspace: Path, paths: Sequence[str]) -> None:
-        ...
+        pass
 
 
 @dataclass(frozen=True)
