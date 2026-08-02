@@ -2155,6 +2155,7 @@ class WorkflowExecutionSpec(BaseModel):
     publish: WorkflowPublishSelection = Field(
         default_factory=WorkflowPublishSelection, alias="publish"
     )
+    git: WorkflowGitSelection | None = Field(None, alias="git")
     propose_tasks: bool = Field(
         default_factory=_default_propose_tasks, alias="proposeTasks"
     )
@@ -2753,6 +2754,8 @@ def build_canonical_workflow_view(
         # ``targetBranch`` is historical output metadata, never authored
         # branch-selection authority for a new canonical task.
         git_node.pop("targetBranch", None)
+    elif git_node is None:
+        workflow_node.pop("git", None)
 
     target_runtime = (
         _normalize_runtime_value(
