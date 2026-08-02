@@ -113,6 +113,14 @@ class CheckpointBranchCreateRequest(BaseModel):
     )
     git_work_branch: str | None = Field(None, alias="gitWorkBranch", max_length=255)
     max_budget_usd: float | None = Field(None, alias="maxBudgetUsd", ge=0)
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", min_length=1, max_length=255
+    )
+    execution_profile_ref: str | None = Field(
+        None, alias="executionProfileRef", min_length=1, max_length=255
+    )
+    model: str | None = Field(None, min_length=1, max_length=255)
+    effort: str | None = Field(None, min_length=1, max_length=64)
     # Authored in-session follow-up retrieval override for the branch turn
     # (MoonMind#3514). Recorded as bounded authored intent and folded into the
     # branch operation idempotency digest; enforcement inherits the parent run's

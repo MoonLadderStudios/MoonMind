@@ -13242,6 +13242,21 @@ async def create_checkpoint_branch(
     branch.publish_status = "unpublished"
     branch.idempotency_key = payload.idempotency_key
     branch.created_by = getattr(user, "email", None) or _owner_id(user)
+    # Runtime selectors are authored branch input. Persist the exact effective
+    # selection with the branch so launch/retry never has to trust transient UI
+    # state or mutate the source workflow's immutable runtime selection.
+    branch.diagnostics = {
+        **(branch.diagnostics or {}),
+        "runtimeSelection": {
+            "providerProfileRef": payload.provider_profile_ref,
+            "executionProfileRef": payload.execution_profile_ref,
+            "model": payload.model,
+            "effort": payload.effort,
+            "runtimeContextPolicy": payload.runtime_context_policy,
+            "publishMode": payload.publish_mode,
+            "gitWorkBranch": payload.git_work_branch,
+        },
+    }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
