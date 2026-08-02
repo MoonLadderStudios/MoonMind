@@ -134,6 +134,22 @@ def test_provider_target_persists_connection_revision_and_remote_tip_axes() -> N
     assert intent.remote_tip_expectation == {"kind": "read_only"}
 
 
+def test_rejects_caller_authored_resolved_repository_evidence() -> None:
+    request = _request(
+        workspace_spec={
+            "workspaceLocator": _locator(),
+            "repository": "acme/widgets",
+            "resolvedRepositoryTarget": {"authority": "authoritative"},
+        }
+    )
+
+    with pytest.raises(
+        WorkspaceIntentCompilationError,
+        match="resolvedRepositoryTarget is runtime-owned",
+    ):
+        _compile(request)
+
+
 def test_owner_repo_shorthand_is_classified_as_github_not_local() -> None:
     # The canonical materialization classifier resolves ``owner/repo`` to a
     # GitHub clone, so durable evidence must not redact it as ``[local-source]``.

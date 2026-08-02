@@ -2440,7 +2440,7 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    repository: AuthoredRepositoryTarget = Field(alias="repository")
+    repository: AuthoredRepositoryTarget | None = Field(None, alias="repository")
     required_capabilities: list[str] | None = Field(
         None,
         alias="requiredCapabilities",
@@ -2462,7 +2462,9 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     @field_validator("repository", mode="before")
     @classmethod
-    def _normalize_repository(cls, value: object) -> AuthoredRepositoryTarget:
+    def _normalize_repository(cls, value: object) -> AuthoredRepositoryTarget | None:
+        if value is None:
+            return None
         return compile_repository_target(value)
 
     @field_validator("target_runtime", mode="before")
@@ -2484,7 +2486,11 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
     def _validate_repository_revision_publish_mode(
         self,
     ) -> "CanonicalWorkflowExecutionPayload":
-        if self.repository.revision is not None and self.task.publish.mode != "none":
+        if (
+            self.repository is not None
+            and self.repository.revision is not None
+            and self.task.publish.mode != "none"
+        ):
             raise WorkflowContractError(
                 "repository.revision is allowed only when workflow.publish.mode='none'"
             )
@@ -2766,7 +2772,12 @@ def build_canonical_workflow_view(
         required.extend(canonical_existing)
 
     required.append(target_runtime)
-    repository_target = compile_repository_target(canonical.get("repository"))
+    repository_raw = canonical.get("repository")
+    repository_target = (
+        compile_repository_target(repository_raw)
+        if repository_raw is not None
+        else None
+    )
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
@@ -2846,14 +2857,17 @@ def build_canonical_workflow_view(
                 repository_tool_caps.extend(step_tool_caps)
                 required.extend(step_tool_caps)
 
-    required.extend(
-        derive_repository_capabilities(
-            repository_target,
-            publish_mode=publish_mode,
-            skill_capabilities=repository_skill_caps,
-            tool_capabilities=repository_tool_caps,
+    if repository_target is not None:
+        required.extend(
+            derive_repository_capabilities(
+                repository_target,
+                publish_mode=publish_mode,
+                skill_capabilities=repository_skill_caps,
+                tool_capabilities=repository_tool_caps,
+            )
         )
-    )
+    elif publish_mode == "pr":
+        required.append("gh")
 
     container_node = (canonical.get("workflow") or {}).get("container")
     container = container_node if isinstance(container_node, Mapping) else {}

@@ -280,7 +280,7 @@ async def test_portable_lore_adapter_validates_connection_and_exact_cli_evidence
             "provider": "lore",
             "displayName": "Tactics Lore",
             "endpointRef": "lore-endpoint:tactics",
-            "allowedRepositoryIds": ["tactics"],
+            "allowedRepositoryIds": ["lore-repository-uuid"],
             "allowedOperations": ["read"],
             "clientPolicy": {
                 "pinnedVersion": "1.2.3",

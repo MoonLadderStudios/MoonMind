@@ -345,10 +345,11 @@ def compile_workspace_intent(
 
     repository = authored_repository_source(request) or None
     resolved_repository = _spec(request).get("resolvedRepositoryTarget")
-    if resolved_repository is not None and not isinstance(resolved_repository, Mapping):
+    if resolved_repository is not None:
         raise WorkspaceIntentCompilationError(
             WORKSPACE_INTENT_UNSAFE_INPUT,
-            "workspaceSpec.resolvedRepositoryTarget must be an object",
+            "workspaceSpec.resolvedRepositoryTarget is runtime-owned and cannot "
+            "be authored",
         )
     restore_refs = authored_restore_input_refs(request)
     restore_input_refs, external_state_refs = _partition_restore_refs(restore_refs)

@@ -1623,9 +1623,9 @@ def _build_runtime_planner():
             node_inputs["publishBaseBranch"] = publish_base_branch
 
         repository = (
-            task_payload.get("repository")
+            parameter_payload.get("repository")
             or input_payload.get("repository")
-            or parameter_payload.get("repository")
+            or task_payload.get("repository")
             or parameter_payload.get("repo")
             or selected_skill_inputs.get("repository")
             or selected_skill_inputs.get("repo")

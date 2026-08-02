@@ -439,7 +439,8 @@ def validate_connection_and_client(
             f"connection does not allow operation {operation!r}",
         )
     if (
-        connection.allowed_repository_ids
+        target.provider == "git"
+        and connection.allowed_repository_ids
         and target.repository.name not in connection.allowed_repository_ids
     ):
         raise RepositoryContractError(

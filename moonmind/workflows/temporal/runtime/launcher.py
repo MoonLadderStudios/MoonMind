@@ -422,16 +422,38 @@ class ManagedRuntimeLauncher:
                     "match the authored target",
                 )
             return resolved
-        if target.connection_ref != DEFAULT_GIT_CONNECTION_REF:
+
+        if target.connection_ref == DEFAULT_GIT_CONNECTION_REF:
+            if self._repository_client_policy is None:
+                raise RepositoryContractError(
+                    "REPOSITORY_CONNECTION_UNAVAILABLE",
+                    "the current deployment Git client policy was not supplied",
+                )
+            connection_path = _DEFAULT_REPOSITORY_CONNECTION_PATH
+        else:
+            connections_dir = Path(
+                os.environ.get(
+                    "MOONMIND_REPOSITORY_CONNECTIONS_DIR",
+                    str(_DEFAULT_REPOSITORY_CONNECTION_PATH.parent),
+                )
+            )
+            connection_path = next(
+                (
+                    path
+                    for path in sorted(connections_dir.glob("*.json"))
+                    if self._connection_file_matches(path, target.connection_ref)
+                ),
+                None,
+            )
+        if connection_path is None:
             raise RepositoryContractError(
                 "REPOSITORY_CONNECTION_UNAVAILABLE",
-                "the managed-runtime launch boundary has no ready adapter for "
-                "the selected connection",
+                "the selected Git connection is absent from the deployment registry",
             )
 
         observed = await self._observe_git_client()
         connection = load_repository_connection(
-            _DEFAULT_REPOSITORY_CONNECTION_PATH, target.connection_ref
+            connection_path, target.connection_ref
         )
         registry = CapabilityReadinessRegistry(
             runtime_owned_tokens=(
@@ -585,6 +607,14 @@ class ManagedRuntimeLauncher:
             work_branch_origin=work_branch_origin,
             projection=connection.projection,
         )
+
+    @staticmethod
+    def _connection_file_matches(path: Path, connection_ref: str) -> bool:
+        try:
+            connection = load_repository_connection(path, connection_ref)
+        except RepositoryContractError:
+            return False
+        return connection.provider == "git"
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
@@ -1148,6 +1178,11 @@ class ManagedRuntimeLauncher:
         repo_path = (workspace_root / "repo").resolve()
         workspace_root.mkdir(parents=True, exist_ok=True)
         if repo_path.exists():
+            await self._checkout_resolved_read_only_revision(
+                repo_path=repo_path,
+                workspace_spec=workspace_spec,
+                git_env=git_env,
+            )
             return str(repo_path)
 
         source = self._resolve_repository_source(repository)
@@ -1167,6 +1202,12 @@ class ManagedRuntimeLauncher:
             *clone_cmd,
             cwd=str(workspace_root),
             env=command_env,
+        )
+
+        await self._checkout_resolved_read_only_revision(
+            repo_path=repo_path,
+            workspace_spec=workspace_spec,
+            git_env=git_env,
         )
 
         new_branch = str(workspace_spec.get("targetBranch") or "").strip()
@@ -1217,6 +1258,48 @@ class ManagedRuntimeLauncher:
                 )
 
         return str(repo_path)
+
+    async def _checkout_resolved_read_only_revision(
+        self,
+        *,
+        repo_path: Path,
+        workspace_spec: Mapping[str, Any],
+        git_env: Mapping[str, str] | None,
+    ) -> None:
+        resolved = workspace_spec.get("resolvedRepositoryTarget")
+        if not isinstance(resolved, Mapping):
+            return
+        expectation = resolved.get("remoteTipExpectation")
+        revision = resolved.get("preparedRevision")
+        if (
+            not isinstance(expectation, Mapping)
+            or expectation.get("kind") != "read_only"
+            or not isinstance(revision, Mapping)
+        ):
+            return
+        commit_sha = str(revision.get("commitSha") or "").strip()
+        if not commit_sha:
+            return
+        await self._run_checked_command(
+            "git",
+            "-C",
+            str(repo_path),
+            "checkout",
+            "--detach",
+            commit_sha,
+            env=dict(git_env) if git_env is not None else None,
+        )
+        returncode, stdout_text, _stderr_text = await self._run_command(
+            "git", "-C", str(repo_path), "rev-parse", "HEAD"
+        )
+        observed_sha = stdout_text.strip()
+        if returncode != 0 or not observed_sha.startswith(commit_sha):
+            raise RepositoryContractError(
+                REPOSITORY_REMOTE_TIP_MISMATCH,
+                "prepared workspace does not match the resolved pinned revision",
+            )
+        if isinstance(revision, dict):
+            revision["commitSha"] = observed_sha
 
     @staticmethod
     def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
@@ -1711,6 +1794,12 @@ class ManagedRuntimeLauncher:
             request.workspace_spec["resolvedRepositoryTarget"] = (
                 resolved_repository.model_dump(by_alias=True, mode="json")
             )
+            if resolved_repository.provider == "lore" and workspace_path is None:
+                raise RepositoryContractError(
+                    "LORE_WORKSPACE_MATERIALIZATION_UNAVAILABLE",
+                    "the configured Lore adapter resolves authority but does not "
+                    "materialize a managed workspace",
+                )
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,

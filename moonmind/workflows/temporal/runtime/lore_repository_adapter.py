@@ -203,6 +203,14 @@ class LoreCliReadinessAdapter:
                 "LORE_CONNECTION_NOT_READY",
                 "Lore client authority does not match the authored target",
             )
+        if (
+            connection.allowed_repository_ids
+            and identity.repository_id not in connection.allowed_repository_ids
+        ):
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_MISMATCH",
+                "resolved Lore repository is not allowed by connection",
+            )
         evidence = RepositoryClientEvidence(
             toolBundleRef=self._tool_bundle_ref,
             clientVersion=client_version,
