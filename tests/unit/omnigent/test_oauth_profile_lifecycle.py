@@ -1607,6 +1607,80 @@ def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> Non
         )
 
 
+@pytest.mark.asyncio
+async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_spec() -> None:
+    checkpoint = _checkpoint()
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:loop-1",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator.execute = AsyncMock(return_value=AgentRunResult(summary="restored"))  # type: ignore[method-assign]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="restore-attempt",
+        inputRefs=["artifact://request-input"],
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "new-clean-workspace",
+                "relativePath": "repo",
+            }
+        },
+    )
+
+    await coordinator.recover_from_checkpoint(
+        request=request,
+        checkpoint=checkpoint,
+        provider_lease=None,
+        host_lease=None,
+        host_registered=False,
+        session_valid=False,
+        first_message_consistent=False,
+        current_credential_generation=3,
+        candidate_workspace=candidate,
+    )
+
+    restored_request = coordinator.execute.await_args.args[0]
+    assert restored_request.workspace_spec == {
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": "new-clean-workspace",
+            "relativePath": "repo",
+        },
+        "checkoutCommit": "abc123",
+        "restoreInputRefs": [
+            "artifact://workspace-checkpoint",
+            "artifact://head",
+            "artifact://workspace-checkpoint/2",
+            "artifact://candidate-head/2",
+        ],
+    }
+    assert restored_request.input_refs == [
+        "artifact://request-input",
+        "artifact://instructions",
+        "artifact://context",
+        "artifact://external-state",
+        "artifact://candidate-head/2",
+        "artifact://workspace-checkpoint/2",
+    ]
+
+
 def test_checkpoint_rejects_raw_credentials_and_accepts_safe_identity_refs() -> None:
     evidence = WorkspaceCheckpointEvidenceModel(
         kind="external_state_ref",

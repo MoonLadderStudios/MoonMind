@@ -28,6 +28,7 @@ from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
+    OmnigentRestoreMaterial,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_cold_restore_target,
@@ -217,6 +218,47 @@ def _bind_candidate_workspace(
             ),
         }
     )
+
+
+def _bind_cold_restore_workspace_spec(
+    authored_spec: Mapping[str, Any],
+    *,
+    restore_material: OmnigentRestoreMaterial,
+    candidate_workspace: CandidateWorkspaceAuthority,
+) -> dict[str, Any]:
+    """Route validated restore evidence through the canonical workspace boundary.
+
+    The host materializer consumes ``checkoutCommit`` and ``restoreInputRefs``;
+    keeping them only in execution parameters would launch a clean host without
+    reconstructing the repository plane.
+    """
+
+    workspace_spec = dict(authored_spec or {})
+    existing_checkout = str(
+        workspace_spec.get("checkoutCommit")
+        or workspace_spec.get("baseCommit")
+        or ""
+    ).strip()
+    if existing_checkout and existing_checkout != restore_material.baseline_commit:
+        raise ValueError("cold restore baseline conflicts with authored workspace")
+    workspace_spec["checkoutCommit"] = restore_material.baseline_commit
+    workspace_spec.pop("baseCommit", None)
+    existing_refs = workspace_spec.get("restoreInputRefs")
+    if existing_refs is not None and not isinstance(existing_refs, (list, tuple)):
+        raise ValueError("workspaceSpec.restoreInputRefs must be a list")
+    workspace_spec["restoreInputRefs"] = list(
+        dict.fromkeys(
+            [
+                *(str(ref).strip() for ref in (existing_refs or ()) if str(ref).strip()),
+                restore_material.workspace_checkpoint_ref,
+                *([restore_material.diff_ref] if restore_material.diff_ref else []),
+                restore_material.head_ref,
+                candidate_workspace.checkpoint_ref,
+                candidate_workspace.head_ref,
+            ]
+        )
+    )
+    return workspace_spec
 
 
 # Optional positive-integer ceilings an authoring surface may narrow. The
@@ -1149,6 +1191,40 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            # Publish the compact, reference-only session/host plane needed by
+            # the canonical Step Execution checkpoint writer.  Workspace
+            # evidence is deliberately added later by the workspace capture
+            # activity; neither boundary is allowed to infer the other plane.
+            result_metadata = dict(result.metadata or {})
+            result_metadata["omnigentCheckpointCapture"] = {
+                "providerProfileId": profile_id,
+                "credentialRef": (
+                    f"credential://provider-profile/{profile_id}/generation/"
+                    f"{host_lease.credential_generation}"
+                ),
+                "credentialGeneration": host_lease.credential_generation,
+                "providerLeaseRef": provider_lease.lease_id,
+                "hostBindingRef": binding.binding_ref,
+                "hostLeaseRef": host_lease.lease_id,
+                "endpointRef": binding.endpoint_ref,
+                "omnigentHostId": host_id,
+                "bridgeSessionId": bridge.bridge_session_id,
+                "effectiveLaunchRef": effective_launch["snapshotRef"],
+                "executionProfileRef": effective_launch["executionProfileRef"],
+                "launchPolicyRef": effective_launch["launchPolicyRef"],
+                "externalStateRef": result_metadata.get("externalStateRef"),
+                "captureManifestRef": result_metadata.get("captureManifestRef"),
+                "terminalRef": next(iter(result.output_refs), None),
+                "diagnosticsRef": result.diagnostics_ref,
+                "omnigentSessionId": result_metadata.get("omnigentSessionId"),
+                "idempotencyKey": request.idempotency_key,
+                "sourceBranch": self._starting_branch(request) or "detached",
+                "outputBranch": self._target_branch(request),
+                "publicationState": str(
+                    (request.parameters or {}).get("publishMode") or "none"
+                ),
+            }
+            result = result.model_copy(update={"metadata": result_metadata})
             authority_result = result
             result_failed = bool(result.failure_class or result.provider_error_code)
             result_status = "failed" if result_failed else "completed"
@@ -1569,15 +1645,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 by_alias=True, mode="json"
             ),
         }
+        workspace_spec = _bind_cold_restore_workspace_spec(
+            request.workspace_spec,
+            restore_material=restore_material,
+            candidate_workspace=candidate_workspace,
+        )
         return await self.execute(
             request.model_copy(
                 update={
                     "idempotency_key": cold_key,
                     "parameters": parameters,
+                    "workspace_spec": workspace_spec,
                     "input_refs": list(
                         dict.fromkeys(
                             [
                                 *request.input_refs,
+                                *restore_material.immutable_input_refs,
                                 checkpoint.external_state_ref,
                                 candidate_workspace.head_ref,
                                 candidate_workspace.checkpoint_ref,
@@ -1620,14 +1703,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                 by_alias=True, mode="json"
             ),
         }
+        workspace_spec = _bind_cold_restore_workspace_spec(
+            request.workspace_spec,
+            restore_material=restore_material,
+            candidate_workspace=candidate_workspace,
+        )
         return await self.execute(
             request.model_copy(
                 update={
                     "parameters": parameters,
+                    "workspace_spec": workspace_spec,
                     "input_refs": list(
                         dict.fromkeys(
                             [
                                 *request.input_refs,
+                                *restore_material.immutable_input_refs,
                                 checkpoint.external_state_ref,
                                 candidate_workspace.head_ref,
                                 candidate_workspace.checkpoint_ref,

@@ -5470,6 +5470,7 @@ class MoonMindRunWorkflow:
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
         omnigent_checkpoint: Mapping[str, Any] | None = None,
+        omnigent_checkpoint_capture: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Write checkpoint evidence through the artifact activity boundary.
 
@@ -5492,6 +5493,11 @@ class MoonMindRunWorkflow:
             "diagnosticRefs": list(diagnostic_refs),
             "omnigentCheckpoint": (
                 dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
+            ),
+            "omnigentCheckpointCapture": (
+                dict(omnigent_checkpoint_capture)
+                if omnigent_checkpoint_capture is not None
+                else None
             ),
             "idempotencyKey": checkpoint_id,
         }
@@ -5645,6 +5651,9 @@ class MoonMindRunWorkflow:
                         "relativePath": ".",
                     }
                 elif capabilities.runtime_id == "omnigent":
+                    capture_input["omnigentCheckpointCapture"] = {
+                        "captureBoundaryState": "session_not_started"
+                    }
                     try:
                         wf_info = workflow.info()
                         identity = StepExecutionIdentityModel(
@@ -5675,6 +5684,11 @@ class MoonMindRunWorkflow:
         ):
             capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            omnigent_capture = candidate.get("omnigentCheckpointCapture") or candidate.get(
+                "omnigent_checkpoint_capture"
+            )
+            if isinstance(omnigent_capture, Mapping):
+                capture_input["omnigentCheckpointCapture"] = dict(omnigent_capture)
             omnigent_checkpoint = candidate.get("omnigentCheckpoint") or candidate.get(
                 "omnigent_checkpoint"
             )
@@ -5985,6 +5999,20 @@ class MoonMindRunWorkflow:
         if capture is None:
             return None
         capture_diagnostics = list(capture.get("diagnosticRefs") or [])
+        step_capture_input = self._step_workspace_capture_inputs.get(
+            logical_step_id, {}
+        )
+        raw_omnigent_capture = step_capture_input.get("omnigentCheckpointCapture")
+        omnigent_capture_input: dict[str, Any] | None = None
+        if isinstance(raw_omnigent_capture, Mapping):
+            omnigent_capture_input = dict(raw_omnigent_capture)
+            if isinstance(step_capture_input.get("workspaceLocator"), Mapping):
+                omnigent_capture_input["workspaceLocator"] = dict(
+                    step_capture_input["workspaceLocator"]
+                )
+            omnigent_capture_input["instructionRefs"] = list(
+                self._prepared_artifact_refs
+            )
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,
             boundary=boundary,
@@ -6010,6 +6038,7 @@ class MoonMindRunWorkflow:
                 )
                 else None
             ),
+            omnigent_checkpoint_capture=omnigent_capture_input,
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:

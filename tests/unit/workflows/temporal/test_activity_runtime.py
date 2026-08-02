@@ -99,6 +99,98 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+
+
+@pytest.mark.asyncio
+async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() -> None:
+    store = InMemoryArtifactStore()
+    external = store.put_bytes(
+        json.dumps(
+            {
+                "omnigentSessionId": "session-1",
+                "firstMessage": {
+                    "digest": "sha256:" + "1" * 64,
+                    "responseIdentifiers": {"itemId": "message-1"},
+                },
+                "lastCommittedBridgeEventCursor": "event-9",
+            },
+            sort_keys=True,
+        ).encode(),
+        content_type="application/json",
+    )
+    external_ref = external.artifact_ref
+    manifest = store.put_bytes(b'{"capture":"complete"}', content_type="application/json")
+    manifest_ref = manifest.artifact_ref
+    activities = TemporalCheckpointActivities(artifact_store=store)
+
+    result = await activities.step_checkpoint_create(
+        {
+            "identity": {
+                "workflowId": "wf-3509",
+                "runId": "run-3509",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "after_execution",
+            "taskInputSnapshotRef": "artifact://task/input",
+            "planRef": "artifact://plan/current",
+            "workspace": {
+                "kind": "worktree_archive",
+                "baseCommit": "abc123",
+                "headCommit": "def456",
+                "archiveRef": "artifact://workspace/archive",
+                "archiveDigest": "sha256:" + "2" * 64,
+                "archiveBytes": 10,
+                "createdAt": "2026-08-02T00:00:00Z",
+            },
+            "omnigentCheckpointCapture": {
+                "providerProfileId": "codex",
+                "credentialRef": "credential://provider-profile/codex/generation/3",
+                "credentialGeneration": 3,
+                "providerLeaseRef": "provider-lease-1",
+                "hostBindingRef": "binding-1",
+                "hostLeaseRef": "host-lease-1",
+                "endpointRef": "endpoint-1",
+                "omnigentHostId": "host-1",
+                "bridgeSessionId": "bridge-1",
+                "effectiveLaunchRef": "omnigent-launch:sha256:" + "3" * 64,
+                "executionProfileRef": "profile://codex",
+                "launchPolicyRef": "policy://default",
+                "externalStateRef": external_ref,
+                "captureManifestRef": manifest_ref,
+                "terminalRef": "artifact://terminal/result",
+                "diagnosticsRef": "artifact://diagnostics/result",
+                "idempotencyKey": "idem-3509",
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "clean-workspace",
+                    "relativePath": "repo",
+                },
+                "instructionRefs": ["artifact://instructions/current"],
+                "sourceBranch": "main",
+                "publicationState": "none",
+            },
+            "createdAt": "2026-08-02T00:00:00Z",
+            "idempotencyKey": "wf-3509:checkpoint:after_execution",
+        }
+    )
+
+    checkpoint = json.loads(store.get_bytes(result["checkpointRef"]))
+    identity = checkpoint["omnigentCheckpoint"]
+    assert identity["schemaVersion"] == "v2"
+    assert identity["externalStateRef"] == external_ref
+    assert identity["externalStateDigest"].startswith("sha256:")
+    assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    assert identity["validation"] == {
+        "valid": True,
+        "liveReattachAvailable": True,
+        "workspaceColdRestoreAvailable": True,
+        "branchCreationAvailable": True,
+        "reasons": [],
+        "capacityBlocked": False,
+        "readinessBlocked": False,
+    }
 
 
 @pytest.mark.asyncio
