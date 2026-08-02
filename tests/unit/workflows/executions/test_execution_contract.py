@@ -1505,16 +1505,16 @@ def test_workflow_skill_side_effect_metadata_forces_none_for_unknown_skill() -> 
     "skill_id",
     ["fix-comments", "fix-ci", "fix-merge-conflicts"],
 )
-def test_codex_skill_payload_defaults_auto_publish_capable_skill_to_auto(
+def test_recorded_codex_skill_defaults_auto_publish_capable_skill_to_auto(
     skill_id: str,
 ) -> None:
-    """codex_skill submissions that omit publishMode must default to ``auto``.
+    """Recorded codex_skill payloads that omit publishMode default to ``auto``.
 
     The legacy payload path must preserve omitted publish mode until the
     selected-skill resolver can apply the auto publishing contract.
     """
 
-    result = build_canonical_workflow_view(
+    result = decode_recorded_legacy_workflow_history_v1(
         job_type="codex_skill",
         payload={
             "skillId": skill_id,
