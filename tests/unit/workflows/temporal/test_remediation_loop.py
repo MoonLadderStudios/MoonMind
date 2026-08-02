@@ -147,15 +147,36 @@ def test_environment_contamination_is_a_terminal_block() -> None:
 
 
 def test_repeated_progress_evidence_updates_no_progress_budgets() -> None:
+    signature = "sha256:" + ("a" * 64)
     first = record_semantic_progress(
-        _state(), progress_ref="artifact://remaining/R1"
+        _state(),
+        progress_ref="artifact://remaining/R1",
+        progress_signature=signature,
     )
-    repeated = record_semantic_progress(
-        first, progress_ref="artifact://remaining/R1"
+    repeated_once = record_semantic_progress(
+        first,
+        progress_ref="artifact://remaining/R2",
+        progress_signature=signature,
+    )
+    repeated_twice = record_semantic_progress(
+        repeated_once,
+        progress_ref="artifact://remaining/R3",
+        progress_signature=signature,
+    )
+    decision = decide_remediation_continuation(
+        spec=_spec(),
+        state=repeated_twice,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/latest",
+        remaining_work_ref=repeated_twice.latest_progress_ref,
     )
 
-    assert repeated.consumed_budgets.consecutive_semantic_no_progress == 1
-    assert repeated.consumed_budgets.repeated_failure_signature == 1
+    assert repeated_twice.consumed_budgets.consecutive_semantic_no_progress == 2
+    assert repeated_twice.consumed_budgets.repeated_failure_signature == 2
+    assert repeated_twice.latest_progress_ref == "artifact://remaining/R3"
+    assert repeated_twice.latest_progress_signature == signature
+    assert decision.continue_loop is False
+    assert decision.reason == "remediation_budget_or_progress_exhausted"
 
 
 def test_semantic_step_execution_id_is_attempt_scoped() -> None:

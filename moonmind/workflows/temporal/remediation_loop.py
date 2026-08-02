@@ -10,12 +10,16 @@ Implementation reference: MoonLadderStudios/MoonMind#3475.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.schemas.agent_runtime_models import AUTO_RUNTIME_SENTINEL
+
+
+_SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class _Contract(BaseModel):
@@ -164,6 +168,11 @@ class RemediationLoopState(_Contract):
     capability_digest: str | None = Field(default=None, alias="capabilityDigest")
     latest_verdict: str | None = Field(default=None, alias="latestVerdict")
     latest_progress_ref: str | None = Field(default=None, alias="latestProgressRef")
+    latest_progress_signature: str | None = Field(
+        default=None,
+        alias="latestProgressSignature",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     continuation_reason: str | None = Field(
         default=None, alias="continuationReason"
     )
@@ -301,13 +310,24 @@ def record_verification_evidence(
 
 
 def record_semantic_progress(
-    state: RemediationLoopState, *, progress_ref: str | None
+    state: RemediationLoopState,
+    *,
+    progress_ref: str | None,
+    progress_signature: str | None = None,
 ) -> RemediationLoopState:
     """Update bounded no-progress counters from authoritative verifier evidence."""
 
     if not progress_ref:
         return state
-    repeated = progress_ref == state.latest_progress_ref
+    if progress_signature is not None and not _SHA256_DIGEST.fullmatch(
+        progress_signature
+    ):
+        raise ValueError("progressSignature must be a sha256 digest")
+    progress_identity = progress_signature or progress_ref
+    previous_identity = (
+        state.latest_progress_signature or state.latest_progress_ref
+    )
+    repeated = progress_identity == previous_identity
     consumed = state.consumed_budgets.model_copy(
         update={
             "consecutive_semantic_no_progress": (
@@ -325,6 +345,7 @@ def record_semantic_progress(
     return state.model_copy(
         update={
             "latest_progress_ref": progress_ref,
+            "latest_progress_signature": progress_signature,
             "consumed_budgets": consumed,
         }
     )
