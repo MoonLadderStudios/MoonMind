@@ -18165,6 +18165,9 @@ class MoonMindRunWorkflow:
         if (
             self._recovery_failed_step_id == node_id
             and isinstance(self._recovery_source, Mapping)
+            and self._workflow_patch_enabled(
+                RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+            )
         ):
             # This is trusted workflow-owned recovery state created by the API
             # after artifact validation. Keep it out of ordinary plan inputs.

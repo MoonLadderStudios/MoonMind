@@ -114,6 +114,8 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
     provider = SimpleNamespace(credential_generation=checkpoint.credential_generation)
     provider_lease = SimpleNamespace(
         lease_id="provider-lease",
+        owner_id="owner-1",
+        idempotency_key=checkpoint.idempotency_key,
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
     )
 
@@ -123,6 +125,10 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
 
         def scalar_one_or_none(self):
             return self.value
+
+        def scalars(self):
+            value = self.value if isinstance(self.value, list) else [self.value]
+            return SimpleNamespace(all=lambda: value)
 
         def scalar(self):
             return self.value
@@ -183,6 +189,93 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
         authority["current_credential_generation"]
         == checkpoint.credential_generation
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lease_rows",
+    [
+        [],
+        [
+            SimpleNamespace(
+                lease_id="provider-lease",
+                owner_id="owner-1",
+                idempotency_key="wrong-boundary",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        ],
+        [
+            SimpleNamespace(
+                lease_id="provider-lease",
+                owner_id="owner-1",
+                idempotency_key="checkpoint-key",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            ),
+            SimpleNamespace(
+                lease_id="provider-lease",
+                owner_id="owner-2",
+                idempotency_key="checkpoint-key",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            ),
+        ],
+    ],
+)
+async def test_live_recovery_authority_fails_closed_for_ambiguous_or_mismatched_lease(
+    lease_rows,
+) -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "idempotency_key": "checkpoint-key",
+            "provider_lease_ref": "provider-lease",
+            "host_lease_ref": "host-lease",
+            "omnigent_host_id": "host-1",
+            "omnigent_session_id": "session-1",
+            "last_bridge_event_cursor": "4",
+            "first_message_id": "message-1",
+            "first_message_digest": "sha256:" + "a" * 64,
+        }
+    )
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: self.value)
+
+        def scalar(self):
+            return self.value
+
+    class Session:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args):
+            return SimpleNamespace(
+                credential_generation=checkpoint.credential_generation
+            )
+
+        async def execute(self, _query):
+            self.calls += 1
+            return Result(lease_rows if self.calls == 1 else 7)
+
+    authority = await _resolve_live_recovery_authority(
+        checkpoint=checkpoint,
+        session_factory=Session,
+        host_repository=SimpleNamespace(get_host_lease=lambda _ref: _async_value(None)),
+        run_store=SimpleNamespace(get_bridge_session=lambda _ref: _async_value(None)),
+    )
+
+    assert authority["provider_lease"] is None or not authority["provider_lease"][
+        "active"
+    ]
 
 
 async def _async_value(value):

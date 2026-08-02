@@ -65,16 +65,24 @@ async def _resolve_live_recovery_authority(
         current_generation = int(profile.credential_generation) if profile else 0
         provider_row = None
         if checkpoint.provider_lease_ref:
-            provider_row = (
-                await session.execute(
-                    select(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.lease_id
-                        == checkpoint.provider_lease_ref,
-                        ProviderProfileSlotLease.profile_id
-                        == checkpoint.provider_profile_id,
+            provider_rows = list(
+                (
+                    await session.execute(
+                        select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.lease_id
+                            == checkpoint.provider_lease_ref,
+                            ProviderProfileSlotLease.profile_id
+                            == checkpoint.provider_profile_id,
+                        )
                     )
                 )
-            ).scalar_one_or_none()
+                .scalars()
+                .all()
+            )
+            # A duplicated lease identity is ambiguous authority even if both
+            # rows otherwise look current.  Fail closed instead of allowing a
+            # live session to keep consuming the OAuth profile.
+            provider_row = provider_rows[0] if len(provider_rows) == 1 else None
         latest_sequence = int(
             (
                 await session.execute(
@@ -94,7 +102,12 @@ async def _resolve_live_recovery_authority(
             expires_at = expires_at.replace(tzinfo=UTC)
         provider_lease = {
             "leaseId": provider_row.lease_id,
-            "active": expires_at is None or expires_at > now,
+            "active": bool(
+                expires_at
+                and expires_at > now
+                and provider_row.owner_id
+                and provider_row.idempotency_key == checkpoint.idempotency_key
+            ),
         }
 
     host = (
