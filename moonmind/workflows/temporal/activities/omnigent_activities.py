@@ -3,11 +3,284 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+
+_IMMUTABLE_RECOVERY_DIMENSIONS = (
+    "instructionDigest",
+    "runtimeId",
+    "model",
+    "effort",
+    "providerProfileId",
+    "launchPolicyRef",
+    "repositoryBranch",
+    "publishMode",
+)
+
+
+def _checkpoint_recovery_decision(
+    recovery: dict[str, Any],
+    *,
+    live_authority: dict[str, Any] | None = None,
+    cold_restore_authorized: bool | None = None,
+    live_reattach_authorized: bool | None = None,
+) -> dict[str, Any]:
+    """Classify recovery from bounded, caller-independent authority evidence.
+
+    The decision is intentionally compact so the request/history can retain the
+    exact terminal rationale without persisting mutable host details. Immutable
+    input changes always win over live/cold availability.
+    """
+
+    source = recovery.get("immutableSource")
+    requested = recovery.get("immutableRequested")
+    if not isinstance(source, dict) or not isinstance(requested, dict):
+        return {
+            "recoveryAction": "resume_unavailable",
+            "reasonCodes": ["immutable_authority_missing"],
+        }
+    missing = [
+        dimension
+        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
+        if dimension not in source or dimension not in requested
+    ]
+    if missing:
+        return {
+            "recoveryAction": "resume_unavailable",
+            "reasonCodes": [
+                f"immutable_{dimension}_missing" for dimension in missing[:20]
+            ],
+        }
+    changed = [
+        dimension
+        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
+        if source[dimension] != requested[dimension]
+    ]
+    if changed:
+        return {
+            "recoveryAction": "branch_required",
+            "reasonCodes": [
+                f"immutable_{dimension}_changed" for dimension in changed[:20]
+            ],
+        }
+    # Availability is authority-sensitive and must be supplied by the trusted
+    # Activity after it has re-resolved current profile, lease, host, session,
+    # cursor, and first-message state.  Payload booleans are deliberately
+    # ignored: callers may request recovery, but cannot attest authority.
+    live_valid = bool(
+        live_reattach_authorized is True
+        and live_authority
+        and live_authority.get("provider_lease")
+        and live_authority["provider_lease"].get("active") is True
+        and live_authority.get("host_registered") is True
+        and live_authority.get("session_valid") is True
+        and live_authority.get("first_message_consistent") is True
+        and live_authority.get("current_credential_generation")
+        == live_authority.get("checkpoint_credential_generation")
+    )
+    if live_valid:
+        return {
+            "recoveryAction": "live_reattach",
+            "reasonCodes": ["all_authority_valid"],
+        }
+    if cold_restore_authorized is True:
+        return {
+            "recoveryAction": "cold_restore",
+            "reasonCodes": ["live_authority_unavailable"],
+        }
+    reasons = recovery.get("unavailableReasonCodes")
+    bounded_reasons = (
+        [str(reason)[:120] for reason in reasons[:20]]
+        if isinstance(reasons, list) and reasons
+        else ["checkpoint_authority_unavailable"]
+    )
+    return {"recoveryAction": "resume_unavailable", "reasonCodes": bounded_reasons}
+
+
+def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
+    """Return validated coordinator inputs for an evidence-gated resume."""
+
+    from moonmind.omnigent.checkpoints import (
+        CandidateWorkspaceAuthority,
+        OmnigentCheckpointIdentity,
+    )
+
+    recovery = request.checkpoint_recovery
+    if not isinstance(recovery, dict):
+        return None
+    checkpoint_payload = recovery.get("omnigentCheckpoint")
+    if checkpoint_payload is None:
+        return None
+    checkpoint = OmnigentCheckpointIdentity.model_validate(checkpoint_payload)
+    candidate_workspace = CandidateWorkspaceAuthority(
+        loopId=f"{checkpoint.workflow_id}:{checkpoint.logical_step_id}",
+        attemptOrdinal=checkpoint.attempt_ordinal,
+        headRef=checkpoint.head_ref,
+        headDigest=checkpoint.head_digest,
+        checkpointRef=checkpoint.workspace_checkpoint_ref,
+        checkpointDigest=checkpoint.workspace_checkpoint_digest,
+    )
+    return checkpoint, candidate_workspace
+
+
+def _checkpoint_branch_from_request(request: AgentExecutionRequest):
+    """Return branch inputs only for an explicit, immutable-input-changing turn.
+
+    Recovery and branch execution intentionally share checkpoint validation, but
+    they do not share lease/session identity.  The explicit action keeps a normal
+    resume from accidentally creating a new branch and gives the production
+    Activity a typed call site for ``branch_from_checkpoint``.
+    """
+
+    recovery = request.checkpoint_recovery
+    if not isinstance(recovery, dict):
+        return None
+    if "immutableSource" in recovery or "immutableRequested" in recovery:
+        decision = _checkpoint_recovery_decision(recovery)
+        recovery["recoveryDecision"] = decision
+        recovery["recoveryAction"] = decision["recoveryAction"]
+    if recovery.get("recoveryAction") != "branch_required":
+        return None
+    parsed = _checkpoint_recovery_from_request(request)
+    if parsed is None:
+        raise ValueError("checkpoint branch requires validated checkpoint evidence")
+    checkpoint, candidate_workspace = parsed
+    if request.idempotency_key == checkpoint.idempotency_key:
+        raise ValueError("checkpoint branch requires a new idempotency key")
+    return checkpoint, candidate_workspace
+
+
+async def _resolve_live_recovery_authority(
+    *, checkpoint: Any, session_factory: Any, host_repository: Any, run_store: Any
+) -> dict[str, Any]:
+    """Resolve every mutable authority used by the live-reattach gate.
+
+    Missing, expired, ambiguous, or mismatched state is represented as false
+    evidence so ``recovery_mode`` fails closed to cold restore.  Credential
+    generation is always loaded from the current Provider Profile and is never
+    copied from checkpoint evidence.
+    """
+
+    from sqlalchemy import func, select
+
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        OmnigentBridgeSessionEvent,
+        ProviderProfileSlotLease,
+    )
+
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, checkpoint.provider_profile_id
+        )
+        current_generation = int(profile.credential_generation) if profile else 0
+        provider_row = None
+        if checkpoint.provider_lease_ref:
+            provider_rows = list(
+                (
+                    await session.execute(
+                        select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.lease_id
+                            == checkpoint.provider_lease_ref,
+                            ProviderProfileSlotLease.profile_id
+                            == checkpoint.provider_profile_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # A duplicated lease identity is ambiguous authority even if both
+            # rows otherwise look current.  Fail closed instead of allowing a
+            # live session to keep consuming the OAuth profile.
+            provider_row = provider_rows[0] if len(provider_rows) == 1 else None
+        latest_sequence = int(
+            (
+                await session.execute(
+                    select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                        OmnigentBridgeSessionEvent.bridge_session_id
+                        == checkpoint.bridge_session_id
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+
+    provider_lease = None
+    if provider_row is not None:
+        expires_at = provider_row.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        provider_lease = {
+            "leaseId": provider_row.lease_id,
+            "active": bool(
+                expires_at
+                and expires_at > now
+                and provider_row.owner_id
+                and provider_row.idempotency_key == checkpoint.idempotency_key
+            ),
+        }
+
+    host = (
+        await host_repository.get_host_lease(checkpoint.host_lease_ref)
+        if checkpoint.host_lease_ref
+        else None
+    )
+    host_lease = (
+        host.model_dump(by_alias=True, mode="json", exclude_none=True)
+        if host is not None
+        else None
+    )
+    bridge = await run_store.get_bridge_session(checkpoint.bridge_session_id)
+    host_expires_at = host.expires_at if host is not None else None
+    if host_expires_at is not None and host_expires_at.tzinfo is None:
+        host_expires_at = host_expires_at.replace(tzinfo=UTC)
+    host_registered = bool(
+        host
+        and host.omnigent_host_id == checkpoint.omnigent_host_id
+        and host.omnigent_session_id == checkpoint.omnigent_session_id
+        and host.bridge_session_id == checkpoint.bridge_session_id
+        and host.status in {"ready", "assigned"}
+        and host_expires_at
+        and host_expires_at > now
+    )
+    session_valid = bool(
+        bridge
+        and bridge.omnigent_host_id == checkpoint.omnigent_host_id
+        and bridge.omnigent_session_id == checkpoint.omnigent_session_id
+        and bridge.status == "active"
+        and (
+            checkpoint.last_bridge_event_cursor is None
+            or (
+                checkpoint.last_bridge_event_cursor.isdecimal()
+                and latest_sequence >= int(checkpoint.last_bridge_event_cursor)
+            )
+        )
+    )
+    first_message_consistent = bool(
+        bridge
+        and checkpoint.first_message_digest
+        and bridge.first_message_digest == checkpoint.first_message_digest
+        and checkpoint.first_message_id
+        in {bridge.first_message_item_id, bridge.first_message_pending_id}
+        and bridge.first_message_state in {"posted", "terminal"}
+    )
+    return {
+        "provider_lease": provider_lease,
+        "host_lease": host_lease,
+        "host_registered": host_registered,
+        "session_valid": session_valid,
+        "first_message_consistent": first_message_consistent,
+        "current_credential_generation": current_generation,
+        "checkpoint_credential_generation": checkpoint.credential_generation,
+    }
 
 
 @activity.defn(name="integration.omnigent.execute")
@@ -120,10 +393,11 @@ async def omnigent_execute_activity(
         )
 
         lore_repository_adapter = build_lore_repository_adapter_from_environment()
+        host_repository = OmnigentOAuthHostRepository(async_session_maker)
         coordinator = OmnigentProfileBoundExecutionCoordinator(
             session_factory=async_session_maker,
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            host_repository=OmnigentOAuthHostRepository(async_session_maker),
+            host_repository=host_repository,
             host_runtime=OmnigentOAuthHostRuntime(
                 client=omnigent_client,
                 lore_repository_adapter=lore_repository_adapter,
@@ -138,6 +412,72 @@ async def omnigent_execute_activity(
                 head_loader=ArtifactRemediationHeadLoader(artifact_service),
             ),
         )
+        recovery_inputs = _checkpoint_recovery_from_request(request)
+        branch_inputs = _checkpoint_branch_from_request(request)
+        recovery_payload = request.checkpoint_recovery
+        if branch_inputs is not None:
+            checkpoint, candidate_workspace = branch_inputs
+            authority = await _resolve_live_recovery_authority(
+                checkpoint=checkpoint,
+                session_factory=async_session_maker,
+                host_repository=host_repository,
+                run_store=run_store,
+            )
+            return await coordinator.branch_from_checkpoint(
+                request=request,
+                checkpoint=checkpoint,
+                current_credential_generation=authority[
+                    "current_credential_generation"
+                ],
+                candidate_workspace=candidate_workspace,
+            )
+        if recovery_inputs is not None:
+            checkpoint, candidate_workspace = recovery_inputs
+            authority = await _resolve_live_recovery_authority(
+                checkpoint=checkpoint,
+                session_factory=async_session_maker,
+                host_repository=host_repository,
+                run_store=run_store,
+            )
+            if not isinstance(recovery_payload, dict):
+                raise ValueError("checkpoint recovery payload is invalid")
+            decision = _checkpoint_recovery_decision(
+                recovery_payload,
+                live_authority=authority,
+                live_reattach_authorized=bool(
+                    checkpoint.validation.valid
+                    and checkpoint.validation.live_reattach_available
+                ),
+                cold_restore_authorized=bool(
+                    checkpoint.validation.valid
+                    and checkpoint.validation.workspace_cold_restore_available
+                    and authority["current_credential_generation"]
+                    == checkpoint.credential_generation
+                    and request.execution_profile_ref
+                    == checkpoint.provider_profile_id
+                ),
+            )
+            recovery_payload["recoveryDecision"] = decision
+            recovery_payload["recoveryAction"] = decision["recoveryAction"]
+            if decision["recoveryAction"] == "resume_unavailable":
+                reasons = decision.get("reasonCodes") or [
+                    "checkpoint_authority_unavailable"
+                ]
+                raise ValueError(
+                    "checkpoint resume unavailable: "
+                    + ",".join(map(str, reasons[:20]))
+                )
+            if decision["recoveryAction"] == "cold_restore":
+                raise ValueError(
+                    "checkpoint cold restore requires an owned workspace restoration "
+                    "boundary before Omnigent launch"
+                )
+            return await coordinator.recover_from_checkpoint(
+                request=request,
+                checkpoint=checkpoint,
+                candidate_workspace=candidate_workspace,
+                **authority,
+            )
         return await coordinator.execute(request)
 
 
@@ -204,6 +544,8 @@ async def omnigent_oauth_host_janitor_activity(
 
 
 __all__ = [
+    "_checkpoint_recovery_from_request",
+    "_resolve_live_recovery_authority",
     "omnigent_execute_activity",
     "omnigent_profile_bound_execute_activity",
     "omnigent_oauth_host_janitor_activity",

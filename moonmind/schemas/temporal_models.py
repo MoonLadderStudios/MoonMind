@@ -1543,6 +1543,9 @@ class StepCheckpointCreateInput(BaseModel):
     omnigent: OmnigentCheckpointIdentity | None = Field(
         None, alias="omnigentCheckpoint"
     )
+    omnigent_capture: dict[str, Any] | None = Field(
+        None, alias="omnigentCheckpointCapture"
+    )
     created_at: datetime = Field(..., alias="createdAt")
     plan_ref: str | None = Field(None, alias="planRef")
     plan_digest: str | None = Field(None, alias="planDigest")
@@ -1558,6 +1561,17 @@ class StepCheckpointCreateInput(BaseModel):
             return None
         candidate = str(value).strip()
         return candidate or None
+
+    @field_validator("omnigent_capture", mode="before")
+    @classmethod
+    def _validate_omnigent_capture(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        payload = validate_compact_temporal_mapping(
+            value, field_name="omnigentCheckpointCapture"
+        )
+        _reject_raw_secret_text(payload, "omnigentCheckpointCapture")
+        return payload
 
     @field_validator("prepared_input_refs", "diagnostic_refs")
     @classmethod

@@ -4697,6 +4697,10 @@ type BranchCreateDraft = {
   publishMode: string;
   gitWorkBranch: string;
   maxBudgetUsd: string;
+  providerProfileRef: string;
+  executionProfileRef: string;
+  model: string;
+  effort: string;
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
@@ -4737,6 +4741,10 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
   publishMode: 'none',
   gitWorkBranch: '',
   maxBudgetUsd: '',
+  providerProfileRef: '',
+  executionProfileRef: '',
+  model: '',
+  effort: '',
 };
 
 function stepCheckpointRef(row: StepLedgerRow): string | null {
@@ -5149,6 +5157,28 @@ function BranchExplorerPanel({
               <option value="fresh_agent_run">Fresh agent run</option>
               <option value="reuse_session_new_epoch">Reuse session new epoch</option>
               <option value="reuse_session_same_epoch">Reuse session same epoch</option>
+            </select>
+          </label>
+          <label>
+            Provider profile
+            <input value={draft.providerProfileRef} disabled={busy} placeholder="Automatic authorized profile" onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Execution profile / launch policy
+            <input value={draft.executionProfileRef} disabled={busy} placeholder="Inherited launch policy" onChange={(event) => setDraft((current) => ({ ...current, executionProfileRef: event.target.value }))} />
+          </label>
+          <label>
+            Model
+            <input value={draft.model} disabled={busy} placeholder="Runtime default" onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} />
+          </label>
+          <label>
+            Effort
+            <select value={draft.effort} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, effort: event.target.value }))}>
+              <option value="">Runtime default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
             </select>
           </label>
           <label>
@@ -9057,6 +9087,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           idempotencyKey: request.idempotencyKey,
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
+          providerProfileRef: request.draft.providerProfileRef.trim() || null,
+          executionProfileRef: request.draft.executionProfileRef.trim() || null,
+          model: request.draft.model.trim() || null,
+          effort: request.draft.effort || null,
         };
         applyBranchRetrievalOverride(body, request.contextRetrieval);
       } else if (request.kind === 'continue') {

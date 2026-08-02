@@ -95,7 +95,9 @@ from moonmind.schemas.temporal_models import (
     WorkspaceCheckpointEvidenceModel,
     WorkspacePolicyApplyInput,
     WorkspacePolicyApplyResult,
+    build_step_execution_id,
 )
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
     ManagedWorkspaceLocator,
@@ -1360,6 +1362,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.unpin": ("artifacts", "artifact_unpin"),
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
     "step_checkpoint.create": ("artifacts", "step_checkpoint_create"),
+    "step_checkpoint.create_v2": ("artifacts", "step_checkpoint_create"),
     "step_checkpoint.validate": ("artifacts", "step_checkpoint_validate"),
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
@@ -3659,6 +3662,11 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
+            head = model.base_commit
+            if (workspace / ".git").exists():
+                head = (
+                    await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+                ).stdout.strip()
             archive_payload, entries = self._build_worktree_archive(workspace)
             workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
@@ -3698,6 +3706,7 @@ class TemporalSandboxActivities:
             return WorkspaceCheckpointEvidenceModel(
                 kind="worktree_archive",
                 baseCommit=model.base_commit,
+                headCommit=head,
                 archiveRef=archive_ref,
                 archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
                 workspaceDigest=workspace_digest,
@@ -15608,6 +15617,10 @@ class TemporalCheckpointActivities:
         return _compact_artifact_ref_text(artifact)
 
     async def _read_bytes(self, artifact_ref: str) -> bytes:
+        if artifact_ref.startswith("artifact://omnigent/"):
+            from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+            return await LocalOmnigentArtifactGateway().read_bytes(artifact_ref)
         if self._artifact_service is not None:
             _artifact, payload = await self._artifact_service.read(
                 artifact_id=artifact_ref,
@@ -15626,6 +15639,20 @@ class TemporalCheckpointActivities:
             if isinstance(request, StepCheckpointCreateInput)
             else StepCheckpointCreateInput.model_validate(request)
         )
+        omnigent_checkpoint = model.omnigent
+        if omnigent_checkpoint is None and model.omnigent_capture is not None:
+            omnigent_checkpoint = await self._materialize_omnigent_checkpoint_identity(
+                model
+            )
+        step_outputs = dict(model.step_outputs)
+        if model.omnigent_capture is not None and omnigent_checkpoint is None:
+            step_outputs["omnigentCheckpointValidation"] = {
+                "valid": False,
+                "reasons": ["capture_incomplete_or_unresolvable"],
+                "liveReattachAvailable": False,
+                "workspaceColdRestoreAvailable": False,
+                "branchCreationAvailable": False,
+            }
         payload = build_step_checkpoint_payload(
             identity=model.identity,
             boundary=model.boundary,
@@ -15635,8 +15662,8 @@ class TemporalCheckpointActivities:
             plan_ref=model.plan_ref,
             plan_digest=model.plan_digest,
             prepared_input_refs=model.prepared_input_refs,
-            step_outputs=model.step_outputs,
-            omnigent_checkpoint=model.omnigent,
+            step_outputs=step_outputs,
+            omnigent_checkpoint=omnigent_checkpoint,
         )
         checkpoint_ref = await self._put_bytes(
             _json_bytes(payload),
@@ -15652,6 +15679,147 @@ class TemporalCheckpointActivities:
             workspace_kind=model.workspace.kind,
             diagnostic_refs=model.diagnostic_refs,
             idempotency_key=model.idempotency_key,
+        )
+
+    async def _materialize_omnigent_checkpoint_identity(
+        self,
+        model: StepCheckpointCreateInput,
+    ) -> OmnigentCheckpointIdentity | None:
+        """Join independently captured session and workspace authority planes.
+
+        Implements the production boundary required by
+        MoonLadderStudios/MoonMind#3509.
+        """
+
+        capture = dict(model.omnigent_capture or {})
+        external_ref = str(capture.get("externalStateRef") or "").strip()
+        workspace_ref = str(
+            model.workspace.archive_ref
+            or model.workspace.patch_ref
+            or model.workspace.workspace_artifact_ref
+            or ""
+        ).strip()
+        workspace_digest = str(
+            model.workspace.archive_digest
+            or model.workspace.workspace_digest
+            or ""
+        ).strip()
+        required = (
+            external_ref,
+            workspace_ref,
+            workspace_digest,
+            capture.get("workspaceLocator"),
+            model.workspace.base_commit,
+            model.workspace.head_commit,
+            capture.get("providerProfileId"),
+            capture.get("credentialRef"),
+            capture.get("credentialGeneration"),
+            capture.get("hostBindingRef"),
+            capture.get("endpointRef"),
+            capture.get("bridgeSessionId"),
+            capture.get("idempotencyKey"),
+            capture.get("executionProfileRef"),
+            capture.get("launchPolicyRef"),
+        )
+        if not all(required):
+            return None
+        try:
+            external_bytes = await self._read_bytes(external_ref)
+            external = json.loads(external_bytes.decode("utf-8"))
+        except (ArtifactStoreError, TemporalArtifactError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(external, Mapping):
+            return None
+        first_message = external.get("firstMessage")
+        first_message = first_message if isinstance(first_message, Mapping) else {}
+        response_ids = first_message.get("responseIdentifiers")
+        response_ids = response_ids if isinstance(response_ids, Mapping) else {}
+        first_digest = str(first_message.get("digest") or "").strip() or None
+        first_id = str(
+            response_ids.get("itemId")
+            or response_ids.get("pendingId")
+            or ""
+        ).strip() or None
+        retry = external.get("retry")
+        retry = retry if isinstance(retry, Mapping) else {}
+        cursor = str(
+            external.get("lastCommittedBridgeEventCursor")
+            or retry.get("lastCommittedBridgeEventCursor")
+            or ""
+        ).strip() or None
+        capture_manifest_ref = str(capture.get("captureManifestRef") or "").strip() or None
+        capture_manifest_digest = None
+        if capture_manifest_ref:
+            try:
+                capture_manifest_bytes = await self._read_bytes(capture_manifest_ref)
+            except (ArtifactStoreError, TemporalArtifactError):
+                return None
+            capture_manifest_digest = "sha256:" + hashlib.sha256(
+                capture_manifest_bytes
+            ).hexdigest()
+        cold_available = True
+        live_available = bool(
+            capture.get("providerLeaseRef")
+            and capture.get("hostLeaseRef")
+            and capture.get("omnigentHostId")
+            and external.get("omnigentSessionId")
+            and first_id
+            and first_digest
+            and cursor
+        )
+        return OmnigentCheckpointIdentity(
+            workflowId=model.identity.workflow_id,
+            runId=model.identity.run_id,
+            logicalStepId=model.identity.logical_step_id,
+            stepExecutionId=build_step_execution_id(model.identity),
+            attemptOrdinal=model.identity.execution_ordinal,
+            boundary=model.boundary,
+            providerProfileId=capture["providerProfileId"],
+            credentialRef=capture["credentialRef"],
+            credentialGeneration=capture["credentialGeneration"],
+            providerLeaseRef=capture.get("providerLeaseRef"),
+            hostBindingRef=capture["hostBindingRef"],
+            hostLeaseRef=capture.get("hostLeaseRef"),
+            endpointRef=capture["endpointRef"],
+            omnigentHostId=capture.get("omnigentHostId"),
+            omnigentSessionId=external.get("omnigentSessionId"),
+            bridgeSessionId=capture["bridgeSessionId"],
+            externalStateRef=external_ref,
+            externalStateDigest="sha256:" + hashlib.sha256(external_bytes).hexdigest(),
+            idempotencyKey=capture["idempotencyKey"],
+            terminalRef=capture.get("terminalRef"),
+            diagnosticsRef=capture.get("diagnosticsRef"),
+            effectiveLaunchRef=capture.get("effectiveLaunchRef"),
+            executionProfileRef=capture["executionProfileRef"],
+            launchPolicyRef=capture["launchPolicyRef"],
+            lastBridgeEventCursor=cursor,
+            firstMessageId=first_id,
+            firstMessageDigest=first_digest,
+            captureManifestRef=capture_manifest_ref,
+            captureManifestDigest=capture_manifest_digest,
+            patchCapable=bool(model.workspace.patch_ref),
+            workspaceLocator=capture["workspaceLocator"],
+            baselineCommit=model.workspace.base_commit,
+            headCommit=model.workspace.head_commit,
+            headRef=workspace_ref,
+            headDigest=workspace_digest,
+            diffRef=model.workspace.patch_ref,
+            diffDigest=(workspace_digest if model.workspace.patch_ref else None),
+            workspaceCheckpointRef=workspace_ref,
+            workspaceCheckpointDigest=workspace_digest,
+            instructionRefs=capture.get("instructionRefs") or [],
+            sourceBranch=capture.get("sourceBranch") or model.workspace.branch or "detached",
+            outputBranch=capture.get("outputBranch"),
+            publicationState=capture.get("publicationState") or "none",
+            capturedAt=model.created_at,
+            producerVersion="moonmind-step-checkpoint-v2",
+            validation={
+                "valid": cold_available,
+                "liveReattachAvailable": live_available,
+                "workspaceColdRestoreAvailable": cold_available,
+                "branchCreationAvailable": cold_available,
+                "reasons": ([] if cold_available else ["capture_incomplete"]),
+            },
         )
 
     async def step_checkpoint_validate(

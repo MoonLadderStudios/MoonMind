@@ -46,12 +46,14 @@ from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
-    _compile_persisted_effective_launch,
     _bind_candidate_workspace,
+    _bind_cold_restore_workspace_spec,
+    _compile_persisted_effective_launch,
     _failure_evidence,
 )
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
+from moonmind.omnigent.workspace_intent import compile_workspace_intent
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreWorkspaceError,
@@ -1605,6 +1607,182 @@ def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> Non
             checkpointRef="artifact://workspace-checkpoint/2",
             checkpointDigest="sha256:" + "b" * 64,
         )
+
+
+@pytest.mark.asyncio
+async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_spec() -> None:
+    checkpoint = _checkpoint()
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:loop-1",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator.execute = AsyncMock(return_value=AgentRunResult(summary="restored"))  # type: ignore[method-assign]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="restore-attempt",
+        inputRefs=["artifact://request-input"],
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "new-clean-workspace",
+                "relativePath": "repo",
+            }
+        },
+    )
+
+    await coordinator.recover_from_checkpoint(
+        request=request,
+        checkpoint=checkpoint,
+        provider_lease=None,
+        host_lease=None,
+        host_registered=False,
+        session_valid=False,
+        first_message_consistent=False,
+        current_credential_generation=3,
+        candidate_workspace=candidate,
+    )
+
+    restored_request = coordinator.execute.await_args.args[0]
+    assert restored_request.workspace_spec == {
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": "new-clean-workspace",
+            "relativePath": "repo",
+        },
+        "checkoutCommit": "abc123",
+        "restoreInputRefs": [
+            "artifact://workspace-checkpoint",
+            "artifact://head",
+            "artifact://workspace-checkpoint/2",
+            "artifact://candidate-head/2",
+        ],
+        "workspaceCheckpointRestoreRef": "artifact://workspace-checkpoint",
+    }
+    assert restored_request.input_refs == [
+        "artifact://request-input",
+        "artifact://instructions",
+        "artifact://context",
+        "artifact://external-state",
+        "artifact://candidate-head/2",
+        "artifact://workspace-checkpoint/2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cold_restore_intent_materializes_clean_pinned_workspace(tmp_path) -> None:
+    """Prove the recovery request reaches the real clean-workspace materializer."""
+
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    baseline = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    checkpoint = _checkpoint().model_copy(update={"baseline_commit": baseline})
+    validation = validate_restore_material(
+        checkpoint,
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        step_execution_id="step-execution-1",
+        attempt_ordinal=1,
+        boundary="after_execution",
+        provider_profile_id="codex",
+        credential_generation=3,
+        repository_baseline=baseline,
+        repository_head="def456",
+        artifact_reader=lambda _ref: b"payload",
+    )
+    # Digest mismatches are irrelevant to this boundary test; use the already
+    # validated capability shape while preserving the production materializer.
+    validation = validation.model_copy(
+        update={
+            "valid": True,
+            "workspace_cold_restore_available": True,
+            "branch_creation_available": True,
+            "reasons": [],
+        }
+    )
+    material = materialize_cold_restore_inputs(checkpoint, validation)
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:loop-clean",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://candidate-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    workspace_id = _sandbox_id()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="cold-materialization",
+        inputRefs=list(material.immutable_input_refs),
+        workspaceSpec={
+            "workspaceLocator": {"kind": "sandbox", "workspaceId": workspace_id},
+            "repository": str(source),
+            **_bind_cold_restore_workspace_spec(
+                {}, restore_material=material, candidate_workspace=candidate
+            ),
+        },
+    )
+    intent = compile_workspace_intent(
+        request,
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="step-1",
+        step_execution_id="step-1",
+    )
+    payloads = {
+        ref.removeprefix("artifact://"): f"restored:{ref}".encode()
+        for ref in intent.restore_input_refs
+    }
+    runtime = _runtime_for(tmp_path)
+    resolved = await runtime._prepare_workspace(
+        workspace_locator=intent.workspace_locator,
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=intent.repository,
+        checkout_commit=intent.checkout_commit,
+        restore_input_refs=tuple(intent.restore_input_refs),
+        artifact_gateway=_FakeArtifactService(payloads),
+    )
+
+    assert subprocess.run(
+        ["git", "-C", str(resolved), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == baseline
+    assert intent.input_refs == ("artifact://instructions", "artifact://context")
+    restored = sorted(
+        path.read_bytes() for path in (resolved / ".moonmind" / "restore").iterdir()
+    )
+    assert restored == sorted(payloads.values())
+    assert runtime._last_workspace_evidence["materialization"]["commit"] == baseline
+    assert len(
+        runtime._last_workspace_evidence["materialization"]["restoreInputs"]
+    ) == len(intent.restore_input_refs)
 
 
 def test_checkpoint_rejects_raw_credentials_and_accepts_safe_identity_refs() -> None:
