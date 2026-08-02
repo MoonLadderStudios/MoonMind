@@ -822,6 +822,13 @@ class ManagedRuntimeLauncher:
                 workspace_spec.get("workspaceLocator")
                 or {"kind": "sandbox", "workspaceId": workspace_key, "relativePath": "repo"}
             )
+            omnigent_workspace_key = hashlib.sha256(
+                f"{request.correlation_id}:{request.idempotency_key}".encode("utf-8")
+            ).hexdigest()[:24]
+            if locator.workspace_id not in {workspace_key, omnigent_workspace_key}:
+                raise RuntimeError(
+                    "Lore sandbox locator does not belong to the current run"
+                )
             # Resolve the same sandbox-authority path used by the Omnigent owner.
             # The managed lane must not create a parallel checkout under its
             # managed-run store when an authored locator already names authority.
@@ -841,8 +848,10 @@ class ManagedRuntimeLauncher:
                     "Lore workspaceSpec requires repository, branch, and revisionSignature"
                 )
             if authority_path.exists():
-                prepared = self._lore_repository_adapter.load_prepared_workspace(
-                    locator=locator, authority_path=authority_path
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.load_prepared_workspace,
+                    locator=locator,
+                    authority_path=authority_path,
                 )
                 if (prepared.repository, prepared.branch, prepared.revision_signature) != (
                     repository, branch, revision
@@ -851,7 +860,8 @@ class ManagedRuntimeLauncher:
                         "existing Lore workspace does not match the authored target"
                     )
             else:
-                prepared = self._lore_repository_adapter.prepare_workspace(
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.prepare_workspace,
                     repository=repository,
                     branch=branch,
                     revision_signature=revision,

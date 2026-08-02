@@ -8,10 +8,11 @@ Implements the remaining workspace-boundary scope of Jira MM-1220.
 
 from __future__ import annotations
 
-import hashlib
 import base64
+import hashlib
 import json
 import os
+import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -38,11 +39,24 @@ class LoreClient(Protocol):
     """Machine-readable operations supplied by the pinned Lore tool bundle."""
 
     def materialize(
-        self, *, repository: str, revision: str, destination: Path
-    ) -> Mapping[str, object]: ...
-    def scan_external_changes(self, *, workspace: Path) -> Mapping[str, object]: ...
-    def status(self, *, workspace: Path) -> Mapping[str, object]: ...
-    def stage_paths(self, *, workspace: Path, paths: Sequence[str]) -> None: ...
+        self,
+        *,
+        repository: str,
+        revision: str,
+        destination: Path,
+        connection_ref: str,
+        client_evidence: Mapping[str, str],
+    ) -> Mapping[str, object]:
+        ...
+
+    def scan_external_changes(self, *, workspace: Path) -> Mapping[str, object]:
+        ...
+
+    def status(self, *, workspace: Path) -> Mapping[str, object]:
+        ...
+
+    def stage_paths(self, *, workspace: Path, paths: Sequence[str]) -> None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -331,19 +345,33 @@ class LoreRepositoryProviderAdapter:
             raise LoreWorkspaceError(
                 LORE_WORKSPACE_INVALID, "workspace must be empty before preparation"
             )
-        root.mkdir(parents=True, exist_ok=True)
-        result = self._client.materialize(
-            repository=repository, revision=revision_signature, destination=root
+        root.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(
+            tempfile.mkdtemp(prefix=f".{root.name}.materializing-", dir=root.parent)
         )
-        if (
-            result.get("revisionSignature") != revision_signature
-            or result.get("completeTree") is not True
-        ):
-            raise LoreWorkspaceError(
-                LORE_WORKSPACE_INVALID,
-                "client did not prove the exact complete revision",
+        try:
+            result = self._client.materialize(
+                repository=repository,
+                revision=revision_signature,
+                destination=temporary,
+                connection_ref=connection_ref,
+                client_evidence=client_evidence,
             )
-        self._validate_tree(root)
+            if (
+                result.get("revisionSignature") != revision_signature
+                or result.get("completeTree") is not True
+            ):
+                raise LoreWorkspaceError(
+                    LORE_WORKSPACE_INVALID,
+                    "client did not prove the exact complete revision",
+                )
+            self._validate_tree(temporary)
+            if root.exists():
+                root.rmdir()
+            os.replace(temporary, root)
+        except Exception:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
         metadata = {
             "schemaVersion": "moonmind.lore-workspace.v1",
             "repository": repository,

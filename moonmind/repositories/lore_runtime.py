@@ -67,13 +67,27 @@ class PinnedLoreCliClient:
             )
         return result
 
-    def materialize(self, *, repository: str, revision: str, destination: Path):
+    def materialize(
+        self,
+        *,
+        repository: str,
+        revision: str,
+        destination: Path,
+        connection_ref: str,
+        client_evidence: Mapping[str, str],
+    ):
+        if not connection_ref:
+            raise LoreWorkspaceError(
+                LORE_WORKSPACE_INVALID, "Lore connectionRef is required"
+            )
         return self._invoke(
             (
                 "workspace",
                 "materialize",
                 "--repository",
                 repository,
+                "--connection-ref",
+                connection_ref,
                 "--revision",
                 revision,
                 "--destination",

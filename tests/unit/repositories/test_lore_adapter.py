@@ -1,4 +1,3 @@
-from pathlib import Path
 import hashlib
 
 import pytest
@@ -30,7 +29,16 @@ class FakeLoreClient:
         self.staged = []
         self.scan_ok = True
 
-    def materialize(self, *, repository, revision, destination):
+    def materialize(
+        self,
+        *,
+        repository,
+        revision,
+        destination,
+        connection_ref,
+        client_evidence,
+    ):
+        self.calls.append(("connection", connection_ref, dict(client_evidence)))
         self.calls.append(("materialize", revision))
         (destination / "Content").mkdir()
         (destination / "Content/root.uasset").write_bytes(b"root")
@@ -70,7 +78,7 @@ def test_prepares_complete_revision_once_and_binds_same_authority(tmp_path):
     client, adapter, _, workspace = prepared(tmp_path)
     assert (workspace.authority_path / "Content/root.uasset").is_file()
     assert (workspace.authority_path / "Plugins/P/Content/plugin.uasset").is_file()
-    assert [call[0] for call in client.calls] == ["materialize"]
+    assert [call[0] for call in client.calls] == ["connection", "materialize"]
     managed = adapter.bind_workspace(workspace, runtime_lane="managed_runtime")
     omnigent = adapter.bind_workspace(workspace, runtime_lane="omnigent")
     assert (
@@ -79,6 +87,44 @@ def test_prepares_complete_revision_once_and_binds_same_authority(tmp_path):
         == workspace.authority_locator
     )
     assert managed.mount_mode == "direct_path" and omnigent.mount_mode == "bind_mount"
+
+
+def test_failed_materialization_leaves_authority_retryable(tmp_path):
+    client = FakeLoreClient()
+    adapter = LoreRepositoryProviderAdapter(client)
+    locator = SandboxWorkspaceLocator(workspaceId="run-1", relativePath="repo")
+    original = client.materialize
+
+    def fail_after_writing(**kwargs):
+        original(**kwargs)
+        raise RuntimeError("transient failure")
+
+    client.materialize = fail_after_writing
+    authority = tmp_path / "repo"
+    with pytest.raises(RuntimeError, match="transient failure"):
+        adapter.prepare_workspace(
+            repository="Tactics",
+            branch="main",
+            revision_signature="rev-1",
+            locator=locator,
+            authority_path=authority,
+            connection_ref="repository-connection:lore",
+            client_evidence={},
+        )
+    assert not authority.exists()
+    assert not list(tmp_path.glob(".repo.materializing-*"))
+
+    client.materialize = original
+    adapter.prepare_workspace(
+        repository="Tactics",
+        branch="main",
+        revision_signature="rev-1",
+        locator=locator,
+        authority_path=authority,
+        connection_ref="repository-connection:lore",
+        client_evidence={},
+    )
+    assert authority.is_dir()
 
 
 def test_rejects_unsupported_lane_before_launch(tmp_path):
@@ -287,6 +333,35 @@ async def test_managed_launcher_delegates_lore_preparation_and_reuses_revision(
 
 
 @pytest.mark.asyncio
+async def test_managed_launcher_rejects_foreign_lore_locator(tmp_path):
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        lore_repository_adapter=LoreRepositoryProviderAdapter(FakeLoreClient()),
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="agent",
+        correlationId="corr",
+        idempotencyKey="key",
+        workspaceSpec={
+            "provider": "lore",
+            "repository": "Tactics",
+            "branch": "main",
+            "revisionSignature": "rev-1",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "another-run",
+                "relativePath": "repo",
+            },
+        },
+    )
+    with pytest.raises(RuntimeError, match="does not belong to the current run"):
+        await launcher._prepare_workspace_path(
+            run_id="run-1", request=request, workspace_path=None
+        )
+
+
+@pytest.mark.asyncio
 async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tmp_path):
     workflow_id, step_id = "workflow", "step"
     workspace_id = hashlib.sha256(
@@ -306,8 +381,8 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
         request=AgentExecutionRequest(
             agentKind="managed",
             agentId="agent",
-            correlationId="corr",
-            idempotencyKey="key",
+            correlationId=workflow_id,
+            idempotencyKey=step_id,
             workspaceSpec={
                 "provider": "lore",
                 "repository": "Tactics",
@@ -338,6 +413,37 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
     )
 
 
+@pytest.mark.asyncio
+async def test_omnigent_launcher_materializes_fresh_lore_sandbox(tmp_path):
+    workflow_id, step_id = "workflow", "fresh-step"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    locator = SandboxWorkspaceLocator(workspaceId=workspace_id, relativePath="repo")
+    client = FakeLoreClient()
+    runtime = OmnigentOAuthHostRuntime(
+        client=object(),
+        workspace_root=tmp_path,
+        lore_repository_adapter=LoreRepositoryProviderAdapter(client),
+    )
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator=locator.model_dump(by_alias=True),
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+        repository_source="Tactics",
+        repository_provider="lore",
+        repository_connection_ref="repository-connection:lore",
+        repository_client_evidence={"clientVersion": "1"},
+        starting_branch="main",
+        checkout_commit="rev-1",
+        omnigent_isolation_verified=True,
+    )
+
+    assert resolved == tmp_path / workspace_id / "repo"
+    assert [call[0] for call in client.calls].count("materialize") == 1
+
+
 class FakeArtifactService:
     def __init__(self):
         self.payloads = {}
@@ -352,7 +458,9 @@ class FakeArtifactService:
         self.content_types[artifact.artifact_id] = content_type
         return artifact, object()
 
-    async def write_complete(self, *, artifact_id, payload, content_type, **kwargs):
+    async def write_payload_complete(
+        self, *, artifact_id, payload, content_type, **kwargs
+    ):
         self.payloads[artifact_id] = payload
         return type("Artifact", (), {"artifact_id": artifact_id})()
 

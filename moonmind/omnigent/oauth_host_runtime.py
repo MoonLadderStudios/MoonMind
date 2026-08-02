@@ -219,6 +219,8 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any] | None = None,
         repository_source: str = "",
         repository_provider: str = "",
+        repository_connection_ref: str = "",
+        repository_client_evidence: Mapping[str, str] | None = None,
         starting_branch: str | None = None,
         target_branch: str | None = None,
         checkout_commit: str | None = None,
@@ -252,6 +254,8 @@ class OmnigentOAuthHostRuntime:
             current_step_execution_id=current_step_execution_id,
             repository_source=repository_source,
             repository_provider=repository_provider,
+            repository_connection_ref=repository_connection_ref,
+            repository_client_evidence=repository_client_evidence,
             starting_branch=starting_branch,
             target_branch=target_branch,
             checkout_commit=checkout_commit,
@@ -933,6 +937,8 @@ class OmnigentOAuthHostRuntime:
         current_step_execution_id: str,
         repository_source: str = "",
         repository_provider: str = "",
+        repository_connection_ref: str = "",
+        repository_client_evidence: Mapping[str, str] | None = None,
         starting_branch: str | None = None,
         target_branch: str | None = None,
         checkout_commit: str | None = None,
@@ -993,9 +999,40 @@ class OmnigentOAuthHostRuntime:
                     "Lore repository work requires the configured provider adapter",
                     code=WORKSPACE_LOCATOR_UNSUPPORTED,
                 )
-            prepared = self._lore_repository_adapter.load_prepared_workspace(
-                locator=locator, authority_path=workspace
-            )
+            repository = str(repository_source or "").strip()
+            branch = str(starting_branch or target_branch or "").strip()
+            revision = str(checkout_commit or "").strip()
+            if workspace.exists():
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.load_prepared_workspace,
+                    locator=locator,
+                    authority_path=workspace,
+                )
+                if repository and (
+                    prepared.repository,
+                    prepared.branch,
+                    prepared.revision_signature,
+                ) != (repository, branch, revision):
+                    raise OmnigentOAuthHostError(
+                        "existing Lore workspace does not match the authored target",
+                        code=WORKSPACE_AUTHORITY_MISMATCH,
+                    )
+            else:
+                if not repository or not branch or not revision:
+                    raise OmnigentOAuthHostError(
+                        "fresh Lore workspaces require repository, branch, and revision",
+                        code=WORKSPACE_LOCATOR_UNSUPPORTED,
+                    )
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.prepare_workspace,
+                    repository=repository,
+                    branch=branch,
+                    revision_signature=revision,
+                    locator=locator,
+                    authority_path=workspace,
+                    connection_ref=repository_connection_ref,
+                    client_evidence=dict(repository_client_evidence or {}),
+                )
             binding = self._lore_repository_adapter.bind_workspace(
                 prepared,
                 runtime_lane="omnigent",
