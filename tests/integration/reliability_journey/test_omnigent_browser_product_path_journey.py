@@ -30,6 +30,14 @@ from tests.unit.omnigent.test_oauth_profile_lifecycle import (
 )
 from tests.unit.omnigent.test_policy_authority import policy_document
 
+# The rollout gate deliberately composes the production-owner fixtures rather
+# than replacing bridge and embedded-host behavior with journey-local fakes.
+pytest_plugins = (
+    "tests.integration.omnigent.test_bridge_conformance",
+    "tests.integration.omnigent.test_embedded_recovery",
+    "tests.integration.omnigent.test_execute_fake_server",
+)
+
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -270,56 +278,55 @@ async def test_product_path_failures_never_fallback_and_preserve_release_order(
         assert actions.index("host_stopped") < actions.index("provider_released")
 
 
-def test_required_product_failure_catalog_is_complete_and_no_fallback() -> None:
-    """Pin the issue-level failure vocabulary to the executable owner matrix.
+async def test_controlling_bridge_failure_and_recovery_owners(
+    bridge_harness, monkeypatch, tmp_path
+) -> None:
+    """Execute the production owners previously represented by catalog strings."""
 
-    Browser-only failures are controlled by the Workflow Create suite and
-    transport-only failures by bridge/execute conformance.  This assertion
-    prevents the rollout gate from silently dropping either class when those
-    suites are selected together by CI.
-    """
+    from tests.integration.omnigent import test_bridge_conformance as bridge
 
-    coordinator_failures = {
-        "no_eligible_profile",
-        "disconnected_profile",
-        "profile_lease_busy",
-        "bounded_lease_timeout",
-        "docker_unavailable",
-        "host_image_pull_failure",
-        "host_image_start_failure",
-        "network_policy_failure",
-        "egress_policy_failure",
-        "mount_policy_failure",
-        "invalid_oauth",
-        "registration_timeout",
-        "codex_native_mismatch",
-        "bridge_server_auth_failure",
-        "ambiguous_first_message_reconciliation",
-        "cleanup_failure",
-        "profile_release_failure",
-    }
-    production_boundary_failures = {
-        "stale_runtime_catalog",
-        "disabled_execution_profile",
-        "incompatible_policy",
-        "invalid_workspace",
-        "escaped_workspace",
-        "worker_unavailable",
-        "bridge_session_authorization_failure",
-        "active_session_disconnect",
-        "resource_route_unavailable",
-        "operator_cancelled",
-        "artifact_persistence_failure",
-    }
-    required = coordinator_failures | production_boundary_failures
+    await bridge.test_scenario_03_stream_disconnect_and_snapshot_reconciliation(
+        bridge_harness
+    )
+    await bridge.test_scenario_07_optional_diff_unavailable(bridge_harness)
+    await bridge.test_scenario_09_cancellation_via_interrupt_and_stop_session(
+        bridge_harness
+    )
+    await bridge.test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redaction(
+        bridge_harness, monkeypatch, tmp_path
+    )
 
-    # These names are also consumed by the protected product smoke. Keeping
-    # one exact set makes omission fail closed; none names a fallback runtime,
-    # alternate profile, host mode, or broader policy.
-    assert len(required) == 28
-    assert not required & {
-        "direct_codex",
-        "alternate_profile",
-        "static_compose_fallback",
-        "broader_policy",
-    }
+
+async def test_controlling_restart_owner(store, session_factory) -> None:
+    """Execute the durable disconnect/restart authorization owner."""
+
+    from tests.integration.omnigent import test_embedded_recovery as recovery
+
+    await recovery.test_disconnect_restart_reconnect_and_retry_matrix(
+        store, session_factory
+    )
+
+
+async def test_controlling_first_message_reconciliation_owner(
+    store, session_factory
+) -> None:
+    """Execute response-before-persist reconciliation at the durable owner."""
+
+    from tests.integration.omnigent import test_embedded_recovery as recovery
+
+    await recovery.test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
+        store, session_factory
+    )
+
+
+@pytest.mark.parametrize("fake_omnigent_server", [True], indirect=True)
+async def test_controlling_required_artifact_failure_owner(
+    fake_omnigent_server, monkeypatch, tmp_path
+) -> None:
+    """Execute required-artifact failure through the production executor."""
+
+    from tests.integration.omnigent import test_execute_fake_server as execute
+
+    await execute.test_omnigent_execute_required_artifact_persistence_failure_is_terminal(
+        fake_omnigent_server, monkeypatch, tmp_path
+    )
