@@ -17,13 +17,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
-from moonmind.omnigent.authority_chain import build_omnigent_authority_chain_evidence
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.execution_profiles import (
+    POLICIES,
+    PROFILES,
+    compile_effective_launch,
+)
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
+from moonmind.schemas.workspace_locator_models import (
+    SandboxWorkspaceLocator,
+    WorkspaceLocatorResolutionError,
+)
 from moonmind.workflows.executions.execution_contract import build_canonical_workflow_view
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    resolve_sandbox_workspace_locator,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.omnigent.test_oauth_profile_lifecycle import (
     _run_coordinator_failure_case,
@@ -141,50 +153,24 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     )
     assert same_row.id == row.id  # retry/worker restart keeps one session
 
-    evidence = build_omnigent_authority_chain_evidence(
-        effective_launch={
-            "hostMode": "on_demand_docker",
-            "executionProfileRef": "omnigent-codex-default",
-            "launchPolicyRef": "on-demand-v1",
-            "providerProfileId": "oauth-1",
-        },
-        workspace_resolution={
-            "locatorKind": "sandbox",
-            "workspaceId": "browser-product-path",
-            "relativePath": "repo",
-            "identityVerified": True,
-        },
-        repository=str(authored["repository"]),
-        source_branch="main",
-        output_branch="agent/implement",
-        publish_mode="none",
-        profile_authorization={
-            "providerProfileId": "oauth-1",
-            "providerLeaseRef": "provider-lease-1",
-            "hostBindingRef": "host-binding-1",
-            "hostLeaseRef": "host-lease-1",
-            "bridgeSessionId": str(row.id),
-        },
-        result_output_refs=["artifact://terminal-output"],
-        terminal_status="completed",
-        cleanup_mode="on_demand_remove",
-        cleanup_completed=True,
-        lease_released=True,
-        janitor_required=False,
-        release_ordering=[
-            "artifact_harvest_completed",
-            "host_cleanup_completed",
-            "provider_lease_released",
-            "terminal",
-        ],
+    # Execute the production profile-bound coordinator.  Only its Docker and
+    # provider transports are controlled; lifecycle, cleanup, release, and
+    # terminalization remain owned by the real coordinator.
+    lifecycle, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="none", code="unused"
     )
-    terminal = evidence["terminal"]
+    assert actions.count("envelope_created") == 1
+    assert owner_calls.count("session_create") == 1
+    assert owner_calls.count("resource_harvest") == 1
+    assert actions.count("provider_released") == 1
+    assert lifecycle[-1][0] == "terminal"
+    terminal = lifecycle[-1][1]["metadata"]
     assert terminal["cleanupCompleted"] is True
     assert terminal["leaseReleased"] is True
+    assert terminal["janitorRequired"] is False
     assert terminal["releaseOrdering"].index("host_cleanup_completed") < (
         terminal["releaseOrdering"].index("provider_lease_released")
     )
-    assert evidence["runtime"]["bridgeSessionId"] == str(row.id)
 
     # Workflow Detail reload resolves the durable projection after host removal.
     replay = await store.resolve_projection_session(
@@ -194,6 +180,68 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     assert replay.id == row.id
     assert replay.endpoint_ref == "controlled-fake"
     await engine.dispose()
+
+
+def test_product_path_launch_selection_fails_closed_at_catalog_owner(
+    monkeypatch,
+) -> None:
+    """Disabled/incompatible refs never widen to another profile or policy."""
+
+    selected_profile = next(
+        profile for profile in PROFILES.values() if profile.provider_runtime == "codex_cli"
+    )
+    disabled = selected_profile.model_copy(update={"enabled": False})
+    monkeypatch.setitem(PROFILES, disabled.ref, disabled)
+    with pytest.raises(OmnigentOAuthHostError) as captured:
+        compile_effective_launch(
+            profile_ref=disabled.ref,
+            policy_ref=disabled.default_policy_ref,
+            provider_profile_id="oauth-1",
+        )
+    assert captured.value.code == "OMNIGENT_EXECUTION_PROFILE_UNAVAILABLE"
+
+    enabled = disabled.model_copy(update={"enabled": True})
+    monkeypatch.setitem(PROFILES, enabled.ref, enabled)
+    incompatible = next(
+        policy
+        for policy in POLICIES.values()
+        if not policy.policy_id.startswith("codex-")
+    )
+    with pytest.raises(OmnigentOAuthHostError) as captured:
+        compile_effective_launch(
+            profile_ref=enabled.ref,
+            policy_ref=incompatible.ref,
+            provider_profile_id="oauth-1",
+        )
+    assert captured.value.code == "OMNIGENT_LAUNCH_POLICY_PROVIDER_MISMATCH"
+
+
+def test_product_path_workspace_owner_rejects_invalid_and_escaped_locators(
+    tmp_path,
+) -> None:
+    """The worker owner rejects both malformed and filesystem-escaped authority."""
+
+    with pytest.raises(ValueError, match="without traversal"):
+        SandboxWorkspaceLocator(
+            workspaceId="browser-product-path", relativePath="../repo"
+        )
+
+    authority = tmp_path / "temporal_sandbox" / "browser-product-path"
+    authority.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (authority / "repo").symlink_to(outside, target_is_directory=True)
+    locator = SandboxWorkspaceLocator(
+        workspaceId="browser-product-path", relativePath="repo"
+    )
+    with pytest.raises(
+        WorkspaceLocatorResolutionError, match="escapes its workspace"
+    ):
+        resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=tmp_path,
+            expected_workspace_id="browser-product-path",
+        )
 
 
 @pytest.mark.asyncio
