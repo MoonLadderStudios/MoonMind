@@ -109,7 +109,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     assert canonical["targetRuntime"] == "omnigent"
     assert canonical["omnigent"] == authored["omnigent"]
     assert canonical["workflow"]["runtime"]["mode"] == "omnigent"
-    assert canonical["workflow"]["runtime"]["profileId"] == "oauth-1"
+    assert canonical["workflow"]["runtime"]["providerProfile"] == "oauth-1"
     serialized = json.dumps(canonical)
     assert all(
         forbidden not in serialized
