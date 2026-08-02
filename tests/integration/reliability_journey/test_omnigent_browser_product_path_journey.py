@@ -197,9 +197,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     assert terminal["cleanupCompleted"] is True
     assert terminal["leaseReleased"] is True
     assert terminal["janitorRequired"] is False
-    assert terminal["releaseOrdering"].index("host_cleanup_completed") < (
-        terminal["releaseOrdering"].index("provider_lease_released")
-    )
+    assert actions.index("host_stopped") < actions.index("provider_released")
 
     # Workflow Detail reload resolves the durable projection after host removal.
     replay = await store.resolve_projection_session(
