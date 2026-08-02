@@ -119,9 +119,11 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
         ).encode(),
         content_type="application/json",
     )
-    external_ref = external.artifact_ref
+    external_ref = "artifact://omnigent-test/external-state"
+    store._data[external_ref] = store.get_bytes(external.artifact_ref)
     manifest = store.put_bytes(b'{"capture":"complete"}', content_type="application/json")
-    manifest_ref = manifest.artifact_ref
+    manifest_ref = "artifact://omnigent-test/capture-manifest"
+    store._data[manifest_ref] = store.get_bytes(manifest.artifact_ref)
     activities = TemporalCheckpointActivities(artifact_store=store)
 
     result = await activities.step_checkpoint_create(

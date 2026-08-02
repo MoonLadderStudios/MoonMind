@@ -348,7 +348,7 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         captured.append({"activity": activity, "payload": payload})
         if activity == "agent_runtime.capture_workspace_checkpoint":
             return _managed_checkpoint_capture_result(payload)
-        assert activity == "step_checkpoint.create_v2"
+        assert activity == "step_checkpoint.create"
         return _checkpoint_create_result(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
@@ -4202,7 +4202,7 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert result == "artifact://checkpoint/before_execution"
     assert [(call["activity"], call["payload"]["boundary"]) for call in captured] == [
         ("workspace.capture_checkpoint", "before_execution"),
-        ("step_checkpoint.create", "before_execution"),
+        ("step_checkpoint.create_v2", "before_execution"),
     ]
     assert captured[0]["payload"]["kind"] == "worktree_archive"
     assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
