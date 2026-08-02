@@ -2654,19 +2654,17 @@ def _build_spec_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         payload.get("ref")
     )
     publish_payload = {
-        # Preserve an omitted publish mode as ``None`` so the auto-publish-capable
-        # skill resolver applies the per-skill default from
-        # docs/Workflows/WorkflowPublishing.md. Materializing the default ``pr``
-        # here would make ``resolve_publish_mode_for_skill`` treat the absent mode
-        # as an explicit forbidden mode and reject the request.
-        "mode": _normalize_publish_mode(publish_mode)
-        if publish_mode is not None
-        else None,
         "prBaseBranch": publish_base,
         "commitMessage": None,
         "prTitle": None,
         "prBody": None,
     }
+    # Preserve omission by leaving ``mode`` out entirely. Supplying ``None``
+    # marks the Pydantic field as explicitly set after its field validator
+    # normalizes it to the global ``pr`` default, which prevents the selected
+    # skill resolver from applying an auto-publish skill's ``auto`` default.
+    if publish_mode is not None:
+        publish_payload["mode"] = _normalize_publish_mode(publish_mode)
     if "verificationSkipReason" in skill_publish_node:
         publish_payload["verificationSkipReason"] = skill_publish_node.get(
             "verificationSkipReason"
