@@ -47,6 +47,7 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     WorkflowProposalPolicy,
     build_canonical_workflow_view,
+    decode_recorded_legacy_workflow_history_v1,
     build_effective_proposal_policy,
     build_workflow_stage_plan,
     is_self_managed_publish_skill,
@@ -233,6 +234,29 @@ def _canonical_workflow_node(canonical_payload: Mapping[str, Any]) -> Mapping[st
     if isinstance(task_node, Mapping):
         return task_node
     return {}
+
+
+def _canonical_repository_name(canonical_payload: Mapping[str, Any]) -> str:
+    """Return the canonical provider target's portable repository name."""
+
+    target = canonical_payload.get("repository")
+    if isinstance(target, Mapping):
+        identity = target.get("repository")
+        if isinstance(identity, Mapping):
+            return str(identity.get("name") or "").strip()
+        return ""
+    return str(target or "").strip()
+
+
+def _canonical_repository_branch(canonical_payload: Mapping[str, Any]) -> str:
+    """Return the canonical provider target's authored branch name."""
+
+    target = canonical_payload.get("repository")
+    if isinstance(target, Mapping):
+        branch = target.get("branch")
+        if isinstance(branch, Mapping):
+            return str(branch.get("name") or "").strip()
+    return ""
 
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
@@ -1637,9 +1661,15 @@ class CodexWorker:
             return None
 
         try:
-            canonical_payload = build_canonical_workflow_view(
-                job_type=job.type,
-                payload=job.payload,
+            canonical_payload = (
+                decode_recorded_legacy_workflow_history_v1(
+                    job_type=job.type, payload=job.payload
+                )
+                if job.type in LEGACY_WORKFLOW_JOB_TYPES
+                else build_canonical_workflow_view(
+                    job_type=job.type,
+                    payload=job.payload,
+                )
             )
         except WorkflowContractError as exc:
             await self._emit_event(
@@ -2925,7 +2955,7 @@ class CodexWorker:
                 canonical_payload=canonical_payload,
                 runtime_mode=runtime_mode,
             )
-            repository = str(canonical_payload.get("repository") or "").strip()
+            repository = _canonical_repository_name(canonical_payload)
             runtime_meta: dict[str, Any] = {
                 "source": "moonmind",
                 "stage": "moonmind.task.execute",
@@ -3472,7 +3502,7 @@ class CodexWorker:
         jules_runtime_records: Sequence[JulesRuntimeTaskRecord] = (),
         run_quality_reason: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        repository = str(canonical_payload.get("repository") or "").strip()
+        repository = _canonical_repository_name(canonical_payload)
         patch_path = "patches/changes.patch"
         patch_exists = False
         if prepared is not None:
@@ -3947,7 +3977,7 @@ class CodexWorker:
         publish = publish_node if isinstance(publish_node, Mapping) else {}
 
         payload: dict[str, Any] = {
-            "repository": canonical_payload.get("repository"),
+            "repository": _canonical_repository_name(canonical_payload),
             "instruction": (
                 instruction_override
                 if instruction_override is not None
@@ -3965,7 +3995,10 @@ class CodexWorker:
             },
         }
         selected_ref = (
-            ref_override if ref_override is not None else git.get("startingBranch")
+            ref_override
+            if ref_override is not None
+            else _canonical_repository_branch(canonical_payload)
+            or git.get("startingBranch")
         )
         if include_ref and selected_ref:
             payload["ref"] = selected_ref
@@ -4108,7 +4141,7 @@ class CodexWorker:
                 or runtime_provider_profile
             )
 
-            repository = str(canonical_payload.get("repository") or "").strip()
+            repository = _canonical_repository_name(canonical_payload)
             if not repository:
                 raise ValueError("repository is required for prepare stage")
             auth_context = await self._resolve_task_auth_context(
@@ -4172,9 +4205,13 @@ class CodexWorker:
                 fallback="main",
                 env=auth_context.repo_command_env,
             )
-            authored_branch_input = str(git.get("branch") or "").strip() or None
+            canonical_branch = _canonical_repository_branch(canonical_payload)
+            authored_branch_input = (
+                canonical_branch or str(git.get("branch") or "").strip() or None
+            )
             starting_branch_input = (
-                str(git.get("startingBranch") or "").strip()
+                canonical_branch
+                or str(git.get("startingBranch") or "").strip()
                 or authored_branch_input
                 or None
             )
@@ -6051,7 +6088,7 @@ class CodexWorker:
             if publish_mode == "pr" and pr_base is not None:
                 publish_env = prepared.publish_command_env or {}
                 github_token = str(publish_env.get("GITHUB_TOKEN") or "").strip()
-                repository = str(canonical_payload.get("repository") or "").strip()
+                repository = _canonical_repository_name(canonical_payload)
                 if repository and github_token:
                     pr_result = await GitHubService().create_pull_request(
                         repo=repository,
@@ -8329,13 +8366,15 @@ class CodexWorker:
         else:
             args = self._skill_inputs_from_node(skill)
 
-        repository = str(canonical_payload.get("repository") or "").strip()
+        repository = _canonical_repository_name(canonical_payload)
         instructions = (
             str(instruction_override).strip()
             if instruction_override is not None
             else str(task.get("instructions") or "").strip()
         )
-        starting_branch = str(git.get("startingBranch") or "").strip()
+        starting_branch = _canonical_repository_branch(canonical_payload) or str(
+            git.get("startingBranch") or ""
+        ).strip()
         selected_ref = (
             str(ref_override).strip() if ref_override is not None else starting_branch
         )
@@ -8418,7 +8457,11 @@ class CodexWorker:
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
 
-        starting_branch = str(git.get("startingBranch") or "").strip() or None
+        starting_branch = (
+            _canonical_repository_branch(canonical_payload)
+            or str(git.get("startingBranch") or "").strip()
+            or None
+        )
         publish_mode = "pr"
 
         return {
@@ -8426,7 +8469,7 @@ class CodexWorker:
             "priority": 0,
             "maxAttempts": 3,
             "payload": {
-                "repository": str(canonical_payload.get("repository") or "").strip(),
+                "repository": _canonical_repository_name(canonical_payload),
                 "workflow": {
                     "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
@@ -8674,7 +8717,7 @@ class CodexWorker:
         evidence = self._redact_text(
             str(evidence_source)
         )[:500]
-        repository = str(canonical_payload.get("repository") or "").strip().lower()
+        repository = _canonical_repository_name(canonical_payload).lower()
         is_moonmind_repository = repository == "moonladderstudios/moonmind"
         if is_moonmind_repository:
             instructions = (
@@ -8862,7 +8905,7 @@ class CodexWorker:
             )
             skill_args = {
                 "jobId": str(job.id),
-                "repository": str(canonical_payload.get("repository") or "").strip(),
+                "repository": _canonical_repository_name(canonical_payload),
                 "runtimeMode": runtime_mode,
                 "taskStatus": "completed" if task_result.succeeded else "failed",
                 "taskSummary": str(task_result.summary or ""),
@@ -10582,7 +10625,7 @@ class CodexWorker:
         prepared: PreparedTaskWorkspace,
         container_spec: ContainerTaskSpec,
     ) -> WorkerExecutionResult:
-        repository = str(canonical_payload.get("repository") or "").strip()
+        repository = _canonical_repository_name(canonical_payload)
         if not repository:
             raise ValueError("repository is required for task.container execution")
 
@@ -11244,7 +11287,7 @@ class CodexWorker:
         """Submit instruction to Jules and poll until completion/failure."""
 
         self._ensure_jules_runtime_enabled()
-        repository = str(canonical_payload.get("repository") or "").strip()
+        repository = _canonical_repository_name(canonical_payload)
         runtime_meta: dict[str, Any] = {
             "source": "moonmind",
             "stage": stage,
@@ -11494,7 +11537,7 @@ class CodexWorker:
         }
         if not required:
             return "requiredCapabilities must include at least one capability"
-        repository = str(canonical_payload.get("repository") or "").strip()
+        repository = _canonical_repository_name(canonical_payload)
         if "git" in required and not repository:
             return "repository is required for git task execution"
 
@@ -11528,7 +11571,7 @@ class CodexWorker:
         repo_token, repo_source = await self._resolve_github_token(
             auth_ref=repo_auth_ref,
             purpose="repository",
-            repo=str(canonical_payload.get("repository") or "").strip() or None,
+            repo=_canonical_repository_name(canonical_payload) or None,
         )
         repo_env = self._build_command_env(
             repo_token,
@@ -11543,7 +11586,7 @@ class CodexWorker:
             publish_token, publish_source = await self._resolve_github_token(
                 auth_ref=publish_ref,
                 purpose="publish",
-                repo=str(canonical_payload.get("repository") or "").strip() or None,
+                repo=_canonical_repository_name(canonical_payload) or None,
             )
             publish_env = self._build_command_env(
                 publish_token,
@@ -11855,7 +11898,7 @@ class CodexWorker:
             [proposal for proposal in proposals if isinstance(proposal, dict)]
         )
         canonical_payload = job.payload if isinstance(job.payload, Mapping) else {}
-        project_repository = str(canonical_payload.get("repository") or "").strip()
+        project_repository = _canonical_repository_name(canonical_payload)
         if not project_repository:
             logger.warning(
                 "Skipping workflow proposal submission for job %s: canonical repository missing",

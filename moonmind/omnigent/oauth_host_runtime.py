@@ -18,6 +18,11 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.repositories.lore_adapter import (
+    LORE_UNSUPPORTED_RUNTIME_LANE,
+    LoreRepositoryProviderAdapter,
+    LoreWorkspaceError,
+)
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
@@ -147,6 +152,7 @@ class OmnigentOAuthHostRuntime:
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
         repository_source_root: Path | str | None = None,
+        lore_repository_adapter: LoreRepositoryProviderAdapter | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -188,6 +194,7 @@ class OmnigentOAuthHostRuntime:
         self._repository_source_root = (
             Path(source_root_text).resolve() if source_root_text else None
         )
+        self._lore_repository_adapter = lore_repository_adapter
         # Bounded, non-sensitive evidence of the most recent workspace resolution,
         # surfaced through the preflight result for Workflow Detail. Never carries
         # credentials, raw daemon paths, or unbounded command output.
@@ -215,6 +222,9 @@ class OmnigentOAuthHostRuntime:
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
         repository_source: str = "",
+        repository_provider: str = "",
+        repository_connection_ref: str = "",
+        repository_client_evidence: Mapping[str, str] | None = None,
         starting_branch: str | None = None,
         target_branch: str | None = None,
         checkout_commit: str | None = None,
@@ -247,6 +257,9 @@ class OmnigentOAuthHostRuntime:
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
             repository_source=repository_source,
+            repository_provider=repository_provider,
+            repository_connection_ref=repository_connection_ref,
+            repository_client_evidence=repository_client_evidence,
             starting_branch=starting_branch,
             target_branch=target_branch,
             checkout_commit=checkout_commit,
@@ -254,6 +267,10 @@ class OmnigentOAuthHostRuntime:
             attachment_refs=attachment_refs,
             github_token=github_token,
             artifact_gateway=artifact_gateway,
+            omnigent_isolation_verified=(
+                launch.get("hostMode") == "on_demand_docker"
+                and "workspace" in set(launch.get("mountClasses") or ())
+            ),
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
@@ -923,6 +940,9 @@ class OmnigentOAuthHostRuntime:
         current_workflow_id: str,
         current_step_execution_id: str,
         repository_source: str = "",
+        repository_provider: str = "",
+        repository_connection_ref: str = "",
+        repository_client_evidence: Mapping[str, str] | None = None,
         starting_branch: str | None = None,
         target_branch: str | None = None,
         checkout_commit: str | None = None,
@@ -930,6 +950,7 @@ class OmnigentOAuthHostRuntime:
         attachment_refs: tuple[str, ...] = (),
         github_token: str | None = None,
         artifact_gateway: Any | None = None,
+        omnigent_isolation_verified: bool = False,
     ) -> Path:
         """Resolve, and when required materialize, the authoritative workspace.
 
@@ -976,6 +997,71 @@ class OmnigentOAuthHostRuntime:
             expected_workspace_id=expected_id,
             must_exist=False,
         )
+        if str(repository_provider or "").strip().lower() == "lore":
+            if self._lore_repository_adapter is None:
+                raise OmnigentOAuthHostError(
+                    "Lore repository work requires the configured provider adapter",
+                    code=WORKSPACE_LOCATOR_UNSUPPORTED,
+                )
+            if not omnigent_isolation_verified:
+                raise LoreWorkspaceError(
+                    LORE_UNSUPPORTED_RUNTIME_LANE,
+                    "Lore workspace isolation is not verified for this runtime lane",
+                )
+            repository = str(repository_source or "").strip()
+            branch = str(starting_branch or target_branch or "").strip()
+            revision = str(checkout_commit or "").strip()
+            if workspace.exists():
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.load_prepared_workspace,
+                    locator=locator,
+                    authority_path=workspace,
+                )
+                if repository and (
+                    prepared.repository,
+                    prepared.branch,
+                    prepared.revision_signature,
+                ) != (repository, branch, revision):
+                    raise OmnigentOAuthHostError(
+                        "existing Lore workspace does not match the authored target",
+                        code=WORKSPACE_AUTHORITY_MISMATCH,
+                    )
+            else:
+                if not repository or not branch or not revision:
+                    raise OmnigentOAuthHostError(
+                        "fresh Lore workspaces require repository, branch, and revision",
+                        code=WORKSPACE_LOCATOR_UNSUPPORTED,
+                    )
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.prepare_workspace,
+                    repository=repository,
+                    branch=branch,
+                    revision_signature=revision,
+                    locator=locator,
+                    authority_path=workspace,
+                    connection_ref=repository_connection_ref,
+                    client_evidence=dict(repository_client_evidence or {}),
+                )
+            binding = self._lore_repository_adapter.bind_workspace(
+                prepared,
+                runtime_lane="omnigent",
+                omnigent_mount_path="/workspaces/run",
+                omnigent_isolation_verified=omnigent_isolation_verified,
+            )
+            if binding.authority_locator != locator:
+                raise OmnigentOAuthHostError(
+                    "Lore workspace binding changed sandbox authority",
+                    code=WORKSPACE_AUTHORITY_MISMATCH,
+                )
+            self._last_workspace_evidence = self._workspace_resolution_evidence(
+                locator=locator,
+                expected_id=expected_id,
+                materialization={
+                    "action": "reused_lore_authority",
+                    "revisionSignature": prepared.revision_signature,
+                },
+            )
+            return workspace
         source = str(repository_source or "").strip()
         # 2. Establish or load the durable owner record and validate its binding
         #    before mutating the filesystem, so a retry or a foreign record can

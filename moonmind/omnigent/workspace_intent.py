@@ -52,6 +52,12 @@ def authored_repository_source(request: AgentExecutionRequest) -> str:
         spec.get("repo"),
         parameters.get("repository"),
     ):
+        if isinstance(candidate, Mapping):
+            nested = candidate.get("repository")
+            if isinstance(nested, Mapping):
+                value = str(nested.get("name") or "").strip()
+                if value:
+                    return value
         value = str(candidate or "").strip()
         if value:
             return value
@@ -60,6 +66,13 @@ def authored_repository_source(request: AgentExecutionRequest) -> str:
 
 def authored_starting_branch(request: AgentExecutionRequest) -> str | None:
     spec = _spec(request)
+    repository = spec.get("repository")
+    if isinstance(repository, Mapping):
+        branch = repository.get("branch")
+        if isinstance(branch, Mapping):
+            value = str(branch.get("name") or "").strip()
+            if value:
+                return value
     for candidate in (
         spec.get("startingBranch"),
         spec.get("branch"),
@@ -78,11 +91,38 @@ def authored_target_branch(request: AgentExecutionRequest) -> str | None:
 
 def authored_checkout_commit(request: AgentExecutionRequest) -> str | None:
     spec = _spec(request)
+    repository = spec.get("repository")
+    if isinstance(repository, Mapping):
+        revision = repository.get("revision")
+        if isinstance(revision, Mapping):
+            for key in ("commitSha", "revisionSignature"):
+                value = str(revision.get(key) or "").strip()
+                if value:
+                    return value
     for candidate in (spec.get("checkoutCommit"), spec.get("baseCommit")):
         value = str(candidate or "").strip()
         if value:
             return value
     return None
+
+
+def authored_connection_ref(request: AgentExecutionRequest) -> str | None:
+    repository = _spec(request).get("repository")
+    if not isinstance(repository, Mapping):
+        return None
+    value = str(repository.get("connectionRef") or "").strip()
+    return value or None
+
+
+def authored_revision_kind(request: AgentExecutionRequest) -> str | None:
+    repository = _spec(request).get("repository")
+    if not isinstance(repository, Mapping):
+        return None
+    revision = repository.get("revision")
+    if not isinstance(revision, Mapping):
+        return None
+    value = str(revision.get("kind") or "").strip()
+    return value or None
 
 
 def authored_restore_input_refs(request: AgentExecutionRequest) -> tuple[str, ...]:
@@ -304,6 +344,13 @@ def compile_workspace_intent(
         )
 
     repository = authored_repository_source(request) or None
+    resolved_repository = _spec(request).get("resolvedRepositoryTarget")
+    if resolved_repository is not None:
+        raise WorkspaceIntentCompilationError(
+            WORKSPACE_INTENT_UNSAFE_INPUT,
+            "workspaceSpec.resolvedRepositoryTarget is runtime-owned and cannot "
+            "be authored",
+        )
     restore_refs = authored_restore_input_refs(request)
     restore_input_refs, external_state_refs = _partition_restore_refs(restore_refs)
 
@@ -316,7 +363,33 @@ def compile_workspace_intent(
             stepExecutionId=step_execution_id,
             repository=repository,
             repositoryKind=_classify_repository(repository or ""),
+            connectionRef=authored_connection_ref(request),
             checkoutCommit=authored_checkout_commit(request),
+            revisionKind=authored_revision_kind(request),
+            remoteTipExpectation=(
+                resolved_repository.get("remoteTipExpectation")
+                if resolved_repository
+                else
+                {"kind": "read_only"}
+                if authored_revision_kind(request)
+                else {
+                    "kind": "must_equal",
+                    "revision": {
+                        "provider": (
+                            "lore"
+                            if authored_revision_kind(request) == "lore_revision"
+                            else "git"
+                        ),
+                        "repositoryId": repository,
+                        "commitSha": authored_checkout_commit(request),
+                    },
+                }
+                if repository
+                else None
+            ),
+            resolvedRepositoryTarget=(
+                dict(resolved_repository) if resolved_repository else None
+            ),
             startingBranch=authored_starting_branch(request),
             targetBranch=authored_target_branch(request),
             inputRefs=list(request.input_refs),

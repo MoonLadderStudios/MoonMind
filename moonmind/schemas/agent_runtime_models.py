@@ -2034,6 +2034,9 @@ class ManagedRunRecord(BaseModel):
     finished_at: datetime | None = Field(None, alias="finishedAt")
     last_heartbeat_at: datetime | None = Field(None, alias="lastHeartbeatAt")
     workspace_path: str | None = Field(None, alias="workspacePath")
+    resolved_repository_target: dict[str, Any] | None = Field(
+        None, alias="resolvedRepositoryTarget"
+    )
     # deprecated: use stdout_artifact_ref and stderr_artifact_ref instead
     log_artifact_ref: str | None = Field(None, alias="logArtifactRef")
     stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")

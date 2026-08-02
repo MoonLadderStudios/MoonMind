@@ -2370,6 +2370,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                         "contentRef": "art_skill",
                         "contentDigest": "sha256:skill",
                         "inputContractDigest": "sha256:contract",
+                        "requiredCapabilities": ["repo.lock"],
                         "inputs": {"issue": "MM-1052"},
                     },
                 },
@@ -2385,6 +2386,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 "contentRef": "art_skill",
                 "contentDigest": "sha256:skill",
                 "inputContractDigest": "sha256:contract",
+                "requiredCapabilities": ["repo.lock"],
                 "inputs": {"issue": "MM-1052"},
             },
         )
