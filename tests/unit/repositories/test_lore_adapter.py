@@ -6,6 +6,7 @@ from moonmind.repositories.lore_adapter import (
     LORE_CHECKPOINT_TOO_LARGE,
     LORE_EXTERNAL_SCAN_FAILED,
     LORE_UNSUPPORTED_RUNTIME_LANE,
+    LORE_WORKSPACE_INVALID,
     LoreRepositoryProviderAdapter,
     LoreImmutableObjectCache,
     LoreDeltaCheckpoint,
@@ -368,7 +369,7 @@ async def test_omnigent_launcher_binds_prepared_lore_sandbox_without_checkout(tm
         f"{workflow_id}:{step_id}".encode("utf-8")
     ).hexdigest()[:24]
     locator = SandboxWorkspaceLocator(workspaceId=workspace_id, relativePath="repo")
-    authority = tmp_path / workspace_id / "repo"
+    authority = tmp_path / "temporal_sandbox" / workspace_id / "repo"
     client = FakeLoreClient()
     adapter = LoreRepositoryProviderAdapter(client)
     launcher = ManagedRuntimeLauncher(
@@ -440,7 +441,7 @@ async def test_omnigent_launcher_materializes_fresh_lore_sandbox(tmp_path):
         omnigent_isolation_verified=True,
     )
 
-    assert resolved == tmp_path / workspace_id / "repo"
+    assert resolved == tmp_path / "temporal_sandbox" / workspace_id / "repo"
     assert [call[0] for call in client.calls].count("materialize") == 1
 
 

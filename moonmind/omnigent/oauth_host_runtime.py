@@ -18,7 +18,11 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
-from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
+from moonmind.repositories.lore_adapter import (
+    LORE_UNSUPPORTED_RUNTIME_LANE,
+    LoreRepositoryProviderAdapter,
+    LoreWorkspaceError,
+)
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
@@ -998,6 +1002,11 @@ class OmnigentOAuthHostRuntime:
                 raise OmnigentOAuthHostError(
                     "Lore repository work requires the configured provider adapter",
                     code=WORKSPACE_LOCATOR_UNSUPPORTED,
+                )
+            if not omnigent_isolation_verified:
+                raise LoreWorkspaceError(
+                    LORE_UNSUPPORTED_RUNTIME_LANE,
+                    "Lore workspace isolation is not verified for this runtime lane",
                 )
             repository = str(repository_source or "").strip()
             branch = str(starting_branch or target_branch or "").strip()

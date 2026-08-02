@@ -833,7 +833,9 @@ class ManagedRuntimeLauncher:
             # The managed lane must not create a parallel checkout under its
             # managed-run store when an authored locator already names authority.
             workspace_root = (
-                self._store.store_root.parent / locator.workspace_id
+                self._store.store_root.parent
+                / "temporal_sandbox"
+                / locator.workspace_id
             ).resolve()
             authority_path = workspace_root.joinpath(
                 *PurePosixPath(locator.relative_path).parts
