@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
+    RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
@@ -29,6 +30,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
+    RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
@@ -3588,6 +3590,7 @@ def test_loop_attempt_materialization_requires_a_resolved_controller_runtime(
 @pytest.mark.asyncio
 async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     loop = {
         "kind": "remediation_loop",
@@ -3613,7 +3616,15 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     mock_run_workflow._write_json_artifact = AsyncMock(
         return_value="artifact://decision/D0"
     )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
+        ),
+    )
     ordered_nodes: list[dict[str, Any]] = []
+    progress_signature = "sha256:" + ("a" * 64)
 
     admitted = await (
         mock_run_workflow._evaluate_dynamic_remediation_verification(
@@ -3621,6 +3632,7 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
             verdict="ADDITIONAL_WORK_NEEDED",
             gate_result_ref="artifact://verification/V0",
             remaining_work_ref="artifact://remaining/R0",
+            progress_signature=progress_signature,
         )
     )
 
@@ -3638,6 +3650,9 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     assert projection["status"] == "remediation_running"
     assert projection["latestVerdict"] == "ADDITIONAL_WORK_NEEDED"
     assert projection["continuationDecisionRef"] == "artifact://decision/D0"
+    assert mock_run_workflow._remediation_loop_state.latest_progress_signature == (
+        progress_signature
+    )
     mock_run_workflow._write_json_artifact.assert_awaited_once()
 
 
@@ -3781,6 +3796,46 @@ async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
     assert state.latest_verification_ref == "artifact://art_verification_V0"
     assert state.latest_progress_ref == "artifact://art_remaining_R0"
     assert state.continuation_decision_ref == "artifact://art_decision_D0"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_uses_gate_artifact_for_legacy_remaining_work(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="art_decision_legacy"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
+        ),
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="art_verification_legacy",
+        remaining_work_ref=None,
+    )
+
+    assert admitted is True
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.latest_progress_ref == "artifact://art_verification_legacy"
+    decision_payload = mock_run_workflow._write_json_artifact.await_args.kwargs[
+        "payload"
+    ]
+    assert decision_payload["remainingWorkRef"] == (
+        "artifact://art_verification_legacy"
+    )
 
 
 @pytest.mark.asyncio
@@ -4612,6 +4667,55 @@ def test_continue_as_new_preserves_the_workflow_scoped_managed_session(
     mock_run_workflow._restore_remediation_loop_continuation(ordered_nodes=[])
 
     assert mock_run_workflow._codex_session_binding == binding
+
+
+def test_continue_as_new_preserves_stable_progress_identity_only_after_patch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    spec = RemediationLoopSpec.model_validate(_dynamic_loop_spec_payload())
+    signature = "sha256:" + ("b" * 64)
+    mock_run_workflow._remediation_loop_spec = spec
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId=spec.loop_id,
+        attemptOrdinal=1,
+        phase=RemediationLoopPhase.VERIFICATION_PENDING,
+        latestProgressRef="artifact://remaining/R1",
+        latestProgressSignature=signature,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._original_input_payload = {}
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
+        ),
+    )
+
+    carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )["remediation_loop_continuation"]
+
+    assert carried["state"]["latestProgressSignature"] == signature
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    legacy = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )["remediation_loop_continuation"]
+
+    assert "latestProgressSignature" not in legacy["state"]
 
 
 def test_continuation_written_without_a_head_still_restores(

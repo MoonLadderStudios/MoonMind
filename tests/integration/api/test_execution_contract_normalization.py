@@ -187,7 +187,7 @@ def test_sc006_target_branch_rejected_as_active_authored_input() -> None:
         job_type="task",
         payload=_workflow_payload({"git": {"targetBranch": "feature/legacy-branch"}}),
     )
-    assert result["workflow"]["git"]["branch"] is None
+    assert result["workflow"]["git"].get("branch") is None
     assert "targetBranch" not in result["workflow"]["git"]
 
 
