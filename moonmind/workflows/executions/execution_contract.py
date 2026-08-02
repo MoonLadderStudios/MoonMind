@@ -2749,7 +2749,12 @@ def build_canonical_workflow_view(
     if not isinstance(workflow_node, dict):
         workflow_node = {}
         canonical["workflow"] = workflow_node
-    if workflow_node.get("git") is None:
+    git_node = workflow_node.get("git")
+    if isinstance(git_node, dict):
+        # ``targetBranch`` is historical output metadata, never authored
+        # branch-selection authority for a new canonical task.
+        git_node.pop("targetBranch", None)
+    elif git_node is None:
         workflow_node.pop("git", None)
 
     target_runtime = (

@@ -2576,7 +2576,11 @@ def _injected_launch_error(code: str) -> OmnigentOAuthHostError:
 
 
 async def _run_coordinator_failure_case(
-    *, fail_at: str, code: str, release_failures: int = 0
+    *,
+    fail_at: str,
+    code: str,
+    release_failures: int = 0,
+    request: AgentExecutionRequest | None = None,
 ):
     events: list[tuple[str, dict]] = []
     actions: list[str] = []
@@ -2588,6 +2592,12 @@ async def _run_coordinator_failure_case(
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
     )
     error = _injected_launch_error(code)
+    request_uses_on_demand_policy = bool(
+        request is not None
+        and isinstance(request.parameters.get("omnigent"), dict)
+        and request.parameters["omnigent"].get("launchPolicyRef")
+        == "codex-on-demand@1"
+    )
 
     class FailureOwners:
         """Deterministic fakes for the concrete launch/cleanup owners.
@@ -2642,7 +2652,7 @@ async def _run_coordinator_failure_case(
         async def get_binding_for_profile(self, _profile_id):
             if fail_at == "binding":
                 raise error
-            if fail_at in {
+            if request_uses_on_demand_policy or fail_at in {
                 "container_start", "image_pull", "network_start",
                 "credential_volume_missing", "credential_volume_owner",
                 "credential_generation", "credential_login",
@@ -2787,25 +2797,28 @@ async def _run_coordinator_failure_case(
             return_value=_launch_ready_profile()
         )
 
-    request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="codex",
-        correlationId="workflow-1",
-        idempotencyKey="idem-failure-matrix",
-        workspaceSpec={
-            "workspaceLocator": {
-                "kind": "sandbox",
-                "workspaceId": hashlib.sha256(
-                    b"workflow-1:idem-failure-matrix"
-                ).hexdigest()[:24],
-            }
-        },
-        parameters={
-            "untrustedSupportValue": "github_pat_secret_value_must_not_persist",
-            "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},
-        },
-    )
+    if request is None:
+        request = AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="codex",
+            correlationId="workflow-1",
+            idempotencyKey="idem-failure-matrix",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(
+                        b"workflow-1:idem-failure-matrix"
+                    ).hexdigest()[:24],
+                }
+            },
+            parameters={
+                "untrustedSupportValue": "github_pat_secret_value_must_not_persist",
+                "omnigent": {
+                    "session": {"workspace": "https://example.com/repo.git"}
+                },
+            },
+        )
     if fail_at == "host_remove":
         coordinator._hosts.get_binding_for_profile = AsyncMock(  # type: ignore[attr-defined]
             return_value=_binding().model_copy(
@@ -2813,7 +2826,7 @@ async def _run_coordinator_failure_case(
             )
         )
 
-    if fail_at in {"host_stop", "host_remove", "release"}:
+    if fail_at in {"none", "host_stop", "host_remove", "release"}:
         await coordinator.execute(request)
     else:
         with pytest.raises(OmnigentOAuthHostError) as captured:

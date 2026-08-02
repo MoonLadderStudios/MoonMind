@@ -854,6 +854,11 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
     expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
+    const readinessCalls = fetchSpy.mock.calls.filter(
+      ([url]) => String(url) === "/api/omnigent/codex-catalog-readiness",
+    );
+    expect(readinessCalls).toHaveLength(2);
+    expect((readinessCalls[1]?.[1] as RequestInit | undefined)?.cache).toBe("no-store");
   });
 
   it("fails closed when submit-time Omnigent readiness cannot be refreshed", async () => {

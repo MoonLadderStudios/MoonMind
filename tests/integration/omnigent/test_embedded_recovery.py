@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import (
@@ -453,6 +454,38 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     )
     refs = await restarted_store.cleanup_required_host_lease_refs()
     assert refs == {"host-lease-1"}
+
+    # Restart/retry must preserve each durable authority and the enrolled OAuth
+    # materialization instead of allocating replacement runtime state.
+    async with session_factory() as session:
+        profile_count = await session.scalar(
+            select(func.count()).select_from(ManagedAgentProviderProfile)
+        )
+        binding_count = await session.scalar(
+            select(func.count()).select_from(OmnigentOAuthHostBindingRecord)
+        )
+        lease_count = await session.scalar(
+            select(func.count()).select_from(OmnigentOAuthHostLeaseRecord)
+        )
+        durable_profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        durable_binding = await session.get(
+            OmnigentOAuthHostBindingRecord, "binding-1"
+        )
+    assert profile_count == binding_count == lease_count == 1
+    assert durable_profile is not None
+    assert durable_profile.credential_generation == 1
+    assert durable_binding is not None
+    assert durable_binding.credential_mount_template_json["authVolumeRef"] == {
+        "providerProfileId": "profile-1",
+        "runtimeId": "codex_cli",
+        "providerId": "openai",
+        "volumeRef": "profile-1-volume",
+        "credentialGeneration": 1,
+        "ownerUserId": "user-1",
+    }
+    assert [event.sequence for event in events] == list(
+        range(1, len(events) + 1)
+    )
 
 
 async def test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
