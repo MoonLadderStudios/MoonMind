@@ -249,6 +249,8 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
     compile_repository_target,
+    repository_branch_from_value,
+    repository_name_from_value,
 )
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
@@ -266,6 +268,9 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex",
     "claude",
 })
+_GITHUB_ONLY_REPOSITORY_SKILLS = frozenset(
+    {"batch-pr-resolver", "pr-resolver"}
+)
 _TEMPORAL_SCOPE_QUERIES = {
     "default": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
 }
@@ -824,9 +829,11 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         git_payload = params.get("git")
     if not isinstance(git_payload, Mapping):
         git_payload = {}
+    repository_target = params.get("repository")
 
     repository = (
-        _coerce_temporal_scalar(git_payload.get("repository"))
+        repository_name_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("repository"))
         or _coerce_temporal_scalar(task_payload.get("repository"))
         or _coerce_temporal_scalar(workflow_payload.get("repository"))
         or _coerce_temporal_scalar(params.get("repository"))
@@ -837,7 +844,8 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
         or _coerce_temporal_scalar(memo.get("repository"))
     )
     base_branch = (
-        _coerce_temporal_scalar(git_payload.get("baseBranch"))
+        repository_branch_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("baseBranch"))
         or _coerce_temporal_scalar(git_payload.get("startingBranch"))
         or _coerce_temporal_scalar(git_payload.get("branch"))
         or _coerce_temporal_scalar(task_payload.get("startingBranch"))
@@ -8446,9 +8454,15 @@ async def _expand_goal_preset_for_workflow_submission(
     )
     template_inputs = {**schedule.inputs, **existing_inputs}
     context: dict[str, Any] = {}
-    repository = _submitted_repository_name(
-        request_payload.get("repository") or task_payload.get("repository")
-    )
+    nested_repository = task_payload.get("repository")
+    if isinstance(nested_repository, Mapping):
+        raise _invalid_workflow_request(
+            "payload.workflow.repository must not contain a repository target; "
+            "use payload.repository."
+        )
+    repository = repository_name_from_value(request_payload.get("repository"))
+    if not repository:
+        repository = repository_name_from_value(nested_repository)
     if repository:
         context["repository"] = repository
         context["repo"] = repository
@@ -10057,15 +10071,65 @@ def _normalize_submitted_repository(
     )
 
 
-def _submitted_repository_name(value: object) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if not isinstance(value, Mapping):
-        return ""
-    identity = value.get("repository")
-    if not isinstance(identity, Mapping):
-        return ""
-    return str(identity.get("name") or "").strip()
+def _selected_repository_skill_names(
+    task_payload: Mapping[str, Any],
+) -> set[str]:
+    names: set[str] = set()
+    candidates: list[object] = [task_payload.get("tool"), task_payload.get("skill")]
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, Mapping):
+                candidates.extend((step.get("tool"), step.get("skill")))
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        name = str(candidate.get("name") or candidate.get("id") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _validate_repository_submission_compatibility(
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any],
+    publish_payload: Mapping[str, Any] | None = None,
+) -> None:
+    nested_repository = task_payload.get("repository")
+    if isinstance(nested_repository, Mapping):
+        raise _invalid_workflow_request(
+            "payload.workflow.repository must not contain a repository target; "
+            "use payload.repository."
+        )
+    if not isinstance(repository_payload, Mapping):
+        return
+    if "git" in task_payload:
+        raise _invalid_workflow_request(
+            "payload.workflow.git is not accepted with a provider-discriminated "
+            "payload.repository target."
+        )
+
+    provider = str(repository_payload.get("provider") or "").strip().lower()
+    if provider == "lore":
+        incompatible = sorted(
+            _selected_repository_skill_names(task_payload)
+            & _GITHUB_ONLY_REPOSITORY_SKILLS
+        )
+        if incompatible:
+            raise _invalid_workflow_request(
+                "Lore repository targets do not support GitHub-only Skills: "
+                + ", ".join(incompatible)
+                + "."
+            )
+
+    if repository_payload.get("revision") is not None and publish_payload is not None:
+        publish_mode = str(publish_payload.get("mode") or "").strip().lower()
+        if publish_mode != "none":
+            raise _invalid_workflow_request(
+                "payload.repository.revision is allowed only when "
+                "payload.workflow.publish.mode='none'."
+            )
 
 
 async def _create_execution_from_workflow_request(
@@ -10142,6 +10206,20 @@ async def _create_execution_from_workflow_request(
         payload.pop("repository", None)
     else:
         payload["repository"] = repository_payload
+    early_publish_payload: Mapping[str, Any] | None = None
+    if isinstance(repository_payload, Mapping) and repository_payload.get(
+        "revision"
+    ) is not None:
+        early_publish_payload = _resolve_workflow_publish_payload(
+            payload=payload,
+            task_payload=task_payload,
+            normalized_tool=_normalize_task_tool(task_payload),
+        )
+    _validate_repository_submission_compatibility(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+        publish_payload=early_publish_payload,
+    )
 
     # --- Schedule routing ---
     schedule: ScheduleParameters | None = None
@@ -10287,6 +10365,11 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         skill_publish_metadata=publish_metadata,
         skill_side_effect_metadata=side_effect_metadata,
+    )
+    _validate_repository_submission_compatibility(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+        publish_payload=publish_payload,
     )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
