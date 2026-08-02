@@ -18,6 +18,8 @@ from moonmind.workflows.executions.repository_contract import (
     load_repository_connection,
     materialize_resolved_repository_target,
     persist_repository_connection,
+    repository_branch_from_value,
+    repository_name_from_value,
     reconcile_default_git_connection,
     resolve_default_git_credential,
     validate_connection_and_client,
@@ -47,6 +49,44 @@ def test_common_git_draft_injects_default_connection_and_keeps_axes_distinct() -
     assert target.branch.name == "main"
     assert target.revision is not None
     assert target.revision.commit_sha == "abcdef012345"
+
+
+def test_repository_target_trims_identity_axes() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "  MoonLadderStudios/MoonMind  "},
+            "branch": {"name": "  main  "},
+        }
+    )
+
+    assert target.repository.name == "MoonLadderStudios/MoonMind"
+    assert target.branch.name == "main"
+
+
+@pytest.mark.parametrize("field", ["repository", "branch"])
+def test_repository_target_rejects_whitespace_only_identity(field: str) -> None:
+    payload = {
+        "provider": "git",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"},
+    }
+    payload[field] = {"name": "   "}
+
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_TARGET_INVALID"):
+        compile_repository_target(payload)
+
+
+def test_repository_projection_helpers_support_scalar_and_structured_values() -> None:
+    target = {
+        "provider": "git",
+        "repository": {"name": " MoonLadderStudios/MoonMind "},
+        "branch": {"name": " feature/repository-target "},
+    }
+
+    assert repository_name_from_value(" owner/repo ") == "owner/repo"
+    assert repository_name_from_value(target) == "MoonLadderStudios/MoonMind"
+    assert repository_branch_from_value(target) == "feature/repository-target"
 
 
 @pytest.mark.parametrize("legacy", ["owner/repo", None, 123])
