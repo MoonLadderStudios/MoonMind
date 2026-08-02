@@ -12,8 +12,11 @@ import shutil
 import stat
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
+from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -220,12 +223,46 @@ class ManagedRuntimeLauncher:
         store: ManagedRunStore,
         log_streamer: RuntimeLogStreamer | None = None,
         artifact_service: Any | None = None,
+        lore_repository_adapter: LoreRepositoryProviderAdapter | None = None,
     ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
         self._artifact_service = artifact_service
+        self._lore_repository_adapter = lore_repository_adapter
+        self._lore_checkpoint_service = None
+        if lore_repository_adapter is not None and artifact_service is not None:
+            from moonmind.repositories.lore_checkpoints import (
+                LoreDurableCheckpointService,
+            )
+
+            self._lore_checkpoint_service = LoreDurableCheckpointService(
+                adapter=lore_repository_adapter,
+                artifact_service=artifact_service,
+            )
+
+    async def capture_lore_workspace_checkpoint(
+        self, *, locator: SandboxWorkspaceLocator, authority_path: Path
+    ) -> str:
+        """Persist provider state from the authoritative sandbox workspace."""
+        if (
+            self._lore_repository_adapter is None
+            or self._lore_checkpoint_service is None
+        ):
+            raise RuntimeError("Lore durable checkpoint support is not configured")
+        prepared = self._lore_repository_adapter.load_prepared_workspace(
+            locator=locator, authority_path=authority_path
+        )
+        return await self._lore_checkpoint_service.capture(prepared)
+
+    async def restore_lore_workspace_checkpoint(
+        self, checkpoint_ref: str, **kwargs: Any
+    ):
+        """Cold-restore a Lore delta before a managed runtime is launched."""
+        if self._lore_checkpoint_service is None:
+            raise RuntimeError("Lore durable checkpoint support is not configured")
+        return await self._lore_checkpoint_service.restore(checkpoint_ref, **kwargs)
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
@@ -774,6 +811,70 @@ class ManagedRuntimeLauncher:
             if isinstance(request.workspace_spec, dict)
             else {}
         )
+        provider = str(workspace_spec.get("provider") or "").strip().lower()
+        if provider == "lore":
+            if self._lore_repository_adapter is None:
+                raise RuntimeError(
+                    "Lore repository work requires the configured provider adapter"
+                )
+            workspace_key = self._workspace_key_for_request(run_id=run_id, request=request)
+            locator = SandboxWorkspaceLocator.model_validate(
+                workspace_spec.get("workspaceLocator")
+                or {"kind": "sandbox", "workspaceId": workspace_key, "relativePath": "repo"}
+            )
+            omnigent_workspace_key = hashlib.sha256(
+                f"{request.correlation_id}:{request.idempotency_key}".encode("utf-8")
+            ).hexdigest()[:24]
+            if locator.workspace_id not in {workspace_key, omnigent_workspace_key}:
+                raise RuntimeError(
+                    "Lore sandbox locator does not belong to the current run"
+                )
+            # Resolve the same sandbox-authority path used by the Omnigent owner.
+            # The managed lane must not create a parallel checkout under its
+            # managed-run store when an authored locator already names authority.
+            workspace_root = (
+                self._store.store_root.parent
+                / "temporal_sandbox"
+                / locator.workspace_id
+            ).resolve()
+            authority_path = workspace_root.joinpath(
+                *PurePosixPath(locator.relative_path).parts
+            ).resolve()
+            if not authority_path.is_relative_to(workspace_root):
+                raise RuntimeError("Lore sandbox locator escapes workspace authority")
+            repository = str(workspace_spec.get("repository") or workspace_spec.get("repo") or "").strip()
+            branch = str(workspace_spec.get("startingBranch") or workspace_spec.get("branch") or "").strip()
+            revision = str(workspace_spec.get("revisionSignature") or workspace_spec.get("preparedRevision") or "").strip()
+            if not repository or not branch or not revision:
+                raise RuntimeError(
+                    "Lore workspaceSpec requires repository, branch, and revisionSignature"
+                )
+            if authority_path.exists():
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.load_prepared_workspace,
+                    locator=locator,
+                    authority_path=authority_path,
+                )
+                if (prepared.repository, prepared.branch, prepared.revision_signature) != (
+                    repository, branch, revision
+                ):
+                    raise RuntimeError(
+                        "existing Lore workspace does not match the authored target"
+                    )
+            else:
+                prepared = await asyncio.to_thread(
+                    self._lore_repository_adapter.prepare_workspace,
+                    repository=repository,
+                    branch=branch,
+                    revision_signature=revision,
+                    locator=locator,
+                    authority_path=authority_path,
+                    connection_ref=str(workspace_spec.get("connectionRef") or ""),
+                    client_evidence=dict(workspace_spec.get("clientEvidence") or {}),
+                )
+            return self._lore_repository_adapter.bind_workspace(
+                prepared, runtime_lane="managed_runtime"
+            ).runtime_visible_path
         repository = str(
             workspace_spec.get("repository")
             or workspace_spec.get("repo")

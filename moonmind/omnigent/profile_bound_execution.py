@@ -992,6 +992,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else (workspace_intent.repository or "")
                 ),
+                repository_provider=str(
+                    (request.workspace_spec or {}).get("provider") or ""
+                ).strip(),
+                repository_connection_ref=str(
+                    (request.workspace_spec or {}).get("connectionRef") or ""
+                ).strip(),
+                repository_client_evidence=dict(
+                    (request.workspace_spec or {}).get("clientEvidence") or {}
+                ),
                 starting_branch=(
                     None
                     if remediation_resolution is not None

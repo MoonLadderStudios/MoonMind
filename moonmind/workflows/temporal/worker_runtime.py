@@ -2498,6 +2498,9 @@ def _build_agent_runtime_deps(
         DockerWorkloadLauncher,
         RunnerProfileRegistry,
     )
+    from moonmind.repositories.lore_runtime import (
+        build_lore_repository_adapter_from_environment,
+    )
 
     class LocalRuntimeArtifactStorage:
         def __init__(self, root: str) -> None:
@@ -2531,6 +2534,7 @@ def _build_agent_runtime_deps(
         store,
         log_streamer=log_streamer,
         artifact_service=artifact_service,
+        lore_repository_adapter=build_lore_repository_adapter_from_environment(),
     )
     session_store = ManagedSessionStore(
         os.path.join(
