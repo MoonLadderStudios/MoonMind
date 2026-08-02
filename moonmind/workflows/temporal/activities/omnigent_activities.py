@@ -12,6 +12,76 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
+_IMMUTABLE_RECOVERY_DIMENSIONS = (
+    "instructionDigest",
+    "runtimeId",
+    "model",
+    "effort",
+    "providerProfileId",
+    "launchPolicyRef",
+    "repositoryBranch",
+    "publishMode",
+)
+
+
+def _checkpoint_recovery_decision(recovery: dict[str, Any]) -> dict[str, Any]:
+    """Classify recovery from bounded, caller-independent authority evidence.
+
+    The decision is intentionally compact so the request/history can retain the
+    exact terminal rationale without persisting mutable host details. Immutable
+    input changes always win over live/cold availability.
+    """
+
+    source = recovery.get("immutableSource")
+    requested = recovery.get("immutableRequested")
+    if not isinstance(source, dict) or not isinstance(requested, dict):
+        return {
+            "recoveryAction": "resume_unavailable",
+            "reasonCodes": ["immutable_authority_missing"],
+        }
+    missing = [
+        dimension
+        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
+        if dimension not in source or dimension not in requested
+    ]
+    if missing:
+        return {
+            "recoveryAction": "resume_unavailable",
+            "reasonCodes": [
+                f"immutable_{dimension}_missing" for dimension in missing[:20]
+            ],
+        }
+    changed = [
+        dimension
+        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
+        if source[dimension] != requested[dimension]
+    ]
+    if changed:
+        return {
+            "recoveryAction": "branch_required",
+            "reasonCodes": [
+                f"immutable_{dimension}_changed" for dimension in changed[:20]
+            ],
+        }
+    if recovery.get("liveReattachAvailable") is True:
+        return {
+            "recoveryAction": "live_reattach",
+            "reasonCodes": ["all_authority_valid"],
+        }
+    if recovery.get("coldRestoreAvailable") is True:
+        return {
+            "recoveryAction": "cold_restore",
+            "reasonCodes": ["live_authority_unavailable"],
+        }
+    reasons = recovery.get("unavailableReasonCodes")
+    bounded_reasons = (
+        [str(reason)[:120] for reason in reasons[:20]]
+        if isinstance(reasons, list) and reasons
+        else ["checkpoint_authority_unavailable"]
+    )
+    return {"recoveryAction": "resume_unavailable", "reasonCodes": bounded_reasons}
+
+
 def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
     """Return validated coordinator inputs for an evidence-gated resume."""
 
@@ -48,10 +118,13 @@ def _checkpoint_branch_from_request(request: AgentExecutionRequest):
     """
 
     recovery = (request.parameters or {}).get("checkpointRecovery")
-    if (
-        not isinstance(recovery, dict)
-        or recovery.get("recoveryAction") != "branch_required"
-    ):
+    if not isinstance(recovery, dict):
+        return None
+    if "immutableSource" in recovery or "immutableRequested" in recovery:
+        decision = _checkpoint_recovery_decision(recovery)
+        recovery["recoveryDecision"] = decision
+        recovery["recoveryAction"] = decision["recoveryAction"]
+    if recovery.get("recoveryAction") != "branch_required":
         return None
     parsed = _checkpoint_recovery_from_request(request)
     if parsed is None:
@@ -319,6 +392,22 @@ async def omnigent_execute_activity(
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
         branch_inputs = _checkpoint_branch_from_request(request)
+        recovery_payload = (request.parameters or {}).get("checkpointRecovery")
+        recovery_decision = (
+            recovery_payload.get("recoveryDecision")
+            if isinstance(recovery_payload, dict)
+            else None
+        )
+        if (
+            isinstance(recovery_decision, dict)
+            and recovery_decision.get("recoveryAction") == "resume_unavailable"
+        ):
+            reasons = recovery_decision.get("reasonCodes") or [
+                "checkpoint_authority_unavailable"
+            ]
+            raise ValueError(
+                "checkpoint resume unavailable: " + ",".join(map(str, reasons[:20]))
+            )
         if branch_inputs is not None:
             checkpoint, candidate_workspace = branch_inputs
             authority = await _resolve_live_recovery_authority(

@@ -15,10 +15,98 @@ from moonmind.workflows.temporal.activities import (
 )
 from moonmind.workflows.temporal.activities.omnigent_activities import (
     _checkpoint_branch_from_request,
+    _checkpoint_recovery_decision,
     _checkpoint_recovery_from_request,
     _resolve_live_recovery_authority,
     omnigent_execute_activity,
 )
+
+
+@pytest.mark.parametrize(
+    ("dimension", "changed"),
+    [
+        ("instructionDigest", "sha256:changed-instructions"),
+        ("runtimeId", "codex"),
+        ("model", "gpt-5.6"),
+        ("effort", "high"),
+        ("providerProfileId", "profile-2"),
+        ("launchPolicyRef", "artifact://policy/2"),
+        ("repositoryBranch", "feature/changed"),
+        ("publishMode", "pull_request"),
+    ],
+)
+def test_checkpoint_recovery_decision_requires_branch_for_immutable_change(
+    dimension, changed
+) -> None:
+    immutable_source = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+    requested = {**immutable_source, dimension: changed}
+
+    decision = _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable_source,
+            "immutableRequested": requested,
+            "liveReattachAvailable": True,
+            "coldRestoreAvailable": True,
+        }
+    )
+
+    assert decision == {
+        "recoveryAction": "branch_required",
+        "reasonCodes": [f"immutable_{dimension}_changed"],
+    }
+
+
+def test_checkpoint_recovery_decision_fails_closed_without_authoritative_snapshot() -> None:
+    decision = _checkpoint_recovery_decision(
+        {"liveReattachAvailable": True, "coldRestoreAvailable": True}
+    )
+
+    assert decision == {
+        "recoveryAction": "resume_unavailable",
+        "reasonCodes": ["immutable_authority_missing"],
+    }
+
+
+def test_checkpoint_recovery_decision_selects_live_or_cold_with_bounded_rationale() -> None:
+    immutable = {
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "artifact://policy/1",
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": immutable,
+            "liveReattachAvailable": True,
+            "coldRestoreAvailable": True,
+        }
+    ) == {"recoveryAction": "live_reattach", "reasonCodes": ["all_authority_valid"]}
+    assert _checkpoint_recovery_decision(
+        {
+            "immutableSource": immutable,
+            "immutableRequested": immutable,
+            "liveReattachAvailable": False,
+            "coldRestoreAvailable": True,
+        }
+    ) == {
+        "recoveryAction": "cold_restore",
+        "reasonCodes": ["live_authority_unavailable"],
+    }
 
 
 @pytest.mark.asyncio
@@ -123,6 +211,49 @@ def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -
     parsed_checkpoint, candidate = parsed
     assert parsed_checkpoint == checkpoint
     assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
+
+
+def test_checkpoint_branch_request_is_derived_from_immutable_input_change() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    checkpoint = _checkpoint()
+    source = {
+        "instructionDigest": "sha256:old",
+        "runtimeId": "omnigent",
+        "model": "default",
+        "effort": "medium",
+        "providerProfileId": checkpoint.provider_profile_id,
+        "launchPolicyRef": checkpoint.launch_policy_ref,
+        "repositoryBranch": "main",
+        "publishMode": "none",
+    }
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="branch-workflow",
+        idempotencyKey="branch-turn-derived",
+        parameters={
+            "checkpointRecovery": {
+                "omnigentCheckpoint": checkpoint.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                ),
+                "immutableSource": source,
+                "immutableRequested": {
+                    **source,
+                    "instructionDigest": "sha256:new",
+                },
+                "liveReattachAvailable": True,
+                "coldRestoreAvailable": True,
+            }
+        },
+    )
+
+    assert _checkpoint_branch_from_request(request) is not None
+    assert request.parameters["checkpointRecovery"]["recoveryDecision"] == {
+        "recoveryAction": "branch_required",
+        "reasonCodes": ["immutable_instructionDigest_changed"],
+    }
 
 
 def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None:
