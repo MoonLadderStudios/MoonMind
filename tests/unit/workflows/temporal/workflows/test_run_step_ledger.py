@@ -227,7 +227,7 @@ async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_b
                 },
                 "diagnosticRefs": [],
             }
-        assert activity == "step_checkpoint.create"
+        assert activity == "step_checkpoint.create_v2"
         return await checkpoint_activities.step_checkpoint_create(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", execute_activity)

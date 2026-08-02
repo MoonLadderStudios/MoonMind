@@ -1362,6 +1362,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.unpin": ("artifacts", "artifact_unpin"),
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
     "step_checkpoint.create": ("artifacts", "step_checkpoint_create"),
+    "step_checkpoint.create_v2": ("artifacts", "step_checkpoint_create"),
     "step_checkpoint.validate": ("artifacts", "step_checkpoint_validate"),
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
@@ -3661,6 +3662,9 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
+            head = (
+                await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+            ).stdout.strip()
             archive_payload, entries = self._build_worktree_archive(workspace)
             workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
@@ -3700,6 +3704,7 @@ class TemporalSandboxActivities:
             return WorkspaceCheckpointEvidenceModel(
                 kind="worktree_archive",
                 baseCommit=model.base_commit,
+                headCommit=head,
                 archiveRef=archive_ref,
                 archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
                 workspaceDigest=workspace_digest,
@@ -15545,6 +15550,10 @@ class TemporalCheckpointActivities:
         return _compact_artifact_ref_text(artifact)
 
     async def _read_bytes(self, artifact_ref: str) -> bytes:
+        if artifact_ref.startswith("artifact://omnigent/"):
+            from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+            return await LocalOmnigentArtifactGateway().read_bytes(artifact_ref)
         if self._artifact_service is not None:
             _artifact, payload = await self._artifact_service.read(
                 artifact_id=artifact_ref,

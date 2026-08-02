@@ -258,6 +258,11 @@ def _bind_cold_restore_workspace_spec(
             ]
         )
     )
+    # Workspace checkpoints are executable restore authority, not passive input
+    # attachments.  Keep the applying boundary explicit for the owning host.
+    workspace_spec["workspaceCheckpointRestoreRef"] = (
+        restore_material.workspace_checkpoint_ref
+    )
     return workspace_spec
 
 
@@ -1068,6 +1073,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else tuple(workspace_intent.restore_input_refs)
                 ),
+                workspace_checkpoint_restore_ref=str(
+                    (request.workspace_spec or {}).get("workspaceCheckpointRestoreRef")
+                    or ""
+                ).strip()
+                or None,
                 # A remediation workspace is already materialized with its own
                 # inputs; only fresh normal runs project declared attachments
                 # through the owning-worker boundary.

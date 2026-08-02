@@ -5478,7 +5478,12 @@ class MoonMindRunWorkflow:
         inspection must happen before this call in sandbox/service activities.
         """
 
-        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step_checkpoint.create")
+        activity_type = (
+            "step_checkpoint.create_v2"
+            if omnigent_checkpoint_capture is not None
+            else "step_checkpoint.create"
+        )
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_type)
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
@@ -5494,13 +5499,10 @@ class MoonMindRunWorkflow:
             "omnigentCheckpoint": (
                 dict(omnigent_checkpoint) if omnigent_checkpoint is not None else None
             ),
-            "omnigentCheckpointCapture": (
-                dict(omnigent_checkpoint_capture)
-                if omnigent_checkpoint_capture is not None
-                else None
-            ),
             "idempotencyKey": checkpoint_id,
         }
+        if omnigent_checkpoint_capture is not None:
+            payload["omnigentCheckpointCapture"] = dict(omnigent_checkpoint_capture)
         result = await workflow.execute_activity(
             route.activity_type,
             payload,
@@ -6010,9 +6012,11 @@ class MoonMindRunWorkflow:
                 omnigent_capture_input["workspaceLocator"] = dict(
                     step_capture_input["workspaceLocator"]
                 )
-            omnigent_capture_input["instructionRefs"] = list(
-                self._prepared_artifact_refs
-            )
+            omnigent_capture_input["instructionRefs"] = [
+                ref
+                for ref in self._prepared_artifact_refs
+                if str(ref).startswith("artifact://")
+            ]
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,
             boundary=boundary,

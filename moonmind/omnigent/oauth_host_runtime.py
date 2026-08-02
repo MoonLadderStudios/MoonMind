@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import shutil
+import tarfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -229,6 +230,7 @@ class OmnigentOAuthHostRuntime:
         target_branch: str | None = None,
         checkout_commit: str | None = None,
         restore_input_refs: tuple[str, ...] = (),
+        workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
@@ -264,6 +266,7 @@ class OmnigentOAuthHostRuntime:
             target_branch=target_branch,
             checkout_commit=checkout_commit,
             restore_input_refs=restore_input_refs,
+            workspace_checkpoint_restore_ref=workspace_checkpoint_restore_ref,
             attachment_refs=attachment_refs,
             github_token=github_token,
             artifact_gateway=artifact_gateway,
@@ -947,6 +950,7 @@ class OmnigentOAuthHostRuntime:
         target_branch: str | None = None,
         checkout_commit: str | None = None,
         restore_input_refs: tuple[str, ...] = (),
+        workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
         github_token: str | None = None,
         artifact_gateway: Any | None = None,
@@ -1138,6 +1142,12 @@ class OmnigentOAuthHostRuntime:
                     restore_input_refs=restore_input_refs,
                     artifact_gateway=artifact_gateway,
                 )
+                if workspace_checkpoint_restore_ref:
+                    await self._apply_workspace_checkpoint_restore(
+                        workspace,
+                        artifact_ref=workspace_checkpoint_restore_ref,
+                        artifact_gateway=artifact_gateway,
+                    )
                 if restore_evidence:
                     materialization["restoreInputs"] = restore_evidence
                 attachment_evidence = await self._materialize_attachments(
@@ -1307,6 +1317,60 @@ class OmnigentOAuthHostRuntime:
             principal=_RESTORE_ARTIFACT_PRINCIPAL,
             noun="restore inputs",
         )
+
+    async def _apply_workspace_checkpoint_restore(
+        self,
+        workspace: Path,
+        *,
+        artifact_ref: str,
+        artifact_gateway: Any | None,
+    ) -> None:
+        """Apply a typed worktree archive at the owning workspace boundary."""
+
+        if not artifact_ref.startswith("artifact://"):
+            raise OmnigentOAuthHostError(
+                "workspace checkpoint restore requires a durable artifact ref",
+                code=WORKSPACE_LOCATOR_UNSUPPORTED,
+            )
+        service = self._as_artifact_service(artifact_gateway)
+        if service is None:
+            raise OmnigentOAuthHostError(
+                "workspace checkpoint restore requires an artifact service",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        artifact_id = artifact_ref[len("artifact://"):]
+        _metadata, payload = await service.read(
+            artifact_id=artifact_id,
+            principal=_RESTORE_ARTIFACT_PRINCIPAL,
+            allow_restricted_raw=True,
+        )
+        if len(payload) > _MAX_RESTORE_INPUT_BYTES:
+            raise OmnigentOAuthHostError(
+                "workspace checkpoint exceeds the authorized workspace bound",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            )
+        try:
+            with tarfile.open(fileobj=__import__("io").BytesIO(payload), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    target = (workspace / member.name).resolve()
+                    if not target.is_relative_to(workspace.resolve()) or member.isdev():
+                        raise OmnigentOAuthHostError(
+                            "workspace checkpoint contains an unsafe archive member",
+                            code=WORKSPACE_AUTHORITY_MISMATCH,
+                        )
+                    if member.issym() or member.islnk():
+                        link_target = (target.parent / member.linkname).resolve()
+                        if not link_target.is_relative_to(workspace.resolve()):
+                            raise OmnigentOAuthHostError(
+                                "workspace checkpoint symlink escapes workspace",
+                                code=WORKSPACE_AUTHORITY_MISMATCH,
+                            )
+                archive.extractall(workspace, filter="data")
+        except (tarfile.TarError, OSError) as exc:
+            raise OmnigentOAuthHostError(
+                "workspace checkpoint archive could not be applied",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            ) from exc
 
     async def _materialize_attachments(
         self,
