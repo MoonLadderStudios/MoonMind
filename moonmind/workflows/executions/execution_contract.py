@@ -2155,6 +2155,9 @@ class WorkflowExecutionSpec(BaseModel):
     publish: WorkflowPublishSelection = Field(
         default_factory=WorkflowPublishSelection, alias="publish"
     )
+    git: WorkflowGitSelection = Field(
+        default_factory=WorkflowGitSelection, alias="git"
+    )
     propose_tasks: bool = Field(
         default_factory=_default_propose_tasks, alias="proposeTasks"
     )
