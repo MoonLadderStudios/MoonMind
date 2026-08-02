@@ -61,6 +61,7 @@ EVIDENCE_GROUPS = {
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
 }
+PENDING_EVIDENCE_GROUPS = {"cumulativeJourney"}
 COMMANDS = (
     (
         sys.executable,
@@ -182,10 +183,13 @@ def main() -> int:
                 }
             )
             failed |= not passed
+        paths_passed = all(result["status"] == "passed" for result in path_results)
         evidence_group_results[name] = {
             "status": (
-                "passed"
-                if all(result["status"] == "passed" for result in path_results)
+                "pending"
+                if name in PENDING_EVIDENCE_GROUPS and paths_passed
+                else "passed"
+                if paths_passed
                 else "failed"
             ),
             "paths": path_results,

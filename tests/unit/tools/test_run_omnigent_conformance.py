@@ -25,6 +25,7 @@ def test_cumulative_remediation_stays_pending_until_production_shaped_proof() ->
     assert runner.PENDING_PRODUCTION_SHAPED_CASES == {
         "product.cumulative-remediation"
     }
+    assert runner.PENDING_EVIDENCE_GROUPS == {"cumulativeJourney"}
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
@@ -83,6 +84,7 @@ def test_runner_derives_group_results_from_executed_commands(
         "EVIDENCE_GROUPS",
         {"journey": ("proof-a.py",), "undeclared": ("proof-b.py",)},
     )
+    monkeypatch.setattr(runner, "PENDING_EVIDENCE_GROUPS", {"journey"})
     monkeypatch.setattr(
         runner.subprocess,
         "run",
@@ -122,7 +124,7 @@ def test_runner_derives_group_results_from_executed_commands(
     assert cumulative["status"] == "skipped"
     assert evidence["deterministicCoverage"]["evidenceGroupResults"]["journey"][
         "status"
-    ] == "passed"
+    ] == "pending"
     missing = evidence["deterministicCoverage"]["evidenceGroupResults"]["undeclared"]
     assert missing == {
         "status": "failed",

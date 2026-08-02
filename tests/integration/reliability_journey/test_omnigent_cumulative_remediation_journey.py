@@ -43,7 +43,10 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 def _digest(path: Path) -> str:
     content = b"".join(
-        relative.as_posix().encode() + b"\0" + relative.read_bytes() + b"\0"
+        relative.relative_to(path).as_posix().encode()
+        + b"\0"
+        + relative.read_bytes()
+        + b"\0"
         for relative in sorted(path.rglob("*"))
         if relative.is_file()
     )
