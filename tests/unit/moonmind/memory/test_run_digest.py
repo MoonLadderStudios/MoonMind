@@ -71,6 +71,27 @@ def test_build_run_digest_uses_terminal_execution_evidence_without_raw_logs() ->
     assert "raw log" not in digest.to_context_text().lower()
 
 
+def test_build_run_digest_projects_structured_repository_target() -> None:
+    service = TaskHistoryService(
+        qdrant_client=_VectorIndex(),
+        embedding_provider=_Embedder(),
+    )
+    parameters = {
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "feature/mm-1219"},
+        },
+        "publishMode": "pr",
+    }
+
+    digest = service.build_run_digest(_record(parameters=parameters))
+
+    assert digest.repo == "MoonLadderStudios/MoonMind"
+    assert digest.security_scope == "repo:MoonLadderStudios/MoonMind"
+
+
 def test_payload_for_digest_marks_retrieval_record_kind_and_provenance() -> None:
     service = TaskHistoryService(
         qdrant_client=_VectorIndex(),

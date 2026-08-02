@@ -18,6 +18,10 @@ from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
+from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
+    repository_name_from_value,
+)
 
 
 @dataclass(slots=True)
@@ -172,7 +176,7 @@ def _workflow_context_from_parameters(
     workflow_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
-    for key in ("repository", "repo", "branch", "startingBranch"):
+    for key in ("repo", "branch", "startingBranch"):
         value = workflow_payload.get(key, parameters.get(key))
         if value is not None:
             context[key] = value
@@ -181,6 +185,16 @@ def _workflow_context_from_parameters(
         for key in ("branch", "startingBranch"):
             if git_payload.get(key) is not None:
                 context[key] = git_payload[key]
+    repository_value = workflow_payload.get(
+        "repository", parameters.get("repository")
+    )
+    repository = repository_name_from_value(repository_value)
+    if repository:
+        context["repository"] = repository
+        context["repo"] = repository
+    branch = repository_branch_from_value(repository_value)
+    if branch:
+        context["branch"] = branch
     return context
 
 

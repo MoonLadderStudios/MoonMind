@@ -8,6 +8,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from moonmind.workflows.executions.repository_contract import (
+    repository_name_from_value,
+)
+
 RUN_DIGEST_SCHEMA_VERSION = "v1"
 RUN_DIGEST_RECORD_KIND = "run_digest"
 RUN_DIGEST_TRUST_CLASS = "derived"
@@ -156,10 +160,10 @@ class TaskHistoryService:
             "default",
         )
         repo = _first_text(
-            git.get("repository"),
-            task.get("repository"),
+            repository_name_from_value(git.get("repository")),
+            repository_name_from_value(task.get("repository")),
             task.get("repo"),
-            params.get("repository"),
+            repository_name_from_value(params.get("repository")),
             params.get("repo"),
             attrs.get("mm_repository"),
             attrs.get("mm_repo"),

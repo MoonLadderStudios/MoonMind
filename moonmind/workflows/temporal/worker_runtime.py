@@ -103,6 +103,10 @@ from moonmind.workflows.temporal.workers import (
 from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
 )
+from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
+    repository_name_from_value,
+)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
 )
@@ -644,6 +648,27 @@ def _coerce_non_empty_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _skill_input_workflow_context(
+    *,
+    parameter_payload: Mapping[str, Any],
+    git_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    context = {
+        **parameter_payload,
+        **_coerce_mapping(parameter_payload.get("context")),
+        **git_payload,
+    }
+    repository_value = parameter_payload.get("repository")
+    repository = repository_name_from_value(repository_value)
+    if repository:
+        context["repository"] = repository
+        context["repo"] = repository
+    branch = repository_branch_from_value(repository_value)
+    if branch:
+        context["branch"] = branch
+    return context
+
+
 def _first_non_empty_text(*values: Any) -> str:
     for value in values:
         text = _coerce_non_empty_text(value)
@@ -955,7 +980,7 @@ def _required_capability_blockers(
     if not capabilities:
         return blockers
 
-    repository = str(parameters.get("repository") or "").strip()
+    repository = repository_name_from_value(parameters.get("repository"))
 
     def add(
         capability: str,
@@ -1468,11 +1493,10 @@ def _build_runtime_planner():
                 _validated_skill_payload_inputs(
                     skill_payload=skill_contract_payload,
                     raw_inputs=selected_skill_inputs,
-                    workflow_context={
-                        **parameter_payload,
-                        **_coerce_mapping(parameter_payload.get("context")),
-                        **git_payload,
-                    },
+                    workflow_context=_skill_input_workflow_context(
+                        parameter_payload=parameter_payload,
+                        git_payload=git_payload,
+                    ),
                     path_prefix="steps[0].skill.inputs",
                 )
             )
@@ -1977,11 +2001,10 @@ def _build_runtime_planner():
                         step_entry=step_entry,
                         step_index=idx,
                         raw_inputs=step_tool_inputs,
-                        workflow_context={
-                            **parameter_payload,
-                            **_coerce_mapping(parameter_payload.get("context")),
-                            **git_payload,
-                        },
+                        workflow_context=_skill_input_workflow_context(
+                            parameter_payload=parameter_payload,
+                            git_payload=git_payload,
+                        ),
                     )
                 step_extra_inputs = {
                     k: v

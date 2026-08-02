@@ -3272,6 +3272,12 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
                 "agentRunId": "old-agent-run",
                 "agent_run_id": "old-agent-run-snake",
                 "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
@@ -3331,6 +3337,8 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert source.state is MoonMindWorkflowState.CANCELED
         assert source.close_status is TemporalExecutionCloseStatus.CANCELED
         assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.search_attributes["mm_repo"] == "MoonLadderStudios/MoonMind"
+        assert isinstance(rerun.parameters["repository"], dict)
         assert rerun.parameters["rerunSource"] == {
             "workflowId": source_workflow_id,
             "runId": source_run_id,
@@ -3734,6 +3742,12 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
                 "agentRunId": "source-agent-run",
                 "workflow": {"title": "source", "instructions": "Original"},
             },
@@ -3784,6 +3798,10 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
         assert destination.parameters["recoverySource"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/source"
         )
+        assert destination.search_attributes["mm_repo"] == (
+            "MoonLadderStudios/MoonMind"
+        )
+        assert isinstance(destination.parameters["repository"], dict)
         assert "agentRunId" not in destination.parameters
         refreshed_source = await session.get(
             TemporalExecutionCanonicalRecord, source.workflow_id
@@ -3810,6 +3828,12 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/MoonMind"},
+                    "branch": {"name": "feature/mm-1219"},
+                },
                 "agentRunId": "old-agent-run",
                 "workflow": {"title": "recovery source", "instructions": "Original"},
             },
@@ -3842,6 +3866,8 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
 
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["applied"] == "created_resumed_execution"
+        assert resumed.search_attributes["mm_repo"] == "MoonLadderStudios/MoonMind"
+        assert isinstance(resumed.parameters["repository"], dict)
         assert result["source"] == {
             "workflowId": created.workflow_id,
             "runId": created.run_id,
