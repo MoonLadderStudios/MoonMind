@@ -44,7 +44,7 @@ def _browser_payload() -> dict[str, object]:
             "executionTargetRef": "omnigent-codex-default",
             "launchPolicyRef": "on-demand-v1",
         },
-        "workflow": {
+        "task": {
             "instructions": "Make the bounded deterministic change.",
             "git": {"branch": "main"},
             "runtime": {"mode": "omnigent", "profileId": "oauth-1"},
@@ -63,7 +63,7 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     # credential, mount, image, or lease authority on behalf of the browser.
     assert canonical["targetRuntime"] == "omnigent"
     assert canonical["omnigent"] == authored["omnigent"]
-    assert canonical["workflow"]["runtime"] == authored["workflow"]["runtime"]
+    assert canonical["workflow"]["runtime"] == authored["task"]["runtime"]
     serialized = json.dumps(canonical)
     assert all(
         forbidden not in serialized
