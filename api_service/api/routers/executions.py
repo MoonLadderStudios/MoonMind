@@ -246,6 +246,10 @@ from moonmind.workflows.executions.execution_contract import (
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
 )
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryContractError,
+    compile_repository_target,
+)
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
 
@@ -8442,10 +8446,12 @@ async def _expand_goal_preset_for_workflow_submission(
     )
     template_inputs = {**schedule.inputs, **existing_inputs}
     context: dict[str, Any] = {}
-    repository = request_payload.get("repository") or task_payload.get("repository")
-    if isinstance(repository, str) and repository.strip():
-        context["repository"] = repository.strip()
-        context["repo"] = repository.strip()
+    repository = _submitted_repository_name(
+        request_payload.get("repository") or task_payload.get("repository")
+    )
+    if repository:
+        context["repository"] = repository
+        context["repo"] = repository
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
@@ -10027,6 +10033,41 @@ def _workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str
     return {}
 
 
+def _normalize_submitted_repository(
+    value: object,
+) -> tuple[str | dict[str, Any] | None, str | None]:
+    """Validate repository authoring while retaining its scalar projection."""
+
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        repository = value.strip()
+        return (repository, repository) if repository else (None, None)
+
+    try:
+        target = compile_repository_target(value)
+    except RepositoryContractError as exc:
+        raise _invalid_workflow_request(
+            f"payload.repository is invalid: {exc}"
+        ) from exc
+
+    return (
+        target.model_dump(by_alias=True, mode="json", exclude_none=True),
+        target.repository.name,
+    )
+
+
+def _submitted_repository_name(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, Mapping):
+        return ""
+    identity = value.get("repository")
+    if not isinstance(identity, Mapping):
+        return ""
+    return str(identity.get("name") or "").strip()
+
+
 async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
@@ -10093,6 +10134,14 @@ async def _create_execution_from_workflow_request(
             task_payload=task_payload,
             inherited=inherited,
         )
+
+    repository_payload, repository = _normalize_submitted_repository(
+        payload.get("repository")
+    )
+    if repository_payload is None:
+        payload.pop("repository", None)
+    else:
+        payload["repository"] = repository_payload
 
     # --- Schedule routing ---
     schedule: ScheduleParameters | None = None
@@ -10161,12 +10210,6 @@ async def _create_execution_from_workflow_request(
             if index < len(normalized_steps):
                 normalized_steps[index]["inputAttachments"] = refs
 
-    raw_repository = payload.get("repository")
-    if raw_repository is not None and not isinstance(raw_repository, str):
-        raise _invalid_workflow_request("payload.repository must be a string.")
-    repository = raw_repository.strip() if isinstance(raw_repository, str) else None
-    if repository == "":
-        repository = None
     integration = (
         str(
             payload.get("integration")
@@ -10489,7 +10532,7 @@ async def _create_execution_from_workflow_request(
 
     initial_parameters = {
         "requestType": request.type,
-        "repository": repository,
+        "repository": repository_payload,
         "requiredCapabilities": required_capabilities,
         "priority": request.priority,
         "maxAttempts": request.max_attempts,

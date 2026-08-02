@@ -1071,7 +1071,14 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
             }
             await _expand_goal_preset_for_workflow_submission(
                 task_payload=task_payload,
-                request_payload={"repository": "MoonLadderStudios/MoonMind"},
+                request_payload={
+                    "repository": {
+                        "provider": "git",
+                        "connectionRef": "repository-connection:git-default",
+                        "repository": {"name": "MoonLadderStudios/MoonMind"},
+                        "branch": {"name": "main"},
+                    }
+                },
                 session=session,
                 user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
@@ -8169,7 +8176,53 @@ def test_create_task_shaped_execution_rejects_legacy_target_branch_aliases(
     assert "targetBranch" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-def test_create_task_shaped_execution_rejects_non_string_repository(
+@pytest.mark.parametrize(
+    ("skill_name", "publish_mode", "inputs"),
+    [
+        ("batch-pr-resolver", "none", {"repo": "Moon/Mind"}),
+        ("pr-resolver", "auto", {"repo": "Moon/Mind", "pr": 123}),
+    ],
+)
+def test_create_task_shaped_execution_accepts_provider_repository_for_resolvers(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    skill_name: str,
+    publish_mode: str,
+    inputs: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    repository_target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "Moon/Mind"},
+        "branch": {"name": "main"},
+    }
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": repository_target,
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Resolve pull requests.",
+                    "skill": {"name": skill_name},
+                    "inputs": inputs,
+                    "publish": {"mode": publish_mode},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    create_kwargs = service.create_execution.await_args.kwargs
+    assert create_kwargs["repository"] == "Moon/Mind"
+    assert create_kwargs["initial_parameters"]["repository"] == repository_target
+
+
+def test_create_task_shaped_execution_rejects_malformed_repository_target(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -8188,7 +8241,9 @@ def test_create_task_shaped_execution_rejects_non_string_repository(
     )
 
     assert response.status_code == 422
-    assert "repository" in response.json()["detail"]["message"]
+    assert response.json()["detail"]["message"].startswith(
+        "payload.repository is invalid: REPOSITORY_TARGET_INVALID:"
+    )
     service.create_execution.assert_not_awaited()
 
 def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_targets(
