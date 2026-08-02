@@ -124,6 +124,7 @@ from moonmind.workflows.temporal.title_search import tokenize_title
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+_BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
 FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
     {
         "recoverySource",
@@ -2583,12 +2584,6 @@ class TemporalExecutionService:
                 return await self._sync_projection_best_effort(record)
             return record
 
-        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
-            await self._best_effort_terminate_workflow_scoped_managed_sessions(
-                workflow_id=record.workflow_id,
-                reason=reason_text,
-            )
-
         try:
             if graceful:
                 # Temporal cancellation is the authoritative terminal action.
@@ -2636,6 +2631,15 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+            # Session cleanup is auxiliary to the authoritative Temporal close
+            # request. Dispatch it only after the parent cancellation and
+            # terminal state are durable so a stuck runtime cannot make
+            # the operator's cancel command a no-op.
+            await self._best_effort_terminate_workflow_scoped_managed_sessions(
+                workflow_id=record.workflow_id,
+                reason=reason_text,
+            )
         if isinstance(record, TemporalExecutionCanonicalRecord):
             return await self._sync_projection_best_effort(record)
         return record
@@ -3015,10 +3019,21 @@ class TemporalExecutionService:
 
         session_workflow_id = f"{workflow_id}:session:{session_record.runtime_id}"
         try:
-            await self._client_adapter.update_workflow(
-                session_workflow_id,
-                "TerminateSession",
-                {"reason": reason},
+            await asyncio.wait_for(
+                self._client_adapter.update_workflow(
+                    session_workflow_id,
+                    "TerminateSession",
+                    {"reason": reason},
+                ),
+                timeout=_BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Best-effort session termination timed out after %.1fs for "
+                "workflow %s session %s",
+                _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS,
+                workflow_id,
+                session_record.session_id,
             )
         except Exception:
             logger.warning(
