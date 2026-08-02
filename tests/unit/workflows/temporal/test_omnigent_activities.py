@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
 from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _checkpoint_branch_from_request,
     _checkpoint_recovery_from_request,
     _resolve_live_recovery_authority,
     omnigent_execute_activity,
@@ -94,6 +95,58 @@ def test_checkpoint_recovery_request_builds_validated_candidate_workspace() -> N
     )
     assert candidate.head_ref == checkpoint.head_ref
     assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
+
+
+def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    checkpoint = _checkpoint()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="branch-workflow",
+        idempotencyKey="branch-turn-1",
+        parameters={
+            "checkpointRecovery": {
+                "recoveryAction": "branch_required",
+                "omnigentCheckpoint": checkpoint.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                ),
+            }
+        },
+    )
+
+    parsed = _checkpoint_branch_from_request(request)
+
+    assert parsed is not None
+    parsed_checkpoint, candidate = parsed
+    assert parsed_checkpoint == checkpoint
+    assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
+
+
+def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    checkpoint = _checkpoint()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="branch-workflow",
+        idempotencyKey=checkpoint.idempotency_key,
+        parameters={
+            "checkpointRecovery": {
+                "recoveryAction": "branch_required",
+                "omnigentCheckpoint": checkpoint.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                ),
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="new idempotency key"):
+        _checkpoint_branch_from_request(request)
 
 
 @pytest.mark.asyncio

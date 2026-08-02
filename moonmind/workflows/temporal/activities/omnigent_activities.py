@@ -38,6 +38,30 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
     return checkpoint, candidate_workspace
 
 
+def _checkpoint_branch_from_request(request: AgentExecutionRequest):
+    """Return branch inputs only for an explicit, immutable-input-changing turn.
+
+    Recovery and branch execution intentionally share checkpoint validation, but
+    they do not share lease/session identity.  The explicit action keeps a normal
+    resume from accidentally creating a new branch and gives the production
+    Activity a typed call site for ``branch_from_checkpoint``.
+    """
+
+    recovery = (request.parameters or {}).get("checkpointRecovery")
+    if (
+        not isinstance(recovery, dict)
+        or recovery.get("recoveryAction") != "branch_required"
+    ):
+        return None
+    parsed = _checkpoint_recovery_from_request(request)
+    if parsed is None:
+        raise ValueError("checkpoint branch requires validated checkpoint evidence")
+    checkpoint, candidate_workspace = parsed
+    if request.idempotency_key == checkpoint.idempotency_key:
+        raise ValueError("checkpoint branch requires a new idempotency key")
+    return checkpoint, candidate_workspace
+
+
 async def _resolve_live_recovery_authority(
     *, checkpoint: Any, session_factory: Any, host_repository: Any, run_store: Any
 ) -> dict[str, Any]:
@@ -294,6 +318,23 @@ async def omnigent_execute_activity(
             ),
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
+        branch_inputs = _checkpoint_branch_from_request(request)
+        if branch_inputs is not None:
+            checkpoint, candidate_workspace = branch_inputs
+            authority = await _resolve_live_recovery_authority(
+                checkpoint=checkpoint,
+                session_factory=async_session_maker,
+                host_repository=host_repository,
+                run_store=run_store,
+            )
+            return await coordinator.branch_from_checkpoint(
+                request=request,
+                checkpoint=checkpoint,
+                current_credential_generation=authority[
+                    "current_credential_generation"
+                ],
+                candidate_workspace=candidate_workspace,
+            )
         if recovery_inputs is not None:
             checkpoint, candidate_workspace = recovery_inputs
             authority = await _resolve_live_recovery_authority(
