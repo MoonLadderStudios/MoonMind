@@ -2592,6 +2592,12 @@ async def _run_coordinator_failure_case(
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
     )
     error = _injected_launch_error(code)
+    request_uses_on_demand_policy = bool(
+        request is not None
+        and isinstance(request.parameters.get("omnigent"), dict)
+        and request.parameters["omnigent"].get("launchPolicyRef")
+        == "codex-on-demand@1"
+    )
 
     class FailureOwners:
         """Deterministic fakes for the concrete launch/cleanup owners.
@@ -2646,7 +2652,7 @@ async def _run_coordinator_failure_case(
         async def get_binding_for_profile(self, _profile_id):
             if fail_at == "binding":
                 raise error
-            if fail_at in {
+            if request_uses_on_demand_policy or fail_at in {
                 "container_start", "image_pull", "network_start",
                 "credential_volume_missing", "credential_volume_owner",
                 "credential_generation", "credential_login",

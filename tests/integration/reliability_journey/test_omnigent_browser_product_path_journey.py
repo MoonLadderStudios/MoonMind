@@ -55,6 +55,30 @@ pytest_plugins = (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
 
+@pytest.fixture(autouse=True)
+def persisted_policy_authority(monkeypatch):
+    """Resolve the same persisted launch-policy snapshots as the unit owner."""
+
+    async def resolve(_self, policy_ref):
+        document = policy_document()
+        if policy_ref.startswith("codex-on-demand@"):
+            document["host"]["mode"] = "on_demand_docker"
+            document["host"]["backendRef"] = "container-backend"
+            document["session"]["cleanup"] = "remove"
+        return compile_policy_snapshot(
+            policy_id=policy_ref.rsplit("@", 1)[0],
+            version=int(policy_ref.rsplit("@", 1)[1]),
+            document=document,
+            validation={"valid": True, "diagnostics": []},
+        )
+
+    monkeypatch.setattr(
+        OmnigentProfileBoundExecutionCoordinator,
+        "_resolve_policy_snapshot",
+        resolve,
+    )
+
+
 def _browser_payload() -> dict[str, object]:
     """Exact authority shape emitted by the Create Workflow page."""
 
@@ -84,7 +108,8 @@ async def test_browser_payload_compiles_replays_and_releases_only_after_cleanup(
     # credential, mount, image, or lease authority on behalf of the browser.
     assert canonical["targetRuntime"] == "omnigent"
     assert canonical["omnigent"] == authored["omnigent"]
-    assert canonical["workflow"]["runtime"] == authored["task"]["runtime"]
+    assert canonical["workflow"]["runtime"]["mode"] == "omnigent"
+    assert canonical["workflow"]["runtime"]["profileId"] == "oauth-1"
     serialized = json.dumps(canonical)
     assert all(
         forbidden not in serialized
@@ -274,27 +299,9 @@ def test_product_path_workspace_owner_rejects_invalid_and_escaped_locators(
     ],
 )
 async def test_product_path_failures_never_fallback_and_preserve_release_order(
-    monkeypatch, fail_at: str, code: str
+    fail_at: str, code: str
 ) -> None:
     """Drive the real coordinator with failures only at external-owner seams."""
-
-    async def resolve_policy(_self, policy_ref):
-        document = policy_document()
-        document["host"]["mode"] = "on_demand_docker"
-        document["host"]["backendRef"] = "container-backend"
-        document["session"]["cleanup"] = "remove"
-        return compile_policy_snapshot(
-            policy_id=policy_ref.rsplit("@", 1)[0],
-            version=int(policy_ref.rsplit("@", 1)[1]),
-            document=document,
-            validation={"valid": True, "diagnostics": []},
-        )
-
-    monkeypatch.setattr(
-        OmnigentProfileBoundExecutionCoordinator,
-        "_resolve_policy_snapshot",
-        resolve_policy,
-    )
     events, actions, owner_calls = await _run_coordinator_failure_case(
         fail_at=fail_at,
         code=code,
