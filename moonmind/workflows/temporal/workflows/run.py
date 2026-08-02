@@ -18231,6 +18231,17 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        checkpoint_recovery = None
+        if (
+            self._recovery_failed_step_id == node_id
+            and isinstance(self._recovery_source, Mapping)
+            and self._workflow_patch_enabled(
+                RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+            )
+        ):
+            # This is trusted workflow-owned recovery state created by the API
+            # after artifact validation. Keep it out of ordinary plan inputs.
+            checkpoint_recovery = dict(self._recovery_source)
         if (
             self._workflow_patch_enabled(
                 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
@@ -19117,6 +19128,7 @@ class MoonMindRunWorkflow:
                 if isinstance(remediation_workspace, Mapping)
                 else None
             ),
+            checkpoint_recovery=checkpoint_recovery,
             terminal_contract=terminal_contract_payload,
             terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
