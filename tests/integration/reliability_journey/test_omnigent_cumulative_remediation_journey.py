@@ -11,7 +11,9 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -30,6 +32,7 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     advance_head,
     freeze_attempt_input,
 )
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_user_dependencies,
@@ -154,6 +157,36 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert authored["targetRuntime"] == "omnigent"
     assert authored["omnigent"]["executionTargetRef"] == "omnigent-host-codex"
     assert authored["workflow"]["runtime"]["executionProfileRef"] == "omnigent-codex"
+
+    # Cross the real deterministic workflow compiler boundary.  This is the
+    # request shape consumed by the Temporal agent activity; an API-shaped
+    # dictionary is not accepted as compilation evidence.
+    compiler = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="mm:wf-3480", run_id="run-1", namespace="default"
+        ),
+    ):
+        compiled = compiler._build_agent_execution_request(
+            node_inputs={
+                "runtime": {
+                    "mode": authored["targetRuntime"],
+                    "executionProfileRef": authored["workflow"]["runtime"][
+                        "executionProfileRef"
+                    ],
+                },
+                "omnigent": {"harness": "codex-native"},
+            },
+            node_id="initial-implementation",
+            tool_name="omnigent",
+            workflow_parameters=authored,
+        )
+    assert compiled.agent_kind == "external"
+    assert compiled.agent_id == "omnigent"
+    assert compiled.execution_profile_ref == "omnigent-codex"
+    assert compiled.parameters["omnigent"] == {"harness": "codex-native"}
+    assert compiled.step_execution.workflow_id == "mm:wf-3480"
 
     artifacts = _CheckpointStore(tmp_path / "artifacts")
     source = tmp_path / "source"

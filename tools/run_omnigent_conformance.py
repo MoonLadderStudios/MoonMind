@@ -44,6 +44,8 @@ EVIDENCE_GROUPS = {
         "test_omnigent_cumulative_remediation_journey.py",
     ),
     "failureAndRestartMatrix": (
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
     ),
     "rolloutAndReplay": (

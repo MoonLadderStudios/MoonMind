@@ -45,6 +45,8 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
         "MoonLadderStudios/MoonMind#3456",
     )
     assert runner.EVIDENCE_GROUPS["failureAndRestartMatrix"] == (
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
     )
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
