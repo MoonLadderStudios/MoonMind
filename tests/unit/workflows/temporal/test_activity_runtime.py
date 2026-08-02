@@ -140,6 +140,7 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
                 "baseCommit": "abc123",
                 "headCommit": "def456",
                 "archiveRef": "artifact://workspace/archive",
+                "manifestRef": "artifact://workspace/manifest",
                 "archiveDigest": "sha256:" + "2" * 64,
                 "archiveBytes": 10,
                 "createdAt": "2026-08-02T00:00:00Z",

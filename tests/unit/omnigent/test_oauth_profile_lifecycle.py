@@ -1672,6 +1672,7 @@ async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_
             "artifact://workspace-checkpoint/2",
             "artifact://candidate-head/2",
         ],
+        "workspaceCheckpointRestoreRef": "artifact://workspace-checkpoint",
     }
     assert restored_request.input_refs == [
         "artifact://request-input",
@@ -1773,7 +1774,7 @@ async def test_cold_restore_intent_materializes_clean_pinned_workspace(tmp_path)
         capture_output=True,
         text=True,
     ).stdout.strip() == baseline
-    assert intent.input_refs == ["artifact://instructions", "artifact://context"]
+    assert intent.input_refs == ("artifact://instructions", "artifact://context")
     restored = sorted(
         path.read_bytes() for path in (resolved / ".moonmind" / "restore").iterdir()
     )

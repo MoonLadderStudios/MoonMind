@@ -222,6 +222,7 @@ async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_b
                     "baseCommit": "abc123",
                     "headCommit": "def456",
                     "archiveRef": "artifact://workspace/archive",
+                    "manifestRef": "artifact://workspace/manifest",
                     "archiveDigest": "sha256:" + "2" * 64,
                     "createdAt": now.isoformat(),
                 },
@@ -347,7 +348,7 @@ async def test_dynamic_remediation_validates_active_managed_session_workspace(
         captured.append({"activity": activity, "payload": payload})
         if activity == "agent_runtime.capture_workspace_checkpoint":
             return _managed_checkpoint_capture_result(payload)
-        assert activity == "step_checkpoint.create"
+        assert activity == "step_checkpoint.create_v2"
         return _checkpoint_create_result(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
@@ -4179,7 +4180,7 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
             assert payload["kind"] == "worktree_archive"
             assert payload["workspaceLocator"]["kind"] == "sandbox"
             return _managed_checkpoint_capture_result(payload)
-        assert activity == "step_checkpoint.create"
+        assert activity == "step_checkpoint.create_v2"
         return _checkpoint_create_result(payload)
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
