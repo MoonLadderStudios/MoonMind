@@ -18,10 +18,13 @@ def _load_runner():
     return module
 
 
-def test_cumulative_remediation_case_is_backed_by_controlling_deterministic_journey() -> None:
+def test_cumulative_remediation_stays_pending_until_production_shaped_proof() -> None:
     runner = _load_runner()
 
-    assert "product.cumulative-remediation" in runner.DETERMINISTIC_CASES
+    assert "product.cumulative-remediation" not in runner.DETERMINISTIC_CASES
+    assert runner.PENDING_PRODUCTION_SHAPED_CASES == {
+        "product.cumulative-remediation"
+    }
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
@@ -108,6 +111,15 @@ def test_runner_derives_group_results_from_executed_commands(
 
     assert runner.main() == 1
     evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["deterministicCoverage"][
+        "pendingProductionShapedCaseIds"
+    ] == ["product.cumulative-remediation"]
+    cumulative = next(
+        case
+        for case in evidence["cases"]
+        if case["caseId"] == "product.cumulative-remediation"
+    )
+    assert cumulative["status"] == "skipped"
     assert evidence["deterministicCoverage"]["evidenceGroupResults"]["journey"][
         "status"
     ] == "passed"

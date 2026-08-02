@@ -21,7 +21,6 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
-    "product.cumulative-remediation",
     "proxy.routes",
     "session.first-message-crash-matrix",
     "events.durable-replay-sse",
@@ -33,6 +32,13 @@ DETERMINISTIC_CASES = {
     "events.replay-overlap-schema-drift",
     "resources.bounds-and-secret-scan",
 }
+# This case stays critical in the profile, but it must remain skipped in the
+# partial deterministic report until one production-shaped journey proves the
+# persisted Temporal, profile-bound host/session, publication, cleanup, and
+# Workflow Detail boundaries plus the complete fault/restart matrix.  A green
+# exit from the narrower checkpoint test is useful evidence, but is not enough
+# to classify the product case as passed.
+PENDING_PRODUCTION_SHAPED_CASES = {"product.cumulative-remediation"}
 ISSUE_LINKS = (
     "MoonLadderStudios/MoonMind#3480",
     "MoonLadderStudios/MoonMind#3471",
@@ -149,7 +155,10 @@ def main() -> int:
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
     profile_case_ids = {case["id"] for case in profile["cases"]}
     missing_deterministic = DETERMINISTIC_CASES - profile_case_ids
+    missing_pending = PENDING_PRODUCTION_SHAPED_CASES - profile_case_ids
     if missing_deterministic:
+        failed = True
+    if missing_pending:
         failed = True
     evidence_group_results: dict[str, dict[str, object]] = {}
     for name, paths in EVIDENCE_GROUPS.items():
@@ -225,6 +234,10 @@ def main() -> int:
         "deterministicCoverage": {
             "requiredCaseIds": sorted(DETERMINISTIC_CASES),
             "missingCaseIds": sorted(missing_deterministic),
+            "pendingProductionShapedCaseIds": sorted(
+                PENDING_PRODUCTION_SHAPED_CASES
+            ),
+            "missingPendingCaseIds": sorted(missing_pending),
             "issueLinks": list(ISSUE_LINKS),
             "evidenceGroups": {
                 name: list(paths) for name, paths in EVIDENCE_GROUPS.items()
