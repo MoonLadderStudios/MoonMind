@@ -166,6 +166,69 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     assert plan_ref == "art_plan_1"
     assert workflow._input_ref == "art_input_1"
     assert workflow._plan_ref == "art_plan_1"
+    assert workflow._repo == "MoonLadderStudios/MoonMind"
+
+
+def test_initialize_from_payload_projects_canonical_repository_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._canonical_git_repository_projection_enabled = True
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {"instructions": "Resolve GitHub issues."},
+            },
+        }
+    )
+
+    assert workflow._repo == "MoonLadderStudios/Tactics"
+
+
+def test_initialize_from_payload_does_not_project_lore_target_to_github_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._canonical_git_repository_projection_enabled = True
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repo": "must-not-be-used-as-a-github-repository",
+                "repository": {
+                    "provider": "lore",
+                    "connectionRef": "repository-connection:tactics",
+                    "repository": {"name": "tactics-id"},
+                    "branch": {"name": "Main"},
+                },
+                "workflow": {"instructions": "Prepare a Lore review request."},
+            },
+        }
+    )
+
+    assert workflow._repo is None
+
 
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
