@@ -9485,15 +9485,7 @@ class TemporalAgentRuntimeActivities:
                 )
                 validated_refs.setdefault(
                     "authoritativeEvidenceDigest",
-                    "sha256:"
-                    + hashlib.sha256(
-                        json.dumps(
-                            remaining_work,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        ).encode("utf-8")
-                    ).hexdigest(),
+                    _unordered_json_list_digest(remaining_work),
                 )
                 gate_payload["validatedRefs"] = validated_refs
                 gate_payload.pop("validated_refs", None)
@@ -15556,6 +15548,22 @@ def _compact_artifact_ref_text(artifact: Any) -> str:
 
 def _json_bytes(payload: Mapping[str, Any] | list[Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _unordered_json_list_digest(values: Sequence[Any]) -> str:
+    """Hash a JSON list as a multiset while preserving each item's semantics."""
+
+    canonical_items = sorted(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        for value in values
+    )
+    canonical_list = "[" + ",".join(canonical_items) + "]"
+    return "sha256:" + hashlib.sha256(canonical_list.encode("utf-8")).hexdigest()
 
 
 class TemporalCheckpointActivities:

@@ -774,6 +774,13 @@ RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
 RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH = (
     "run-moonspec-verify-remaining-work-evidence-v1"
 )
+# A verifier artifact receives a new opaque ref on every publication, even
+# when its structured remaining-work payload is unchanged. Compare the stable
+# content digest while retaining the artifact ref as durable handoff evidence.
+# Gate the state and Continue-As-New payload change for replay safety.
+RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH = (
+    "run-remediation-stable-progress-identity-v1"
+)
 # Promote canonical checkpoint Activity evidence into cumulative remediation
 # authority and carry that compact head through Continue-As-New. Histories that
 # already admitted remediation without this evidence retain their prior command
@@ -3995,9 +4002,12 @@ class MoonMindRunWorkflow:
         if state is None:
             raise ValueError("remediation loop is not initialized")
         payload = dict(self._original_input_payload)
+        state_payload = state.model_dump(by_alias=True, mode="json")
+        if not workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH):
+            state_payload.pop("latestProgressSignature", None)
         continuation: dict[str, Any] = {
             "schemaVersion": 1,
-            "state": state.model_dump(by_alias=True, mode="json"),
+            "state": state_payload,
             "orderedNodes": [dict(node) for node in ordered_nodes],
             "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
         }
@@ -4090,6 +4100,7 @@ class MoonMindRunWorkflow:
         verdict: str,
         gate_result_ref: str | None,
         remaining_work_ref: str | None,
+        progress_signature: str | None = None,
         current_index: int | None = None,
         logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
@@ -4187,6 +4198,13 @@ class MoonMindRunWorkflow:
         state = record_semantic_progress(
             state,
             progress_ref=remaining_work_ref,
+            progress_signature=(
+                progress_signature
+                if workflow.patched(
+                    RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
+                )
+                else None
+            ),
         )
         decision = decide_remediation_continuation(
             spec=spec,
@@ -12384,6 +12402,12 @@ class MoonMindRunWorkflow:
                                 gate_result_ref=step_gate_result_ref,
                                 remaining_work_ref=(
                                     step_gate_result.remaining_work_ref
+                                ),
+                                progress_signature=self._coerce_text(
+                                    (
+                                        step_gate_result.validated_refs or {}
+                                    ).get("authoritativeEvidenceDigest"),
+                                    max_chars=200,
                                 ),
                                 current_index=index,
                                 logical_step_id=node_id,

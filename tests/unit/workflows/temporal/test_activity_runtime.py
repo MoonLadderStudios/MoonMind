@@ -5629,6 +5629,26 @@ async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_jso
             assert persisted_payload["nextVerificationRequired"] is True
 
 
+async def test_remaining_work_digest_is_independent_of_entry_order() -> None:
+    first = {
+        "requirement": "artifact linkage",
+        "gapType": "implementation",
+    }
+    second = {
+        "requirement": "workflow routing",
+        "gapType": "behavior",
+    }
+
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) == activity_runtime_module._unordered_json_list_digest([second, first])
+    assert activity_runtime_module._unordered_json_list_digest(
+        [first, second]
+    ) != activity_runtime_module._unordered_json_list_digest(
+        [first, {**second, "gapType": "contract"}]
+    )
+
+
 async def test_agent_runtime_publish_artifacts_links_remediation_verification_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
