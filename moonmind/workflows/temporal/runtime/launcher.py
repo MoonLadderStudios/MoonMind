@@ -77,17 +77,6 @@ LoreRepositoryReadinessAdapter = Callable[
     Awaitable[ResolvedRepositoryTarget],
 ]
 
-_DEFAULT_REPOSITORY_CONNECTION_PATH = Path(
-    os.environ.get(
-        "MOONMIND_REPOSITORY_CONNECTION_PATH",
-        os.path.join(
-            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-            "repository_connections",
-            "git-default.json",
-        ),
-    )
-)
-
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 _MODEL_TIER_DIAGNOSTIC_STRING_LIMIT = 1024
 _MODEL_TIER_DIAGNOSTIC_FIELDS = (
