@@ -18,14 +18,13 @@ def _load_runner():
     return module
 
 
-def test_cumulative_remediation_case_is_reserved_for_live_provider_evidence() -> None:
+def test_cumulative_remediation_case_is_backed_by_controlling_deterministic_journey() -> None:
     runner = _load_runner()
 
-    assert "product.cumulative-remediation" not in runner.DETERMINISTIC_CASES
+    assert "product.cumulative-remediation" in runner.DETERMINISTIC_CASES
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
-        "tests/integration/reliability/test_checkpoint_cold_resume.py",
-        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
-        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
     )
     flattened_commands = {
         argument

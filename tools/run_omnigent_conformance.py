@@ -21,6 +21,7 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
+    "product.cumulative-remediation",
     "proxy.routes",
     "session.first-message-crash-matrix",
     "events.durable-replay-sse",
@@ -39,9 +40,8 @@ ISSUE_LINKS = (
 )
 EVIDENCE_GROUPS = {
     "cumulativeJourney": (
-        "tests/integration/reliability/test_checkpoint_cold_resume.py",
-        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
-        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
     ),
     "failureAndRestartMatrix": (
         "tests/integration/omnigent/test_embedded_recovery.py",
@@ -73,6 +73,8 @@ COMMANDS = (
         "-m",
         "pytest",
         "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/integration/reliability_journey/"
+        "test_omnigent_cumulative_remediation_journey.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
         "tests/unit/workflows/temporal/workflows/test_run_integration.py",
         "tests/integration/omnigent/test_embedded_recovery.py",
