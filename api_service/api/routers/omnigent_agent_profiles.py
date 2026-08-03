@@ -37,6 +37,10 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_readiness,
     synchronize_upstream_inventory,
 )
+from api_service.services.omnigent_agent_bundle_service import (
+    BundleValidationError,
+    publish_validated_agent_bundle,
+)
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.services.omnigent_agent_smoke_service import (
     DEFAULT_SMOKE_TIMEOUT_SECONDS,
@@ -197,6 +201,9 @@ class ValidateCreate(BaseModel):
 class SmokeCreate(BaseModel):
     version: int | None = Field(None, ge=1)
 
+class BundleImportCreate(BaseModel):
+    version: int | None = Field(None, ge=1)
+
 def _assert_owner(profile: OmnigentAgentProfile, user: User) -> None:
     if profile.owner_id != user.id and not user.is_superuser:
         raise HTTPException(403, "profile owner permission required")
@@ -230,7 +237,9 @@ def _response(profile: OmnigentAgentProfile, versions: list[OmnigentAgentProfile
             "defaultForRuntime": profile.default_for_runtime, "versions": [{"version": v.version, "digest": v.digest, "document": v.document,
             "parentVersion": v.parent_version, "clonedFromProfileId": v.cloned_from_profile_id,
             "clonedFromVersion": v.cloned_from_version, "upstreamSnapshot": v.upstream_snapshot,
-            "validationResult": v.validation_result, "createdAt": v.created_at} for v in versions]}
+            "validationResult": v.validation_result,
+            "rolloutMetadata": getattr(v, "rollout_metadata", None),
+            "createdAt": v.created_at} for v in versions]}
 
 async def _load(session: AsyncSession, profile_id: str) -> tuple[OmnigentAgentProfile, list[OmnigentAgentProfileVersion]]:
     profile = await session.get(OmnigentAgentProfile, profile_id)
@@ -552,6 +561,77 @@ async def smoke_validate_profile(
             },
         )
     )
+    await session.commit()
+    return result
+
+
+@router.post("/{profile_id}/import-bundle")
+async def import_profile_bundle(
+    profile_id: str,
+    body: BundleImportCreate,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    """Publish one validated immutable bundle through the authorized facade."""
+
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile, versions = await _load(session, profile_id)
+    _assert_owner(profile, current_user)
+    target_number = body.version or profile.active_version or (
+        versions[0].version if versions else None
+    )
+    target = next((v for v in versions if v.version == target_number), None)
+    if target is None:
+        raise HTTPException(404, "profile version not found")
+    source = target.document.get("source", {})
+    artifact_ref = str(source.get("bundleArtifactRef") or "")
+    if not artifact_ref:
+        raise HTTPException(409, "profile version is not artifact-backed")
+    if target.document.get("endpointRef") != "default":
+        raise HTTPException(409, "profile endpoint is outside the configured bridge scope")
+    if (
+        bridge_config.host_protocol_mode != "proxy"
+        or target.document.get("bridgeMode") != "proxy"
+        or bridge_proxy is None
+    ):
+        raise HTTPException(409, "bundle import requires the authorized proxy bridge mode")
+    if not target.validation_result or target.validation_result.get("ready") is not True:
+        raise HTTPException(409, "profile version must pass validation before bundle import")
+
+    artifact_id = artifact_ref.removeprefix("artifact:")
+    stored_artifact, bundle_bytes = await artifact_service.read(
+        artifact_id=artifact_id, principal=str(current_user.id)
+    )
+    filename = f"{profile_id}-v{target.version}.bundle"
+    try:
+        result = await publish_validated_agent_bundle(
+            data=bundle_bytes,
+            content_type=str(stored_artifact.content_type or "application/octet-stream"),
+            expected_digest=str(source["bundleDigest"]),
+            filename=filename,
+            publish=bridge_proxy.import_agent_bundle,
+        )
+    except (BundleValidationError, OmnigentBridgeError) as exc:
+        failure = {
+            "schemaVersion": "moonmind.omnigent-agent-bundle-import.v1",
+            "status": "failed",
+            "failureClass": (
+                exc.failure_class if isinstance(exc, OmnigentBridgeError) else "validation_error"
+            ),
+        }
+        target.rollout_metadata = {**(target.rollout_metadata or {}), "bundleImport": failure}
+        session.add(_audit(profile_id, "bundle_import_failed", current_user,
+                           version=target.version, metadata=failure))
+        await session.commit()
+        raise HTTPException(409 if isinstance(exc, BundleValidationError) else 502,
+                            "bundle import failed; see profile audit evidence") from exc
+
+    target.rollout_metadata = {**(target.rollout_metadata or {}), "bundleImport": result}
+    session.add(_audit(profile_id, "bundle_imported", current_user,
+                       version=target.version, metadata=result))
     await session.commit()
     return result
 

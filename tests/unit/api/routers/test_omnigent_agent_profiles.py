@@ -48,6 +48,7 @@ def test_fixed_post_routes_precede_lifecycle_catch_all():
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/default") < catch_all
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/snapshot") < catch_all
     assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/smoke") < catch_all
+    assert post_paths.index("/api/omnigent/agent-profiles/{profile_id}/import-bundle") < catch_all
 
 
 def test_list_response_contract_includes_ordered_versions_and_default_state():
@@ -70,6 +71,7 @@ def test_list_response_contract_includes_ordered_versions_and_default_state():
             cloned_from_version=None,
             upstream_snapshot={"upstreamId": "codex"},
             validation_result={"ready": True},
+            rollout_metadata={"bundleImport": {"status": "succeeded"}},
             created_at=None,
         ),
         SimpleNamespace(
@@ -81,6 +83,7 @@ def test_list_response_contract_includes_ordered_versions_and_default_state():
             cloned_from_version=None,
             upstream_snapshot=None,
             validation_result=None,
+            rollout_metadata=None,
             created_at=None,
         ),
     ]
@@ -91,6 +94,7 @@ def test_list_response_contract_includes_ordered_versions_and_default_state():
     assert "default" not in response
     assert [version["version"] for version in response["versions"]] == [2, 1]
     assert response["versions"][0]["validationResult"] == {"ready": True}
+    assert response["versions"][0]["rolloutMetadata"]["bundleImport"]["status"] == "succeeded"
 
 def test_source_requires_stable_identity_or_immutable_bundle():
     with pytest.raises(ValidationError, match="exactly one"):

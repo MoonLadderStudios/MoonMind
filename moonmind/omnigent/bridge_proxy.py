@@ -133,6 +133,11 @@ class OmnigentSessionFacade(Protocol):
     async def list_hosts(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 
+    async def import_agent_bundle(
+        self, *, filename: str, content: bytes, content_type: str
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     async def create_session(
         self, *, request: BridgeSessionCreateRequest, binding: BridgePrincipalBinding
     ) -> dict[str, Any]:
@@ -949,6 +954,23 @@ class OmnigentBridgeSessionProxy:
 
         self._require_proxy_mode()
         return await self._list_agents_raw()
+
+    async def import_agent_bundle(
+        self, *, filename: str, content: bytes, content_type: str
+    ) -> dict[str, Any]:
+        """Publish a prevalidated immutable bundle to the configured endpoint."""
+
+        self._require_proxy_mode()
+        try:
+            return await self._client.create_agent_bundle(
+                filename=filename, content=content, content_type=content_type
+            )
+        except OmnigentClientError as exc:
+            raise OmnigentBridgeError(
+                str(exc),
+                failure_class=exc.failure_class,
+                status_code=exc.status_code,
+            ) from exc
 
     async def _list_agents_raw(self) -> list[dict[str, Any]]:
         try:
