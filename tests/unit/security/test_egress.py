@@ -41,6 +41,42 @@ def test_denial_diagnostics_are_bounded_scoped_and_strip_request_data():
     )
 
 
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("CONNECT", "metadata.invalid:443"),
+        ("HTTP", "example.invalid:8080"),
+        ("HTTP_IPV6", "[2001:db8::1]:8443"),
+    ],
+)
+def test_denial_diagnostics_normalize_authority_forms(target, expected):
+    request_target = {
+        "CONNECT": "user:secret@metadata.invalid:443/path?token=secret",
+        "HTTP": "http://user:secret@example.invalid:8080/private?token=secret",
+        "HTTP_IPV6": "https://user:secret@[2001:db8::1]:8443/private",
+    }[target]
+    line = (
+        f"1 2 172.31.0.7 TCP_DENIED/403 0 GET {request_target} "
+        "- HIER_NONE/- text/html"
+    ).encode()
+
+    assert bounded_denial_diagnostics(line, client_address="172.31.0.7") == (
+        f"denied {expected} TCP_DENIED/403",
+    )
+    assert "secret" not in bounded_denial_diagnostics(
+        line, client_address="172.31.0.7"
+    )[0]
+
+
+@pytest.mark.parametrize("target", ["-", "http://", "http://[bad", "http://:bad"])
+def test_denial_diagnostics_drop_malformed_targets(target):
+    line = (
+        f"1 2 172.31.0.7 TCP_DENIED/403 0 GET {target} "
+        "- HIER_NONE/- text/html"
+    ).encode()
+    assert bounded_denial_diagnostics(line, client_address="172.31.0.7") == ()
+
+
 def _profile(**updates):
     payload = DEFAULT_EGRESS_PROFILE.model_dump(by_alias=True, mode="json")
     payload.update(updates)

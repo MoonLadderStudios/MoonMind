@@ -13,6 +13,7 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Awaitable, Callable, Literal, Sequence
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -198,9 +199,28 @@ def bounded_denial_diagnostics(
         result = fields[3]
         if "DENIED" not in result:
             continue
-        authority = fields[6].split("/", 1)[0]
-        if "@" in authority:
-            authority = authority.rsplit("@", 1)[-1]
+        target = fields[6]
+        try:
+            if "://" in target:
+                parsed = urlsplit(target)
+                host = parsed.hostname
+                if not host:
+                    continue
+                display_host = f"[{host}]" if ":" in host else host
+                authority = (
+                    f"{display_host}:{parsed.port}" if parsed.port else display_host
+                )
+            else:
+                authority = target.split("/", 1)[0].rsplit("@", 1)[-1]
+                parsed = urlsplit(f"//{authority}")
+                if not parsed.hostname or any(char.isspace() for char in authority):
+                    continue
+                # Accessing port validates malformed bracket/port forms.
+                _ = parsed.port
+        except ValueError:
+            continue
+        if authority in {"", "-"}:
+            continue
         authority = authority[:253]
         diagnostics.append(f"denied {authority} {result[:64]}")
         if len(diagnostics) >= min(limit, 20):

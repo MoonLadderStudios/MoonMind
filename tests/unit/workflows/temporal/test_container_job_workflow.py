@@ -590,7 +590,13 @@ async def test_terminal_projection_carries_post_cleanup_evidence(
         if name == "container_job.project_status":
             projections.append(request.model_copy(deep=True))
         if name == "container_job.publish_evidence":
+            assert request.egress_attestation_ref == "art:launch-attestation"
             return ContainerJobActivityResult(diagnosticsRef="art:runtime")
+        if name == "container_job.create_container":
+            return ContainerJobActivityResult(
+                containerRef="owned:3277",
+                diagnosticsRef="art:launch-attestation",
+            )
         if name == "container_job.cleanup":
             assert request.publication.diagnostics_ref == "art:runtime"
             return ContainerJobActivityResult(diagnosticsRef="art:lifecycle")
@@ -604,6 +610,45 @@ async def test_terminal_projection_carries_post_cleanup_evidence(
         "diagnosticsRef": "art:lifecycle",
     }
     assert projections[-1].cleanup_outcome.diagnostics_ref == "art:lifecycle"
+    assert projections[-1].egress_attestation_ref == "art:launch-attestation"
+
+
+@pytest.mark.asyncio
+async def test_terminal_projection_preserves_failed_cleanup_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.cleanup":
+            return ContainerJobActivityResult(
+                diagnosticsRef="art:failed-lifecycle", cleanupSucceeded=False
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["cleanup"] == {
+        "state": "failed",
+        "diagnosticsRef": "art:failed-lifecycle",
+    }
+    assert projections[-1].cleanup_outcome.diagnostics_ref == "art:failed-lifecycle"
+
+
+def test_pre_egress_lifecycle_activity_payload_remains_compatible() -> None:
+    legacy = ContainerJobActivityResult.model_validate(
+        {"contractVersion": "v1", "diagnosticsRef": "art:legacy-cleanup"}
+    )
+
+    assert legacy.cleanup_succeeded is None
+    assert legacy.model_dump(by_alias=True, exclude_none=True) == {
+        "contractVersion": "v1",
+        "diagnosticsRef": "art:legacy-cleanup",
+    }
 
 
 @pytest.mark.asyncio

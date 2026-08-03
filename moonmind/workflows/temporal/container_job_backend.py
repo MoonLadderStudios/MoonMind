@@ -2024,6 +2024,9 @@ class DockerContainerJobBackend:
             ],
         }
         if egress_evidence is not None:
+            egress_evidence["launchAttestationRef"] = (
+                request.egress_attestation_ref
+            )
             diagnostics["egressEvidence"] = egress_evidence
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
@@ -2125,19 +2128,16 @@ class DockerContainerJobBackend:
         # cleanup failure is reported through the workflow's separate cleanup
         # auxiliary outcome and never rewrites the primary workload result.
         auth_dir = self._auth_dir(request)
+        cleanup_succeeded = True
+        failure_code: str | None = None
         try:
             self._remove_auth_dir(auth_dir, best_effort=False)
-        except OSError as exc:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.CREDENTIAL_CLEANUP_FAILED,
-                "ephemeral registry credential directory could not be removed",
-            ) from exc
+        except OSError:
+            cleanup_succeeded = False
+            failure_code = "credential_cleanup_failed"
 
         diagnostics_ref = None
-        if (
-            request.request.spec.network_mode == "bridge"
-            and request.container_ref is not None
-        ):
+        if request.request.spec.network_mode == "bridge":
             # remove_container runs immediately before cleanup. Observe that no
             # job-owned attachment remains rather than turning an attempted
             # delete into terminal evidence. Filters are ownership scoped, so
@@ -2153,9 +2153,8 @@ class DockerContainerJobBackend:
                 )
             )
             if code or stdout.strip():
-                raise RuntimeError(
-                    "restricted-egress workload cleanup could not be attested"
-                )
+                cleanup_succeeded = False
+                failure_code = failure_code or "attachment_still_present"
             if self._publish is None:
                 raise RuntimeError(
                     "restricted-egress lifecycle evidence publisher is unavailable"
@@ -2171,9 +2170,14 @@ class DockerContainerJobBackend:
                     if request.publication is not None
                     else None
                 ),
-                "reconciliationResult": "succeeded",
-                "cleanupResult": "succeeded",
+                "launchAttestationRef": request.egress_attestation_ref,
+                "reconciliationResult": (
+                    "succeeded" if not (code or stdout.strip()) else "failed"
+                ),
+                "cleanupResult": "succeeded" if cleanup_succeeded else "failed",
             }
+            if failure_code is not None:
+                lifecycle["failureCode"] = failure_code
             diagnostics_ref = await self._publish(
                 request,
                 f"{request.job_id}-egress-lifecycle.json",
@@ -2181,4 +2185,7 @@ class DockerContainerJobBackend:
                     lifecycle, sort_keys=True, separators=(",", ":")
                 ).encode(),
             )
-        return ContainerJobActivityResult(diagnosticsRef=diagnostics_ref)
+        return ContainerJobActivityResult(
+            diagnosticsRef=diagnostics_ref,
+            cleanupSucceeded=cleanup_succeeded,
+        )

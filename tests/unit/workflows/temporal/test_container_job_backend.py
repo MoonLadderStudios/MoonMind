@@ -284,15 +284,18 @@ async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> 
     request.publication = AuxiliaryOutcome(
         state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
     )
+    request.egress_attestation_ref = "artifact:launch-attestation"
 
     result = await backend.cleanup(request)
 
     assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
+    assert result.cleanup_succeeded is True
     assert published == [
         (
             f"{JOB_ID}-egress-lifecycle.json",
             {
                 "cleanupResult": "succeeded",
+                "launchAttestationRef": "artifact:launch-attestation",
                 "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
                 "profileRef": DEFAULT_EGRESS_PROFILE.ref,
                 "reconciliationResult": "succeeded",
@@ -302,6 +305,65 @@ async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> 
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_durably_publishes_failed_reconciliation(tmp_path) -> None:
+    published: list[tuple[str, dict]] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"still-attached\n", b""
+        raise AssertionError(args)
+
+    async def publish(_request, name, data):
+        published.append((name, json.loads(data)))
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+    request.publication = AuxiliaryOutcome(
+        state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
+    )
+
+    result = await backend.cleanup(request)
+
+    assert result.cleanup_succeeded is False
+    assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
+    assert published[0][1]["cleanupResult"] == "failed"
+    assert published[0][1]["reconciliationResult"] == "failed"
+    assert published[0][1]["failureCode"] == "attachment_still_present"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_publishes_partial_setup_outcome_without_container_ref(
+    tmp_path,
+) -> None:
+    published: list[dict] = []
+
+    async def runner(args):
+        assert args[:2] == ("ps", "-aq")
+        return 0, b"", b""
+
+    async def publish(_request, _name, data):
+        published.append(json.loads(data))
+        return "artifact:partial-setup-lifecycle"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+
+    result = await backend.cleanup(request)
+
+    assert result.cleanup_succeeded is True
+    assert result.diagnostics_ref == "artifact:partial-setup-lifecycle"
+    assert published[0]["workloadAttachmentIdentity"].startswith(
+        "moonmind-container-job-"
+    )
 
 
 @pytest.mark.asyncio

@@ -189,6 +189,7 @@ class MoonMindContainerJobWorkflow:
                         "container_job.create_container", request
                     )
                     request.container_ref = created.container_ref
+                    request.egress_attestation_ref = created.diagnostics_ref
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)
@@ -296,7 +297,11 @@ class MoonMindContainerJobWorkflow:
         cleanup = AuxiliaryOutcome(
             state=(
                 "succeeded"
-                if removed is not None and cleaned is not None
+                if (
+                    removed is not None
+                    and cleaned is not None
+                    and cleaned.cleanup_succeeded is not False
+                )
                 else "failed"
             ),
             diagnosticsRef=cleaned.diagnostics_ref if cleaned is not None else None,
