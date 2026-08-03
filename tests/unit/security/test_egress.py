@@ -15,9 +15,30 @@ from moonmind.security.egress import (
     ENFORCER_IMPLEMENTATION,
     OMNIGENT_EGRESS_NETWORK_REF,
     attest_docker_egress,
+    bounded_denial_diagnostics,
     omnigent_proxy_env,
     restricted_proxy_env,
 )
+
+
+def test_denial_diagnostics_are_bounded_scoped_and_strip_request_data():
+    lines = [
+        b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+        b"metadata.invalid:443/path?token=secret - HIER_NONE/- text/html",
+        b"1 2 172.31.0.8 TCP_DENIED/403 0 CONNECT "
+        b"other.invalid:443/ - HIER_NONE/- text/html",
+    ] * 30
+
+    diagnostics = bounded_denial_diagnostics(
+        b"\n".join(lines), client_address="172.31.0.7"
+    )
+
+    assert len(diagnostics) == 20
+    assert diagnostics[0] == "denied metadata.invalid:443 TCP_DENIED/403"
+    assert all(
+        "secret" not in item and "172.31.0.8" not in item
+        for item in diagnostics
+    )
 
 
 def _profile(**updates):

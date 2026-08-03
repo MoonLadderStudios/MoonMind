@@ -83,6 +83,12 @@ or an unavailable backend fail closed before workload start. Reconciliation
 and cleanup remain label/ownership scoped; they never remove an unowned
 network, gateway, container, or volume. Diagnostics contain bounded redacted
 destination metadata, never credentials, request bodies, or packet payloads.
+Terminal Container Job diagnostics correlate the workload attachment with the
+gateway access log and persist only a hashed attachment address, denial count,
+and at most 20 normalized denied authorities. The production-shaped local
+conformance suite is `tests/integration/security/test_restricted_egress_live.py`;
+operators run it against the supported Compose topology with
+`MOONMIND_RUN_EGRESS_CONFORMANCE=1` before approving an external-target profile.
 
 External PentestGPT targets remain gated. Enabling one additionally requires an
 exact reviewed egress profile, approved target scope, and durable approval

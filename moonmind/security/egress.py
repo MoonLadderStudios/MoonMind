@@ -178,6 +178,36 @@ class EgressAttestation(BaseModel):
     diagnostics: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
 
 
+def bounded_denial_diagnostics(
+    access_log: bytes, *, client_address: str, limit: int = 20
+) -> tuple[str, ...]:
+    """Extract bounded, payload-free denial evidence for one workload.
+
+    Squid's native access log is read only at the trusted backend.  The durable
+    form deliberately retains a normalized destination authority and status,
+    never the request path, query, credentials, or complete traffic log.
+    """
+
+    if not client_address or limit < 1:
+        return ()
+    diagnostics: list[str] = []
+    for raw_line in access_log.decode("utf-8", errors="replace").splitlines():
+        fields = raw_line.split()
+        if len(fields) < 7 or fields[2] != client_address:
+            continue
+        result = fields[3]
+        if "DENIED" not in result:
+            continue
+        authority = fields[6].split("/", 1)[0]
+        if "@" in authority:
+            authority = authority.rsplit("@", 1)[-1]
+        authority = authority[:253]
+        diagnostics.append(f"denied {authority} {result[:64]}")
+        if len(diagnostics) >= min(limit, 20):
+            break
+    return tuple(diagnostics)
+
+
 DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
     {
         "profileId": "moonmind-provider-egress",

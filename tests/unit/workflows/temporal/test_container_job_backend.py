@@ -232,6 +232,35 @@ async def test_bridge_launch_fails_before_create_when_network_is_not_internal(
 
 
 @pytest.mark.asyncio
+async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None:
+    async def runner(args):
+        if args[0] == "inspect":
+            return 0, b"172.31.0.7\n", b""
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+            return 0, (
+                b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+                b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
+            ), b""
+        raise AssertionError(args)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    evidence = await backend._runtime_egress_evidence(request)
+
+    assert evidence is not None
+    assert evidence["attachmentIdentity"] == "owned-workload"
+    assert evidence["attachmentAddressDigest"].startswith("sha256:")
+    assert evidence["deniedConnectionCount"] == 1
+    assert evidence["denialDiagnostics"] == [
+        "denied 169.254.169.254:443 TCP_DENIED/403"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_mounts_authorized_workspace_volume_subpath(tmp_path) -> None:
     workspace = tmp_path / "temporal_sandbox" / "run-1" / "repo"
     workspace.mkdir(parents=True)

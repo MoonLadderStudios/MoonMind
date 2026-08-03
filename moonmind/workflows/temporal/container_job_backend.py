@@ -80,6 +80,7 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    bounded_denial_diagnostics,
     attest_docker_egress,
     restricted_proxy_env,
 )
@@ -1995,6 +1996,7 @@ class DockerContainerJobBackend:
     ) -> str | None:
         if self._publish is None:
             return None
+        egress_evidence = await self._runtime_egress_evidence(request)
         diagnostics = {
             "jobId": request.job_id,
             "contractVersion": "v1",
@@ -2021,12 +2023,64 @@ class DockerContainerJobBackend:
                 for item in manifest
             ],
         }
+        if egress_evidence is not None:
+            diagnostics["egressEvidence"] = egress_evidence
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
         ).encode("utf-8")
         return await self._publish(
             request, f"{request.job_id}-diagnostics.json", data
         )
+
+    async def _runtime_egress_evidence(
+        self, request: ContainerJobActivityRequest
+    ) -> dict | None:
+        """Observe bounded denial and attachment evidence before cleanup."""
+
+        if request.request.spec.network_mode != "bridge":
+            return None
+        ref = request.container_ref or self._name(request)
+        code, stdout, _ = await self._runner(
+            (
+                "inspect",
+                "--format",
+                "{{with index .NetworkSettings.Networks \""
+                + DEFAULT_EGRESS_PROFILE.network_ref
+                + "\"}}{{.IPAddress}}{{end}}",
+                ref,
+            )
+        )
+        if code or not stdout.strip():
+            raise RuntimeError("restricted-egress attachment evidence is unavailable")
+        client_address = stdout.decode(errors="replace").strip()
+        code, access_log, _ = await self._runner(
+            (
+                "exec",
+                DEFAULT_EGRESS_PROFILE.gateway_ref,
+                "tail",
+                "-n",
+                "500",
+                "/var/log/squid/access.log",
+            )
+        )
+        if code:
+            raise RuntimeError("restricted-egress denial evidence is unavailable")
+        denial_diagnostics = bounded_denial_diagnostics(
+            access_log, client_address=client_address
+        )
+        return {
+            "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+            "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+            "networkRef": DEFAULT_EGRESS_PROFILE.network_ref,
+            "gatewayRef": DEFAULT_EGRESS_PROFILE.gateway_ref,
+            "attachmentIdentity": ref,
+            "attachmentAddressDigest": "sha256:"
+            + hashlib.sha256(client_address.encode()).hexdigest(),
+            "deniedConnectionCount": len(denial_diagnostics),
+            "denialDiagnostics": list(denial_diagnostics),
+            "cleanupResult": "pending",
+            "reconciliationResult": "not-required",
+        }
 
     async def _persist_live_events_journal(
         self, request: ContainerJobActivityRequest
