@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from api_service.api.routers import omnigent_bridge
 from api_service.api.routers.retrieval_gateway import (
     BridgeRetrievalCapabilityIssue,
     RetrievalCapabilityIssue,
@@ -17,6 +20,7 @@ from api_service.api.routers.retrieval_gateway import (
     issue_bridge_retrieval_capability,
     authorize_retrieval_request,
     bridge_follow_up_retrieval_diagnostics,
+    get_capability_registry,
     get_bridge_session_store,
     get_retrieval_service,
     revoke_bridge_retrieval_capabilities,
@@ -31,6 +35,8 @@ from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
 from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 from moonmind.rag.qdrant_client import IndexCollectionHealth, IndexHealthSummary
+from omnigent.runner._entry import _resolve_agent_spec_from_server
+from omnigent.runner.proxy_mcp_manager import ProxyMcpManager
 
 
 def _bridge_row(**overrides):
@@ -1137,15 +1143,118 @@ def test_stock_runner_mcp_registers_and_invokes_retrieval_tool(
                 },
             },
         )
+        acknowledged = client.post(
+            "/retrieval/v1/sessions/session-1/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": "2:delivery",
+                "method": "moonmind/delivery/ack",
+                "params": {"toolCallId": "tool-1"},
+            },
+        )
+        acknowledged_retry = client.post(
+            "/retrieval/v1/sessions/session-1/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": "2:delivery-retry",
+                "method": "moonmind/delivery/ack",
+                "params": {"toolCallId": "tool-1"},
+            },
+        )
 
     assert listed.status_code == 200
     assert listed.json()["result"]["tools"][0]["name"] == "moonmind_context_retrieve"
     assert called.status_code == 200, called.text
     tool_result = json.loads(called.json()["result"]["content"][0]["text"])
     assert tool_result["kind"] == "retrieval_tool_result"
-    assert tool_result["deliveryState"] == "delivered"
-    assert tool_result["deliveryBoundary"] == "same_turn_mcp_result"
+    assert tool_result["deliveryState"] == "delivery_unknown"
+    assert tool_result["deliveryAcknowledgement"] == {
+        "method": "moonmind/delivery/ack",
+        "params": {"toolCallId": "tool-1"},
+    }
     assert tool_result["contextPack"]["transport"] == "gateway"
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["result"]["deliveryState"] == "delivered"
+    assert acknowledged.json()["result"]["deliveryBoundary"] == "runner_proxy_received"
+    assert acknowledged_retry.status_code == 200, acknowledged_retry.text
+    assert acknowledged_retry.json()["result"]["deliveryState"] == "delivered"
+    assert (
+        acknowledged_retry.json()["result"]["deliveryEvidenceRef"]
+        == acknowledged.json()["result"]["deliveryEvidenceRef"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedded_bundle_and_proxy_complete_active_turn_retrieval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production embedded routes and stock proxy form one authority boundary."""
+    service = StubService()
+    app = FastAPI()
+    app.include_router(omnigent_bridge.router)
+    registry = RetrievalCapabilityRegistry(tmp_path / "registry")
+    monkeypatch.setenv("OMNIGENT_HOST_RUNNER_TOKEN", "runner-root")
+    binding = derive_runner_binding_token(
+        "runner-root", host_id="host-1", session_id="session-1", generation=2_000_003
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({binding})
+    ).runner_id_for_binding_token(binding)
+    row = _bridge_row(
+        omnigent_runner_id=runner_id,
+        credential_generation=2,
+        metadata_={"embedded_runner_launch": {"generation": 2_000_003}},
+    )
+
+    class Store:
+        async def get_active_session_by_runner_identity(self, requested_runner_id):
+            return row if requested_runner_id == runner_id else None
+
+        async def get_session_by_provider_session_id(self, session_id):
+            return row if session_id == "session-1" else None
+
+        async def append_events(self, bridge_session_id, events):
+            assert bridge_session_id == "bridge-1"
+
+    store = Store()
+    app.dependency_overrides[omnigent_bridge._require_embedded_mode] = lambda: object()
+    app.dependency_overrides[omnigent_bridge._get_bridge_store] = lambda: store
+    app.dependency_overrides[get_bridge_session_store] = lambda: store
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+    app.dependency_overrides[get_capability_registry] = lambda: registry
+    headers = {"X-Omnigent-Runner-Tunnel-Token": binding}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://embedded", headers=headers
+    ) as client:
+        resolved = await _resolve_agent_spec_from_server(
+            client, tmp_path / "specs", "session-agent", session_id="session-1"
+        )
+        assert resolved is not None
+        manager = ProxyMcpManager("session-1", client)
+        schemas = await manager.schemas_for(resolved.spec)
+        output = await manager.call_tool(
+            resolved.spec,
+            "moonmind_context_retrieve",
+            {"query": "bounded", "turnId": "turn-1", "toolCallId": "tool-1"},
+        )
+
+    assert schemas.tool_names == {"moonmind_context_retrieve"}
+    result = json.loads(output)
+    assert result["kind"] == "retrieval_tool_result"
+    assert result["deliveryState"] == "delivered"
+    assert result["deliveryBoundary"] == "runner_proxy_received"
+    assert result["contextPack"]["transport"] == "gateway"
+    capability = registry.live_scope_capability(
+        run_id="run-1", host_id="host-1", session_id="session-1", step_id="step-1"
+    )
+    assert capability is not None
+    assert any(
+        request.get("delivery", {}).get("state") == "delivered"
+        for request in registry.status(capability.capability_id)["requests"]
+    )
 
 
 def test_session_retrieval_passes_capability_run_identity_to_overlays(

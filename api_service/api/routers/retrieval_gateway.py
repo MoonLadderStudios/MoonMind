@@ -415,7 +415,7 @@ class OmnigentMcpRequest(BaseModel):
 
     jsonrpc: str = Field(default="2.0", pattern="^2\\.0$")
     id: str | int | None = None
-    method: str = Field(..., pattern="^tools/(list|call)$")
+    method: str = Field(..., pattern="^(tools/(list|call)|moonmind/delivery/ack)$")
     params: Dict[str, object] = Field(default_factory=dict)
 
 
@@ -1517,6 +1517,84 @@ async def omnigent_runner_retrieval_mcp(
                 ]
             },
         }
+    if payload.method == "moonmind/delivery/ack":
+        tool_call_id = str(payload.params.get("toolCallId") or "").strip()
+        if not tool_call_id:
+            return {
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "error": {"code": -32602, "message": "toolCallId is required."},
+            }
+        capability = registry.live_scope_capability(
+            run_id=str(row.moonmind_run_id),
+            host_id=str(row.omnigent_host_id),
+            session_id=str(row.omnigent_session_id),
+            step_id=str(row.step_execution_id),
+        )
+        if capability is None:
+            raise HTTPException(409, detail="Retrieval delivery authority is unavailable.")
+        try:
+            acknowledgement = registry.acknowledge_delivery(
+                capability.capability_id, tool_call_id, state="delivered"
+            )
+        except KeyError as exc:
+            raise HTTPException(404, detail="Retrieval tool result was not found.") from exc
+        prior_delivery = next(
+            (
+                item
+                for item in reversed(registry.status(capability.capability_id)["requests"])
+                if item.get("state") == "delivery_updated"
+                and (item.get("correlation") or {}).get("toolCallId") == tool_call_id
+                and (item.get("delivery") or {}).get("state") == "delivered"
+            ),
+            None,
+        )
+        delivery_evidence_ref = (
+            prior_delivery.get("evidenceRef")
+            if prior_delivery is not None
+            else registry.record(
+                capability,
+                {
+                    "state": "delivery_updated",
+                    "classification": "delivered",
+                    "correlation": {"toolCallId": tool_call_id},
+                    "delivery": {
+                        "state": "delivered",
+                        "boundary": "runner_proxy_received",
+                        "toolCallId": tool_call_id,
+                    },
+                },
+            )
+        )
+        try:
+            await store.append_events(
+                row.bridge_session_id,
+                [
+                    {
+                        "eventType": "retrieval.tool.delivered",
+                        "direction": "host_to_moonmind",
+                        "deduplicationKey": f"retrieval-tool:{tool_call_id}:delivered",
+                        "metadata": {
+                            "toolCallId": tool_call_id,
+                            "deliveryState": "delivered",
+                            "deliveryBoundary": "runner_proxy_received",
+                        },
+                    }
+                ],
+            )
+        except Exception:
+            logger.warning("Failed to append bounded retrieval delivery event.")
+        return {
+            "jsonrpc": "2.0",
+            "id": payload.id,
+            "result": {
+                **acknowledgement,
+                "deliveryState": "delivered",
+                "deliveryBoundary": "runner_proxy_received",
+                "deliveryEvidenceRef": delivery_evidence_ref,
+            },
+        }
+
     name = str(payload.params.get("name") or "")
     arguments = payload.params.get("arguments")
     if name != "moonmind_context_retrieve" or not isinstance(arguments, dict):
@@ -1534,57 +1612,10 @@ async def omnigent_runner_retrieval_mcp(
         registry=registry,
         store=store,
     )
-    capability = registry.live_scope_capability(
-        run_id=str(row.moonmind_run_id),
-        host_id=str(row.omnigent_host_id),
-        session_id=str(row.omnigent_session_id),
-        step_id=str(row.step_execution_id),
-    )
-    if capability is None:  # pragma: no cover - guarded by successful invocation
-        raise HTTPException(409, detail="Retrieval delivery authority is unavailable.")
-    registry.acknowledge_delivery(
-        capability.capability_id, tool_payload.tool_call_id, state="delivered"
-    )
-    delivery_evidence_ref = registry.record(
-        capability,
-        {
-            "state": "delivery_updated",
-            "classification": "delivered",
-            "correlation": {"toolCallId": tool_payload.tool_call_id},
-            "delivery": {
-                "state": "delivered",
-                "boundary": "same_turn_mcp_result",
-                "toolCallId": tool_payload.tool_call_id,
-            },
-        },
-    )
-    result.update(
-        deliveryState="delivered",
-        deliveryBoundary="same_turn_mcp_result",
-        deliveryEvidenceRef=delivery_evidence_ref,
-    )
-    try:
-        await store.append_events(
-            row.bridge_session_id,
-            [
-                {
-                    "eventType": "retrieval.tool.delivered",
-                    "direction": "moonmind_to_host",
-                    "deduplicationKey": (
-                        f"retrieval-tool:{tool_payload.tool_call_id}:delivered"
-                    ),
-                    "metadata": {
-                        "turnId": tool_payload.turn_id,
-                        "toolCallId": tool_payload.tool_call_id,
-                        "deliveryState": "delivered",
-                        "deliveryBoundary": "same_turn_mcp_result",
-                        "contextPackRef": result.get("contextPackRef"),
-                    },
-                }
-            ],
-        )
-    except Exception:
-        logger.warning("Failed to append bounded retrieval delivery event.")
+    result["deliveryAcknowledgement"] = {
+        "method": "moonmind/delivery/ack",
+        "params": {"toolCallId": tool_payload.tool_call_id},
+    }
     return {
         "jsonrpc": "2.0",
         "id": payload.id,
