@@ -18894,6 +18894,17 @@ class MoonMindRunWorkflow:
         ):
             branch_turn_payload = candidate_branch_turn_payload
         if branch_turn_payload is not None:
+            branch_follow_up_retrieval = branch_turn_payload.get(
+                "followUpRetrieval"
+            )
+            if isinstance(branch_follow_up_retrieval, Mapping):
+                parent_follow_up_retrieval = parameters.get("followUpRetrieval")
+                parameters["followUpRetrieval"] = (
+                    self._narrow_checkpoint_branch_follow_up_retrieval(
+                        parent_follow_up_retrieval,
+                        branch_follow_up_retrieval,
+                    )
+                )
             source_checkpoint = self._checkpoint_branch_turn_source_checkpoint(
                 branch_turn_payload,
                 node_id=node_id,
@@ -19366,6 +19377,125 @@ class MoonMindRunWorkflow:
             callback_policy=node_inputs.get("callbackPolicy") or {},
             profile_selector=profile_selector,
         )
+
+    @staticmethod
+    def _narrow_checkpoint_branch_follow_up_retrieval(
+        parent: object,
+        override: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Apply branch retrieval intent without broadening parent authority.
+
+        Checkpoint branch turns are continuations of an already-authorized run.
+        Their persisted override may disable or narrow that authority, but it
+        cannot enable retrieval, add collections, relax filters, enlarge a
+        budget, or turn on fallback/stale-overlay permissions denied to the
+        parent.  The returned block is placed in ``request.parameters`` so the
+        profile-bound coordinator compiles the actual turn launch from it.
+
+        GitHub issue MoonLadderStudios/MoonMind#3514.
+        """
+
+        parent_policy = dict(parent) if isinstance(parent, Mapping) else {}
+        requested = dict(override)
+        if requested.get("enabled") is not True:
+            return {"enabled": False}
+        if parent_policy.get("enabled") is not True:
+            raise ValueError(
+                "checkpoint branch follow-up retrieval cannot enable parent-denied authority"
+            )
+
+        narrowed = dict(parent_policy)
+        narrowed["enabled"] = True
+        if "required" in requested:
+            narrowed["required"] = bool(requested["required"])
+
+        parent_collections = {
+            str(value).strip()
+            for value in parent_policy.get("collections", ())
+            if str(value).strip()
+        }
+        if "collections" in requested:
+            requested_collections = [
+                str(value).strip()
+                for value in requested.get("collections", ())
+                if str(value).strip()
+            ]
+            if not requested_collections or not set(requested_collections).issubset(
+                parent_collections
+            ):
+                raise ValueError(
+                    "checkpoint branch follow-up retrieval collections exceed parent authority"
+                )
+            narrowed["collections"] = list(dict.fromkeys(requested_collections))
+
+        parent_filters = dict(parent_policy.get("filters") or {})
+        if "filters" in requested:
+            requested_filters = {
+                str(key): str(value)
+                for key, value in dict(requested.get("filters") or {}).items()
+                if str(key).strip() and str(value).strip()
+            }
+            if any(
+                requested_filters.get(key) != value
+                for key, value in parent_filters.items()
+            ):
+                raise ValueError(
+                    "checkpoint branch follow-up retrieval filters relax parent authority"
+                )
+            narrowed["filters"] = requested_filters
+
+        for permission in ("fallbackAllowed", "staleOverlayAllowed"):
+            if (
+                requested.get(permission) is True
+                and parent_policy.get(permission) is not True
+            ):
+                raise ValueError(
+                    f"checkpoint branch follow-up retrieval {permission} exceeds parent authority"
+                )
+            if permission in requested:
+                narrowed[permission] = bool(requested[permission])
+
+        if "overlayPolicy" in requested:
+            requested_overlay = str(requested["overlayPolicy"])
+            if (
+                parent_policy.get("overlayPolicy") == "skip"
+                and requested_overlay != "skip"
+            ):
+                raise ValueError(
+                    "checkpoint branch follow-up retrieval overlay policy exceeds parent authority"
+                )
+            narrowed["overlayPolicy"] = requested_overlay
+
+        for field in (
+            "topK",
+            "maxSources",
+            "maxQueryBytes",
+            "maxContextBytes",
+            "maxContextTokens",
+            "maxQueries",
+            "latencyMs",
+            "maxConcurrency",
+            "maxRequestsPerMinute",
+            "embeddingTimeoutMs",
+            "searchTimeoutMs",
+            "overlayMaxAgeSeconds",
+            "retentionDays",
+            "maxLifetimeSeconds",
+        ):
+            if field not in requested:
+                continue
+            value = requested[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(
+                    f"checkpoint branch follow-up retrieval {field} must be a positive integer"
+                )
+            parent_value = parent_policy.get(field)
+            if isinstance(parent_value, int) and value > parent_value:
+                raise ValueError(
+                    f"checkpoint branch follow-up retrieval {field} exceeds parent authority"
+                )
+            narrowed[field] = value
+        return narrowed
 
     async def _request_with_persisted_retrieval_ref(
         self,
