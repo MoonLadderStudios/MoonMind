@@ -32,6 +32,13 @@ type PolicyVersion = {
   validation: { valid?: boolean; diagnostics?: Array<{ code: string; path?: string; message: string }> };
 };
 type AuditEvent = { eventId: string; version: number | null; type: string; actor: string; createdAt: string };
+type PolicyUsage = {
+  policyRef: string;
+  default: boolean;
+  dependents: { hostBindings: string[]; hostBindingCount: number };
+  activationImpact: { willSwitchDefault: boolean; compatible: boolean; diagnostics: Array<{ code: string; message: string }> };
+  unavailabilityBlockers: string[];
+};
 type ProfileVersion = {
   version: number;
   digest: string;
@@ -234,6 +241,15 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     },
   });
   const visibleVersion = selectedVersion ?? versions.data?.[0] ?? null;
+  const usage = useQuery({
+    queryKey: ['omnigent-policy-usage', selected?.id, visibleVersion?.version],
+    enabled: Boolean(endpoint && selected && visibleVersion),
+    queryFn: async (): Promise<PolicyUsage> => {
+      const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/versions/${visibleVersion!.version}/usage`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Policy usage request failed (${response.status})`);
+      return response.json() as Promise<PolicyUsage>;
+    },
+  });
   const versionDiff = useQuery({
     queryKey: ['omnigent-policy-diff', selected?.id, visibleVersion?.version, selected?.version],
     enabled: Boolean(endpoint && selected && visibleVersion && selected.version && visibleVersion.version !== selected.version),
@@ -258,6 +274,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     onSuccess: async (_, variables) => {
       setNotice(`${variables.row.name} is now ${variables.state}.`);
       await queryClient.invalidateQueries({ queryKey: ['omnigent-inventory', kind] });
+      await queryClient.invalidateQueries({ queryKey: ['omnigent-policy-versions', variables.row.id] });
+      await queryClient.invalidateQueries({ queryKey: ['omnigent-policy-usage', variables.row.id] });
     },
   });
   const validate = useMutation({
@@ -326,7 +344,18 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, RAG, approvals, and retention</h3>
         <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
         {visibleVersion ? <button type="button" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</button> : null}
+        {usage.isError ? <p role="alert">{usage.error.message}</p> : null}
+        {usage.data ? <section aria-label="Policy usage and activation impact">
+          <h3>Dependent use and activation impact</h3>
+          <p>{usage.data.default ? 'This is the current default.' : 'Activation will switch the current default.'}</p>
+          <p>Deployment compatibility: {usage.data.activationImpact.compatible ? 'Compatible' : 'Incompatible'}</p>
+          <p>Dependent host profiles: {usage.data.dependents.hostBindingCount}</p>
+          {usage.data.dependents.hostBindings.length ? <ul>{usage.data.dependents.hostBindings.map((ref) => <li key={ref}>{ref}</li>)}</ul> : null}
+          {usage.data.unavailabilityBlockers.map((blocker) => <p role="alert" key={blocker}>{blocker}</p>)}
+        </section> : null}
         {visibleVersion && visibleVersion.version !== selected.version ? <button type="button" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</button> : null}
+        {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'disabled' })}>Disable {visibleVersion.ref}</button> : null}
+        {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'deprecated' })}>Deprecate {visibleVersion.ref}</button> : null}
         <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Edit as new version</button>
         <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: JSON.stringify(visibleVersion?.document ?? selected.document, null, 2) })}>Clone</button>
         {versionDiff.data ? <><h3>Normalized diff to current default</h3><pre>{versionDiff.data.diff || 'No document differences.'}</pre></> : null}

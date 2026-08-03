@@ -295,6 +295,39 @@ class OmnigentPolicyService:
             .order_by(OmnigentPolicyEvent.created_at, OmnigentPolicyEvent.event_id)
         )).scalars())
 
+    async def usage(self, policy_id: str, version: int) -> dict[str, Any]:
+        """Return persisted dependents and lifecycle impact for one immutable version."""
+
+        policy = await self.get_policy(policy_id)
+        row = await self.get_version(policy_id, version)
+        policy_ref = f"{policy_id}@{version}"
+        host_bindings = list((await self.session.execute(
+            select(OmnigentOAuthHostBindingRecord.binding_ref).where(
+                OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+            ).order_by(OmnigentOAuthHostBindingRecord.binding_ref)
+        )).scalars())
+        is_default = policy.default_version == version
+        blockers = []
+        if is_default:
+            blockers.append("Switch the policy default before disabling or deprecating this version.")
+        if host_bindings:
+            blockers.append("Move dependent host profiles before disabling or deprecating this version.")
+        return {
+            "policyRef": policy_ref,
+            "state": row.state,
+            "default": is_default,
+            "dependents": {
+                "hostBindings": host_bindings,
+                "hostBindingCount": len(host_bindings),
+            },
+            "activationImpact": {
+                "willSwitchDefault": not is_default,
+                "compatible": bool(row.compatibility_json.get("compatible")),
+                "diagnostics": row.validation_json.get("diagnostics", []),
+            },
+            "unavailabilityBlockers": blockers,
+        }
+
     async def snapshot(self, policy_id: str, version: int) -> dict[str, Any]:
         row = await self.get_version(policy_id, version)
         return compile_policy_snapshot(policy_id=policy_id, version=version, document=row.document_json, validation=row.validation_json)

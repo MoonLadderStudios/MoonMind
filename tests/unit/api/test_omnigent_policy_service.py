@@ -120,6 +120,12 @@ async def test_lifecycle_default_switch_rollback_and_historical_read(tmp_path):
                 state=PolicyState.DISABLED,
                 actor="operator",
             )
+        usage = await service.usage("policy", 2)
+        assert usage["default"] is True
+        assert usage["activationImpact"]["compatible"] is True
+        assert usage["unavailabilityBlockers"] == [
+            "Switch the policy default before disabling or deprecating this version."
+        ]
 
         # Roll back by selecting the still-valid historical authority, then retire v2.
         await service.transition(
@@ -225,6 +231,15 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
             launch_policy_ref="policy@1",
         ))
         await session.commit()
+
+        usage = await service.usage("policy", 1)
+        assert usage["dependents"] == {
+            "hostBindings": ["binding"],
+            "hostBindingCount": 1,
+        }
+        assert usage["unavailabilityBlockers"] == [
+            "Move dependent host profiles before disabling or deprecating this version."
+        ]
 
         with pytest.raises(PolicyConflict, match="bound to an active host profile"):
             await service.transition(
