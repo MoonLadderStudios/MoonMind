@@ -16658,7 +16658,14 @@ describe("Task Create schema-driven capability inputs", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill", "schema.other", "no-schema.skill"] },
+          items: {
+            worker: [
+              "schema.skill",
+              "schema.other",
+              "no-schema.skill",
+              "pr-resolver",
+            ],
+          },
           legacyItems: [
             {
               id: "schema.skill",
@@ -16777,6 +16784,30 @@ describe("Task Create schema-driven capability inputs", () => {
               id: "no-schema.skill",
               description: "Instruction-driven Skill fixture.",
               inputSchema: {},
+              uiSchema: {},
+              defaults: {},
+            },
+            {
+              id: "pr-resolver",
+              description: "Resolve a pull request.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  pr: {
+                    type: "string",
+                    title: "Pull request",
+                    description:
+                      "PR number or PR URL. MoonMind requires either this value or a head branch so the resolver cannot target the wrong PR.",
+                  },
+                  branch: {
+                    type: "string",
+                    title: "Head branch",
+                    description:
+                      "PR head branch. MoonMind requires either this value or a PR number or URL so the resolver cannot target the wrong PR.",
+                  },
+                },
+                anyOf: [{ required: ["pr"] }, { required: ["branch"] }],
+              },
               uiSchema: {},
               defaults: {},
             },
@@ -17411,6 +17442,59 @@ describe("Task Create schema-driven capability inputs", () => {
       ),
     ).toBeTruthy();
   });
+
+  it.each([
+    ["Pull request", "2733", "pr"],
+    ["Head branch", "agent/fix-selector", "branch"],
+  ])(
+    "requires a pr-resolver selector and submits %s structurally",
+    async (fieldLabel, selectorValue, inputKey) => {
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      const step = (await screen.findByText("Step 1")).closest(
+        "section",
+      ) as HTMLElement;
+      selectStepType(step, "Skill");
+      fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+        target: { value: "pr-resolver" },
+      });
+
+      const selector = await within(step).findByLabelText(fieldLabel);
+      expect(await within(step).findByLabelText("Pull request")).toBeTruthy();
+      expect(within(step).getByLabelText("Head branch")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+      expect(
+        await within(step).findByText(
+          "Pull request or Head branch is required.",
+        ),
+      ).toBeTruthy();
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(false);
+
+      fireEvent.change(selector, { target: { value: selectorValue } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+      await waitFor(() => {
+        expect(
+          fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+        ).toBe(true);
+      });
+      const request = latestSchemaCreateRequest() as {
+        payload: {
+          task: {
+            inputs?: Record<string, unknown>;
+            skill?: { inputs?: Record<string, unknown> };
+            tool?: { inputs?: Record<string, unknown> };
+          };
+        };
+      };
+      expect(request.payload.task.inputs?.[inputKey]).toBe(selectorValue);
+      expect(request.payload.task.skill?.inputs?.[inputKey]).toBe(selectorValue);
+      expect(request.payload.task.tool?.inputs?.[inputKey]).toBe(selectorValue);
+    },
+  );
 
   it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);

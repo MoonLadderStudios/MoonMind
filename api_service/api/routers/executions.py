@@ -9082,11 +9082,12 @@ def _validate_pentest_submission_boundary(
             )
 
 _PR_RESOLVER_SELECTOR_ERROR = (
-    "pr-resolver workflow requires a structured PR selector: "
-    "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
-    "payload.workflow.tool.inputs.pr/branch, or "
-    "payload.workflow.git.startingBranch, or a non-default "
-    "payload.workflow.git.branch."
+    "pr-resolver requires an explicit pull request selector. In the dashboard, "
+    "select the pr-resolver Skill and fill in Pull request with a PR number, PR "
+    "URL, or head branch. API callers can set payload.task.inputs.pr (or "
+    "payload.workflow.inputs.pr); Skill/Tool inputs named pr or branch, "
+    "git.startingBranch, and a non-default git.branch are also accepted. A "
+    "default checkout branch such as main does not identify a PR."
 )
 _PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
     {"main", "master", "develop", "development", "trunk"}

@@ -3227,9 +3227,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
-            "or a non-default workflow.git.branch"
+            "pr-resolver requires an explicit pull request selector.*"
+            "A default checkout branch such as main does not identify a PR"
         ),
     ):
         planner(
@@ -3983,9 +3982,8 @@ def test_runtime_planner_rejects_pr_resolver_with_only_jira_instructions_and_bas
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
-            "or a non-default workflow.git.branch"
+            "pr-resolver requires an explicit pull request selector.*"
+            "A default checkout branch such as main does not identify a PR"
         ),
     ):
         planner(

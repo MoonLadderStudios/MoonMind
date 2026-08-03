@@ -3416,6 +3416,21 @@ function schemaRequired(schema: Record<string, unknown> | undefined): Set<string
   );
 }
 
+function schemaAlternativeRequiredGroups(
+  schema: Record<string, unknown> | undefined,
+): string[][] {
+  const alternatives = Array.isArray(schema?.anyOf)
+    ? schema.anyOf
+    : Array.isArray(schema?.oneOf)
+      ? schema.oneOf
+      : [];
+  return alternatives
+    .map((alternative) =>
+      Array.from(schemaRequired(recordValue(alternative))),
+    )
+    .filter((group) => group.length > 0);
+}
+
 function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
   return String(schema.title || name)
     .trim()
@@ -3843,6 +3858,30 @@ function validateSchemaCapabilityValues(
       (typeof value !== "object" || Array.isArray(value))
     ) {
       errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON object.`;
+    }
+  }
+  const alternativeRequiredGroups = schemaAlternativeRequiredGroups(
+    detail.inputSchema,
+  );
+  if (
+    alternativeRequiredGroups.length > 0 &&
+    !alternativeRequiredGroups.some((group) =>
+      group.every((name) => {
+        const value = values[name];
+        return value !== undefined && value !== null && value !== "";
+      }),
+    )
+  ) {
+    const labels = alternativeRequiredGroups.map((group) =>
+      group
+        .map((name) =>
+          capabilityFieldLabel(name, recordValue(properties[name])),
+        )
+        .join(" and "),
+    );
+    const errorField = alternativeRequiredGroups[0]?.[0];
+    if (errorField) {
+      errors[errorField] = `${labels.join(" or ")} is required.`;
     }
   }
   return errors;
