@@ -60,6 +60,36 @@ async def create_policy(service: OmnigentPolicyService, policy_id: str = "policy
 
 
 @pytest.mark.asyncio
+async def test_default_runtime_snapshot_is_durable_active_authority(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        await service.transition(
+            policy_id="policy",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
+        )
+
+        snapshot = await service.resolve_default_runtime_snapshot("policy")
+
+        assert snapshot["policyRef"] == "policy@1"
+        assert snapshot["validation"]["valid"] is True
+        assert snapshot["boundaries"]["host"] == policy_document()["host"]
+
+
+@pytest.mark.asyncio
+async def test_default_runtime_snapshot_rejects_missing_default(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+
+        with pytest.raises(PolicyConflict, match="no default version"):
+            await service.resolve_default_runtime_snapshot("policy")
+
+
+@pytest.mark.asyncio
 async def test_append_only_edit_preserves_history_and_rejects_stale_parent(tmp_path):
     async with policy_db(tmp_path) as sessions, sessions() as session:
         service = OmnigentPolicyService(session)

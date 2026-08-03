@@ -419,6 +419,25 @@ class OmnigentPolicyService:
             raise PolicyConflict(f"runtime policy digest conflict: {policy_ref}")
         return snapshot
 
+    async def resolve_default_runtime_snapshot(
+        self, policy_id: str
+    ) -> dict[str, Any]:
+        """Resolve a policy's durable default as exact runtime authority.
+
+        Environment-backed values are bootstrap inputs only.  Normal runtime
+        callers must resolve the persisted default and then apply the same
+        active/validation/digest gates as an explicitly selected version.
+        """
+
+        policy = await self.get_policy(policy_id)
+        if policy.default_version is None:
+            raise PolicyConflict(
+                f"runtime policy has no default version: {policy_id}"
+            )
+        return await self.resolve_runtime_snapshot(
+            f"{policy.policy_id}@{policy.default_version}"
+        )
+
     @staticmethod
     def _version(policy_id: str, version: int, document: PolicyDocument, actor: str, **lineage: Any) -> OmnigentPolicyVersion:
         normalized = normalize_document(document)

@@ -64,7 +64,20 @@ def _validated_embedded_evidence(monkeypatch):
 
     module = importlib.import_module("api_service.api.routers.omnigent_bridge")
 
-    async def resolved(_config):
+    policy_authority = {
+        "policyRef": "omnigent-codex@1",
+        "policyDigest": "sha256:durable-policy",
+        "snapshotRef": "omnigent-policy:sha256:durable-snapshot",
+        "validation": {"valid": True, "diagnostics": []},
+        "boundaries": {
+            "host": {
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            }
+        },
+    }
+
+    async def resolved(_config, **_kwargs):
         return {
             key: {
                 "status": "passed",
@@ -74,6 +87,11 @@ def _validated_embedded_evidence(monkeypatch):
         }
 
     monkeypatch.setattr(module, "_resolve_embedded_evidence", resolved)
+    monkeypatch.setattr(
+        module,
+        "_resolve_bridge_policy_authority",
+        AsyncMock(return_value=policy_authority),
+    )
 
 
 def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
@@ -98,6 +116,12 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
         "static_compose",
         "on_demand_docker",
     ]
+    assert diagnostics["policyAuthority"] == {
+        "policyRef": "omnigent-codex@1",
+        "policyDigest": "sha256:durable-policy",
+        "policySnapshotRef": "omnigent-policy:sha256:durable-snapshot",
+        "validation": {"valid": True, "diagnostics": []},
+    }
 
 
 @pytest.mark.asyncio
@@ -148,7 +172,7 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
         }
     )
 
-    async def invalid(_config):
+    async def invalid(_config, **_kwargs):
         return {
             key: {
                 "status": "failed",

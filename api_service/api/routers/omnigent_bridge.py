@@ -41,6 +41,11 @@ from api_service.services.omnigent_agent_profile_service import (
     record_upstream_sync_failure,
     synchronize_upstream_inventory,
 )
+from api_service.services.omnigent_policies import (
+    OmnigentPolicyService,
+    PolicyConflict,
+    PolicyNotFound,
+)
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -265,11 +270,14 @@ async def get_omnigent_bridge_readiness(
     """Expose selected protocol and conformance gates without secret material."""
 
     auth: dict[str, Any] | None = None
+    policy_authority = await _resolve_bridge_policy_authority()
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         readiness = config.readiness()
     else:
         readiness = config.readiness(
-            evidence_validation=await _resolve_embedded_evidence(config)
+            evidence_validation=await _resolve_embedded_evidence(
+                config, policy_authority=policy_authority
+            )
         )
         try:
             profile = await _active_host_auth_profile()
@@ -281,7 +289,10 @@ async def get_omnigent_bridge_readiness(
             readiness["conformanceState"] = "gated"
             readiness.setdefault("gateReason", auth.get("code"))
     readiness["compatibilityDiagnostics"] = _compatibility_diagnostics(
-        config=config, readiness=readiness, auth=auth
+        config=config,
+        readiness=readiness,
+        auth=auth,
+        policy_authority=policy_authority,
     )
     return readiness
 
@@ -297,6 +308,7 @@ def _compatibility_diagnostics(
     config: OmnigentBridgeConfig,
     readiness: dict[str, Any],
     auth: dict[str, Any] | None = None,
+    policy_authority: dict[str, Any],
 ) -> dict[str, Any]:
     """Build one bounded support projection shared by readiness surfaces."""
 
@@ -337,7 +349,11 @@ def _compatibility_diagnostics(
         for item in validation.values()
         if item.get("status") == "passed" and isinstance(item.get("images"), dict)
     ]
-    images = image_sets[0] if image_sets else {}
+    host = policy_authority["boundaries"]["host"]
+    images = image_sets[0] if image_sets else {
+        "server": host["serverImageRef"],
+        "host": host["hostImageRef"],
+    }
     projection = {
         "bridgeMode": config.host_protocol_mode,
         "compatibilityProfile": readiness.get("protocolProfile"),
@@ -345,12 +361,8 @@ def _compatibility_diagnostics(
             config.host_connection.embedded.auth_mode if selected_embedded else None
         ),
         "upstreamComponentVersion": readiness.get("upstreamComponentVersion"),
-        "serverImage": (
-            images.get("server") or os.getenv("OMNIGENT_IMAGE_REF") or None
-        ),
-        "hostImage": (
-            images.get("host") or os.getenv("OMNIGENT_HOST_IMAGE_REF") or None
-        ),
+        "serverImage": images.get("server"),
+        "hostImage": images.get("host"),
         "hostArchitecture": os.getenv("OMNIGENT_HOST_ARCHITECTURE") or None,
         "auth": auth,
         "evidence": {
@@ -360,6 +372,12 @@ def _compatibility_diagnostics(
         },
         "supportMatrix": support_matrix,
         "failureReason": failure_reason,
+        "policyAuthority": {
+            "policyRef": policy_authority["policyRef"],
+            "policyDigest": policy_authority["policyDigest"],
+            "policySnapshotRef": policy_authority["snapshotRef"],
+            "validation": policy_authority["validation"],
+        },
         "rollbackRecommendation": (
             _PROXY_ROLLBACK_RECOMMENDATION
             if selected_embedded and failure_reason
@@ -401,10 +419,14 @@ def _artifact_id_from_evidence_ref(value: str | None) -> str:
 
 async def _resolve_embedded_evidence(
     config: OmnigentBridgeConfig,
+    *,
+    policy_authority: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Resolve claims with the artifact service's trusted service principal."""
 
     results: dict[str, dict[str, Any]] = {}
+    authority = policy_authority or await _resolve_bridge_policy_authority()
+    host = authority["boundaries"]["host"]
     embedded = config.host_connection.embedded
     build_identity = resolve_moonmind_build_id()
     if not build_identity:
@@ -432,8 +454,8 @@ async def _resolve_embedded_evidence(
                         os.getenv("OMNIGENT_HOST_ARCHITECTURE") or ""
                     ),
                     expected_images={
-                        "server": os.getenv("OMNIGENT_IMAGE_REF") or "",
-                        "host": os.getenv("OMNIGENT_HOST_IMAGE_REF") or "",
+                        "server": str(host["serverImageRef"]),
+                        "host": str(host["hostImageRef"]),
                     },
                 )
                 results[key] = {
@@ -454,6 +476,24 @@ async def _resolve_embedded_evidence(
                     "reason": "evidence_unavailable_or_invalid",
                 }
     return results
+
+
+async def _resolve_bridge_policy_authority() -> dict[str, Any]:
+    """Fail closed unless the bridge's persisted default authority is usable."""
+
+    try:
+        async with async_session_maker() as session:
+            return await OmnigentPolicyService(
+                session
+            ).resolve_default_runtime_snapshot("omnigent-codex")
+    except (PolicyConflict, PolicyNotFound) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "omnigent_policy_authority_unavailable",
+                "message": "The persisted Omnigent bridge policy is unavailable.",
+            },
+        ) from exc
 
 
 def _require_proxy_mode(
@@ -1893,14 +1933,19 @@ async def list_omnigent_hosts(
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
         hosts = await facade.list_hosts()
+        policy_authority = await _resolve_bridge_policy_authority()
         evidence = (
-            await _resolve_embedded_evidence(config)
+            await _resolve_embedded_evidence(
+                config, policy_authority=policy_authority
+            )
             if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
             else None
         )
         readiness = config.readiness(evidence_validation=evidence)
         diagnostics = _compatibility_diagnostics(
-            config=config, readiness=readiness
+            config=config,
+            readiness=readiness,
+            policy_authority=policy_authority,
         )
         return [
             {
