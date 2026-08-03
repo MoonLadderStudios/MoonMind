@@ -7,19 +7,26 @@ does not create or remove deployment networks or gateways.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import uuid
+from pathlib import Path
 
 import pytest
 
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
+    OMNIGENT_EGRESS_PROFILE,
     PROXY_URL,
     attest_docker_egress,
 )
-from moonmind.schemas.container_job_models import ContainerJobWorkflowInput
+from moonmind.schemas.container_job_models import (
+    AuxiliaryOutcome,
+    ContainerJobActivityRequest,
+    ContainerJobWorkflowInput,
+)
 from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
 )
@@ -119,6 +126,35 @@ def _probe(
         url,
     ]
     return _docker(*args)
+
+
+async def _live_runner(args):
+    result = _docker(*args)
+    return result.returncode, result.stdout.encode(), result.stderr.encode()
+
+
+def _live_backend_request(workspace: Path, *, command: list[str]):
+    job_id = f"container-job:{uuid.uuid4().hex}"
+    return ContainerJobActivityRequest.model_validate(
+        {
+            "jobId": job_id,
+            "ownershipToken": f"{job_id}:v1",
+            "request": {
+                "idempotencyKey": f"egress-live:{uuid.uuid4().hex}",
+                "source": {"source": "workflow", "workflowId": "egress-live"},
+                "spec": {
+                    "image": "alpine:3.21",
+                    "workspaceRef": {"kind": "external_state", "artifactRef": "probe"},
+                    "command": command,
+                    "networkMode": "bridge",
+                    "resources": {"cpuMillis": 100, "memoryMiB": 128, "pids": 32},
+                    "timeoutSeconds": 30,
+                },
+            },
+            "resolvedWorkspaceRef": str(workspace),
+            "resolvedImageRef": "alpine:3.21",
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -361,3 +397,172 @@ async def test_attestation_fails_closed_when_selected_daemon_cannot_prove_policy
             profile=DEFAULT_EGRESS_PROFILE,
             backend_ref="live-conformance",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_class", "profile"),
+    [
+        ("generic-container-job", DEFAULT_EGRESS_PROFILE),
+        ("managed-helper", DEFAULT_EGRESS_PROFILE),
+        ("static-omnigent", OMNIGENT_EGRESS_PROFILE),
+        ("on-demand-omnigent", OMNIGENT_EGRESS_PROFILE),
+    ],
+)
+async def test_named_runtime_classes_attach_only_after_live_gateway_attestation(
+    runtime_class: str, profile
+) -> None:
+    """Exercise the shared trusted attachment boundary for every supported class."""
+
+    attestation = await attest_docker_egress(
+        runner=_live_runner,
+        profile=profile,
+        backend_ref=f"live-conformance:{runtime_class}",
+    )
+    assert attestation.validation_state == "attested"
+
+    name = f"moonmind-test-{runtime_class}-{uuid.uuid4().hex[:8]}"
+    try:
+        created = _docker(
+            "create",
+            "--name",
+            name,
+            "--label",
+            "moonmind.test.scope=MoonLadderStudios/MoonMind#3516",
+            "--network",
+            attestation.network_ref,
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "alpine:3.21",
+            "sleep",
+            "120",
+        )
+        assert created.returncode == 0, created.stderr[-1000:]
+        inspected = _docker(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            name,
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {attestation.network_ref}
+    finally:
+        _docker("rm", "--force", name)
+
+
+@pytest.mark.asyncio
+async def test_trusted_boundary_rejects_falsified_gateway_attestation() -> None:
+    """A reachable network cannot substitute for exact trusted gateway state."""
+
+    async def falsifying_runner(args):
+        code, stdout, stderr = await _live_runner(args)
+        if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
+            payload = json.loads(stdout)
+            payload["labels"]["moonmind.egress.config-digest"] = "sha256:" + "0" * 64
+            stdout = json.dumps(payload).encode()
+        return code, stdout, stderr
+
+    with pytest.raises(RuntimeError, match="config label is stale"):
+        await attest_docker_egress(
+            runner=falsifying_runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref="live-conformance:falsified",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["cancellation", "timeout", "worker-crash"])
+async def test_interrupted_container_job_removes_owned_attachment_and_publishes_lifecycle(
+    tmp_path: Path, interruption: str
+) -> None:
+    """Replay terminal interruption shapes through the real Docker boundary."""
+
+    published: dict[str, dict] = {}
+
+    async def publish(_request, name, data):
+        path = tmp_path / name.replace(":", "-")
+        path.write_bytes(data)
+        published[name] = json.loads(path.read_text())
+        return f"file:{path}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_live_runner,
+        evidence_publisher=publish,
+    )
+    request = _live_backend_request(tmp_path, command=["sleep", "120"])
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    request.egress_attestation_ref = created.diagnostics_ref
+    try:
+        await backend.start_container(request)
+        action = {
+            "cancellation": ("stop", "--time", "1"),
+            "timeout": ("stop", "--time", "0"),
+            "worker-crash": ("kill",),
+        }[interruption]
+        result = _docker(*action, request.container_ref)
+        assert result.returncode == 0, result.stderr[-1000:]
+        request.publication = AuxiliaryOutcome(
+            state="succeeded", diagnosticsRef=f"artifact:runtime-{interruption}"
+        )
+        await backend.remove_container(request)
+        lifecycle = await backend.cleanup(request)
+        assert lifecycle.cleanup_succeeded is True
+        evidence = published[f"{request.job_id}-egress-lifecycle.json"]
+        assert evidence["cleanupResult"] == "succeeded"
+        assert evidence["reconciliationResult"] == "succeeded"
+        assert evidence["launchAttestationRef"] == created.diagnostics_ref
+        assert evidence["workloadAttachmentIdentity"] == request.container_ref
+        assert _docker("inspect", request.container_ref).returncode != 0
+    finally:
+        _docker("rm", "--force", request.container_ref)
+
+
+@pytest.mark.asyncio
+async def test_partial_setup_and_failed_cleanup_are_owned_and_reconcilable(
+    tmp_path: Path,
+) -> None:
+    published: dict[str, dict] = {}
+
+    async def publish(_request, name, data):
+        published[name] = json.loads(data)
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_live_runner,
+        evidence_publisher=publish,
+    )
+    request = _live_backend_request(tmp_path, command=["sleep", "120"])
+
+    # No attachment exists after a partial setup failure, and cleanup records
+    # that exact absence without claiming authority over deployment resources.
+    partial = await backend.cleanup(request)
+    assert partial.cleanup_succeeded is True
+    assert (
+        published[f"{request.job_id}-egress-lifecycle.json"]["cleanupResult"]
+        == "succeeded"
+    )
+
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    request.egress_attestation_ref = created.diagnostics_ref
+    try:
+        failed = await backend.cleanup(request)
+        assert failed.cleanup_succeeded is False
+        failure = published[f"{request.job_id}-egress-lifecycle.json"]
+        assert failure["failureCode"] == "attachment_still_present"
+        assert failure["cleanupResult"] == "failed"
+        assert failure["reconciliationResult"] == "failed"
+
+        await backend.remove_container(request)
+        recovered = await backend.cleanup(request)
+        assert recovered.cleanup_succeeded is True
+        final = published[f"{request.job_id}-egress-lifecycle.json"]
+        assert final["cleanupResult"] == "succeeded"
+        assert final["reconciliationResult"] == "succeeded"
+    finally:
+        _docker("rm", "--force", request.container_ref)
