@@ -544,6 +544,14 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
+        follow_up = dict(
+            (row.effective_launch_snapshot_json or {}).get("followUpRetrieval") or {}
+        )
+        if bool(follow_up.get("enabled")):
+            # Stock runners only initialize ProxyMcpManager when the server
+            # supplies this turn hint.  The session-scoped bundle served by
+            # the embedded API contains the corresponding MCP declaration.
+            payload["has_mcp_servers"] = True
         supplied_key = _clean(payload.get("idempotencyKey"))
         control_key = supplied_key or f"message:{session_id}:{_stable_payload_digest(payload)}"
         await self._validate_control_expectations(

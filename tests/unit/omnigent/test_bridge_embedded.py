@@ -1104,6 +1104,7 @@ async def test_first_message_uses_durable_runner_and_canonical_posting_state(sto
         provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
         credential_generation=1, host_binding_ref="binding-1",
         host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+        effective_launch_snapshot={"followUpRetrieval": {"enabled": True}},
     )
     await store.get_or_create(
         request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
@@ -1135,7 +1136,11 @@ async def test_first_message_uses_durable_runner_and_canonical_posting_state(sto
     assert channels.calls == [{
         "runner_id": "runner-1",
         "session_id": "sess-embedded",
-        "payload": {"type": "message", "data": {"text": "hello"}},
+        "payload": {
+            "type": "message",
+            "data": {"text": "hello"},
+            "has_mcp_servers": True,
+        },
     }]
     assert row.first_message_state == FIRST_MESSAGE_POSTED
     assert row.first_message_item_id == "item-1"

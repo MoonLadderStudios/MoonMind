@@ -1534,6 +1534,57 @@ async def omnigent_runner_retrieval_mcp(
         registry=registry,
         store=store,
     )
+    capability = registry.live_scope_capability(
+        run_id=str(row.moonmind_run_id),
+        host_id=str(row.omnigent_host_id),
+        session_id=str(row.omnigent_session_id),
+        step_id=str(row.step_execution_id),
+    )
+    if capability is None:  # pragma: no cover - guarded by successful invocation
+        raise HTTPException(409, detail="Retrieval delivery authority is unavailable.")
+    registry.acknowledge_delivery(
+        capability.capability_id, tool_payload.tool_call_id, state="delivered"
+    )
+    delivery_evidence_ref = registry.record(
+        capability,
+        {
+            "state": "delivery_updated",
+            "classification": "delivered",
+            "correlation": {"toolCallId": tool_payload.tool_call_id},
+            "delivery": {
+                "state": "delivered",
+                "boundary": "same_turn_mcp_result",
+                "toolCallId": tool_payload.tool_call_id,
+            },
+        },
+    )
+    result.update(
+        deliveryState="delivered",
+        deliveryBoundary="same_turn_mcp_result",
+        deliveryEvidenceRef=delivery_evidence_ref,
+    )
+    try:
+        await store.append_events(
+            row.bridge_session_id,
+            [
+                {
+                    "eventType": "retrieval.tool.delivered",
+                    "direction": "moonmind_to_host",
+                    "deduplicationKey": (
+                        f"retrieval-tool:{tool_payload.tool_call_id}:delivered"
+                    ),
+                    "metadata": {
+                        "turnId": tool_payload.turn_id,
+                        "toolCallId": tool_payload.tool_call_id,
+                        "deliveryState": "delivered",
+                        "deliveryBoundary": "same_turn_mcp_result",
+                        "contextPackRef": result.get("contextPackRef"),
+                    },
+                }
+            ],
+        )
+    except Exception:
+        logger.warning("Failed to append bounded retrieval delivery event.")
     return {
         "jsonrpc": "2.0",
         "id": payload.id,

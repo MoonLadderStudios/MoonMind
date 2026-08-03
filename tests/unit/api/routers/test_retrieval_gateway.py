@@ -1116,12 +1116,12 @@ def test_stock_runner_mcp_registers_and_invokes_retrieval_tool(
     headers = {"X-Omnigent-Runner-Tunnel-Token": binding}
     with TestClient(app) as client:
         listed = client.post(
-            "/v1/sessions/session-1/mcp",
+            "/retrieval/v1/sessions/session-1/mcp",
             headers=headers,
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         called = client.post(
-            "/v1/sessions/session-1/mcp",
+            "/retrieval/v1/sessions/session-1/mcp",
             headers=headers,
             json={
                 "jsonrpc": "2.0",
@@ -1143,7 +1143,8 @@ def test_stock_runner_mcp_registers_and_invokes_retrieval_tool(
     assert called.status_code == 200, called.text
     tool_result = json.loads(called.json()["result"]["content"][0]["text"])
     assert tool_result["kind"] == "retrieval_tool_result"
-    assert tool_result["deliveryState"] == "delivery_unknown"
+    assert tool_result["deliveryState"] == "delivered"
+    assert tool_result["deliveryBoundary"] == "same_turn_mcp_result"
     assert tool_result["contextPack"]["transport"] == "gateway"
 
 

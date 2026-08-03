@@ -14,9 +14,11 @@ maps bridge failure classes onto HTTP status codes.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
+import tarfile
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -32,7 +34,12 @@ from api_service.api.execution_principal import (
     resolve_execution_principal,
 )
 from api_service.api.routers.executions import _get_service as _get_execution_service
-from api_service.api.routers.retrieval_gateway import get_capability_registry
+from api_service.api.routers.retrieval_gateway import (
+    OmnigentMcpRequest,
+    get_capability_registry,
+    get_retrieval_service,
+    stock_omnigent_session_retrieval_mcp,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker
 from api_service.db.models import User
@@ -41,6 +48,7 @@ from api_service.services.omnigent_agent_profile_service import (
     record_upstream_sync_failure,
     synchronize_upstream_inventory,
 )
+from moonmind.rag.service import ContextRetrievalService
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -72,6 +80,7 @@ from moonmind.omnigent.embedded_evidence import (
 )
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
+    derive_runner_binding_token,
     embedded_host_channels,
 )
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
@@ -2436,6 +2445,106 @@ async def embedded_omnigent_runner_tunnel(
                 # Terminal exit processing may have won the race. Its durable
                 # terminal evidence remains authoritative over disconnect.
                 pass
+
+
+def _embedded_retrieval_agent_bundle() -> bytes:
+    """Build the minimal session-scoped spec that enables the stock MCP proxy.
+
+    The runner only needs one declared MCP server to activate its supported
+    ``ProxyMcpManager`` path.  Transport remains server-mediated: the URL is
+    declarative metadata and the stock runner sends tool traffic to the
+    canonical session MCP route below, never to this URL directly.
+    """
+
+    files = {
+        "config.yaml": (
+            "spec_version: 1\n"
+            "name: MoonMind Codex\n"
+            "executor:\n"
+            "  type: omnigent\n"
+            "  config:\n"
+            "    harness: codex-native\n"
+        ),
+        "tools/mcp/moonmind-retrieval.yaml": (
+            "name: moonmind-retrieval\n"
+            "transport: http\n"
+            "url: http://moonmind.invalid/retrieval\n"
+        ),
+    }
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        for name, value in files.items():
+            body = value.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            info.mtime = 0
+            info.mode = 0o600
+            archive.addfile(info, io.BytesIO(body))
+    return output.getvalue()
+
+
+@router.get("/v1/sessions/{session_id}/agent/contents")
+async def embedded_session_agent_contents(
+    session_id: str,
+    request: Request,
+    _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> Response:
+    """Serve the exact runner-bound spec that advertises MoonMind retrieval."""
+
+    row = await store.get_session_by_provider_session_id(session_id)
+    runner_id = _clean(getattr(row, "omnigent_runner_id", None))
+    if row is None or not runner_id:
+        raise HTTPException(404, detail={"code": "omnigent_bridge_session_unknown"})
+    try:
+        binding = await store.get_active_session_by_runner_identity(runner_id)
+        if binding is None:
+            raise EmbeddedHostChannelError("runner has no active durable binding")
+        generation = int(
+            ((binding.metadata_ or {}).get("embedded_runner_launch") or {}).get(
+                "generation"
+            )
+            or binding.credential_generation
+            or 0
+        )
+        token = derive_runner_binding_token(
+            resolved_host_runner_token(),
+            host_id=binding.omnigent_host_id,
+            session_id=binding.omnigent_session_id,
+            generation=generation,
+        )
+        embedded_host_channels.authenticate_runner(
+            runner_id=runner_id, headers=request.headers, binding_token=token
+        )
+    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        raise HTTPException(401, detail={"code": "runner_binding_rejected"})
+    return Response(
+        content=_embedded_retrieval_agent_bundle(),
+        media_type="application/gzip",
+        headers={"X-Agent-Version": "1", "X-Agent-Session-Scoped": "true"},
+    )
+
+
+@router.post("/v1/sessions/{session_id}/mcp")
+async def embedded_session_retrieval_mcp(
+    session_id: str,
+    payload: OmnigentMcpRequest,
+    request: Request,
+    _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> dict[str, object]:
+    """Expose retrieval on the stock runner's canonical MCP proxy route."""
+
+    return await stock_omnigent_session_retrieval_mcp(
+        session_id,
+        payload,
+        request,
+        service=service,
+        registry=registry,
+        store=store,
+    )
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)
