@@ -34,6 +34,12 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentIdempotencyError,
 )
+from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+from moonmind.omnigent.host_auth_adapter import (
+    OmnigentHostAuthAdapter,
+    UpstreamHostAuthError,
+)
+from moonmind.omnigent.settings import resolved_host_runner_token
 
 logger = logging.getLogger(__name__)
 
@@ -379,6 +385,28 @@ class RetrievalDeliveryAcknowledgement(BaseModel):
     state: str = Field(
         ...,
         pattern="^(delivered|not_delivered|delivery_unknown|cancelled|timed_out)$",
+    )
+
+
+class OmnigentRetrievalToolRequest(BaseModel):
+    """One exact active-turn call from the embedded Omnigent runner."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(..., min_length=1)
+    turn_id: str = Field(..., min_length=1, alias="turnId")
+    tool_call_id: str = Field(..., min_length=1, alias="toolCallId")
+    collections: List[str] = Field(default_factory=list, max_length=16)
+    filters: Dict[str, str] = Field(default_factory=dict)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    max_context_tokens: int | None = Field(
+        default=None, ge=64, le=65536, alias="maxContextTokens"
+    )
+    latency_ms: int | None = Field(
+        default=None, ge=100, le=30000, alias="latencyMs"
+    )
+    overlay_policy: str = Field(
+        default="include", alias="overlayPolicy", pattern="^(include|skip)$"
     )
 
 
@@ -1257,3 +1285,187 @@ async def retrieve_context_pack(
     finally:
         if capability is not None and began:
             registry.abort(capability, tool_call_id)
+
+
+@router.post("/omnigent-runners/{runner_id}/tool")
+async def invoke_omnigent_retrieval_tool(
+    runner_id: str,
+    payload: OmnigentRetrievalToolRequest,
+    request: Request,
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+) -> Dict[str, object]:
+    """Execute and deliver retrieval for the exact authenticated stock runner.
+
+    The runner binding is exchanged server-side for retrieval-only authority.
+    Neither the short-lived capability nor infrastructure credentials cross the
+    host boundary.  Returning the typed ContextPack in this request is the
+    acknowledgement for the active MCP tool call; a transport break leaves the
+    gateway's provisional ``delivery_unknown`` evidence intact.
+    """
+
+    row = await store.get_active_session_by_runner_identity(runner_id)
+    if (
+        row is None
+        or not row.omnigent_host_id
+        or not row.omnigent_session_id
+        or row.credential_generation is None
+    ):
+        raise HTTPException(401, detail="Runner has no active retrieval binding.")
+    generation = int(
+        ((row.metadata_ or {}).get("embedded_runner_launch") or {}).get("generation")
+        or row.credential_generation
+    )
+    binding_token = derive_runner_binding_token(
+        resolved_host_runner_token(),
+        host_id=row.omnigent_host_id,
+        session_id=row.omnigent_session_id,
+        generation=generation,
+    )
+    try:
+        identity = OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({binding_token})
+        ).verify(request.headers)
+    except UpstreamHostAuthError as exc:
+        raise HTTPException(401, detail="Runner retrieval binding was rejected.") from exc
+    if identity.runner_id != runner_id:
+        raise HTTPException(403, detail="Runner retrieval identity does not match.")
+
+    issue = _bridge_authoritative_issue(
+        row,
+        BridgeRetrievalCapabilityIssue(
+            collections=payload.collections,
+            filters=payload.filters,
+            top_k=payload.top_k,
+            max_context_tokens=payload.max_context_tokens,
+            latency_ms=payload.latency_ms,
+        ),
+    )
+    budget = _server_policy_snapshot(issue)
+    capability = registry.live_scope_capability(
+        run_id=budget.run_id,
+        host_id=budget.host_id,
+        session_id=budget.session_id,
+        step_id=budget.step_id,
+    )
+    if capability is None:
+        _token, capability = registry.issue(
+            budget, lifetime_seconds=issue.lifetime_seconds
+        )
+        try:
+            await store.append_events(
+                row.bridge_session_id,
+                [
+                    {
+                        "eventType": "retrieval.capability.issued",
+                        "direction": "moonmind_to_host",
+                        "deduplicationKey": (
+                            f"retrieval-capability:{capability.capability_id}"
+                        ),
+                        "metadata": {
+                            "capabilityId": capability.capability_id,
+                            "policyVersion": budget.policy_version,
+                            "expiresAt": capability.expires_at,
+                        },
+                    }
+                ],
+            )
+        except Exception:
+            registry.revoke(capability.capability_id)
+            raise
+
+    query = RetrievalQuery(
+        query=payload.query,
+        top_k=payload.top_k,
+        collections=payload.collections,
+        filters=payload.filters or {"repository": budget.repository},
+        overlay_policy=payload.overlay_policy,
+        budgets={
+            key: value
+            for key, value in {
+                "tokens": payload.max_context_tokens,
+                "latency_ms": payload.latency_ms,
+            }.items()
+            if value is not None
+        },
+        correlation=RetrievalCorrelation(
+            workflow_id=budget.workflow_id,
+            step_id=budget.step_id,
+            bridge_session_id=budget.bridge_session_id,
+            omnigent_session_id=budget.session_id,
+            turn_id=payload.turn_id,
+            tool_call_id=payload.tool_call_id,
+        ),
+    )
+    auth = RetrievalAuthContext(
+        auth_source="session_capability",
+        allowed_repositories=(budget.repository,),
+        capabilities=("rag.retrieve",),
+        session_capability=capability,
+    )
+
+    async def append_tool_event(state: str, **metadata: object) -> None:
+        try:
+            await store.append_events(
+                row.bridge_session_id,
+                [
+                    {
+                        "eventType": f"retrieval.tool.{state}",
+                        "direction": "host_to_moonmind",
+                        "deduplicationKey": (
+                            f"retrieval-tool:{payload.tool_call_id}:{state}"
+                        ),
+                        "metadata": {
+                            "turnId": payload.turn_id,
+                            "toolCallId": payload.tool_call_id,
+                            **metadata,
+                        },
+                    }
+                ],
+            )
+        except Exception:
+            # Bridge projection is auxiliary evidence; the registry remains the
+            # terminal authority and must not be overwritten by an event write.
+            logger.warning("Failed to append bounded retrieval tool event.")
+
+    await append_tool_event("started")
+    try:
+        result = await retrieve_context_pack(
+            query, service=service, auth=auth, registry=registry
+        )
+    except asyncio.CancelledError:
+        await append_tool_event("failed", classification="cancelled")
+        raise
+    except Exception as exc:
+        await append_tool_event("failed", classification=type(exc).__name__)
+        raise
+    try:
+        context_pack = registry.read_result(capability, payload.tool_call_id)
+        acknowledgement = registry.acknowledge_delivery(
+            capability.capability_id, payload.tool_call_id, state="delivered"
+        )
+        registry.record(
+            capability,
+            {
+                "state": "delivery_updated",
+                "classification": "delivered",
+                "correlation": {"toolCallId": payload.tool_call_id},
+                "delivery": {
+                    "state": "delivered",
+                    "boundary": acknowledgement.get("deliveryBoundary"),
+                    "turnId": payload.turn_id,
+                    "toolCallId": payload.tool_call_id,
+                },
+            },
+        )
+    except KeyError as exc:  # pragma: no cover - defensive atomicity guard
+        await append_tool_event("failed", classification="delivery_unavailable")
+        raise HTTPException(409, detail="Retrieval result delivery is unavailable.") from exc
+    await append_tool_event(
+        "result",
+        deliveryState="delivered",
+        contextPackRef=result.get("contextPackRef"),
+        evidenceRef=result.get("evidenceRef"),
+    )
+    return {**result, "deliveryState": "delivered", "contextPack": context_pack}

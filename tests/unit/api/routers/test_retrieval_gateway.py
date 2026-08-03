@@ -16,6 +16,7 @@ from api_service.api.routers.retrieval_gateway import (
     issue_bridge_retrieval_capability,
     authorize_retrieval_request,
     bridge_follow_up_retrieval_diagnostics,
+    get_bridge_session_store,
     get_retrieval_service,
     revoke_bridge_retrieval_capabilities,
     router,
@@ -25,6 +26,8 @@ from api_service.retrieval_capabilities import (
     RetrievalCapabilityError,
     RetrievalCapabilityRegistry,
 )
+from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 from moonmind.rag.qdrant_client import IndexCollectionHealth, IndexHealthSummary
 
@@ -1015,6 +1018,62 @@ def test_session_retrieval_returns_dereferenceable_context_pack_ref(tmp_path) ->
 
     assert resolved.status_code == 200, resolved.text
     assert resolved.json()["transport"] == "gateway"
+
+
+def test_embedded_runner_tool_exchanges_authority_and_delivers_same_turn(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production runner path never exposes a reusable retrieval token."""
+    service = StubService()
+    app = _build_app()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    app.state.retrieval_capability_registry = registry
+    monkeypatch.setenv("OMNIGENT_HOST_RUNNER_TOKEN", "runner-root")
+    binding = derive_runner_binding_token(
+        "runner-root",
+        host_id="host-1",
+        session_id="session-1",
+        generation=2_000_003,
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({binding})
+    ).runner_id_for_binding_token(binding)
+    row = _bridge_row(
+        omnigent_runner_id=runner_id,
+        credential_generation=2,
+        metadata_={"embedded_runner_launch": {"generation": 2_000_003}},
+    )
+
+    class Store:
+        async def get_active_session_by_runner_identity(self, requested_runner_id):
+            return row if requested_runner_id == runner_id else None
+
+        async def append_events(self, bridge_session_id, events):
+            assert bridge_session_id == "bridge-1"
+
+    app.dependency_overrides[get_bridge_session_store] = lambda: Store()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/retrieval/omnigent-runners/{runner_id}/tool",
+            headers={"X-Omnigent-Runner-Tunnel-Token": binding},
+            json={
+                "query": "bounded query",
+                "turnId": "turn-1",
+                "toolCallId": "tool-1",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["kind"] == "retrieval_tool_result"
+    assert body["deliveryState"] == "delivered"
+    assert body["contextPack"]["transport"] == "gateway"
+    assert "capability" not in body
+    summary = registry.summarize_bridge_session("bridge-1")
+    assert summary["aggregate"]["delivered"] == 1
+    assert summary["aggregate"]["deliveryUnknown"] == 0
 
 
 def test_session_retrieval_passes_capability_run_identity_to_overlays(
