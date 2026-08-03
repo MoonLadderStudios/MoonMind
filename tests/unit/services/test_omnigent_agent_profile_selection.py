@@ -43,6 +43,8 @@ class _Session:
             max_parallel_runs=1, cooldown_after_429_seconds=900,
             runtime_id="codex_cli", credential_source=ProviderCredentialSource.OAUTH_VOLUME,
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            provider_id="openai", volume_ref="codex-oauth",
+            volume_mount_path="/root/.codex", secret_refs={},
             credential_bindings=[], command_behavior={"auth_readiness": {"launch_ready": True}},
         )
         self.added = []
