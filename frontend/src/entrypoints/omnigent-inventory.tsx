@@ -35,7 +35,13 @@ type AuditEvent = { eventId: string; version: number | null; type: string; actor
 type PolicyUsage = {
   policyRef: string;
   default: boolean;
-  dependents: { hostBindings: string[]; hostBindingCount: number };
+  dependents: {
+    hostBindings: string[]; hostBindingCount: number;
+    providerProfiles: string[]; providerProfileCount: number;
+    workflows: string[]; workflowCount: number;
+    bridgeSessions: string[]; bridgeSessionCount: number;
+    activeBridgeSessions: string[]; activeBridgeSessionCount: number;
+  };
   activationImpact: { willSwitchDefault: boolean; compatible: boolean; diagnostics: Array<{ code: string; message: string }> };
   unavailabilityBlockers: string[];
 };
@@ -351,6 +357,12 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           <p>Deployment compatibility: {usage.data.activationImpact.compatible ? 'Compatible' : 'Incompatible'}</p>
           <p>Dependent host profiles: {usage.data.dependents.hostBindingCount}</p>
           {usage.data.dependents.hostBindings.length ? <ul>{usage.data.dependents.hostBindings.map((ref) => <li key={ref}>{ref}</li>)}</ul> : null}
+          <p>Dependent provider profiles: {usage.data.dependents.providerProfileCount}</p>
+          {usage.data.dependents.providerProfiles.length ? <ul>{usage.data.dependents.providerProfiles.map((ref) => <li key={ref}>{ref}</li>)}</ul> : null}
+          <p>Dependent workflows: {usage.data.dependents.workflowCount}</p>
+          {usage.data.dependents.workflows.length ? <ul>{usage.data.dependents.workflows.map((ref) => <li key={ref}>{ref}</li>)}</ul> : null}
+          <p>Bridge sessions: {usage.data.dependents.bridgeSessionCount} ({usage.data.dependents.activeBridgeSessionCount} active)</p>
+          {usage.data.dependents.bridgeSessions.length ? <ul>{usage.data.dependents.bridgeSessions.map((ref) => <li key={ref}>{ref}{usage.data.dependents.activeBridgeSessions.includes(ref) ? ' · active' : ' · historical'}</li>)}</ul> : null}
           {usage.data.unavailabilityBlockers.map((blocker) => <p role="alert" key={blocker}>{blocker}</p>)}
         </section> : null}
         {visibleVersion && visibleVersion.version !== selected.version ? <button type="button" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</button> : null}

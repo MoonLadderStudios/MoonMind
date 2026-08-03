@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
@@ -38,6 +39,9 @@ class PolicyConflict(ValueError):
 
 class PolicyNotFound(LookupError):
     pass
+
+
+_BRIDGE_TERMINAL_STATES = frozenset({"completed", "failed", "canceled", "timed_out"})
 
 
 def _split_policy_ref(policy_ref: str) -> tuple[str, int]:
@@ -264,6 +268,27 @@ class OmnigentPolicyService:
                 raise PolicyConflict(
                     "policy version is bound to an active host profile and cannot be made unavailable"
                 )
+            bridge_rows = list((await self.session.execute(
+                select(OmnigentBridgeSession)
+            )).scalars())
+            policy_ref = f"{policy_id}@{version}"
+            active_bridge = next((
+                bridge.bridge_session_id
+                for bridge in bridge_rows
+                if str(bridge.status).lower() not in _BRIDGE_TERMINAL_STATES
+                and isinstance(bridge.effective_launch_snapshot_json, dict)
+                and isinstance(
+                    bridge.effective_launch_snapshot_json.get("policyAuthority"),
+                    dict,
+                )
+                and bridge.effective_launch_snapshot_json["policyAuthority"].get(
+                    "policyRef"
+                ) == policy_ref
+            ), None)
+            if active_bridge is not None:
+                raise PolicyConflict(
+                    "policy version is bound to an active bridge session and cannot be made unavailable"
+                )
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
@@ -306,12 +331,47 @@ class OmnigentPolicyService:
                 OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
             ).order_by(OmnigentOAuthHostBindingRecord.binding_ref)
         )).scalars())
+        # Bridge sessions keep the complete immutable authority in their launch
+        # snapshot. Resolve dependents from persisted evidence instead of mutable
+        # current defaults so historical usage remains inspectable after rollout.
+        bridge_rows = list((await self.session.execute(
+            select(OmnigentBridgeSession).order_by(
+                OmnigentBridgeSession.bridge_session_id
+            )
+        )).scalars())
+        bridge_sessions: list[str] = []
+        active_bridge_sessions: list[str] = []
+        workflow_ids: set[str] = set()
+        provider_profile_ids = {
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentOAuthHostBindingRecord.provider_profile_id).where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+                )
+            )).scalars()
+        }
+        for bridge in bridge_rows:
+            launch = bridge.effective_launch_snapshot_json
+            if not isinstance(launch, dict):
+                continue
+            authority = launch.get("policyAuthority")
+            if not isinstance(authority, dict) or authority.get("policyRef") != policy_ref:
+                continue
+            bridge_sessions.append(bridge.bridge_session_id)
+            workflow_ids.add(bridge.moonmind_workflow_id)
+            if bridge.provider_profile_id:
+                provider_profile_ids.add(bridge.provider_profile_id)
+            if str(bridge.status).lower() not in _BRIDGE_TERMINAL_STATES:
+                active_bridge_sessions.append(bridge.bridge_session_id)
+
         is_default = policy.default_version == version
         blockers = []
         if is_default:
             blockers.append("Switch the policy default before disabling or deprecating this version.")
         if host_bindings:
             blockers.append("Move dependent host profiles before disabling or deprecating this version.")
+        if active_bridge_sessions:
+            blockers.append("Wait for dependent bridge sessions to finish before disabling or deprecating this version.")
         return {
             "policyRef": policy_ref,
             "state": row.state,
@@ -319,6 +379,14 @@ class OmnigentPolicyService:
             "dependents": {
                 "hostBindings": host_bindings,
                 "hostBindingCount": len(host_bindings),
+                "providerProfiles": sorted(provider_profile_ids),
+                "providerProfileCount": len(provider_profile_ids),
+                "workflows": sorted(workflow_ids),
+                "workflowCount": len(workflow_ids),
+                "bridgeSessions": bridge_sessions,
+                "bridgeSessionCount": len(bridge_sessions),
+                "activeBridgeSessions": active_bridge_sessions,
+                "activeBridgeSessionCount": len(active_bridge_sessions),
             },
             "activationImpact": {
                 "willSwitchDefault": not is_default,

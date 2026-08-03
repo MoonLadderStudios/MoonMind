@@ -116,7 +116,13 @@ describe('OmnigentInventoryPage', () => {
       if (url.endsWith('/versions/2/usage')) return {
         ok: true, json: async () => ({
           policyRef: 'codex-static@2', default: true,
-          dependents: { hostBindings: ['oauth-host-codex'], hostBindingCount: 1 },
+          dependents: {
+            hostBindings: ['oauth-host-codex'], hostBindingCount: 1,
+            providerProfiles: ['codex-profile'], providerProfileCount: 1,
+            workflows: ['workflow-1'], workflowCount: 1,
+            bridgeSessions: ['bridge-1'], bridgeSessionCount: 1,
+            activeBridgeSessions: ['bridge-1'], activeBridgeSessionCount: 1,
+          },
           activationImpact: { willSwitchDefault: false, compatible: true, diagnostics: [] },
           unavailabilityBlockers: ['Switch the policy default before disabling or deprecating this version.'],
         }),
