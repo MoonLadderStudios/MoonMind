@@ -947,24 +947,6 @@ class ManagedRuntimeLauncher:
             return str(resolved_path)
         return str(resolved_path)
 
-    def _find_existing_workspace_repo(self, *, exclude_run_id: str) -> str | None:
-        workspace_root = self._workspace_root()
-        if not workspace_root.exists():
-            return None
-
-        candidates: list[Path] = []
-        for child in workspace_root.iterdir():
-            if not child.is_dir() or child.name == exclude_run_id:
-                continue
-            repo_dir = child / "repo"
-            if (repo_dir / ".git").exists():
-                candidates.append(repo_dir)
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-        return str(candidates[0])
-
     async def _run_git_command(
         self,
         args: list[str],
@@ -1022,8 +1004,6 @@ class ManagedRuntimeLauncher:
             if isinstance(repo_ref, str)
             else None
         )
-        if clone_source is None:
-            clone_source = self._find_existing_workspace_repo(exclude_run_id=run_id)
         if clone_source is None:
             return None
 

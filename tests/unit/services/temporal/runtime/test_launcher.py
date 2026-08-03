@@ -55,6 +55,23 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_does_not_select_an_unrelated_checkout(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    unrelated = tmp_path / "workspaces" / "other-run" / "repo" / ".git"
+    unrelated.mkdir(parents=True)
+
+    resolved = await launcher._prepare_workspace(
+        run_id="current-run",
+        request=_make_request(workspace_spec={}),
+        workspace_path=None,
+    )
+
+    assert resolved is None
+    assert not (tmp_path / "workspaces" / "current-run").exists()
+
+
+@pytest.mark.asyncio
 async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
     readiness = AsyncMock(
@@ -2026,7 +2043,9 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     assert exc_process is None
 
 @pytest.mark.asyncio
-async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatch):
+async def test_launch_does_not_prepare_workspace_from_unrelated_repo(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     existing_repo = tmp_path / "workspaces" / "existing-run" / "repo"
@@ -2057,11 +2076,11 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
     )
     stdout, _stderr = await process.communicate()
 
-    expected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
-    assert record.workspace_path == str(expected_workspace)
-    assert record.live_stream_capable is True
-    assert expected_workspace.exists()
-    assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
+    unexpected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
+    assert record.workspace_path is None
+    assert record.live_stream_capable is False
+    assert not unexpected_workspace.exists()
+    assert str(existing_repo) not in stdout.decode("utf-8", errors="replace")
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypatch):

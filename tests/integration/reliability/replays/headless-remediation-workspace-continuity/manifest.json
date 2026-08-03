@@ -1,0 +1,87 @@
+{
+  "incidentWorkflowId": "mm:6ca2d8a6-4804-4434-8c15-6896ec673ac5",
+  "incidentRunId": "019fc4ae-2a85-7c85-92d9-eb66d0fd6bd4",
+  "failureShapeId": "headless-remediation-workspace-continuity",
+  "boundary": "MoonSpec verifier evidence to checkpointless remediation AgentRun dispatch",
+  "escapedWorkspaceSpec": {},
+  "sourceVerifier": {
+    "logicalStepId": "tpl:github-issue-implement:06:071102cb",
+    "gateResultRef": "artifact://art_01KZ2E49AMDQTHH3YCKTZT0GFE",
+    "nodeInputs": {
+      "repository": "MoonLadderStudios/Tactics",
+      "targetBranch": "github-issue-implement-moonladderstudios-85030dac"
+    },
+    "outputs": {
+      "acceptedRepositoryEvidence": {
+        "authority": "agent_runtime.fetch_result",
+        "publicationAuthorized": true,
+        "candidateContaminated": false,
+        "pushStatus": "pushed",
+        "remoteVerified": true,
+        "branch": "github-issue-implement-moonladderstudios-85030dac",
+        "baseBranch": "main",
+        "headSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5"
+      }
+    }
+  },
+  "controllerPlanNode": {
+    "id": "tpl:github-issue-implement:07:071102cb",
+    "tool": {
+      "type": "agent_runtime",
+      "name": "claude_code"
+    },
+    "inputs": {
+      "runtime": {
+        "mode": "claude_code",
+        "model": "claude-opus-4-8",
+        "executionProfileRef": "claude_anthropic_oauth"
+      },
+      "annotations": {
+        "issueImplementRole": "moonspec-remediation-loop",
+        "remediationLoop": {
+          "kind": "remediation_loop",
+          "loopId": "issue-implementation-remediation",
+          "remediationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "auto",
+              "instructions": "Fix only the gaps identified by the latest verifier result."
+            }
+          },
+          "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "moonspec-verify",
+              "instructions": "Verify the remediated candidate."
+            }
+          },
+          "workspacePolicy": "continue_from_loop_head",
+          "budgets": {
+            "hardMaxAttempts": 6,
+            "maxConsecutiveSemanticNoProgress": 2,
+            "maxRepeatedFailureSignature": 2,
+            "maxEvidenceRetries": 1,
+            "maxContractRepairs": 1
+          },
+          "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop"
+          },
+          "sideEffectPolicy": "workflow_owned",
+          "publicationPolicy": "evaluate_after_terminal"
+        }
+      }
+    }
+  },
+  "workflowParameters": {
+    "repository": "MoonLadderStudios/Tactics",
+    "publishMode": "pr",
+    "model": "claude-opus-4-8",
+    "profileId": "claude_anthropic_oauth"
+  }
+}

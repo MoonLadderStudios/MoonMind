@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -48,7 +49,12 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+    RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    MoonMindRunWorkflow,
+)
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import (
     FinalizationFaultInjector,
@@ -1716,6 +1722,75 @@ async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
     # which no provider can satisfy. Keep that boundary failing loudly.
     with pytest.raises(ValueError, match=expected["rejectedDispatchError"]):
         await agent_run_module.resolve_adapter_metadata(expected["rejectedAgentId"])
+
+
+async def test_checkpointless_remediation_keeps_the_verified_repository_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:6ca2d8a6 at verifier-to-remediation dispatch."""
+
+    replay_id = "headless-remediation-workspace-continuity"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["incidentRunId"],
+        parent=None,
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+            RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+        },
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 8, 3, tzinfo=timezone.utc),
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._initialize_remediation_loop_controller(
+        ordered_nodes=[manifest["controllerPlanNode"]]
+    )
+    parent._step_ledger_rows = []
+    parent._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/verified-workspace"
+    )
+    source = manifest["sourceVerifier"]
+    workspace_spec = parent._verified_headless_remediation_workspace_spec(
+        node_inputs=source["nodeInputs"],
+        outputs=source["outputs"],
+    )
+    ordered_nodes: list[dict[str, object]] = []
+
+    admitted = await parent._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref=source["gateResultRef"],
+        remaining_work_ref=source["gateResultRef"],
+        logical_step_id=source["logicalStepId"],
+        headless_workspace_spec=workspace_spec,
+    )
+
+    assert admitted is True
+    assert len(ordered_nodes) == 2
+    for node in ordered_nodes:
+        request = parent._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_id=str(node["id"]),
+            tool_name=str(node["tool"]["name"]),
+            workflow_parameters=manifest["workflowParameters"],
+        )
+        assert request.workspace_spec == expected["workspaceSpec"]
+        assert request.workspace_spec != manifest["escapedWorkspaceSpec"]
 
 
 async def test_instructionless_remediation_verifier_is_rejected_before_dispatch() -> None:

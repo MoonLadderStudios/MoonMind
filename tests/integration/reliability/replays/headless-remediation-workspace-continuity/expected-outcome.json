@@ -1,0 +1,8 @@
+{
+  "invariant": "checkpointless remediation and its verifier execute only against the remote-verified repository branch that admitted the attempt",
+  "workspaceSpec": {
+    "repository": "MoonLadderStudios/Tactics",
+    "startingBranch": "github-issue-implement-moonladderstudios-85030dac",
+    "targetBranch": "github-issue-implement-moonladderstudios-85030dac"
+  }
+}
