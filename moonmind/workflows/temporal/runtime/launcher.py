@@ -519,12 +519,13 @@ class ManagedRuntimeLauncher:
         registry.register(
             "repo.review.request", operation_ready("review_request")
         )
+        # Skills may require authenticated read-only GitHub operations even
+        # when the workflow itself does not publish a pull request.
         registry.register(
             "gh",
             lambda context: (
                 context["target"].provider == "git"
                 and context["connection"].credential.source == "github_resolver"
-                and context["publishMode"] == "pr"
             ),
         )
 

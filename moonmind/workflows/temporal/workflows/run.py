@@ -91,6 +91,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.repository_contract import (
+        repository_name_from_value,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
@@ -548,6 +551,9 @@ RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = (
     "run-update-inputs-visibility-refresh-v1"
 )
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
+    "run-canonical-git-repository-projection-v1"
+)
 RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
@@ -1367,6 +1373,7 @@ class MoonMindRunWorkflow:
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        self._canonical_git_repository_projection_enabled: bool = False
         self._canonical_no_commit_outcome_enabled: bool = False
         self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
@@ -9620,6 +9627,9 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        self._canonical_git_repository_projection_enabled = workflow.patched(
+            RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH
+        )
         try:
             workflow_type, parameters, input_ref, plan_ref, scheduled_for = (
                 self._initialize_from_payload(input_payload)
@@ -10068,12 +10078,37 @@ class MoonMindRunWorkflow:
             task_parameters.get("dependsOn")
         )
         ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
-        self._repo = (
-            self._string_from_mapping(parameters, "repo")
-            or self._string_from_mapping(parameters, "repository")
-            or self._string_from_mapping(ws, "repo")
-            or self._string_from_mapping(ws, "repository")
+        repository_values = (
+            parameters.get("repository"),
+            ws.get("repository"),
         )
+        lore_target_selected = any(
+            isinstance(value, Mapping) and value.get("provider") == "lore"
+            for value in repository_values
+        )
+        if (
+            self._canonical_git_repository_projection_enabled
+            and not lore_target_selected
+        ):
+            self._repo = (
+                self._string_from_mapping(parameters, "repo")
+                or repository_name_from_value(
+                    parameters.get("repository"), provider="git"
+                )
+                or self._string_from_mapping(ws, "repo")
+                or repository_name_from_value(
+                    ws.get("repository"), provider="git"
+                )
+            )
+        elif self._canonical_git_repository_projection_enabled:
+            self._repo = None
+        else:
+            self._repo = (
+                self._string_from_mapping(parameters, "repo")
+                or self._string_from_mapping(parameters, "repository")
+                or self._string_from_mapping(ws, "repo")
+                or self._string_from_mapping(ws, "repository")
+            )
         self._record_integration_from_parameters(parameters)
 
         input_ref = self._optional_string(

@@ -4,9 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.workflows.executions.repository_contract import (
-    CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
+    CapabilityReadinessRegistry,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
     RepositoryConnection,
@@ -18,9 +19,9 @@ from moonmind.workflows.executions.repository_contract import (
     load_repository_connection,
     materialize_resolved_repository_target,
     persist_repository_connection,
+    reconcile_default_git_connection,
     repository_branch_from_value,
     repository_name_from_value,
-    reconcile_default_git_connection,
     resolve_default_git_credential,
     validate_connection_and_client,
 )
@@ -86,6 +87,11 @@ def test_repository_projection_helpers_support_scalar_and_structured_values() ->
 
     assert repository_name_from_value(" owner/repo ") == "owner/repo"
     assert repository_name_from_value(target) == "MoonLadderStudios/MoonMind"
+    assert (
+        repository_name_from_value(target, provider="git")
+        == "MoonLadderStudios/MoonMind"
+    )
+    assert repository_name_from_value(target, provider="lore") == ""
     assert repository_branch_from_value(target) == "feature/repository-target"
 
 
@@ -408,7 +414,7 @@ async def test_coherent_readiness_boundary_completes_before_mutation() -> None:
     registry = CapabilityReadinessRegistry()
     for token in ("git", "repo.read", "repo.write", "repo.branch.write", "gh"):
         registry.register(token, lambda _context: True)
-    credential = AsyncMock(return_value=object())
+    credential = AsyncMock(return_value=ResolvedGitHubCredential(token="test-token"))
     remote_tip = AsyncMock(return_value=True)
 
     resolved = await ensure_repository_ready(
@@ -458,3 +464,46 @@ async def test_readiness_boundary_fails_before_resolver_for_unknown_token() -> N
             credential_resolver=credential,
         )
     credential.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_readiness_boundary_rejects_unresolved_github_credential() -> None:
+    target = compile_repository_target(
+        {
+            "provider": "git",
+            "repository": {"name": "owner/repo"},
+            "branch": {"name": "main"},
+        }
+    )
+    connection = reconcile_default_git_connection(client_policy=_policy())
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="tool-bundle:git-2.46",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    registry = CapabilityReadinessRegistry()
+    registry.register("git", lambda _context: True)
+    registry.register("repo.read", lambda _context: True)
+    registry.register("gh", lambda _context: True)
+    remote_tip = AsyncMock(return_value=True)
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ):
+        await ensure_repository_ready(
+            target,
+            publish_mode="none",
+            operation="read",
+            skill_capabilities=("gh",),
+            connection_resolver=lambda _target: connection,
+            evidence_resolver=lambda _connection: evidence,
+            readiness_registry=registry,
+            credential_resolver=AsyncMock(
+                return_value=ResolvedGitHubCredential(
+                    diagnostic="GitHub auth is unavailable for the repository."
+                )
+            ),
+            remote_tip_verifier=remote_tip,
+        )
+
+    remote_tip.assert_not_awaited()

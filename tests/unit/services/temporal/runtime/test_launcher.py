@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
@@ -196,7 +197,7 @@ async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=object()),
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
     ):
         resolved = await launcher._ensure_repository_ready_for_launch(
             _repository_readiness_request(publish_mode="none"), None
@@ -206,6 +207,83 @@ async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_
     assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
     assert resolved.client_evidence == evidence
     assert resolved.compatible_server_versions == ()
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_allows_gh_for_read_only_skill(tmp_path):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none",
+                skill_capabilities=["gh"],
+            ),
+            None,
+        )
+
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
+    assert resolved.remote_tip_expectation["kind"] == "must_equal"
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_unresolved_gh_credential(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(
+            return_value=ResolvedGitHubCredential(
+                diagnostic="GitHub auth is unavailable for the repository."
+            )
+        ),
+    ):
+        with pytest.raises(
+            RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+        ):
+            await launcher._ensure_repository_ready_for_launch(
+                _repository_readiness_request(
+                    publish_mode="none",
+                    skill_capabilities=["gh"],
+                ),
+                None,
+            )
+
+    launcher._observe_git_remote_tip.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -412,7 +490,7 @@ async def test_default_repository_readiness_rejects_missing_or_changed_remote_ti
 
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential",
-        AsyncMock(return_value=object()),
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
     ):
         with pytest.raises(
             RepositoryContractError, match="REPOSITORY_REMOTE_TIP_MISMATCH"
