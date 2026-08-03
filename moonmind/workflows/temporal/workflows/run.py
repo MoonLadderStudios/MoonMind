@@ -664,6 +664,7 @@ RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
 )
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v1"
+RUN_CHECKPOINT_BRANCH_RETRIEVAL_PATCH = "run-checkpoint-branch-retrieval-v1"
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
 )
@@ -18897,7 +18898,9 @@ class MoonMindRunWorkflow:
             branch_follow_up_retrieval = branch_turn_payload.get(
                 "followUpRetrieval"
             )
-            if isinstance(branch_follow_up_retrieval, Mapping):
+            if isinstance(branch_follow_up_retrieval, Mapping) and self._workflow_patch_enabled(
+                RUN_CHECKPOINT_BRANCH_RETRIEVAL_PATCH
+            ):
                 parent_follow_up_retrieval = parameters.get("followUpRetrieval")
                 parameters["followUpRetrieval"] = (
                     self._narrow_checkpoint_branch_follow_up_retrieval(

@@ -410,6 +410,15 @@ class OmnigentRetrievalToolRequest(BaseModel):
     )
 
 
+class OmnigentMcpRequest(BaseModel):
+    """Bounded JSON-RPC request emitted by the stock Omnigent MCP proxy."""
+
+    jsonrpc: str = Field(default="2.0", pattern="^2\\.0$")
+    id: str | int | None = None
+    method: str = Field(..., pattern="^tools/(list|call)$")
+    params: Dict[str, object] = Field(default_factory=dict)
+
+
 class IndexCollectionHealthModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1296,13 +1305,13 @@ async def invoke_omnigent_retrieval_tool(
     registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
     store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
 ) -> Dict[str, object]:
-    """Execute and deliver retrieval for the exact authenticated stock runner.
+    """Execute retrieval for the exact authenticated stock runner.
 
     The runner binding is exchanged server-side for retrieval-only authority.
     Neither the short-lived capability nor infrastructure credentials cross the
-    host boundary.  Returning the typed ContextPack in this request is the
-    acknowledgement for the active MCP tool call; a transport break leaves the
-    gateway's provisional ``delivery_unknown`` evidence intact.
+    host boundary.  A successful handler return is not authoritative evidence
+    that the result crossed the runner transport, so delivery remains
+    ``delivery_unknown`` until the runner acknowledges it explicitly.
     """
 
     row = await store.get_active_session_by_runner_identity(runner_id)
@@ -1442,30 +1451,124 @@ async def invoke_omnigent_retrieval_tool(
         raise
     try:
         context_pack = registry.read_result(capability, payload.tool_call_id)
-        acknowledgement = registry.acknowledge_delivery(
-            capability.capability_id, payload.tool_call_id, state="delivered"
-        )
-        registry.record(
-            capability,
-            {
-                "state": "delivery_updated",
-                "classification": "delivered",
-                "correlation": {"toolCallId": payload.tool_call_id},
-                "delivery": {
-                    "state": "delivered",
-                    "boundary": acknowledgement.get("deliveryBoundary"),
-                    "turnId": payload.turn_id,
-                    "toolCallId": payload.tool_call_id,
-                },
-            },
-        )
     except KeyError as exc:  # pragma: no cover - defensive atomicity guard
         await append_tool_event("failed", classification="delivery_unavailable")
         raise HTTPException(409, detail="Retrieval result delivery is unavailable.") from exc
     await append_tool_event(
         "result",
-        deliveryState="delivered",
+        deliveryState="delivery_unknown",
         contextPackRef=result.get("contextPackRef"),
         evidenceRef=result.get("evidenceRef"),
     )
-    return {**result, "deliveryState": "delivered", "contextPack": context_pack}
+    return {
+        **result,
+        "deliveryState": "delivery_unknown",
+        "contextPack": context_pack,
+    }
+
+
+@router.post("/omnigent-runners/{runner_id}/mcp")
+async def omnigent_runner_retrieval_mcp(
+    runner_id: str,
+    payload: OmnigentMcpRequest,
+    request: Request,
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+) -> Dict[str, object]:
+    """Expose retrieval through the stock Omnigent runner MCP protocol."""
+
+    row = await store.get_active_session_by_runner_identity(runner_id)
+    if row is None or not row.omnigent_host_id or not row.omnigent_session_id:
+        raise HTTPException(401, detail="Runner has no active retrieval binding.")
+    generation = int(
+        ((row.metadata_ or {}).get("embedded_runner_launch") or {}).get("generation")
+        or row.credential_generation
+        or 0
+    )
+    binding_token = derive_runner_binding_token(
+        resolved_host_runner_token(),
+        host_id=row.omnigent_host_id,
+        session_id=row.omnigent_session_id,
+        generation=generation,
+    )
+    try:
+        identity = OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({binding_token})
+        ).verify(request.headers)
+    except UpstreamHostAuthError as exc:
+        raise HTTPException(401, detail="Runner retrieval binding was rejected.") from exc
+    if identity.runner_id != runner_id:
+        raise HTTPException(403, detail="Runner retrieval identity does not match.")
+
+    if payload.method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": payload.id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "moonmind_context_retrieve",
+                        "description": "Retrieve bounded untrusted MoonMind context for this active turn.",
+                        "inputSchema": OmnigentRetrievalToolRequest.model_json_schema(
+                            by_alias=True
+                        ),
+                    }
+                ]
+            },
+        }
+    name = str(payload.params.get("name") or "")
+    arguments = payload.params.get("arguments")
+    if name != "moonmind_context_retrieve" or not isinstance(arguments, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": payload.id,
+            "error": {"code": -32602, "message": "Unknown or invalid retrieval tool call."},
+        }
+    tool_payload = OmnigentRetrievalToolRequest.model_validate(arguments)
+    result = await invoke_omnigent_retrieval_tool(
+        runner_id,
+        tool_payload,
+        request,
+        service=service,
+        registry=registry,
+        store=store,
+    )
+    return {
+        "jsonrpc": "2.0",
+        "id": payload.id,
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(result, separators=(",", ":")),
+                }
+            ],
+            "isError": False,
+        },
+    }
+
+
+@router.post("/v1/sessions/{session_id}/mcp")
+async def stock_omnigent_session_retrieval_mcp(
+    session_id: str,
+    payload: OmnigentMcpRequest,
+    request: Request,
+    service: ContextRetrievalService = Depends(get_retrieval_service),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+    store: OmnigentBridgeSessionStore = Depends(get_bridge_session_store),
+) -> Dict[str, object]:
+    """Bind the stock runner's canonical session MCP path to retrieval."""
+
+    row = await store.get_session_by_provider_session_id(session_id)
+    runner_id = str(getattr(row, "omnigent_runner_id", "") or "")
+    if not runner_id:
+        raise HTTPException(401, detail="Session has no active retrieval runner.")
+    return await omnigent_runner_retrieval_mcp(
+        runner_id,
+        payload,
+        request,
+        service=service,
+        registry=registry,
+        store=store,
+    )

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    RUN_CHECKPOINT_BRANCH_RETRIEVAL_PATCH,
+    RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+)
 
 
 def _parent_policy() -> dict:
@@ -81,3 +86,63 @@ def test_checkpoint_branch_retrieval_override_can_disable_parent() -> None:
     assert MoonMindRunWorkflow._narrow_checkpoint_branch_follow_up_retrieval(
         _parent_policy(), {"enabled": False}
     ) == {"enabled": False}
+
+
+def test_real_checkpoint_branch_request_carries_narrowed_retrieval_with_patch() -> None:
+    """Cover the production request constructor and its replay patch boundary."""
+
+    class MockInfo:
+        namespace = "default"
+        workflow_id = "workflow-1"
+        run_id = "run-1"
+
+    branch_turn = {
+        "branchId": "branch-1",
+        "branchTurnId": "turn-1",
+        "sourceWorkflowId": "source-workflow",
+        "sourceRunId": "source-run",
+        "sourceLogicalStepId": "source-step",
+        "sourceCheckpointRef": "artifact://checkpoint/source",
+        "instructionArtifactRef": "artifact://instructions/turn-1",
+        "followUpRetrieval": {
+            "enabled": True,
+            "collections": ["docs"],
+            "topK": 3,
+        },
+    }
+    node_inputs = {
+        "followUpRetrieval": _parent_policy(),
+        "runtime": {
+            "mode": "codex_cli",
+            "metadata": {"moonmind": {"checkpointBranchTurn": branch_turn}},
+        },
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=MockInfo(),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id
+        in {RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH, RUN_CHECKPOINT_BRANCH_RETRIEVAL_PATCH},
+    ):
+        request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs=node_inputs,
+            node_id="branch-step",
+            tool_name="codex_cli",
+        )
+    assert request.parameters["followUpRetrieval"]["collections"] == ["docs"]
+    assert request.parameters["followUpRetrieval"]["topK"] == 3
+
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=MockInfo(),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id == RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+    ):
+        replay_request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs=node_inputs,
+            node_id="branch-step",
+            tool_name="codex_cli",
+        )
+    assert replay_request.parameters["followUpRetrieval"] == _parent_policy()
