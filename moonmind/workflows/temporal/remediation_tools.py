@@ -817,13 +817,51 @@ class RemediationEvidenceToolService:
         )
 
         verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        verification_mapping = dict(verification) if isinstance(verification, Mapping) else {}
+        allowed_verification_outcomes = {
+            "verified_resolved",
+            "verified_no_change",
+            "still_failed",
+            "regressed",
+            "evidence_unavailable",
+            "approval_required",
+            "verification_failed",
+        }
+        verification_outcome = str(
+            verification_mapping.get("outcome")
+            or verification_mapping.get("status")
+            or "verification_failed"
+        ).strip()
+        if verification_outcome not in allowed_verification_outcomes:
+            verification_outcome = "verification_failed"
+        before_state_ref = _string_or_none(raw_result.get("beforeStateRef"))
+        immediate_after_state_ref = _string_or_none(raw_result.get("afterStateRef"))
+        stabilized_state_ref = _string_or_none(
+            verification_mapping.get("stabilizedStateRef")
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
+        if status == "applied" and (
+            before_state_ref is None or immediate_after_state_ref is None
+        ):
+            verification_outcome = "evidence_unavailable"
+        verification_payload = {
+            **verification_mapping,
+            "schemaVersion": "moonmind.remediation-verification.v1",
+            "outcome": verification_outcome,
+            "phase": "verification_completed",
+            "actionKind": action_kind,
+            "actionId": action_request["actionId"],
+            "actionResultRef": result_artifact.artifact_id,
+            "target": {
+                "workflowId": link.target_workflow_id,
+                "runId": link.target_run_id,
+                "sessionIdentity": preparation.context_target.get("sessionIdentity"),
+            },
+            "evidence": {
+                "beforeStateRef": before_state_ref,
+                "immediateAfterStateRef": immediate_after_state_ref,
+                "stabilizedStateRef": stabilized_state_ref,
+            },
+        }
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -899,7 +937,25 @@ class RemediationEvidenceToolService:
         )
 
         link.latest_action_summary = action_kind
-        link.outcome = status
+        link.outcome = verification_outcome
+        operator_state = dict(link.operator_state or {})
+        operator_state["latestAction"] = {
+            "actionKind": action_kind,
+            "risk": action_request.get("riskTier"),
+            "policyDecision": authority_result.get("decision"),
+            "idempotencyKey": action_request["actionId"],
+            "requestRef": request_artifact.artifact_id,
+            "resultRef": result_artifact.artifact_id,
+            "verificationRef": verification_artifact.artifact_id,
+            "verificationOutcome": verification_outcome,
+            "beforeStateRef": before_state_ref,
+            "afterStateRef": immediate_after_state_ref,
+            "stabilizedStateRef": stabilized_state_ref,
+            "lock": guard_result.get("lock"),
+            "actor": action_request.get("requester"),
+        }
+        operator_state["targetAnnotationRef"] = annotation_artifact.artifact_id
+        link.operator_state = operator_state
         await self._session.commit()
         return {
             "schemaVersion": "v1",
@@ -958,6 +1014,18 @@ class RemediationEvidenceToolService:
         )
 
         link.outcome = str(final_summary.get("resolution") or link.outcome or "")
+        operator_state = dict(link.operator_state or {})
+        operator_state.update(
+            {
+                "phase": "completed",
+                "summaryRef": summary_artifact.artifact_id,
+                "decisionLogRef": decision_artifact.artifact_id,
+                "immediateRepair": final_summary.get("repair"),
+                "prevention": final_summary.get("prevention"),
+                "cleanup": {"lockRelease": final_summary.get("lockRelease")},
+            }
+        )
+        link.operator_state = operator_state
         await self._session.commit()
         return {
             "schemaVersion": "v1",

@@ -816,6 +816,11 @@ class TemporalExecutionService:
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
+        if authority_mode == "admin_auto" and trigger_type not in {None, "manual"}:
+            raise TemporalExecutionValidationError(
+                "Automatic or scheduled admin_auto remediation is disabled until the "
+                "MoonLadderStudios/MoonMind#3512 operator acceptance gate passes."
+            )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
         if (
             action_policy_ref
@@ -827,6 +832,39 @@ class TemporalExecutionService:
                 f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
+        approval_state: dict[str, Any] | None = None
+        if authority_mode == "approval_gated":
+            approval_policy = remediation.get("approvalPolicy")
+            policy_snapshot = (
+                dict(approval_policy) if isinstance(approval_policy, Mapping) else {}
+            )
+            ttl_seconds = int(policy_snapshot.get("ttlSeconds") or 1800)
+            if ttl_seconds < 60 or ttl_seconds > 86400:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.approvalPolicy.ttlSeconds must be between 60 and 86400."
+                )
+            target_snapshot = self._remediation_target_binding_snapshot(target_record)
+            created_at = _utc_now()
+            approval_state = {
+                "schemaVersion": "moonmind.remediation-approval.v1",
+                "requestId": f"{new_workflow_id}:approval",
+                "decision": "pending",
+                "canDecide": True,
+                "createdAt": created_at.isoformat(),
+                "expiresAt": (created_at + timedelta(seconds=ttl_seconds)).isoformat(),
+                "target": {
+                    "workflowId": target_record.workflow_id,
+                    "runId": target_record.run_id,
+                },
+                "expectedState": target_snapshot,
+                "policySnapshot": policy_snapshot,
+                "policyVersion": str(policy_snapshot.get("version") or "v1"),
+                "decisionNonce": hashlib.sha256(
+                    f"{new_workflow_id}:{target_record.run_id}:{created_at.isoformat()}".encode()
+                ).hexdigest(),
+                "requiredApprovalStrength": "standard",
+            }
+
         return TemporalExecutionRemediationLink(
             remediation_workflow_id=new_workflow_id,
             remediation_run_id=new_run_id,
@@ -837,7 +875,42 @@ class TemporalExecutionService:
             authority_mode=authority_mode,
             status="created",
             trigger_type=trigger_type,
+            approval_state=approval_state,
+            operator_state={
+                "schemaVersion": "moonmind.remediation-operator-state.v1",
+                "instructions": str(remediation.get("instructions") or "") or None,
+                "launchPolicy": remediation.get("launchPolicy"),
+                "evidencePolicy": remediation.get("evidencePolicy"),
+                "actionPolicyRef": action_policy_ref or None,
+                "approvalPolicy": remediation.get("approvalPolicy"),
+                "lockPolicy": remediation.get("lockPolicy"),
+                "verificationPolicy": remediation.get("verificationPolicy"),
+                "trigger": remediation.get("trigger"),
+            },
         )
+
+    @staticmethod
+    def _remediation_target_binding_snapshot(
+        record: TemporalExecutionCanonicalRecord,
+    ) -> dict[str, Any]:
+        """Return the compact authority binding used to reject stale approvals."""
+
+        parameters = record.parameters if isinstance(record.parameters, Mapping) else {}
+        memo = record.memo if isinstance(record.memo, Mapping) else {}
+        workflow = _workflow_payload(parameters)
+        runtime = workflow.get("runtime") if isinstance(workflow, Mapping) else None
+        runtime_mapping = runtime if isinstance(runtime, Mapping) else {}
+        return {
+            "runId": record.run_id,
+            "state": str(getattr(record.state, "value", record.state)),
+            "checkpointRef": memo.get("checkpointRef") or memo.get("checkpoint_ref"),
+            "hostIdentity": memo.get("hostIdentity") or memo.get("host_identity"),
+            "sessionIdentity": memo.get("sessionIdentity") or memo.get("session_identity"),
+            "credentialGeneration": (
+                memo.get("credentialGeneration")
+                or runtime_mapping.get("credentialGeneration")
+            ),
+        }
 
     @classmethod
     def _target_agent_run_ids(
@@ -1033,6 +1106,7 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        approval_strength: str = "standard",
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise TemporalExecutionValidationError(
@@ -1043,15 +1117,92 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
+        approval_state = dict(link.approval_state or {}) if link is not None else {}
+        expected_request_id = str(
+            approval_state.get("requestId") or f"{remediation_workflow_id}:approval"
+        )
         if (
             link is None
             or link.authority_mode != "approval_gated"
-            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
             or request_id != expected_request_id
         ):
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
+            )
+        previous_decision = str(approval_state.get("decision") or "pending")
+        if previous_decision != "pending":
+            if previous_decision == decision:
+                return {
+                    "accepted": True,
+                    "duplicate": True,
+                    "workflowId": remediation_workflow_id,
+                    "requestId": request_id,
+                    "decision": decision,
+                }
+            raise TemporalExecutionValidationError(
+                "approval request already has a different durable decision."
+            )
+        now = _utc_now()
+        expires_at_raw = approval_state.get("expiresAt")
+        if not expires_at_raw:
+            raise TemporalExecutionValidationError("approval request has no expiration.")
+        try:
+            expires_at = datetime.fromisoformat(str(expires_at_raw).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise TemporalExecutionValidationError(
+                "approval request expiration is invalid."
+            ) from exc
+        if now >= expires_at:
+            approval_state.update({"decision": "expired", "canDecide": False})
+            link.approval_state = approval_state
+            await self._session.commit()
+            raise TemporalExecutionValidationError("approval request has expired.")
+        required_strength = str(
+            approval_state.get("requiredApprovalStrength") or "standard"
+        )
+        if required_strength == "high_risk" and approval_strength != "high_risk":
+            raise TemporalExecutionValidationError(
+                "high-risk action requires explicit high_risk approval strength."
+            )
+        target = await self._require_source_execution(link.target_workflow_id)
+        current_binding = self._remediation_target_binding_snapshot(target)
+        expected_binding = approval_state.get("expectedState")
+        remediation_parameters = (
+            record.parameters if isinstance(record.parameters, Mapping) else {}
+        )
+        remediation_workflow = _workflow_payload(remediation_parameters)
+        current_remediation = (
+            remediation_workflow.get("remediation")
+            if isinstance(remediation_workflow, Mapping)
+            else None
+        )
+        current_approval_policy = (
+            current_remediation.get("approvalPolicy")
+            if isinstance(current_remediation, Mapping)
+            else None
+        )
+        policy_changed = (current_approval_policy or {}) != (
+            approval_state.get("policySnapshot") or {}
+        )
+        if decision == "approved" and (
+            expected_binding != current_binding or policy_changed
+        ):
+            approval_state.update(
+                {
+                    "decision": "stale",
+                    "canDecide": False,
+                    "staleReason": (
+                        "policy_version_changed"
+                        if policy_changed
+                        else "target_authority_binding_changed"
+                    ),
+                    "observedState": current_binding,
+                }
+            )
+            link.approval_state = approval_state
+            await self._session.commit()
+            raise TemporalExecutionValidationError(
+                "approval request is stale because the target authority binding changed."
             )
         detail_parts = [f"requestId={request_id}"]
         if actor:
@@ -1065,11 +1216,23 @@ class TemporalExecutionService:
             summary=f"Remediation approval {decision}.",
             detail="; ".join(detail_parts),
         )
+        approval_state.update(
+            {
+                "decision": decision,
+                "decisionActor": actor,
+                "decisionAt": now.isoformat(),
+                "rationale": comment[:500] if comment else None,
+                "approvalStrength": approval_strength,
+                "canDecide": False,
+            }
+        )
+        link.approval_state = approval_state
         await self._session.commit()
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)
         return {
             "accepted": True,
+            "duplicate": False,
             "workflowId": remediation_workflow_id,
             "requestId": request_id,
             "decision": decision,
@@ -1357,6 +1520,19 @@ class TemporalExecutionService:
                     owner_id=owner,
                     owner_type=owner_type_enum,
                 )
+                operator_state = dict(remediation_link.operator_state or {})
+                operator_state.update(
+                    {
+                        "instructions": task_mapping.get("instructions"),
+                        "runtime": task_mapping.get("runtime"),
+                        "providerProfile": task_mapping.get("providerProfile"),
+                        "launchPolicy": (
+                            remediation.get("launchPolicy")
+                            or task_mapping.get("launchPolicy")
+                        ),
+                    }
+                )
+                remediation_link.operator_state = operator_state
 
         if (
             failure_policy is not None

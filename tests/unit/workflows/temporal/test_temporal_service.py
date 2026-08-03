@@ -1384,6 +1384,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
 
         assert result == {
             "accepted": True,
+            "duplicate": False,
             "workflowId": remediation.workflow_id,
             "requestId": f"{remediation.workflow_id}:approval",
             "decision": "approved",
@@ -1395,6 +1396,9 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["summary"] == "Remediation approval approved."
         assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
+        assert link.approval_state["decision"] == "approved"
+        assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["rationale"] == "Reviewed blast radius."
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
@@ -1426,6 +1430,45 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
                 decision="approved",
                 comment=None,
                 actor="ops@example.com",
+            )
+
+
+@pytest.mark.asyncio
+async def test_scheduled_admin_auto_remediation_is_fail_closed(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="operator acceptance gate passes",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Scheduled remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"workflow": {"remediation": {
+                    "target": {"workflowId": target.workflow_id},
+                    "authorityMode": "admin_auto",
+                    "trigger": {"type": "scheduled"},
+                }}},
+                idempotency_key=None,
             )
 
 @pytest.mark.asyncio

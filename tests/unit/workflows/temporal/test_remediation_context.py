@@ -1849,7 +1849,7 @@ class RecordingActionExecutor:
             "afterStateRef": "artifact://after-state",
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
             "verification": {
-                "status": "verified",
+                "outcome": "verified_resolved",
                 "targetWorkflowId": target_health.workflow_id,
             },
         }
@@ -1876,7 +1876,7 @@ class SensitiveHintActionExecutor:
                 "with token=raw-secret-token"
             ),
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {"status": "verified"},
+            "verification": {"outcome": "verified_resolved"},
         }
 
 
@@ -2898,6 +2898,30 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert high_risk.decision == "approval_required"
         assert high_risk.reason == "high_risk_requires_approval"
         assert high_risk.executable is False
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        link.approval_state = {
+            "requestId": "approval://high-risk/1",
+            "decision": "approved",
+            "approvalStrength": "standard",
+        }
+        await session.commit()
+        weak_high_risk = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.terminate",
+            parameters={},
+            dry_run=False,
+            idempotency_key="high-risk-weak-approval",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+            approval_ref="approval://high-risk/1",
+        )
+        assert weak_high_risk.decision == "approval_required"
+        assert weak_high_risk.reason == "high_risk_requires_stronger_approval"
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_rejects_unsupported_authority_mode(

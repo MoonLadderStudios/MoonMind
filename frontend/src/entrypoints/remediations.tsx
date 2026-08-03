@@ -17,6 +17,8 @@ type RemediationRow = {
   mode: string;
   latestActionSummary?: string | null;
   resolution?: string | null;
+  approvalState?: { decision?: string | null; expiresAt?: string | null } | null;
+  operatorState?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -61,6 +63,8 @@ function compactRows(payload: unknown): RemediationRow[] {
       mode: compactText(record, 'mode') || 'unspecified',
       latestActionSummary: compactText(record, 'latestActionSummary') || null,
       resolution: compactText(record, 'resolution') || null,
+      approvalState: record.approvalState && typeof record.approvalState === 'object' ? record.approvalState as RemediationRow['approvalState'] : null,
+      operatorState: record.operatorState && typeof record.operatorState === 'object' ? record.operatorState as Record<string, unknown> : null,
       createdAt: compactText(record, 'createdAt'),
       updatedAt: compactText(record, 'updatedAt'),
     }];
@@ -116,6 +120,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'targetTitle', header: 'Source Workflow', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.targetWorkflowId)}`} aria-label={`${row.targetTitle} source workflow`}>{row.targetTitle}</Link> },
     { key: 'authorityMode', header: 'Contract', render: (row) => `${row.authorityMode} · ${row.mode}` },
     { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || row.resolution || '—' },
+    { key: 'approvalState', header: 'Approval', render: (row) => row.approvalState?.decision ? `${row.approvalState.decision}${row.approvalState.expiresAt ? ` · expires ${formatDateTime(row.approvalState.expiresAt)}` : ''}` : 'not required' },
     { key: 'createdAt', header: 'Created', sortable: true, render: (row) => formatDateTime(row.createdAt) },
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
   ], []);

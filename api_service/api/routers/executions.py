@@ -531,6 +531,16 @@ class RemediationApprovalStateModel(BaseModel):
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None
+    createdAt: datetime | None = None
+    expiresAt: datetime | None = None
+    target: dict[str, Any] | None = None
+    expectedState: dict[str, Any] | None = None
+    policySnapshot: dict[str, Any] | None = None
+    policyVersion: str | None = None
+    requiredApprovalStrength: str | None = None
+    approvalStrength: str | None = None
+    rationale: str | None = None
+    staleReason: str | None = None
 
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
@@ -626,6 +636,7 @@ class RemediationLinkSummaryModel(BaseModel):
     liveObservation: RemediationLiveObservationModel | None = None
     lockOutcome: RemediationLockOutcomeModel | None = None
     approvalState: RemediationApprovalStateModel | None = None
+    operatorState: dict[str, Any] | None = None
     checkpointBranches: list[RemediationCheckpointBranchLinkModel] = Field(
         default_factory=list
     )
@@ -648,6 +659,8 @@ class RemediationCollectionItemModel(BaseModel):
     mode: str
     latestActionSummary: str | None = None
     resolution: str | None = None
+    approvalState: RemediationApprovalStateModel | None = None
+    operatorState: dict[str, Any] | None = None
     createdAt: datetime
     updatedAt: datetime
 
@@ -658,12 +671,14 @@ class RemediationCollectionResponseModel(BaseModel):
 class RemediationApprovalDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
+    approvalStrength: Literal["standard", "high_risk"] = "standard"
 
 class RemediationApprovalDecisionResponse(BaseModel):
     accepted: bool
     workflowId: str
     requestId: str
     decision: str
+    duplicate: bool = False
 
 
 class PublicationRecoveryResponse(BaseModel):
@@ -11566,6 +11581,7 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         ),
         lockOutcome=_bounded_lock_outcome(getattr(link, "lock_outcome", None)),
         approvalState=approval_state,
+        operatorState=getattr(link, "operator_state", None),
         checkpointBranches=_bounded_checkpoint_branch_links(
             getattr(link, "checkpoint_branch_links", None)
         ),
@@ -11716,6 +11732,12 @@ async def list_remediation_collection(
             mode=link.mode,
             latestActionSummary=link.latest_action_summary,
             resolution=link.outcome,
+            approvalState=_remediation_approval_state_from_link(
+                link,
+                authority_mode=str(link.authority_mode),
+                status_value=str(link.status),
+            ),
+            operatorState=link.operator_state,
             createdAt=link.created_at,
             updatedAt=link.updated_at,
         )
@@ -11987,6 +12009,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            approval_strength=payload.approvalStrength,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

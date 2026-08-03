@@ -1025,6 +1025,16 @@ const RemediationApprovalStateSchema = z
     decisionAt: z.string().nullable().optional(),
     canDecide: z.boolean().default(false),
     auditRef: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    target: z.record(z.string(), z.unknown()).nullable().optional(),
+    expectedState: z.record(z.string(), z.unknown()).nullable().optional(),
+    policySnapshot: z.record(z.string(), z.unknown()).nullable().optional(),
+    policyVersion: z.string().nullable().optional(),
+    requiredApprovalStrength: z.string().nullable().optional(),
+    approvalStrength: z.string().nullable().optional(),
+    rationale: z.string().nullable().optional(),
+    staleReason: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -1069,6 +1079,7 @@ const RemediationLinkSchema = z
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
     lockOutcome: RemediationLockOutcomeSchema.nullable().optional(),
     approvalState: RemediationApprovalStateSchema.nullable().optional(),
+    operatorState: z.record(z.string(), z.unknown()).nullable().optional(),
     checkpointBranches: z
       .array(
         z
@@ -7711,6 +7722,13 @@ function RemediationApprovalSummary({
         <Card label="Audit">{approval.auditRef || '—'}</Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        <Card label="Expires">{approval.expiresAt ? formatWhen(approval.expiresAt) : '—'}</Card>
+        <Card label="Policy version">{approval.policyVersion || '—'}</Card>
+        <Card label="Approval strength">{approval.approvalStrength || approval.requiredApprovalStrength || '—'}</Card>
+        <Card label="Actor">{approval.decisionActor || '—'}</Card>
+        <Card label="Rationale">{approval.rationale || '—'}</Card>
+        <Card label="Expected target state"><code className="text-xs break-all">{approval.expectedState ? JSON.stringify(approval.expectedState) : '—'}</code></Card>
+        <Card label="Stale reason">{approval.staleReason || '—'}</Card>
       </div>
       {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
@@ -7772,6 +7790,7 @@ function RemediationRelationshipsPanel({
                     <Card label="Lock Holder">{item.activeLockHolder}</Card>
                   ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
+                  <Card label="Operator audit state"><code className="text-xs break-all">{item.operatorState ? JSON.stringify(item.operatorState) : '—'}</code></Card>
                 </div>
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
@@ -7824,6 +7843,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
+                  <Card label="Launch / evidence policy"><code className="text-xs break-all">{item.operatorState ? JSON.stringify(item.operatorState) : '—'}</code></Card>
                 </div>
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">

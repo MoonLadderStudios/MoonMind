@@ -969,6 +969,29 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
+        if approval_ref and risk == "high":
+            approval_state = (
+                dict(link.approval_state)
+                if isinstance(link.approval_state, Mapping)
+                else {}
+            )
+            if (
+                approval_state.get("requestId") != approval_ref
+                or approval_state.get("decision") != "approved"
+                or approval_state.get("approvalStrength") != "high_risk"
+            ):
+                return self._linked_result(
+                    link=link,
+                    action_kind=action_kind,
+                    risk=risk,
+                    decision="approval_required",
+                    reason="high_risk_requires_stronger_approval",
+                    idempotency_key=idempotency_key,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:

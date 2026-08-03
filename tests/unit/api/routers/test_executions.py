@@ -5667,6 +5667,7 @@ def test_record_remediation_approval_decision_calls_trusted_service(
     assert response.status_code == 200
     assert response.json() == {
         "accepted": True,
+        "duplicate": False,
         "workflowId": "mm:remediation-1",
         "requestId": "approval-1",
         "decision": "approved",
@@ -5677,6 +5678,7 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        approval_strength="standard",
     )
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(
