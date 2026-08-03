@@ -8,11 +8,19 @@ Issue: MoonLadderStudios/MoonMind#3517
 
 This document defines the target contract. The repository currently implements the
 persistent profile/version/audit/usage records, lifecycle API, bounded upstream
-projection, basic metadata validation, and an explicit snapshot-resolution API.
-Dashboard authoring selectors, transactional snapshot use by workflow and
-continuation submissions, archive-content inspection and import, smoke-session
-validation with lease cleanup, and durable bootstrap migration remain desired
-state until their corresponding production boundaries and controlling tests land.
+projection, metadata and archive-content validation, an explicit snapshot-resolution
+API, an operator-triggered bounded smoke-validation endpoint with lease cleanup and
+secret-scanned diagnostics, and durable bootstrap materialization: the
+environment-derived default is seeded as an explicit draft bootstrap profile at
+startup and the durable active default profile is the launch-boundary authority,
+with the `OMNIGENT_DEFAULT_AGENT_NAME` fallback retained only when durable active
+state is absent (its use recorded, conflicts fail closed).
+
+Dashboard profile management, readiness-aware workflow and schedule selectors,
+transactional immutable snapshots, bounded bundle import, smoke validation, and
+durable bootstrap authority are implemented. Checkpoint-branch and remediation
+authoring preserve the originating immutable agent-profile and Provider Profile
+selection so continuation cannot silently substitute runtime authority.
 
 ## Purpose and identities
 

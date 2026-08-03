@@ -20,6 +20,10 @@ from api_service.db.models import (
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
     TemporalExecutionRecord,
+    User,
+)
+from api_service.services.omnigent_agent_profile_selection import (
+    resolve_agent_profile_snapshot,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -624,6 +628,8 @@ class RecurringWorkflowsService:
         owner_user_id: UUID | None,
         target: Mapping[str, Any],
         policy: Mapping[str, Any] | None,
+        agent_profile_selection: Mapping[str, Any] | None = None,
+        actor: User | None = None,
     ) -> RecurringWorkflowDefinition:
         schedule_kind = _normalize_schedule_type(schedule_type)
         cron_normalized = str(cron or "").strip()
@@ -673,11 +679,52 @@ class RecurringWorkflowsService:
         self._session.add(definition)
         await self._session.flush()
 
+        if agent_profile_selection is not None:
+            if actor is None:
+                raise RecurringWorkflowValidationError(
+                    "an authenticated actor is required for agent profile selection"
+                )
+            snapshot = await resolve_agent_profile_snapshot(
+                self._session,
+                selection=agent_profile_selection,
+                consumer_type="schedule",
+                consumer_id=str(definition_id),
+                user=actor,
+            )
+            initial_parameters = dict(definition.target.get("initialParameters") or {})
+            initial_parameters["agentProfile"] = {
+                "profileId": snapshot["profileId"],
+                "version": snapshot["version"],
+                "digest": snapshot["digest"],
+            }
+            initial_parameters["agentProfileSnapshot"] = snapshot
+            initial_parameters["profileId"] = snapshot["providerProfileRef"]
+            initial_parameters["omnigent"] = {
+                **dict(initial_parameters.get("omnigent") or {}),
+                "agentProfileRef": f"{snapshot['profileId']}@{snapshot['version']}",
+                "executionProfileRef": snapshot["executionProfileRef"],
+                "launchPolicyRef": snapshot["launchPolicyRef"],
+                "agent": {"agentId": snapshot["agentId"]},
+            }
+            definition.target = {
+                **definition.target,
+                "agentProfile": {
+                    "profileId": snapshot["profileId"],
+                    "version": snapshot["version"],
+                    "digest": snapshot["digest"],
+                },
+                "agentProfileSnapshot": snapshot,
+                "initialParameters": initial_parameters,
+            }
+
         workflow_type, workflow_input = self._workflow_bundle_for_target(
             definition_id=definition_id,
             name=name_text,
             owner_user_id=owner_user_id,
-            target_payload=target_payload,
+            # Profile resolution above replaces the authored selection with the
+            # immutable launch snapshot. Build the durable schedule input from
+            # that authoritative target, not the pre-resolution request copy.
+            target_payload=definition.target,
         )
 
         try:
