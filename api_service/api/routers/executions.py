@@ -678,6 +678,8 @@ class PublicationRecoveryResponse(BaseModel):
     rolloutGeneration: str
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     checkpointRef: str
     instructions: CheckpointBranchInstructionsModel
     idempotencyKey: str = Field(..., min_length=1, max_length=512)
@@ -690,6 +692,10 @@ class RemediationCheckpointBranchRepairRequest(BaseModel):
     runtimeContextPolicy: Literal["fresh_agent_run"] = "fresh_agent_run"
     gitWorkBranch: str | None = None
     maxBudgetUsd: float | None = None
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", min_length=1, max_length=255
+    )
+    agent_profile: dict[str, Any] | None = Field(None, alias="agentProfile")
 _PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
@@ -12008,6 +12014,22 @@ async def create_remediation_checkpoint_branch(
         "remediationWorkflowId": workflow_id,
         "remediationContextRef": link.context_artifact_ref,
         "repairActionKind": "checkpoint_branch.create_from_remediation_context",
+        "runtimeSelection": {
+            "providerProfileRef": payload.provider_profile_ref,
+            "runtimeContextPolicy": runtime_context_policy,
+            "publishMode": "none",
+            "gitWorkBranch": payload.gitWorkBranch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot
+                else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
+        },
     }
     session.add(
         WorkflowCheckpointBranchOperation(
@@ -12029,6 +12051,9 @@ async def create_remediation_checkpoint_branch(
                     "actionKind": "checkpoint_branch.create_from_remediation_context",
                     "runtimeContextPolicy": runtime_context_policy,
                 },
+                "runtimeSelection": dict(
+                    branch.diagnostics.get("runtimeSelection") or {}
+                ),
             },
         )
     )
@@ -13419,6 +13444,24 @@ async def create_checkpoint_branch(
     instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=record,
