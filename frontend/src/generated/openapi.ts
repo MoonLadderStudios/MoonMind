@@ -1244,6 +1244,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/agent-profiles/{profile_id}/import-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Profile Bundle
+         * @description Publish one validated immutable bundle through the authorized facade.
+         */
+        post: operations["import_profile_bundle_api_omnigent_agent_profiles__profile_id__import_bundle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/agent-profiles/{profile_id}/default": {
         parameters: {
             query?: never;
@@ -5723,6 +5743,11 @@ export interface components {
             /** Evidenceincompletereason */
             evidenceIncompleteReason?: string | null;
         };
+        /** BundleImportCreate */
+        BundleImportCreate: {
+            /** Version */
+            version?: number | null;
+        };
         /** CacheMount */
         CacheMount: {
             /** Cacheref */
@@ -5945,6 +5970,10 @@ export interface components {
             maxBudgetUsd?: number | null;
             /** Providerprofileref */
             providerProfileRef?: string | null;
+            /** Agentprofile */
+            agentProfile?: {
+                [key: string]: unknown;
+            } | null;
             /** Executionprofileref */
             executionProfileRef?: string | null;
             /** Model */
@@ -11673,6 +11702,12 @@ export interface components {
             gitWorkBranch?: string | null;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Agentprofile */
+            agentProfile?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RemediationCollectionItemModel */
         RemediationCollectionItemModel: {
@@ -16216,6 +16251,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SmokeCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_profile_bundle_api_omnigent_agent_profiles__profile_id__import_bundle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundleImportCreate"];
             };
         };
         responses: {
