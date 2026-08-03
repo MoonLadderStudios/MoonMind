@@ -1523,6 +1523,7 @@ def test_superuser_owns_any_workflow() -> None:
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
