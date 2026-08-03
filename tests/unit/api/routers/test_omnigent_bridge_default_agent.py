@@ -61,7 +61,7 @@ async def test_launch_prefers_durable_active_default(session_maker, monkeypatch)
     await _add_default(session_maker, state="active", active_version=1)
     async with session_maker() as session:
         resolved = await bridge._get_launch_default_agent_name(session)
-    assert resolved == "Codex Prod"
+    assert resolved == "codex-prod"
 
 
 async def test_launch_uses_env_fallback_when_no_durable_default(

@@ -86,7 +86,11 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     assert snapshot["profileId"] == "team-codex"
     assert snapshot["version"] == 2
     assert snapshot["digest"] == "sha256:" + "a" * 64
-    assert snapshot["document"]["model"] == {"model": "gpt-5.4", "effort": "high"}
+    assert snapshot["document"]["model"] == {
+        "model": "gpt-5.4",
+        "effort": "high",
+        "settings": {},
+    }
     assert snapshot["providerProfileRef"] == "oauth-team"
     assert snapshot["agentId"] == "imported-agent"
     assert snapshot["launchPolicyRef"] == "on-demand@1"
