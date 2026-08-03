@@ -483,6 +483,58 @@ def test_legacy_checkpoint_without_effective_launch_ref_remains_loadable() -> No
     assert checkpoint.effective_launch_ref is None
 
 
+def test_checkpoint_rejects_partial_policy_authority_evidence() -> None:
+    payload = _checkpoint().model_dump(by_alias=True, mode="json")
+    payload["policyId"] = "restricted"
+
+    with pytest.raises(ValidationError, match="policy authority evidence is incomplete"):
+        OmnigentCheckpointIdentity.model_validate(payload)
+
+
+def test_restore_rejects_checkpoint_bound_to_a_different_policy_snapshot() -> None:
+    snapshot = compile_policy_snapshot(
+        policy_id="restricted",
+        version=3,
+        document={
+            "schemaVersion": 1,
+            "endpoint": {"ref": "default", "bridgeModes": ["embedded"]},
+            "execution": {"profileRef": "omnigent-codex@1", "harness": "codex-native", "agentIdentities": ["codex"]},
+            "host": {"mode": "static_compose", "backendRef": "compose", "architectures": ["amd64"], "serverImageRef": "image@sha256:" + "1" * 64, "hostImageRef": "host@sha256:" + "2" * 64},
+            "resources": {"cpuMillis": 1000, "memoryMiB": 1024, "processes": 64, "timeoutSeconds": 60, "temporaryStorageMiB": 64, "concurrency": 1},
+            "network": {"attachmentRef": "network", "egressProfileRef": "egress"},
+            "workspace": {"allowedClasses": ["workflow"], "repositoryMutation": True, "mountClasses": ["workspace"], "runtimeUid": 1000, "runtimeGid": 1000},
+            "providerProfile": {"compatibleProviders": ["codex"], "queueWhenBusy": True},
+            "session": {"create": True, "firstMessage": "required", "continuation": True, "interruption": True, "cancellation": True, "cleanup": "drain"},
+            "capture": {"required": True, "artifactClasses": ["events"], "maxLogBytes": 1000, "redaction": "required"},
+            "checkpoint": {"capture": True, "resume": True, "branch": True, "publication": "approval", "promotion": "verified"},
+            "remediation": {"actions": ["retry"], "riskTiers": {"retry": "low"}, "locks": True, "maxActions": 1, "autonomous": False},
+            "rag": {"initialScope": "workflow", "followupScope": "session", "collectionRefs": ["default"], "tokenBudget": 100, "fallback": "deny", "credentialRef": "retrieval"},
+            "approvals": {"actions": {}},
+            "retention": {"days": 1, "deletion": "after-expiry"},
+            "rollout": {"cohort": "default", "gate": "ready", "diagnostics": True},
+        },
+        validation={"valid": True},
+    )
+    payload = _checkpoint().model_dump(by_alias=True, mode="json")
+    payload.update(
+        policyId="restricted", policyVersion=3, policyRef="restricted@3",
+        policyDigest="sha256:" + "0" * 64, policySnapshotRef=snapshot["snapshotRef"],
+        policyValidation=snapshot["validation"],
+    )
+    checkpoint = OmnigentCheckpointIdentity.model_validate(payload)
+
+    validation = validate_restore_material(
+        checkpoint,
+        workflow_id="workflow-1", run_id="run-1", logical_step_id="step-1",
+        step_execution_id="step-execution-1", attempt_ordinal=1,
+        boundary="after_execution", provider_profile_id="codex",
+        credential_generation=3, repository_baseline="abc123",
+        repository_head="def456", artifact_reader=lambda _ref: b"missing",
+        policy_snapshot=snapshot,
+    )
+    assert "policy_authority_mismatch" in validation.reasons
+
+
 def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> None:
     payloads = {
         "artifact://external-state": b"external",

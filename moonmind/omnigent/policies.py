@@ -255,6 +255,38 @@ def compile_policy_snapshot(
     return payload
 
 
+def policy_authority_evidence(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compact immutable authority stamp shared by runtime evidence."""
+
+    required = (
+        "policyId",
+        "policyVersion",
+        "policyRef",
+        "policyDigest",
+        "snapshotRef",
+        "validation",
+    )
+    missing = [field for field in required if snapshot.get(field) in (None, "")]
+    if missing:
+        raise ValueError(
+            f"policy snapshot lacks authority evidence: {', '.join(missing)}"
+        )
+    if snapshot.get("validation", {}).get("valid") is not True:
+        raise ValueError("policy snapshot is not validated")
+    return {field: snapshot[field] for field in required}
+
+
+def validate_policy_authority_evidence(
+    evidence: Mapping[str, Any], snapshot: Mapping[str, Any]
+) -> None:
+    """Fail closed when durable evidence is detached from its compiled snapshot."""
+
+    expected = policy_authority_evidence(snapshot)
+    stale = [field for field, value in expected.items() if evidence.get(field) != value]
+    if stale:
+        raise ValueError(f"policy authority evidence mismatch: {', '.join(stale)}")
+
+
 def resolve_action(snapshot: Mapping[str, Any], action: str) -> dict[str, str]:
     """Resolve action authority without consulting mutable current policy state."""
 

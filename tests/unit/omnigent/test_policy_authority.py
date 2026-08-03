@@ -8,8 +8,10 @@ from moonmind.omnigent.policies import (
     bind_approval_request,
     compile_policy_snapshot,
     document_digest,
+    policy_authority_evidence,
     resolve_action,
     validate_approval_binding,
+    validate_policy_authority_evidence,
 )
 from api_service.services.omnigent_policies import validate_policy
 
@@ -78,6 +80,33 @@ def test_actions_resolve_deterministically_and_fail_closed():
         "approvalClass": "release", "reviewerRule": "owner",
     }
     assert resolve_action(snapshot, "unknown")["decision"] == "deny"
+
+
+def test_policy_authority_evidence_is_compact_and_rejects_stale_records():
+    snapshot = compile_policy_snapshot(
+        policy_id="p", version=1, document=policy_document(), validation={"valid": True}
+    )
+    evidence = policy_authority_evidence(snapshot)
+    assert set(evidence) == {
+        "policyId",
+        "policyVersion",
+        "policyRef",
+        "policyDigest",
+        "snapshotRef",
+        "validation",
+    }
+    validate_policy_authority_evidence(evidence, snapshot)
+    evidence["policyDigest"] = "sha256:" + "0" * 64
+    with pytest.raises(ValueError, match="policy authority evidence mismatch"):
+        validate_policy_authority_evidence(evidence, snapshot)
+
+
+def test_policy_authority_evidence_rejects_unvalidated_snapshot():
+    snapshot = compile_policy_snapshot(
+        policy_id="p", version=1, document=policy_document(), validation={"valid": False}
+    )
+    with pytest.raises(ValueError, match="not validated"):
+        policy_authority_evidence(snapshot)
 
 
 def test_policy_sections_are_typed_and_cross_field_combinations_fail_closed():

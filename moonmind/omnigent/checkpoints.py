@@ -120,6 +120,14 @@ class OmnigentCheckpointIdentity(BaseModel):
     effective_launch_ref: str | None = Field(None, alias="effectiveLaunchRef", min_length=1)
     execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
     launch_policy_ref: str = Field(..., alias="launchPolicyRef", min_length=1)
+    policy_id: str | None = Field(None, alias="policyId", min_length=1)
+    policy_version: int | None = Field(None, alias="policyVersion", ge=1)
+    policy_ref: str | None = Field(None, alias="policyRef", min_length=1)
+    policy_digest: str | None = Field(None, alias="policyDigest", pattern=_DIGEST)
+    policy_snapshot_ref: str | None = Field(
+        None, alias="policySnapshotRef", min_length=1
+    )
+    policy_validation: dict[str, Any] | None = Field(None, alias="policyValidation")
     last_bridge_event_cursor: str | None = Field(None, alias="lastBridgeEventCursor")
     first_message_id: str | None = Field(None, alias="firstMessageId")
     first_message_digest: str | None = Field(None, alias="firstMessageDigest", pattern=_DIGEST)
@@ -158,6 +166,28 @@ class OmnigentCheckpointIdentity(BaseModel):
 
     @model_validator(mode="after")
     def _reject_raw_credential_like_values(self) -> "OmnigentCheckpointIdentity":
+        policy_fields = (
+            self.policy_id,
+            self.policy_version,
+            self.policy_ref,
+            self.policy_digest,
+            self.policy_snapshot_ref,
+            self.policy_validation,
+        )
+        if any(value is not None for value in policy_fields) and not all(
+            value is not None for value in policy_fields
+        ):
+            raise ValueError("checkpoint policy authority evidence is incomplete")
+        if (
+            self.policy_snapshot_ref is not None
+            and not self.policy_snapshot_ref.startswith("omnigent-policy:sha256:")
+        ):
+            raise ValueError("policySnapshotRef must identify a compiled policy snapshot")
+        if (
+            self.policy_validation is not None
+            and self.policy_validation.get("valid") is not True
+        ):
+            raise ValueError("checkpoint policy authority must be validated")
         if self.effective_launch_ref is not None and not self.effective_launch_ref.startswith(
             "omnigent-launch:sha256:"
         ):
@@ -268,10 +298,28 @@ def validate_restore_material(
     repository_baseline: str,
     repository_head: str,
     artifact_reader: ArtifactReader,
+    policy_snapshot: Mapping[str, Any] | None = None,
 ) -> OmnigentCheckpointValidation:
     """Dereference and digest-check the complete authority set before restore."""
 
     reasons: list[str] = []
+    if policy_snapshot is not None:
+        from moonmind.omnigent.policies import validate_policy_authority_evidence
+
+        try:
+            validate_policy_authority_evidence(
+                {
+                    "policyId": checkpoint.policy_id,
+                    "policyVersion": checkpoint.policy_version,
+                    "policyRef": checkpoint.policy_ref,
+                    "policyDigest": checkpoint.policy_digest,
+                    "snapshotRef": checkpoint.policy_snapshot_ref,
+                    "validation": checkpoint.policy_validation,
+                },
+                policy_snapshot,
+            )
+        except ValueError:
+            reasons.append("policy_authority_mismatch")
     if (checkpoint.workflow_id, checkpoint.run_id, checkpoint.logical_step_id) != (
         workflow_id,
         run_id,
