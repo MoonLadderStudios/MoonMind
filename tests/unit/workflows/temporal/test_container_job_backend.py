@@ -600,6 +600,11 @@ async def test_secret_ref_without_resolver_fails_fast(tmp_path) -> None:
         ["create", "--ipc=host"],
         ["create", "--userns=host"],
         ["create", "--device", "/dev/kmsg"],
+        ["create", "--add-host", "metadata.internal:169.254.169.254"],
+        ["create", "--dns", "8.8.8.8"],
+        ["create", "--dns-search=internal"],
+        ["create", "--sysctl", "net.ipv4.ip_forward=1"],
+        ["create", "--cap-add", "NET_ADMIN"],
         ["create", "--mount", "type=bind,src=/var/run/docker.sock,dst=/x"],
         ["create", "--mount", "type=bind,src=/var/lib/docker,dst=/x"],
     ],
@@ -623,8 +628,27 @@ def test_final_launch_boundary_allows_hardened_baseline() -> None:
             "none",
             "--mount",
             "type=bind,src=/work/agent_jobs/ws,dst=/workspace",
-        ]
+        ],
+        expected_network="none",
     )
+
+
+@pytest.mark.parametrize(
+    "network_args",
+    [
+        [],
+        ["--network", "host"],
+        ["--network=bridge"],
+        ["--network", "none", "--network", "attacker-network"],
+    ],
+)
+def test_final_launch_boundary_rejects_missing_or_caller_selected_networks(
+    network_args,
+) -> None:
+    with pytest.raises(RuntimeError, match="unapproved network"):
+        DockerContainerJobBackend._reject_forbidden_launch_args(
+            ["create", *network_args], expected_network="none"
+        )
 
 
 @pytest.mark.asyncio

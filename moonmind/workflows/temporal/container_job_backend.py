@@ -134,14 +134,19 @@ _EXPIRY_GRACE_SECONDS = 300
 # explicit, safe ``--privileged=false``. Every other flag here must never appear.
 _FORBIDDEN_LAUNCH_FLAGS = frozenset(
     {
+        "--add-host",
         "--device",
         "--device-cgroup-rule",
+        "--dns",
+        "--dns-option",
+        "--dns-search",
         "--pid",
         "--ipc",
         "--uts",
         "--userns",
         "--cgroupns",
         "--cap-add",
+        "--sysctl",
     }
 )
 _TRUTHY_PRIVILEGED = frozenset({"--privileged", "--privileged=true", "--privileged=1"})
@@ -487,7 +492,21 @@ class DockerContainerJobBackend:
                 )
 
     @staticmethod
-    def _reject_forbidden_launch_args(args: Sequence[str]) -> None:
+    def _reject_forbidden_launch_args(
+        args: Sequence[str], *, expected_network: str | None = None
+    ) -> None:
+        network_values: list[str] = []
+        for index, token in enumerate(args):
+            if token == "--network":
+                if index + 1 >= len(args):
+                    raise RuntimeError("refusing to launch without a network value")
+                network_values.append(args[index + 1])
+            elif token.startswith("--network="):
+                network_values.append(token.split("=", 1)[1])
+        if expected_network is not None and network_values != [expected_network]:
+            raise RuntimeError(
+                "refusing to launch owned container with an unapproved network"
+            )
         for token in args:
             flag = token.split("=", 1)[0]
             if flag in _FORBIDDEN_LAUNCH_FLAGS:
@@ -1511,7 +1530,7 @@ class DockerContainerJobBackend:
                 args.extend(("--env", proxy_env))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
-        self._reject_forbidden_launch_args(args)
+        self._reject_forbidden_launch_args(args, expected_network=network_mode)
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)

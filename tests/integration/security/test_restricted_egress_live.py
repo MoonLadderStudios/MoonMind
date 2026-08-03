@@ -19,6 +19,10 @@ from moonmind.security.egress import (
     PROXY_URL,
     attest_docker_egress,
 )
+from moonmind.schemas.container_job_models import ContainerJobWorkflowInput
+from moonmind.workflows.temporal.container_job_backend import (
+    DockerContainerJobBackend,
+)
 
 pytestmark = [pytest.mark.integration]
 
@@ -248,6 +252,66 @@ def test_probe_runtime_is_unprivileged_without_route_or_device_authority() -> No
     assert result.returncode == 0, result.stderr[-1000:]
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("networkMode", "host"),
+        ("network", "attacker-network"),
+        ("privileged", True),
+        ("capAdd", ["NET_ADMIN"]),
+        ("devices", ["/dev/net/tun"]),
+        ("extraHosts", ["metadata.internal:169.254.169.254"]),
+        ("routes", ["0.0.0.0/0 via 172.17.0.1"]),
+        ("secondaryNetworks", ["bridge"]),
+        ("helperLaunch", {"networkMode": "host"}),
+    ],
+)
+def test_trusted_launch_contract_rejects_caller_bypass_authority(
+    field: str, value: object
+) -> None:
+    spec = {
+        "image": "curlimages/curl:8.12.1",
+        "workspaceRef": {"kind": "external_state", "artifactRef": "probe"},
+        "command": ["--version"],
+        "networkMode": "bridge",
+        "resources": {"cpuMillis": 100, "memoryMiB": 128, "pids": 32},
+        "timeoutSeconds": 30,
+        field: value,
+    }
+    with pytest.raises(ValueError):
+        ContainerJobWorkflowInput.model_validate(
+            {
+                "jobId": f"container-job:{uuid.uuid4().hex}",
+                "request": {
+                    "idempotencyKey": f"egress-conformance:{field}",
+                    "source": {"source": "workflow", "workflowId": "egress-live"},
+                    "spec": spec,
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "bypass_args",
+    [
+        ["--network", "host"],
+        ["--network", EGRESS_NETWORK_REF, "--network", "bridge"],
+        ["--privileged"],
+        ["--cap-add", "NET_ADMIN"],
+        ["--device", "/dev/net/tun"],
+        ["--add-host", "metadata.internal:host-gateway"],
+        ["--sysctl", "net.ipv4.ip_forward=1"],
+    ],
+)
+def test_final_trusted_docker_boundary_rejects_bypass_flags(
+    bypass_args: list[str],
+) -> None:
+    with pytest.raises(RuntimeError):
+        DockerContainerJobBackend._reject_forbidden_launch_args(
+            ["create", *bypass_args], expected_network=EGRESS_NETWORK_REF
+        )
+
+
 @pytest.mark.asyncio
 async def test_live_gateway_attestation_matches_current_profile_state() -> None:
     async def runner(args):
@@ -276,5 +340,24 @@ async def test_live_gateway_attestation_rejects_stale_profile_rotation() -> None
         await attest_docker_egress(
             runner=runner,
             profile=stale,
+            backend_ref="live-conformance",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["missing backend capability", "untrusted remote daemon"],
+)
+async def test_attestation_fails_closed_when_selected_daemon_cannot_prove_policy(
+    failure: str,
+) -> None:
+    async def runner(_args):
+        return 1, b"", failure.encode()
+
+    with pytest.raises(RuntimeError, match="network is unavailable"):
+        await attest_docker_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
             backend_ref="live-conformance",
         )
