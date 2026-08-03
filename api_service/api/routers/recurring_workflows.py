@@ -725,6 +725,12 @@ async def create_recurring_workflow(
             owner_user_id=owner_user_id,
             target=payload.target,
             policy=payload.policy,
+            agent_profile_selection=(
+                payload.target.get("agentProfile")
+                if isinstance(payload.target.get("agentProfile"), dict)
+                else None
+            ),
+            actor=user,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(

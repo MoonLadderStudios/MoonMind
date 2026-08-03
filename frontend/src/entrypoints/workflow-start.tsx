@@ -1028,6 +1028,15 @@ interface PentestScopeDraftState {
 
 type StepType = "tool" | "skill" | "preset";
 
+type OmnigentAgentProfileOption = {
+  profileId: string;
+  displayName: string;
+  state: string;
+  defaultForRuntime?: boolean;
+  activeVersion?: number | null;
+  versions: Array<{ version: number; digest: string; validationResult?: { ready?: boolean } | null }>;
+};
+
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
   skill: "Skill asks an agent to perform work using reusable behavior.",
   tool: "Tool runs a typed integration or system operation directly.",
@@ -6062,6 +6071,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
   const [repository, setRepository] = useState(initialRepository);
   const [providerProfile, setProviderProfile] = useState("");
+  const [agentProfile, setAgentProfile] = useState("");
   const [branch, setBranch] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
@@ -6448,6 +6458,25 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // (full width) until the fetch resolves and it snaps back to half width.
     placeholderData: keepPreviousData,
   });
+  const agentProfilesQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-agent-profiles"],
+    enabled: runtime === "omnigent",
+    queryFn: async (): Promise<OmnigentAgentProfileOption[]> => {
+      const response = await fetch("/api/omnigent/agent-profiles", { credentials: "same-origin" });
+      if (!response.ok) throw new Error(await responseErrorMessage(response, "Failed to load agent profiles."));
+      const value: unknown = await response.json();
+      return Array.isArray(value) ? value as OmnigentAgentProfileOption[] : [];
+    },
+  });
+  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
+    const active = profile.versions.find((version) => version.version === profile.activeVersion);
+    return profile.state === "active" && active?.validationResult?.ready === true;
+  });
+  useEffect(() => {
+    if (runtime !== "omnigent" || agentProfile) return;
+    const preferred = readyAgentProfiles.find((profile) => profile.defaultForRuntime) || readyAgentProfiles[0];
+    if (preferred) setAgentProfile(preferred.profileId);
+  }, [agentProfile, readyAgentProfiles, runtime]);
 
   const omnigentCatalogQuery = useQuery({
     queryKey: ["workflow-start", "omnigent-codex-catalog-readiness"],
@@ -6734,6 +6763,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime?.profileId) {
       prevProviderProfileRef.current = draft.runtime.profileId;
       setProviderProfile(draft.runtime.profileId);
+    }
+    if (draft.agentProfile?.profileId) {
+      setAgentProfile(draft.agentProfile.profileId);
     }
     if (draft.runtime?.model) {
       setModel(draft.runtime.model);
@@ -11037,6 +11069,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
+        ...(runtime === "omnigent" && agentProfile
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
+                  ? { version: remediationDraft.agentProfile.version }
+                  : {}),
+                providerProfileRef: providerProfile,
+              },
+            }
+          : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }
           : {}),
@@ -11091,6 +11134,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        ...(normalizedRuntime === "omnigent" && agentProfile
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
+                  ? { version: remediationDraft.agentProfile.version }
+                  : {}),
+                providerProfileRef: providerProfile,
+              },
+            }
+          : {}),
         ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
           ? {
               omnigent: {
@@ -13470,6 +13524,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </label>
+
+          {runtime === "omnigent" ? (
+            <label>
+              Agent profile
+              <select
+                name="agentProfile"
+                value={agentProfile}
+                onChange={(event) => setAgentProfile(event.target.value)}
+                disabled={agentProfilesQuery.isFetching}
+                required
+              >
+                <option value="">Select a launch-ready agent profile</option>
+                {readyAgentProfiles.map((profile) => (
+                  <option key={profile.profileId} value={profile.profileId}>
+                    {profile.displayName}{profile.defaultForRuntime ? " (Default)" : ""} · v{profile.activeVersion}
+                  </option>
+                ))}
+              </select>
+              {agentProfilesQuery.isError ? <span className="small" role="alert">Failed to load agent profiles.</span> : null}
+              {!agentProfilesQuery.isPending && !agentProfilesQuery.isError && readyAgentProfiles.length === 0 ? (
+                <span className="small" role="alert">No launch-ready agent profile is available.</span>
+              ) : null}
+            </label>
+          ) : null}
 
           {providerOptions.length > 0 ? (
             <div id="queue-provider-profile-wrap">

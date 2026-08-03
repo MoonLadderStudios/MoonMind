@@ -29,6 +29,11 @@ export type RemediationCreateDraft = {
     tierFallback?: 'clamp' | 'strict';
     profileId?: string;
   };
+  agentProfile?: {
+    profileId: string;
+    version?: number;
+    providerProfileRef: string;
+  };
   instructions?: string;
   remediation: {
     target: {
@@ -62,6 +67,7 @@ type RemediationDraftExecution = {
     checkpointRef?: string | null | undefined;
     sourceRunId?: string | null | undefined;
   } | null | undefined;
+  inputParameters?: Record<string, unknown> | null | undefined;
   steps?: Array<Record<string, unknown>> | null | undefined;
   stepLedger?: Array<Record<string, unknown>> | null | undefined;
   latestCheckpointRef?: string | null | undefined;
@@ -69,6 +75,11 @@ type RemediationDraftExecution = {
   checkpoints?: Array<Record<string, unknown>> | null | undefined;
   targetRuntime?: string | null | undefined;
   profileId?: string | null | undefined;
+  agentProfile?: {
+    profileId?: string | null | undefined;
+    version?: number | null | undefined;
+    providerProfileRef?: string | null | undefined;
+  } | null | undefined;
   model?: string | null | undefined;
   resolvedModel?: string | null | undefined;
   requestedModel?: string | null | undefined;
@@ -190,6 +201,29 @@ export function buildRemediationCreateDraft(
     runId,
     ...(stepSelectors.length > 0 ? { stepSelectors } : {}),
   };
+  const storedAgentProfile = (
+    execution.inputParameters?.agentProfile &&
+    typeof execution.inputParameters.agentProfile === 'object' &&
+    !Array.isArray(execution.inputParameters.agentProfile)
+      ? execution.inputParameters.agentProfile as Record<string, unknown>
+      : {}
+  );
+  const storedSnapshot = (
+    execution.inputParameters?.agentProfileSnapshot &&
+    typeof execution.inputParameters.agentProfileSnapshot === 'object' &&
+    !Array.isArray(execution.inputParameters.agentProfileSnapshot)
+      ? execution.inputParameters.agentProfileSnapshot as Record<string, unknown>
+      : {}
+  );
+  const selectedAgentProfileId = cleanText(
+    execution.agentProfile?.profileId || storedAgentProfile.profileId || storedSnapshot.profileId,
+  );
+  const selectedProviderProfileRef = cleanText(
+    execution.agentProfile?.providerProfileRef || storedSnapshot.providerProfileRef || execution.profileId,
+  );
+  const selectedAgentProfileVersion = Number(
+    execution.agentProfile?.version || storedAgentProfile.version || storedSnapshot.version || 0,
+  );
   return {
     source: 'remediation',
     target: {
@@ -207,6 +241,17 @@ export function buildRemediationCreateDraft(
       ...(cleanText(runtime.effort) ? { effort: cleanText(runtime.effort) } : {}),
       ...(cleanText(runtime.profileId) ? { profileId: cleanText(runtime.profileId) } : {}),
     },
+    ...(selectedAgentProfileId && selectedProviderProfileRef
+      ? {
+          agentProfile: {
+            profileId: selectedAgentProfileId,
+            ...(selectedAgentProfileVersion > 0
+              ? { version: selectedAgentProfileVersion }
+              : {}),
+            providerProfileRef: selectedProviderProfileRef,
+          },
+        }
+      : {}),
     instructions:
       options.instructions ||
       `Investigate and remediate target execution ${workflowId} using bounded evidence.`,

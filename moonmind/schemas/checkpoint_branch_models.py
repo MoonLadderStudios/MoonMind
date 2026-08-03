@@ -116,6 +116,7 @@ class CheckpointBranchCreateRequest(BaseModel):
     provider_profile_ref: str | None = Field(
         None, alias="providerProfileRef", min_length=1, max_length=255
     )
+    agent_profile: dict[str, Any] | None = Field(None, alias="agentProfile")
     execution_profile_ref: str | None = Field(
         None, alias="executionProfileRef", min_length=1, max_length=255
     )
