@@ -189,8 +189,15 @@ async def resolve_default_agent_selection(
         document = version.document or {}
         source = document.get("source", {}) if isinstance(document, dict) else {}
         snapshot = version.upstream_snapshot or {}
-        agent_id = _clean(source.get("upstreamId")) or None
-        agent_name = _clean(snapshot.get("name")) or agent_id
+        bundle_import = (version.rollout_metadata or {}).get("bundleImport") or {}
+        imported_agent = bundle_import.get("upstreamAgent") or {}
+        agent_id = _clean(source.get("upstreamId")) or _clean(imported_agent.get("id")) or None
+        if not agent_id:
+            raise BootstrapDefaultConflictError(
+                f"default Omnigent agent profile '{default_profile.profile_id}' "
+                "has no stable launch agent identity"
+            )
+        agent_name = agent_id
         return DefaultAgentResolution(
             source="durable_profile",
             agent_id=agent_id,

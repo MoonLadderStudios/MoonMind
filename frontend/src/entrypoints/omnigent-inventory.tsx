@@ -69,7 +69,7 @@ function structuredProfileDocument(draft: AgentProfileEditor): Record<string, un
     },
     providerRequirements: {
       runtimeId: draft.providerRuntime || 'codex_cli', providerIds: [],
-      credentialSource: 'oauth', materializationMode: 'host',
+      credentialSource: 'oauth_volume', materializationMode: 'oauth_home',
     },
     workspace: { mutation: 'allowed', requiredCapabilities: [] },
     continuations: { checkpoint: true, branch: true, remediation: true },

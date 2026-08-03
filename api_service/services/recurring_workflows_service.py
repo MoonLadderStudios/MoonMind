@@ -691,6 +691,21 @@ class RecurringWorkflowsService:
                 consumer_id=str(definition_id),
                 user=actor,
             )
+            initial_parameters = dict(definition.target.get("initialParameters") or {})
+            initial_parameters["agentProfile"] = {
+                "profileId": snapshot["profileId"],
+                "version": snapshot["version"],
+                "digest": snapshot["digest"],
+            }
+            initial_parameters["agentProfileSnapshot"] = snapshot
+            initial_parameters["profileId"] = snapshot["providerProfileRef"]
+            initial_parameters["omnigent"] = {
+                **dict(initial_parameters.get("omnigent") or {}),
+                "agentProfileRef": f"{snapshot['profileId']}@{snapshot['version']}",
+                "executionProfileRef": snapshot["executionProfileRef"],
+                "launchPolicyRef": snapshot["launchPolicyRef"],
+                "agent": {"agentId": snapshot["agentId"]},
+            }
             definition.target = {
                 **definition.target,
                 "agentProfile": {
@@ -699,6 +714,7 @@ class RecurringWorkflowsService:
                     "digest": snapshot["digest"],
                 },
                 "agentProfileSnapshot": snapshot,
+                "initialParameters": initial_parameters,
             }
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(

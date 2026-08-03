@@ -91,7 +91,18 @@ async def resolve_agent_profile_snapshot(
         raise HTTPException(status.HTTP_409_CONFLICT, "agent profile is not active")
 
     requested_version = selection.get("version")
-    version_number = int(requested_version) if requested_version is not None else profile.active_version
+    try:
+        version_number = int(requested_version) if requested_version is not None else profile.active_version
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.version must be a positive integer",
+        ) from exc
+    if version_number is None or version_number < 1:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.version must be a positive integer",
+        )
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
             OmnigentAgentProfileVersion.profile_id == profile_id,
@@ -134,6 +145,20 @@ async def resolve_agent_profile_snapshot(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{key} override must be an object")
         document[key] = {**document.get(key, {}), **dict(value)}
 
+    # Overrides cross the same authority boundary as authored versions. Re-run
+    # the canonical document schema so unknown fields and authority-bearing
+    # values cannot enter an effective launch snapshot.
+    from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
+    try:
+        document = AgentProfileDocument.model_validate(document).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile overrides do not form a valid profile document",
+        ) from exc
+
     requirements = document["providerRequirements"]
     provider_query = select(ManagedAgentProviderProfile).where(
             ManagedAgentProviderProfile.enabled.is_(True),
@@ -168,6 +193,24 @@ async def resolve_agent_profile_snapshot(
             "selected Provider Profile is not launch ready or has no capacity",
         )
 
+    source = document.get("source") or {}
+    bundle_import = (version.rollout_metadata or {}).get("bundleImport") or {}
+    imported_agent = bundle_import.get("upstreamAgent") or {}
+    agent_id = str(source.get("upstreamId") or imported_agent.get("id") or "").strip()
+    if not agent_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "selected profile has no stable launch agent identity",
+        )
+    allowed_launch_policies = document["execution"]["allowedLaunchPolicyRefs"]
+    requested_launch_policy = str(selection.get("launchPolicyRef") or "").strip()
+    if requested_launch_policy and requested_launch_policy not in allowed_launch_policies:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.launchPolicyRef is not allowed by the selected profile",
+        )
+    launch_policy_ref = requested_launch_policy or allowed_launch_policies[0]
+
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": profile_id,
@@ -177,6 +220,8 @@ async def resolve_agent_profile_snapshot(
         "providerProfileRef": compatible_provider.profile_id,
         "executionProfileRef": document["execution"]["defaultExecutionProfileRef"],
         "allowedLaunchPolicyRefs": document["execution"]["allowedLaunchPolicyRefs"],
+        "launchPolicyRef": launch_policy_ref,
+        "agentId": agent_id,
         "policyRef": document["policyRef"],
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,

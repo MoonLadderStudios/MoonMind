@@ -9145,11 +9145,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
           providerProfileRef: request.draft.providerProfileRef.trim() || null,
-          agentProfile: request.draft.agentProfileId && request.draft.providerProfileRef.trim()
+          agentProfile: request.draft.agentProfileId
             ? {
                 profileId: request.draft.agentProfileId,
                 version: request.draft.agentProfileVersion,
-                providerProfileRef: request.draft.providerProfileRef.trim(),
+                providerProfileRef: request.draft.providerProfileRef.trim() || null,
               }
             : null,
           executionProfileRef: request.draft.executionProfileRef.trim() || null,

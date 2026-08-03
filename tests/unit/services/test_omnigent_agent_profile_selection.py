@@ -36,6 +36,12 @@ class _Session:
                 "model": {"model": "gpt-5.4"}, "capture": {}, "rag": {}, "publish": {}, "policyRef": "default@1",
             },
             validation_result={"ready": ready}, upstream_snapshot={"id": "bundle"},
+            rollout_metadata={
+                "bundleImport": {
+                    "status": "succeeded",
+                    "upstreamAgent": {"id": "imported-agent"},
+                }
+            },
         )
         self.provider = SimpleNamespace(
             profile_id="oauth-team", enabled=True,
@@ -82,6 +88,8 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     assert snapshot["digest"] == "sha256:" + "a" * 64
     assert snapshot["document"]["model"] == {"model": "gpt-5.4", "effort": "high"}
     assert snapshot["providerProfileRef"] == "oauth-team"
+    assert snapshot["agentId"] == "imported-agent"
+    assert snapshot["launchPolicyRef"] == "on-demand@1"
     usage = session.added[0]
     assert isinstance(usage, OmnigentAgentProfileUsage)
     assert usage.consumer_type == "checkpoint"
@@ -108,6 +116,40 @@ async def test_resolver_requires_authored_provider_profile_identity():
             _Session(), selection={"profileId": "team-codex"},
             consumer_type="workflow", consumer_id="workflow-1", user=SimpleNamespace(id=uuid4()),
         )
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_malformed_version_as_validation_error():
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            _Session(),
+            selection={
+                "profileId": "team-codex",
+                "version": "latest",
+                "providerProfileRef": "oauth-team",
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert caught.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_resolver_revalidates_effective_override_document():
+    with pytest.raises(HTTPException) as caught:
+        await resolve_agent_profile_snapshot(
+            _Session(),
+            selection={
+                "profileId": "team-codex",
+                "providerProfileRef": "oauth-team",
+                "overrides": {"model": {"apiToken": "forbidden"}},
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert caught.value.status_code == 422
 
 
 @pytest.mark.asyncio

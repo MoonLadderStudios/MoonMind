@@ -14,6 +14,7 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentUpstreamAgentProjection,
     ProviderCredentialSource,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
 from api_service.services.omnigent_agent_profile_service import projection_identity
@@ -244,6 +245,8 @@ async def test_readiness_ready_when_projection_fresh_and_provider_compatible(ses
             credential_source=ProviderCredentialSource.SECRET_REF,
             runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
             enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
         )
     )
     await session.commit()

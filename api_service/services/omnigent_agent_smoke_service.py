@@ -37,6 +37,7 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
 )
+from api_service.services.provider_profile_readiness import provider_profile_launch_ready
 from moonmind.security.outbound_scan import scan_outbound_text
 
 SMOKE_SCHEMA_VERSION = "moonmind.omnigent-agent-profile-smoke.v1"
@@ -202,7 +203,8 @@ async def run_profile_readiness_checks(
         ).scalars()
     )
     compatible_provider = any(
-        row.credential_source.value == requirements["credentialSource"]
+        provider_profile_launch_ready(row)
+        and row.credential_source.value == requirements["credentialSource"]
         and row.runtime_materialization_mode.value == requirements["materializationMode"]
         and (
             not requirements.get("providerIds")

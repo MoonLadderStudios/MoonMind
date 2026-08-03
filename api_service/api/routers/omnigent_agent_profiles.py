@@ -205,6 +205,11 @@ class BundleImportCreate(BaseModel):
     version: int | None = Field(None, ge=1)
 
 def _assert_owner(profile: OmnigentAgentProfile, user: User) -> None:
+    # Ownerless workspace profiles are bootstrap/operator-managed resources.
+    # Callers have already enforced provider_profiles.write before reaching
+    # lifecycle mutations.
+    if profile.owner_id is None and profile.visibility == "workspace":
+        return
     if profile.owner_id != user.id and not user.is_superuser:
         raise HTTPException(403, "profile owner permission required")
 
@@ -601,6 +606,35 @@ async def import_profile_bundle(
     if not target.validation_result or target.validation_result.get("ready") is not True:
         raise HTTPException(409, "profile version must pass validation before bundle import")
 
+    existing_import = (target.rollout_metadata or {}).get("bundleImport") or {}
+    if existing_import.get("status") == "succeeded":
+        return existing_import
+    if existing_import.get("status") == "publishing":
+        raise HTTPException(
+            409,
+            "bundle import is already reserved; reconcile its audit evidence before retrying",
+        )
+    operation_key = f"{profile_id}@{target.version}:{source['bundleDigest']}"
+    reservation = {
+        "schemaVersion": "moonmind.omnigent-agent-bundle-import.v1",
+        "status": "publishing",
+        "idempotencyKey": operation_key,
+    }
+    target.rollout_metadata = {
+        **(target.rollout_metadata or {}),
+        "bundleImport": reservation,
+    }
+    session.add(
+        _audit(
+            profile_id,
+            "bundle_import_reserved",
+            current_user,
+            version=target.version,
+            metadata=reservation,
+        )
+    )
+    await session.commit()
+
     artifact_id = artifact_ref.removeprefix("artifact:")
     stored_artifact, bundle_bytes = await artifact_service.read(
         artifact_id=artifact_id, principal=str(current_user.id)
@@ -629,6 +663,7 @@ async def import_profile_bundle(
         raise HTTPException(409 if isinstance(exc, BundleValidationError) else 502,
                             "bundle import failed; see profile audit evidence") from exc
 
+    result = {**result, "idempotencyKey": operation_key}
     target.rollout_metadata = {**(target.rollout_metadata or {}), "bundleImport": result}
     session.add(_audit(profile_id, "bundle_imported", current_user,
                        version=target.version, metadata=result))

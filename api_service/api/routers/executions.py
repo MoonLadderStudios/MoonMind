@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 logger = logging.getLogger(__name__)
 
@@ -10699,7 +10699,14 @@ async def _create_execution_from_workflow_request(
     # Reserve the canonical identity before launch so profile readiness and the
     # immutable effective snapshot are persisted in the same transaction as the
     # execution record.  A failed resolution never starts Temporal work.
-    reserved_workflow_id = f"mm:{uuid4()}"
+    create_idempotency_key = str(
+        task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    reserved_workflow_id = (
+        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
+        if create_idempotency_key
+        else f"mm:{uuid4()}"
+    )
     agent_profile_selection = payload.get("agentProfile")
     if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
         agent_profile_selection = runtime_payload.get("agentProfile")
@@ -10736,7 +10743,8 @@ async def _create_execution_from_workflow_request(
                 f"{profile_snapshot['profileId']}@{profile_snapshot['version']}"
             ),
             "executionProfileRef": profile_snapshot["executionProfileRef"],
-            "launchPolicyRef": profile_snapshot["policyRef"],
+            "launchPolicyRef": profile_snapshot["launchPolicyRef"],
+            "agent": {"agentId": profile_snapshot["agentId"]},
         }
         initial_parameters["rag"] = effective_profile.get("rag") or {}
         initial_parameters["capture"] = effective_profile.get("capture") or {}

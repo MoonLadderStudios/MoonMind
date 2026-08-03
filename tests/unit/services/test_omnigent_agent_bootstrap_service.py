@@ -102,8 +102,8 @@ async def test_durable_active_default_wins_over_env(session):
     assert resolution.source == "durable_profile"
     assert resolution.used_env_fallback is False
     assert resolution.agent_id == "codex-prod"
-    # The name-based fallback slot prefers the resolved upstream name snapshot.
-    assert resolution.default_agent_name == "Codex"
+    # The launch boundary preserves the durable ID instead of a mutable name.
+    assert resolution.default_agent_name == "codex-prod"
     assert resolution.profile_id == "codex-team"
     assert resolution.version == 1
 
