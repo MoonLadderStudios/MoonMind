@@ -2536,8 +2536,10 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         assert result_payload["status"] == "applied"
         assert result_payload["message"]
         assert result_payload["appliedAt"]
-        assert result_payload["beforeStateRef"] == "artifact://before-state"
-        assert result_payload["afterStateRef"] == "artifact://after-state"
+        assert result_payload["beforeStateRef"].startswith("art_")
+        assert result_payload["afterStateRef"].startswith("art_")
+        assert result_payload["beforeStateRef"] != "artifact://before-state"
+        assert result_payload["afterStateRef"] != "artifact://after-state"
         assert result_payload["verificationRequired"] is True
         assert result_payload["verificationHint"]
         assert "raw-secret-token" not in result_payload["verificationHint"]
@@ -2903,7 +2905,10 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
             TemporalExecutionRemediationLink, remediation.workflow_id
         )
         assert link is not None
+        assert link.approval_state["requiredApprovalStrength"] == "high_risk"
+        assert link.approval_state["actionBinding"]["actionKind"] == "session.terminate"
         link.approval_state = {
+            **link.approval_state,
             "requestId": "approval://high-risk/1",
             "decision": "approved",
             "approvalStrength": "standard",
@@ -2922,6 +2927,41 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         )
         assert weak_high_risk.decision == "approval_required"
         assert weak_high_risk.reason == "high_risk_requires_stronger_approval"
+
+        link.approval_state = {
+            **link.approval_state,
+            "approvalStrength": "high_risk",
+        }
+        await session.commit()
+        strong_high_risk = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.terminate",
+            parameters={},
+            dry_run=False,
+            idempotency_key="high-risk",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+            approval_ref="approval://high-risk/1",
+        )
+        assert strong_high_risk.decision == "allowed"
+        assert link.approval_state["consumedByActionId"] == "high-risk"
+
+        replayed = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.terminate",
+            parameters={},
+            dry_run=False,
+            idempotency_key="high-risk",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+            approval_ref="approval://high-risk/1",
+        )
+        assert replayed.decision == "approval_required"
+        assert replayed.reason == "high_risk_requires_stronger_approval"
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_rejects_unsupported_authority_mode(

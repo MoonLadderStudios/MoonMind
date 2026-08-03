@@ -712,7 +712,9 @@ class RemediationActionAuthorityService:
             dry_run=dry_run,
         )
         cache_key = (workflow_id, idem, request_shape_hash)
-        if workflow_id and idem and cache_key in self._decisions:
+        # Approval-backed decisions are durable state transitions. Always
+        # re-read them so an in-process cache cannot replay a consumed grant.
+        if workflow_id and idem and not approval_ref and cache_key in self._decisions:
             return self._decisions[cache_key]
 
         if not workflow_id:
@@ -786,7 +788,7 @@ class RemediationActionAuthorityService:
             self._decisions[cache_key] = result
             return result
 
-        result = self._evaluate_with_link(
+        result = await self._evaluate_with_link(
             link=link,
             action_kind=normalized_action,
             parameters=parameters,
@@ -798,10 +800,11 @@ class RemediationActionAuthorityService:
             approval_ref=approval_ref,
         )
         self._request_shapes.setdefault(shape_key, request_shape_hash)
-        self._decisions[cache_key] = result
+        if not approval_ref:
+            self._decisions[cache_key] = result
         return result
 
-    def _evaluate_with_link(
+    async def _evaluate_with_link(
         self,
         *,
         link: db_models.TemporalExecutionRemediationLink,
@@ -944,6 +947,32 @@ class RemediationActionAuthorityService:
                 parameters=parameters,
             )
         if risk == "high" and not approval_ref:
+            approval_state = (
+                dict(link.approval_state)
+                if isinstance(link.approval_state, Mapping)
+                else {}
+            )
+            if approval_state.get("decision") in {None, "pending"}:
+                approval_state.update(
+                    {
+                        "decision": "pending",
+                        "requiredApprovalStrength": "high_risk",
+                        "actionBinding": {
+                            "actionKind": action_kind,
+                            "actionId": idempotency_key,
+                            "risk": risk,
+                            "parametersDigest": hashlib.sha256(
+                                json.dumps(
+                                    _redact_payload(parameters or {}),
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode("utf-8")
+                            ).hexdigest(),
+                        },
+                    }
+                )
+                link.approval_state = approval_state
+                await self._session.commit()
             return self._linked_result(
                 link=link,
                 action_kind=action_kind,
@@ -979,6 +1008,7 @@ class RemediationActionAuthorityService:
                 approval_state.get("requestId") != approval_ref
                 or approval_state.get("decision") != "approved"
                 or approval_state.get("approvalStrength") != "high_risk"
+                or approval_state.get("consumedAt") is not None
             ):
                 return self._linked_result(
                     link=link,
@@ -992,6 +1022,36 @@ class RemediationActionAuthorityService:
                     approval_ref=approval_ref,
                     parameters=parameters,
                 )
+            action_binding = approval_state.get("actionBinding")
+            expected_binding = {
+                "actionKind": action_kind,
+                "actionId": idempotency_key,
+                "risk": risk,
+                "parametersDigest": hashlib.sha256(
+                    json.dumps(
+                        _redact_payload(parameters or {}),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+            if action_binding != expected_binding:
+                return self._linked_result(
+                    link=link,
+                    action_kind=action_kind,
+                    risk=risk,
+                    decision="approval_required",
+                    reason="high_risk_approval_action_binding_mismatch",
+                    idempotency_key=idempotency_key,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
+            approval_state["consumedAt"] = datetime.now(timezone.utc).isoformat()
+            approval_state["consumedByActionId"] = idempotency_key
+            link.approval_state = approval_state
+            await self._session.commit()
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:

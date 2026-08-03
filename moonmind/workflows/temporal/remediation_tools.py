@@ -761,6 +761,13 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
+        before_snapshot, before_state_artifact = await self._publish_target_state_snapshot(
+            link=link,
+            action_id=str(action_request["actionId"]),
+            phase="before_action",
+            principal=principal,
+        )
+
         raw_result = await self._action_executor.execute_action(
             action_request=action_request,
             guard_result=guard_result,
@@ -768,6 +775,22 @@ class RemediationEvidenceToolService:
         )
         if not isinstance(raw_result, Mapping):
             raise RemediationEvidenceToolError("action executor returned invalid result.")
+        immediate_snapshot, immediate_state_artifact = (
+            await self._publish_target_state_snapshot(
+                link=link,
+                action_id=str(action_request["actionId"]),
+                phase="immediate_after_action",
+                principal=principal,
+            )
+        )
+        stabilized_snapshot, stabilized_state_artifact = (
+            await self._publish_target_state_snapshot(
+                link=link,
+                action_id=str(action_request["actionId"]),
+                phase="stabilized_after_action",
+                principal=principal,
+            )
+        )
         status = _normalize_action_result_status(raw_result.get("status"))
         verification_required = _bool_or_default(
             raw_result.get("verificationRequired"),
@@ -802,8 +825,8 @@ class RemediationEvidenceToolService:
             "appliedAt": applied_at,
             "verificationRequired": verification_required,
             "verificationHint": redacted_verification_hint,
-            "beforeStateRef": _redact_text(raw_result.get("beforeStateRef")),
-            "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
+            "beforeStateRef": before_state_artifact.artifact_id,
+            "afterStateRef": immediate_state_artifact.artifact_id,
             "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
         }
         result_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -816,35 +839,13 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        verification = raw_result.get("verification")
-        verification_mapping = dict(verification) if isinstance(verification, Mapping) else {}
-        allowed_verification_outcomes = {
-            "verified_resolved",
-            "verified_no_change",
-            "still_failed",
-            "regressed",
-            "evidence_unavailable",
-            "approval_required",
-            "verification_failed",
-        }
-        verification_outcome = str(
-            verification_mapping.get("outcome")
-            or verification_mapping.get("status")
-            or "verification_failed"
-        ).strip()
-        if verification_outcome not in allowed_verification_outcomes:
-            verification_outcome = "verification_failed"
-        before_state_ref = _string_or_none(raw_result.get("beforeStateRef"))
-        immediate_after_state_ref = _string_or_none(raw_result.get("afterStateRef"))
-        stabilized_state_ref = _string_or_none(
-            verification_mapping.get("stabilizedStateRef")
+        verification_outcome = _derive_verification_outcome(
+            action_status=status,
+            before=before_snapshot,
+            immediate_after=immediate_snapshot,
+            stabilized=stabilized_snapshot,
         )
-        if status == "applied" and (
-            before_state_ref is None or immediate_after_state_ref is None
-        ):
-            verification_outcome = "evidence_unavailable"
         verification_payload = {
-            **verification_mapping,
             "schemaVersion": "moonmind.remediation-verification.v1",
             "outcome": verification_outcome,
             "phase": "verification_completed",
@@ -855,12 +856,15 @@ class RemediationEvidenceToolService:
                 "workflowId": link.target_workflow_id,
                 "runId": link.target_run_id,
                 "sessionIdentity": preparation.context_target.get("sessionIdentity"),
+                "stepIdentity": preparation.context_target.get("stepIdentity"),
+                "checkpointRef": preparation.context_target.get("checkpointRef"),
             },
             "evidence": {
-                "beforeStateRef": before_state_ref,
-                "immediateAfterStateRef": immediate_after_state_ref,
-                "stabilizedStateRef": stabilized_state_ref,
+                "beforeStateRef": before_state_artifact.artifact_id,
+                "immediateAfterStateRef": immediate_state_artifact.artifact_id,
+                "stabilizedStateRef": stabilized_state_artifact.artifact_id,
             },
+            "verificationHint": redacted_verification_hint,
         }
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
@@ -948,9 +952,9 @@ class RemediationEvidenceToolService:
             "resultRef": result_artifact.artifact_id,
             "verificationRef": verification_artifact.artifact_id,
             "verificationOutcome": verification_outcome,
-            "beforeStateRef": before_state_ref,
-            "afterStateRef": immediate_after_state_ref,
-            "stabilizedStateRef": stabilized_state_ref,
+            "beforeStateRef": before_state_artifact.artifact_id,
+            "afterStateRef": immediate_state_artifact.artifact_id,
+            "stabilizedStateRef": stabilized_state_artifact.artifact_id,
             "lock": guard_result.get("lock"),
             "actor": action_request.get("requester"),
         }
@@ -969,6 +973,57 @@ class RemediationEvidenceToolService:
                 "targetAnnotation": annotation_artifact.artifact_id,
             },
         }
+
+    async def _publish_target_state_snapshot(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        action_id: str,
+        phase: str,
+        principal: str,
+    ) -> tuple[dict[str, Any], Any]:
+        """Reacquire and persist service-owned evidence for action verification."""
+
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord,
+            link.target_workflow_id,
+        )
+        if target is None:
+            snapshot = {
+                "schemaVersion": "moonmind.remediation-target-state.v1",
+                "phase": phase,
+                "available": False,
+                "workflowId": link.target_workflow_id,
+                "pinnedRunId": link.target_run_id,
+            }
+        else:
+            await self._session.refresh(target)
+            memo = target.memo if isinstance(target.memo, Mapping) else {}
+            snapshot = {
+                "schemaVersion": "moonmind.remediation-target-state.v1",
+                "phase": phase,
+                "available": True,
+                "workflowId": target.workflow_id,
+                "pinnedRunId": link.target_run_id,
+                "currentRunId": target.run_id,
+                "state": _enum_value(target.state),
+                "closeStatus": _enum_value(target.close_status),
+                "checkpointRef": memo.get("checkpointRef")
+                or memo.get("checkpoint_ref"),
+                "sessionIdentity": memo.get("sessionIdentity")
+                or memo.get("session_identity"),
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.target_state",
+            name=f"evidence/remediation_target_state-{action_id}-{phase}.json",
+            payload=snapshot,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+        return snapshot, artifact
 
     async def publish_lifecycle_summary(
         self,
@@ -1281,6 +1336,49 @@ def _normalize_action_result_status(value: Any) -> str:
             f"Unsupported action result status: {status}."
         )
     return status
+
+def _derive_verification_outcome(
+    *,
+    action_status: str,
+    before: Mapping[str, Any],
+    immediate_after: Mapping[str, Any],
+    stabilized: Mapping[str, Any],
+) -> str:
+    """Derive verification from durable evidence; executor verdicts are untrusted."""
+
+    if action_status == "approval_required":
+        return "approval_required"
+    if action_status not in {"accepted", "applied", "no_op"}:
+        return "verification_failed"
+    snapshots = (before, immediate_after, stabilized)
+    if any(snapshot.get("available") is not True for snapshot in snapshots):
+        return "evidence_unavailable"
+    before_state = _string_or_none(before.get("state"))
+    immediate_state = _string_or_none(immediate_after.get("state"))
+    stabilized_state = _string_or_none(stabilized.get("state"))
+    if not before_state or not immediate_state or not stabilized_state:
+        return "evidence_unavailable"
+    failed_states = {"failed", "canceled"}
+    resolved_states = {"completed"}
+    if before_state not in failed_states and stabilized_state in failed_states:
+        return "regressed"
+    if stabilized_state in resolved_states and before_state not in resolved_states:
+        return "verified_resolved"
+    if stabilized_state in failed_states:
+        return "still_failed"
+    before_signature = (
+        before_state,
+        _string_or_none(before.get("currentRunId")),
+        _string_or_none(before.get("checkpointRef")),
+    )
+    stabilized_signature = (
+        stabilized_state,
+        _string_or_none(stabilized.get("currentRunId")),
+        _string_or_none(stabilized.get("checkpointRef")),
+    )
+    if before_signature == stabilized_signature:
+        return "verified_no_change"
+    return "verification_failed"
 
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"accepted", "applied", "failed", "timed_out"}:

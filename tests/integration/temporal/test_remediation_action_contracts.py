@@ -25,7 +25,10 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_repair_decision,
     build_remediation_summary_block,
 )
-from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
+from moonmind.workflows.temporal.remediation_tools import (
+    RemediationEvidenceToolService,
+    _derive_verification_outcome,
+)
 from tests.unit.workflows.temporal.test_remediation_context import (
     RecordingActionExecutor,
     _admin_permissions,
@@ -37,6 +40,40 @@ from tests.unit.workflows.temporal.test_remediation_context import (
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.parametrize(
+    ("status", "before", "after", "available", "expected"),
+    [
+        ("applied", "failed", "completed", True, "verified_resolved"),
+        ("applied", "executing", "executing", True, "verified_no_change"),
+        ("applied", "failed", "failed", True, "still_failed"),
+        ("applied", "executing", "failed", True, "regressed"),
+        ("applied", "failed", "failed", False, "evidence_unavailable"),
+        ("approval_required", "failed", "failed", True, "approval_required"),
+        ("failed", "failed", "failed", True, "verification_failed"),
+    ],
+)
+async def test_verification_outcome_is_derived_from_fresh_evidence(
+    status, before, after, available, expected
+) -> None:
+    def snapshot(state: str) -> dict[str, object]:
+        return {
+            "available": available,
+            "state": state,
+            "currentRunId": "run-1",
+            "checkpointRef": "artifact://checkpoint",
+        }
+
+    assert (
+        _derive_verification_outcome(
+            action_status=status,
+            before=snapshot(before),
+            immediate_after=snapshot(after),
+            stabilized=snapshot(after),
+        )
+        == expected
+    )
 
 
 async def test_remediation_action_contract_publishes_request_result_and_verification(
@@ -123,10 +160,19 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         assert result_payload["verificationHint"]
         assert verification_payload["actionKind"] == action_kind
         assert verification_payload["actionId"] == action_id
-        assert verification_payload["outcome"] == "verified_resolved"
+        # Executor-provided verdicts are not authoritative. The target remains
+        # failed in this fixture, so fresh service-owned evidence wins.
+        assert verification_payload["outcome"] == "still_failed"
         assert verification_payload["actionResultRef"] == result["artifactRefs"]["actionResult"]
         assert verification_payload["target"]["workflowId"] == target.workflow_id
         assert verification_payload["target"]["runId"] == target.run_id
+        assert verification_payload["evidence"]["beforeStateRef"].startswith("art_")
+        assert verification_payload["evidence"]["immediateAfterStateRef"].startswith(
+            "art_"
+        )
+        assert verification_payload["evidence"]["stabilizedStateRef"].startswith(
+            "art_"
+        )
         assert audit_payload["eventType"] == "remediation.action"
         assert audit_payload["remediationWorkflowId"] == remediation.workflow_id
         assert audit_payload["targetWorkflowId"] == target.workflow_id
