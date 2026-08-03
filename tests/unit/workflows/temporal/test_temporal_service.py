@@ -49,6 +49,13 @@ from moonmind.workflows.temporal.service import (
     _visibility_skill_from_parameters,
 )
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
+from moonmind.workflows.temporal.remediation_acceptance import (
+    REQUIRED_REMEDIATION_METRICS,
+    REQUIRED_REMEDIATION_SCENARIOS,
+    REQUIRED_SCENARIO_AUDIT_FIELDS,
+    remediation_acceptance_digest,
+    validate_remediation_acceptance_result,
+)
 from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
     FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
@@ -1470,6 +1477,93 @@ async def test_scheduled_admin_auto_remediation_is_fail_closed(
                 }}},
                 idempotency_key=None,
             )
+
+
+def _passing_remediation_acceptance_result():
+    payload = {
+        "schemaVersion": "moonmind.remediation-acceptance-matrix.v1",
+        "status": "passed",
+        "actionPolicyVersion": "sha256:" + "a" * 64,
+        "approvalPolicyVersion": "sha256:" + "b" * 64,
+        "environment": {"id": "acceptance-compose", "productionShaped": True},
+        "buildRevision": "370703b10",
+        "operator": "ops@example.com",
+        "completedAt": "2026-08-03T12:00:00Z",
+        "scenarios": [
+            {
+                "id": scenario_id,
+                "status": "passed",
+                "artifactRefs": [f"artifact://acceptance/{scenario_id}"],
+                "grantedAuthorities": [],
+                "audit": {
+                    field: f"artifact://acceptance/{scenario_id}/{field}"
+                    for field in sorted(REQUIRED_SCENARIO_AUDIT_FIELDS)
+                },
+            }
+            for scenario_id in sorted(REQUIRED_REMEDIATION_SCENARIOS)
+        ],
+        "telemetry": {
+            "metrics": sorted(REQUIRED_REMEDIATION_METRICS),
+            "alerts": sorted(REQUIRED_REMEDIATION_METRICS),
+        },
+    }
+    payload["contentDigest"] = remediation_acceptance_digest(payload)
+    return payload
+
+
+def test_remediation_acceptance_result_is_content_addressed_and_fail_closed():
+    payload = _passing_remediation_acceptance_result()
+    assert validate_remediation_acceptance_result(payload) == (
+        True,
+        "acceptance_gate_passed",
+    )
+
+    payload["scenarios"][0]["grantedAuthorities"] = ["docker_daemon"]
+    assert validate_remediation_acceptance_result(payload)[0] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_admin_auto_requires_trusted_passing_matrix_result(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+            remediation_acceptance_result=_passing_remediation_acceptance_result(),
+        )
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Scheduled remediation",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": "admin_auto",
+                        "trigger": {"type": "scheduled"},
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
+        assert remediation.workflow_id
 
 
 @pytest.mark.asyncio

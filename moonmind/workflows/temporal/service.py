@@ -88,6 +88,9 @@ from moonmind.workflows.executions.repository_contract import (
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
+from moonmind.workflows.temporal.remediation_acceptance import (
+    validate_remediation_acceptance_result,
+)
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -408,6 +411,7 @@ class TemporalExecutionService:
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
         manifest_continue_as_new_phase_threshold: int = 5,
+        remediation_acceptance_result: Mapping[str, Any] | None = None,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -432,6 +436,7 @@ class TemporalExecutionService:
             manifest_continue_as_new_phase_threshold
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
+        self._remediation_acceptance_result = remediation_acceptance_result
 
     def _remediation_context_builder(self) -> RemediationContextBuilder:
         return RemediationContextBuilder(
@@ -817,10 +822,15 @@ class TemporalExecutionService:
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
         if authority_mode == "admin_auto" and trigger_type != "manual":
-            raise TemporalExecutionValidationError(
-                "Automatic or scheduled admin_auto remediation is disabled until the "
-                "MoonLadderStudios/MoonMind#3512 operator acceptance gate passes."
+            gate_open, gate_reason = validate_remediation_acceptance_result(
+                self._remediation_acceptance_result
             )
+            if not gate_open:
+                raise TemporalExecutionValidationError(
+                    "Automatic or scheduled admin_auto remediation is disabled until the "
+                    "MoonLadderStudios/MoonMind#3512 operator acceptance gate passes "
+                    f"({gate_reason})."
+                )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
         if (
             action_policy_ref

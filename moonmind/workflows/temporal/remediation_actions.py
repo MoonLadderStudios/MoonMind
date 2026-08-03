@@ -385,6 +385,60 @@ def remediation_action_kinds() -> tuple[str, ...]:
         for action_kind, metadata in _ACTION_CATALOG.items()
         if metadata.get("enabled") is True
     )
+
+
+_ACTION_VERIFICATION_STRATEGIES: dict[str, str] = {
+    "execution.pause": "target_paused",
+    "execution.resume": "target_active",
+    "execution.request_rerun_same_workflow": "run_identity_changed",
+    "execution.start_fresh_rerun": "run_identity_changed",
+    "checkpoint_branch.create_from_remediation_context": "checkpoint_changed",
+    "execution.cancel": "target_canceled",
+    "execution.force_terminate": "target_terminated",
+    "session.interrupt_turn": "evidence_changed",
+    "session.clear": "evidence_changed",
+    "session.cancel": "target_canceled",
+    "session.terminate": "target_terminated",
+    "session.restart_container": "session_identity_changed",
+    "provider_profile.evict_stale_lease": "evidence_changed",
+    "workload.restart_helper_container": "evidence_changed",
+    "workload.reap_orphan_container": "evidence_changed",
+    "host.drain": "evidence_changed",
+    "host.stop": "evidence_changed",
+    "host.restart": "evidence_changed",
+    "host.remove": "evidence_changed",
+    "host_lease.reconcile_stale": "evidence_changed",
+    "cleanup.request_janitor": "evidence_changed",
+    "cleanup.verify": "evidence_available",
+    "target.annotate": "evidence_changed",
+    "target.verify": "terminal_evidence",
+}
+
+
+def remediation_action_verification_contract(action_kind: str) -> dict[str, Any]:
+    """Return the executable verification contract for one typed action.
+
+    The strategy identity is deliberately data, not prose, so the activity boundary
+    can execute it deterministically and persist which predicate produced the
+    terminal remediation outcome.
+    """
+
+    action_info = _ACTION_CATALOG.get(action_kind)
+    strategy = _ACTION_VERIFICATION_STRATEGIES.get(action_kind)
+    if (
+        action_info is None
+        or action_info.get("enabled") is not True
+        or strategy is None
+    ):
+        raise ValueError(f"Unsupported remediation action kind: {action_kind}")
+    return {
+        "schemaVersion": "moonmind.remediation-action-verification.v1",
+        "actionKind": action_kind,
+        "strategy": strategy,
+        "freshEvidenceRequired": True,
+        "stabilizedEvidenceRequired": True,
+        "hint": str(action_info.get("verification_hint") or ""),
+    }
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )

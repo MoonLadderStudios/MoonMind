@@ -18,6 +18,8 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
     RemediationMutationGuardService,
+    remediation_action_kinds,
+    remediation_action_verification_contract,
 )
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
@@ -27,7 +29,7 @@ from moonmind.workflows.temporal.remediation_context import (
 )
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationEvidenceToolService,
-    _derive_verification_outcome,
+    _execute_verification_contract,
 )
 from tests.unit.workflows.temporal.test_remediation_context import (
     RecordingActionExecutor,
@@ -65,16 +67,34 @@ async def test_verification_outcome_is_derived_from_fresh_evidence(
             "checkpointRef": "artifact://checkpoint",
         }
 
-    assert (
-        _derive_verification_outcome(
-            action_kind="workload.restart_helper_container",
-            action_status=status,
-            before=snapshot(before),
-            immediate_after=snapshot(after),
-            stabilized=snapshot(after),
-        )
-        == expected
+    contract = remediation_action_verification_contract(
+        "workload.restart_helper_container"
     )
+    outcome, checks = _execute_verification_contract(
+        contract=contract,
+        action_kind="workload.restart_helper_container",
+        action_status=status,
+        before=snapshot(before),
+        immediate_after=snapshot(after),
+        stabilized=snapshot(after),
+    )
+    assert outcome == expected
+    if status == "applied":
+        assert checks
+
+
+async def test_every_enabled_action_has_an_executable_verification_contract() -> None:
+    contracts = {
+        action_kind: remediation_action_verification_contract(action_kind)
+        for action_kind in remediation_action_kinds()
+    }
+
+    assert set(contracts) == set(remediation_action_kinds())
+    assert all(contract["freshEvidenceRequired"] for contract in contracts.values())
+    assert all(
+        contract["stabilizedEvidenceRequired"] for contract in contracts.values()
+    )
+    assert all(contract["strategy"] for contract in contracts.values())
 
 
 async def test_remediation_action_contract_publishes_request_result_and_verification(
@@ -164,9 +184,23 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         # Executor-provided verdicts are not authoritative. The target remains
         # failed in this fixture, so fresh service-owned evidence wins.
         assert verification_payload["outcome"] == "still_failed"
-        assert verification_payload["actionResultRef"] == result["artifactRefs"]["actionResult"]
+        assert verification_payload["actionResultRef"] == result["artifactRefs"][
+            "actionResult"
+        ]
         assert verification_payload["target"]["workflowId"] == target.workflow_id
         assert verification_payload["target"]["runId"] == target.run_id
+        assert verification_payload["verificationContract"] == {
+            "schemaVersion": "moonmind.remediation-action-verification.v1",
+            "actionKind": action_kind,
+            "strategy": "evidence_changed",
+            "freshEvidenceRequired": True,
+            "stabilizedEvidenceRequired": True,
+            "hint": "verify helper container health and target state",
+            "stabilizationDelaySeconds": 0.25,
+        }
+        assert verification_payload["checks"][0]["name"] == (
+            "fresh_evidence_available"
+        )
         assert verification_payload["evidence"]["beforeStateRef"].startswith("art_")
         assert verification_payload["evidence"]["immediateAfterStateRef"].startswith(
             "art_"

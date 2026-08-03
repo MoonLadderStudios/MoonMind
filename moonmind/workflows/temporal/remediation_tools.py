@@ -8,6 +8,7 @@ that the context explicitly names.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -34,6 +35,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationMutationGuardService,
     RemediationPermissionSet,
     RemediationSecurityProfile,
+    remediation_action_verification_contract,
     remediation_changes_require_checkpoint_branch,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
@@ -847,7 +849,12 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        verification_outcome = _derive_verification_outcome(
+        verification_contract = remediation_action_verification_contract(action_kind)
+        verification_contract["stabilizationDelaySeconds"] = (
+            self._stabilization_delay_seconds
+        )
+        verification_outcome, verification_checks = _execute_verification_contract(
+            contract=verification_contract,
             action_kind=action_kind,
             action_status=status,
             before=before_snapshot,
@@ -874,11 +881,8 @@ class RemediationEvidenceToolService:
                 "stabilizedStateRef": stabilized_state_artifact.artifact_id,
             },
             "verificationHint": redacted_verification_hint,
-            "verificationContract": {
-                "schemaVersion": "moonmind.remediation-action-verification.v1",
-                "actionKind": action_kind,
-                "stabilizationDelaySeconds": self._stabilization_delay_seconds,
-            },
+            "verificationContract": verification_contract,
+            "checks": verification_checks,
         }
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
@@ -1013,6 +1017,23 @@ class RemediationEvidenceToolService:
         else:
             await self._session.refresh(target)
             memo = target.memo if isinstance(target.memo, Mapping) else {}
+            artifact_refs = sorted(
+                str(item)
+                for item in _safe_sequence(target.artifact_refs)
+                if _string_or_none(item)
+            )
+            evidence_identity = {
+                "runId": target.run_id,
+                "state": _enum_value(target.state),
+                "closeStatus": _enum_value(target.close_status),
+                "checkpointRef": memo.get("checkpointRef")
+                or memo.get("checkpoint_ref"),
+                "sessionIdentity": memo.get("sessionIdentity")
+                or memo.get("session_identity"),
+                "workspaceHead": memo.get("workspaceHead")
+                or memo.get("workspace_head"),
+                "artifactRefs": artifact_refs,
+            }
             snapshot = {
                 "schemaVersion": "moonmind.remediation-target-state.v1",
                 "phase": phase,
@@ -1026,6 +1047,14 @@ class RemediationEvidenceToolService:
                 or memo.get("checkpoint_ref"),
                 "sessionIdentity": memo.get("sessionIdentity")
                 or memo.get("session_identity"),
+                "workspaceHead": memo.get("workspaceHead")
+                or memo.get("workspace_head"),
+                "evidenceSignature": "sha256:"
+                + hashlib.sha256(
+                    json.dumps(
+                        evidence_identity, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                ).hexdigest(),
                 "observedAt": datetime.now(timezone.utc).isoformat(),
             }
         artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -1351,28 +1380,40 @@ def _normalize_action_result_status(value: Any) -> str:
         )
     return status
 
-def _derive_verification_outcome(
+def _execute_verification_contract(
     *,
+    contract: Mapping[str, Any],
     action_kind: str,
     action_status: str,
     before: Mapping[str, Any],
     immediate_after: Mapping[str, Any],
     stabilized: Mapping[str, Any],
-) -> str:
-    """Derive verification from durable evidence; executor verdicts are untrusted."""
+) -> tuple[str, list[dict[str, Any]]]:
+    """Execute a typed contract against fresh evidence; executor prose is untrusted."""
+
+    strategy = _required_string(contract.get("strategy"), "verification strategy")
+    checks: list[dict[str, Any]] = []
+
+    def checked(name: str, passed: bool, **evidence: Any) -> bool:
+        checks.append({"name": name, "passed": passed, "evidence": evidence})
+        return passed
 
     if action_status == "approval_required":
-        return "approval_required"
+        return "approval_required", checks
     if action_status not in {"accepted", "applied", "no_op"}:
-        return "verification_failed"
+        return "verification_failed", checks
     snapshots = (before, immediate_after, stabilized)
-    if any(snapshot.get("available") is not True for snapshot in snapshots):
-        return "evidence_unavailable"
+    if not checked(
+        "fresh_evidence_available",
+        all(snapshot.get("available") is True for snapshot in snapshots),
+        phases=[snapshot.get("phase") for snapshot in snapshots],
+    ):
+        return "evidence_unavailable", checks
     before_state = _string_or_none(before.get("state"))
     immediate_state = _string_or_none(immediate_after.get("state"))
     stabilized_state = _string_or_none(stabilized.get("state"))
     if not before_state or not immediate_state or not stabilized_state:
-        return "evidence_unavailable"
+        return "evidence_unavailable", checks
     failed_states = {"failed", "canceled", "terminated"}
     resolved_states = {"completed"}
     if action_kind in {
@@ -1381,42 +1422,80 @@ def _derive_verification_outcome(
         "session.cancel",
         "session.terminate",
     }:
-        return (
+        outcome = (
             "verified_resolved"
             if stabilized_state in {"canceled", "terminated"}
             else "verified_no_change"
             if before_state == stabilized_state
             else "verification_failed"
         )
-    if action_kind == "execution.pause":
-        return (
+        checked(
+            "target_terminal",
+            outcome == "verified_resolved",
+            state=stabilized_state,
+        )
+        return outcome, checks
+    if strategy == "target_paused":
+        outcome = (
             "verified_resolved"
             if stabilized_state in {"paused", "suspended"}
             else "verified_no_change"
             if before_state == stabilized_state
             else "verification_failed"
         )
-    if action_kind in {
-        "execution.resume",
-        "execution.request_rerun_same_workflow",
-        "execution.start_fresh_rerun",
-    }:
+        checked(
+            "target_paused",
+            outcome == "verified_resolved",
+            state=stabilized_state,
+        )
+        return outcome, checks
+    if strategy in {"target_active", "run_identity_changed"}:
         run_changed = _string_or_none(before.get("currentRunId")) != _string_or_none(
             stabilized.get("currentRunId")
         )
-        resumed = before_state in {"paused", "failed", "canceled"} and stabilized_state in {
-            "running",
-            "executing",
-            "completed",
-        }
-        if run_changed or resumed:
-            return "verified_resolved"
+        resumed = (
+            before_state in {"paused", "failed", "canceled"}
+            and stabilized_state in {"running", "executing", "completed"}
+        )
+        passed = run_changed if strategy == "run_identity_changed" else resumed
+        checked(strategy, passed, runChanged=run_changed, state=stabilized_state)
+        if passed:
+            return "verified_resolved", checks
+    if strategy == "session_identity_changed":
+        changed = _string_or_none(before.get("sessionIdentity")) != _string_or_none(
+            stabilized.get("sessionIdentity")
+        )
+        checked(strategy, changed)
+        if changed:
+            return "verified_resolved", checks
+    if strategy == "checkpoint_changed":
+        changed = _string_or_none(before.get("checkpointRef")) != _string_or_none(
+            stabilized.get("checkpointRef")
+        )
+        checked(strategy, changed)
+        if changed:
+            return "verified_resolved", checks
+    if strategy in {"evidence_changed", "evidence_available", "terminal_evidence"}:
+        evidence_changed = _string_or_none(
+            before.get("evidenceSignature")
+        ) != _string_or_none(stabilized.get("evidenceSignature"))
+        passed = strategy == "evidence_available" or evidence_changed
+        if strategy == "terminal_evidence":
+            passed = stabilized_state in resolved_states | failed_states
+        checked(
+            strategy,
+            passed,
+            evidenceChanged=evidence_changed,
+            state=stabilized_state,
+        )
+        if passed:
+            return "verified_resolved", checks
     if before_state not in failed_states and stabilized_state in failed_states:
-        return "regressed"
+        return "regressed", checks
     if stabilized_state in resolved_states and before_state not in resolved_states:
-        return "verified_resolved"
+        return "verified_resolved", checks
     if stabilized_state in failed_states:
-        return "still_failed"
+        return "still_failed", checks
     before_signature = (
         before_state,
         _string_or_none(before.get("currentRunId")),
@@ -1428,8 +1507,8 @@ def _derive_verification_outcome(
         _string_or_none(stabilized.get("checkpointRef")),
     )
     if before_signature == stabilized_signature:
-        return "verified_no_change"
-    return "verification_failed"
+        return "verified_no_change", checks
+    return "verification_failed", checks
 
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"accepted", "applied", "failed", "timed_out"}:
