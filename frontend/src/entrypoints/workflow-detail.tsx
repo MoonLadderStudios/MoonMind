@@ -7661,6 +7661,70 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+function remediationOperatorRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function remediationOperatorValue(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.length > 0 ? value.map(remediationOperatorValue).join(', ') : '—';
+  const record = remediationOperatorRecord(value);
+  if (!record) return '—';
+  const entries = Object.entries(record).filter(([, item]) => item != null && item !== '');
+  return entries.length > 0
+    ? entries.map(([key, item]) => `${key}: ${remediationOperatorValue(item)}`).join(' · ')
+    : '—';
+}
+
+function RemediationOperatorState({ state }: { state: Record<string, unknown> | null | undefined }) {
+  if (!state) return null;
+  const action = remediationOperatorRecord(state.latestAction);
+  const repair = remediationOperatorRecord(state.immediateRepair);
+  const prevention = remediationOperatorRecord(state.prevention);
+  const cleanup = remediationOperatorRecord(state.cleanup);
+  const fields: Array<[string, unknown]> = [
+    ['Phase', state.phase],
+    ['Instructions', state.instructions],
+    ['Runtime', state.runtime],
+    ['Provider Profile', state.providerProfile],
+    ['Launch Policy', state.launchPolicy],
+    ['Evidence Policy', state.evidencePolicy],
+    ['Action Policy', state.actionPolicyRef],
+    ['Approval Policy', state.approvalPolicy],
+    ['Verification Policy', state.verificationPolicy],
+    ['Trigger / origin', state.trigger],
+    ['Action kind', action?.actionKind],
+    ['Risk / policy decision', action ? [action.risk, action.policyDecision] : null],
+    ['Actor', action?.actor],
+    ['Idempotency key', action?.idempotencyKey],
+    ['Lock', action?.lock],
+    ['Action request / result', action ? [action.requestRef, action.resultRef] : null],
+    ['Before / immediate / stabilized state', action ? [action.beforeStateRef, action.afterStateRef, action.stabilizedStateRef] : null],
+    ['Verification', action ? [action.verificationOutcome, action.verificationRef] : null],
+    ['Target annotation', state.targetAnnotationRef],
+    ['Cumulative attempts / workspace', state.cumulativeAttempts ?? state.attempts ?? state.workspaceHead],
+    ['Immediate repair', repair],
+    ['Prevention / PR verification', prevention],
+    ['Summary / decision log', [state.summaryRef, state.decisionLogRef]],
+    ['Cleanup / lease / janitor', cleanup],
+  ];
+  const visible = fields.filter(([, value]) => remediationOperatorValue(value) !== '—');
+  if (visible.length === 0) return null;
+  return (
+    <div className="td-remediation-live" aria-label="Remediation operator audit">
+      <strong>Operator audit</strong>
+      <div className="grid-2">
+        {visible.map(([label, value]) => (
+          <Card key={label} label={label}><span className="text-xs break-all">{remediationOperatorValue(value)}</span></Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RemediationCheckpointBranches({
   branches,
 }: {
@@ -7790,8 +7854,8 @@ function RemediationRelationshipsPanel({
                     <Card label="Lock Holder">{item.activeLockHolder}</Card>
                   ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
-                  <Card label="Operator audit state"><code className="text-xs break-all">{item.operatorState ? JSON.stringify(item.operatorState) : '—'}</code></Card>
                 </div>
+                <RemediationOperatorState state={item.operatorState} />
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
@@ -7843,8 +7907,8 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
-                  <Card label="Launch / evidence policy"><code className="text-xs break-all">{item.operatorState ? JSON.stringify(item.operatorState) : '—'}</code></Card>
                 </div>
+                <RemediationOperatorState state={item.operatorState} />
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
                     Evidence is degraded. Unavailable: {remediationListValue(item.unavailableEvidenceClasses)}.

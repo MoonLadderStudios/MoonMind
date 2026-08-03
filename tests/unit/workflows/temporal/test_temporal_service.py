@@ -1471,6 +1471,45 @@ async def test_scheduled_admin_auto_remediation_is_fail_closed(
                 idempotency_key=None,
             )
 
+
+@pytest.mark.asyncio
+async def test_admin_auto_remediation_without_trigger_is_fail_closed(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="operator acceptance gate passes",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Ambiguous automatic remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"workflow": {"remediation": {
+                    "target": {"workflowId": target.workflow_id},
+                    "authorityMode": "admin_auto",
+                }}},
+                idempotency_key=None,
+            )
+
 @pytest.mark.asyncio
 async def test_create_execution_persists_supplied_matching_remediation_run_id(
     tmp_path, mock_client_adapter

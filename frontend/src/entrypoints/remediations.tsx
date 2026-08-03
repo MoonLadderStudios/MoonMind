@@ -38,6 +38,15 @@ function compactText(record: Record<string, unknown>, key: keyof RemediationRow)
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function nestedText(value: unknown, ...keys: string[]): string {
+  let current = value;
+  for (const key of keys) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return '';
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === 'string' ? current.trim() : '';
+}
+
 function isWorkflowId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/.test(value);
 }
@@ -111,7 +120,8 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
   const rows = useMemo(() => {
     const term = filter.trim().toLowerCase();
     return term ? (query.data ?? []).filter((row) =>
-      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution]
+      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution,
+        nestedText(row.operatorState, 'phase'), nestedText(row.operatorState, 'latestAction', 'verificationOutcome')]
         .some((value) => String(value ?? '').toLowerCase().includes(term))) : (query.data ?? []);
   }, [filter, query.data]);
   const columns = useMemo<Column<RemediationRow>[]>(() => [
@@ -121,6 +131,14 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'authorityMode', header: 'Contract', render: (row) => `${row.authorityMode} · ${row.mode}` },
     { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || row.resolution || '—' },
     { key: 'approvalState', header: 'Approval', render: (row) => row.approvalState?.decision ? `${row.approvalState.decision}${row.approvalState.expiresAt ? ` · expires ${formatDateTime(row.approvalState.expiresAt)}` : ''}` : 'not required' },
+    { key: 'operatorState', header: 'Outcome audit', render: (row) => {
+      const phase = nestedText(row.operatorState, 'phase') || 'not started';
+      const verification = nestedText(row.operatorState, 'latestAction', 'verificationOutcome') || 'not verified';
+      const repair = nestedText(row.operatorState, 'immediateRepair', 'repairOutcome') || nestedText(row.operatorState, 'immediateRepair', 'status') || 'not attempted';
+      const prevention = nestedText(row.operatorState, 'prevention', 'status') || 'not identified';
+      const cleanup = nestedText(row.operatorState, 'cleanup', 'lockRelease', 'state') || nestedText(row.operatorState, 'cleanup', 'lockRelease') || 'pending';
+      return <span>{phase} · {verification} · repair {repair} · prevention {prevention} · cleanup {cleanup}</span>;
+    } },
     { key: 'createdAt', header: 'Created', sortable: true, render: (row) => formatDateTime(row.createdAt) },
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
   ], []);

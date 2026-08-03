@@ -6549,6 +6549,23 @@ describe('Workflow Detail Entrypoint', () => {
                 authorityMode: 'observe_only',
                 status: 'created',
                 contextArtifactRef: null,
+                operatorState: {
+                  phase: 'completed',
+                  instructions: 'Repair the failed checkout',
+                  launchPolicy: 'manual-only',
+                  evidencePolicy: 'durable-required',
+                  latestAction: {
+                    actionKind: 'resume',
+                    risk: 'medium',
+                    policyDecision: 'allowed',
+                    idempotencyKey: 'action-123',
+                    verificationOutcome: 'verified_resolved',
+                    verificationRef: 'artifact://verification/action-123',
+                  },
+                  immediateRepair: { repairOutcome: 'resumed' },
+                  prevention: { status: 'verified', pullRequest: 'https://example.test/pr/1' },
+                  cleanup: { lockRelease: { state: 'released' }, janitor: 'complete' },
+                },
                 checkpointBranches: [
                   {
                     workflowId: 'mm:target-1',
@@ -6621,6 +6638,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('2 / 3')).toBeTruthy();
     expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
     expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
+    expect(screen.getAllByText('Operator audit').length).toBeGreaterThan(0);
+    expect(screen.getByText('Repair the failed checkout')).toBeTruthy();
+    expect(screen.getByText(/verified_resolved/)).toBeTruthy();
+    expect(screen.getByText(/repairOutcome: resumed/)).toBeTruthy();
+    expect(screen.getByText(/lockRelease: state: released/)).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(

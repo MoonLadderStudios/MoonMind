@@ -46,6 +46,30 @@ describe('Remediations', () => {
     expect(screen.getByText('No remediations match the current filter.')).toBeTruthy();
   });
 
+  it('projects canonical verification, repair, prevention, and cleanup state', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{
+        remediationWorkflowId: 'mm:repair-audit', title: 'Audited repair', status: 'completed',
+        attentionRequired: false, targetWorkflowId: 'mm:source-audit', targetTitle: 'Source audit',
+        authorityMode: 'approval_gated', mode: 'snapshot',
+        operatorState: {
+          phase: 'completed',
+          latestAction: { verificationOutcome: 'verified_resolved' },
+          immediateRepair: { repairOutcome: 'resumed' },
+          prevention: { status: 'verified' },
+          cleanup: { lockRelease: { state: 'released' } },
+        },
+        createdAt: '2026-07-10T00:00:00Z', updatedAt: '2026-07-10T01:00:00Z',
+      }] }),
+    } as Response);
+
+    renderPage();
+
+    expect((await screen.findAllByText(/completed · verified_resolved · repair resumed/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/prevention verified · cleanup released/).length).toBeGreaterThan(0);
+  });
+
   it('preserves the route shell and offers retry for unauthorized reads', async () => {
     vi.spyOn(window, 'fetch').mockResolvedValue({ ok: false, status: 403 } as Response);
     renderPage();

@@ -816,7 +816,7 @@ class TemporalExecutionService:
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
-        if authority_mode == "admin_auto" and trigger_type not in {None, "manual"}:
+        if authority_mode == "admin_auto" and trigger_type != "manual":
             raise TemporalExecutionValidationError(
                 "Automatic or scheduled admin_auto remediation is disabled until the "
                 "MoonLadderStudios/MoonMind#3512 operator acceptance gate passes."
