@@ -1782,14 +1782,21 @@ async def test_checkpointless_remediation_keeps_the_verified_repository_branch(
 
     assert admitted is True
     assert len(ordered_nodes) == 2
-    for node in ordered_nodes:
+    for node, expected_workspace in zip(
+        ordered_nodes,
+        (
+            expected["remediationWorkspaceSpec"],
+            expected["verificationWorkspaceSpec"],
+        ),
+        strict=True,
+    ):
         request = parent._build_agent_execution_request(
             node_inputs=dict(node["inputs"]),
             node_id=str(node["id"]),
             tool_name=str(node["tool"]["name"]),
             workflow_parameters=manifest["workflowParameters"],
         )
-        assert request.workspace_spec == expected["workspaceSpec"]
+        assert request.workspace_spec == expected_workspace
         assert request.workspace_spec != manifest["escapedWorkspaceSpec"]
 
 

@@ -72,6 +72,65 @@ async def test_prepare_workspace_does_not_select_an_unrelated_checkout(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_clones_candidate_and_checks_out_pinned_revision(
+    tmp_path,
+):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    head_sha = "1da4e5fed31bb7821999af47c6f04c2865a8c2e5"
+    checked_calls: list[tuple[object, ...]] = []
+    run_calls: list[tuple[object, ...]] = []
+
+    async def fake_checked(*args, **_kwargs):
+        checked_calls.append(args)
+        if args[:2] == ("git", "clone"):
+            Path(str(args[-1])).mkdir(parents=True)
+
+    async def fake_run(*args, **_kwargs):
+        run_calls.append(args)
+        if args[-2:] == ("rev-parse", "HEAD"):
+            return 0, f"{head_sha}\n", ""
+        return 0, "", ""
+
+    launcher._run_checked_command = fake_checked
+    launcher._run_command = fake_run
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/Tactics",
+            "repositoryTarget": {
+                "provider": "git",
+                "repository": {"name": "MoonLadderStudios/Tactics"},
+                "branch": {"name": "feature/remediation"},
+                "revision": {"kind": "git_commit", "commitSha": head_sha},
+            },
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {"kind": "git_commit", "commitSha": head_sha},
+            },
+            "startingBranch": "main",
+            "targetBranch": "feature/remediation",
+        }
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id="pinned-candidate",
+        request=request,
+        workspace_path=None,
+    )
+
+    clone_call = next(call for call in checked_calls if call[:2] == ("git", "clone"))
+    assert clone_call[2:5] == ("--branch", "feature/remediation", "--single-branch")
+    assert any(
+        call[-4:] == ("checkout", "-B", "feature/remediation", head_sha)
+        for call in checked_calls
+    )
+    assert any(call[-2:] == ("checkout", "feature/remediation") for call in run_calls)
+    assert resolved == str(
+        (tmp_path / "workspaces" / "pinned-candidate" / "repo").resolve()
+    )
+
+
+@pytest.mark.asyncio
 async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
     readiness = AsyncMock(
@@ -515,6 +574,42 @@ async def test_default_repository_readiness_rejects_missing_or_changed_remote_ti
             await launcher._ensure_repository_ready_for_launch(
                 _repository_readiness_request(), None
             )
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_rejects_changed_pinned_branch_tip(
+    tmp_path,
+):
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(
+        return_value="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+    request = _repository_readiness_request()
+    request.workspace_spec["repositoryTarget"]["revision"] = {
+        "kind": "git_commit",
+        "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+
+    with pytest.raises(
+        RepositoryContractError,
+        match="remote branch tip does not match the verifier-pinned revision",
+    ):
+        await launcher._ensure_repository_ready_for_launch(request, None)
+
+    launcher._observe_git_remote_tip.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2043,7 +2138,7 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     assert exc_process is None
 
 @pytest.mark.asyncio
-async def test_launch_does_not_prepare_workspace_from_unrelated_repo(
+async def test_launch_rejects_branch_without_repository_workspace_source(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
@@ -2069,18 +2164,19 @@ async def test_launch_does_not_prepare_workspace_from_unrelated_repo(
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
-        run_id="run-2",
-        request=request,
-        profile=profile,
-    )
-    stdout, _stderr = await process.communicate()
+    with pytest.raises(
+        RuntimeError,
+        match="branch-bearing workspaceSpec requires an explicit repository",
+    ):
+        await launcher.launch(
+            run_id="run-2",
+            request=request,
+            profile=profile,
+        )
 
     unexpected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
-    assert record.workspace_path is None
-    assert record.live_stream_capable is False
     assert not unexpected_workspace.exists()
-    assert str(existing_repo) not in stdout.decode("utf-8", errors="replace")
+    assert store.load("run-2") is None
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypatch):

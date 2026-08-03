@@ -4202,6 +4202,7 @@ async def test_headless_remediation_inherits_remote_verified_workspace(
             "pushStatus": "pushed",
             "remoteVerified": True,
             "branch": "github-issue-implement-moonladderstudios-85030dac",
+            "baseBranch": "main",
             "headSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
         }
     }
@@ -4222,12 +4223,37 @@ async def test_headless_remediation_inherits_remote_verified_workspace(
     )
 
     assert admitted is True
-    expected_workspace = {
+    expected_remediation_workspace = {
         "repository": "MoonLadderStudios/Tactics",
-        "startingBranch": "github-issue-implement-moonladderstudios-85030dac",
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/Tactics"},
+            "branch": {
+                "name": "github-issue-implement-moonladderstudios-85030dac"
+            },
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            },
+        },
+        "startingBranch": "main",
         "targetBranch": "github-issue-implement-moonladderstudios-85030dac",
     }
-    for node in ordered_nodes:
+    expected_verification_workspace = {
+        **expected_remediation_workspace,
+        "repositoryTarget": {
+            key: value
+            for key, value in expected_remediation_workspace[
+                "repositoryTarget"
+            ].items()
+            if key != "revision"
+        },
+    }
+    for node, expected_workspace in zip(
+        ordered_nodes,
+        (expected_remediation_workspace, expected_verification_workspace),
+        strict=True,
+    ):
         assert node["inputs"]["workspaceSpec"] == expected_workspace
         request = mock_run_workflow._build_agent_execution_request(
             node_inputs=dict(node["inputs"]),
@@ -4236,6 +4262,42 @@ async def test_headless_remediation_inherits_remote_verified_workspace(
             workflow_parameters={"publishMode": "pr"},
         )
         assert request.workspace_spec == expected_workspace
+
+
+def test_headless_remediation_accepts_normalized_no_commit_baseline() -> None:
+    workspace_spec = MoonMindRunWorkflow._verified_headless_remediation_workspace_spec(
+        node_inputs={
+            "repository": "MoonLadderStudios/Tactics",
+            "startingBranch": "origin/main",
+            "targetBranch": "refs/heads/feature/remediation",
+        },
+        outputs={
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "no_commits",
+                "remoteVerified": True,
+                "branch": "feature/remediation",
+                "baseBranch": "refs/remotes/origin/main",
+                "headSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            }
+        },
+    )
+
+    assert workspace_spec == {
+        "repository": "MoonLadderStudios/Tactics",
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/Tactics"},
+            "branch": {"name": "feature/remediation"},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            },
+        },
+        "startingBranch": "main",
+        "targetBranch": "feature/remediation",
+    }
 
 
 @pytest.mark.asyncio

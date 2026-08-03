@@ -575,6 +575,16 @@ class ManagedRuntimeLauncher:
                 branch=target.branch.name,
                 git_env=git_env,
             )
+            pinned_revision = str(
+                getattr(target.revision, "commit_sha", "")
+                if target.revision is not None
+                else ""
+            ).strip()
+            if pinned_revision and expected_remote_tip != pinned_revision:
+                raise RepositoryContractError(
+                    REPOSITORY_REMOTE_TIP_MISMATCH,
+                    "remote branch tip does not match the verifier-pinned revision",
+                )
 
         async def resolve_connection(_target: object) -> RepositoryConnection:
             return connection
@@ -1324,8 +1334,17 @@ class ManagedRuntimeLauncher:
             return str(repo_path)
 
         source = self._resolve_repository_source(repository)
+        authored_target = workspace_spec.get("repositoryTarget")
+        authored_target_mapping = (
+            authored_target if isinstance(authored_target, Mapping) else {}
+        )
+        authored_branch = authored_target_mapping.get("branch")
+        authored_branch_mapping = (
+            authored_branch if isinstance(authored_branch, Mapping) else {}
+        )
         branch = str(
-            workspace_spec.get("startingBranch")
+            authored_branch_mapping.get("name")
+            or workspace_spec.get("startingBranch")
             or workspace_spec.get("branch")
             or ""
         ).strip()
@@ -1418,13 +1437,16 @@ class ManagedRuntimeLauncher:
         commit_sha = str(revision.get("commitSha") or "").strip()
         if not commit_sha:
             return
+        target_branch = self._normalize_clone_branch(
+            str(workspace_spec.get("targetBranch") or "")
+        )
+        checkout_args = ["git", "-C", str(repo_path), "checkout"]
+        if target_branch:
+            checkout_args.extend(["-B", target_branch, commit_sha])
+        else:
+            checkout_args.extend(["--detach", commit_sha])
         await self._run_checked_command(
-            "git",
-            "-C",
-            str(repo_path),
-            "checkout",
-            "--detach",
-            commit_sha,
+            *checkout_args,
             env=dict(git_env) if git_env is not None else None,
         )
         returncode, stdout_text, _stderr_text = await self._run_command(
@@ -1945,6 +1967,22 @@ class ManagedRuntimeLauncher:
                 workspace_path=workspace_path,
                 git_env=git_host_env,
             )
+        if resolved_workspace_path is None:
+            workspace_spec = (
+                request.workspace_spec
+                if isinstance(request.workspace_spec, dict)
+                else {}
+            )
+            repository = str(
+                workspace_spec.get("repository")
+                or workspace_spec.get("repo")
+                or ""
+            ).strip()
+            if self._extract_workspace_branch(workspace_spec) and not repository:
+                raise RuntimeError(
+                    "branch-bearing workspaceSpec requires an explicit repository "
+                    "or workspace path"
+                )
 
         # Phase 4 Materialization
         from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer

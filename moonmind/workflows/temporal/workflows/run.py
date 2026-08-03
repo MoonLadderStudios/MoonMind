@@ -830,6 +830,19 @@ RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
 )
 
 
+def _normalize_git_branch_ref(value: Any) -> str:
+    """Return the short branch identity used by managed Git boundaries."""
+
+    normalized = str(value or "").strip()
+    while True:
+        prior = normalized
+        for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+            if normalized.startswith(prefix):
+                normalized = normalized.removeprefix(prefix)
+        if normalized == prior:
+            return normalized
+
+
 @dataclasses.dataclass(frozen=True)
 class MoonSpecRemediationSuccessor:
     """One exact, plan-authored remediation destination."""
@@ -4116,14 +4129,20 @@ class MoonMindRunWorkflow:
         if not isinstance(evidence, Mapping):
             return None
         push_status = str(evidence.get("pushStatus") or "").strip().lower()
-        branch = str(evidence.get("branch") or "").strip()
-        head_sha = str(evidence.get("headSha") or "").strip()
+        branch = _normalize_git_branch_ref(evidence.get("branch"))
+        base_branch = _normalize_git_branch_ref(
+            evidence.get("baseBranch") or evidence.get("base_branch")
+        )
+        head_sha = str(
+            evidence.get("headSha") or evidence.get("head_sha") or ""
+        ).strip()
         if (
             evidence.get("publicationAuthorized") is not True
             or evidence.get("candidateContaminated") is True
             or evidence.get("remoteVerified") is not True
-            or push_status not in {"pushed", "published"}
+            or push_status not in {"pushed", "published", "no_commits"}
             or not branch
+            or not base_branch
             or not head_sha
         ):
             return None
@@ -4155,23 +4174,47 @@ class MoonMindRunWorkflow:
         repository = workspace_spec.get("repository") or workspace_spec.get("repo")
         if not isinstance(repository, str) or not repository.strip():
             return None
-        declared_branch = next(
-            (
-                str(workspace_spec[key]).strip()
-                for key in ("targetBranch", "startingBranch", "branch")
-                if isinstance(workspace_spec.get(key), str)
-                and str(workspace_spec[key]).strip()
-            ),
-            None,
+        declared_target_branch = _normalize_git_branch_ref(
+            workspace_spec.get("targetBranch")
         )
-        if declared_branch and declared_branch != branch:
+        if declared_target_branch and declared_target_branch != branch:
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,
                 "verified remediation branch does not match the verifier workspace",
             )
+        declared_base_branch = _normalize_git_branch_ref(
+            workspace_spec.get("startingBranch") or workspace_spec.get("branch")
+        )
+        if declared_base_branch and declared_base_branch != base_branch:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "verified remediation base does not match the verifier workspace",
+            )
 
+        existing_repository_target = workspace_spec.get("repositoryTarget")
+        existing_repository_target_mapping = (
+            existing_repository_target
+            if isinstance(existing_repository_target, Mapping)
+            else {}
+        )
+        connection_ref = str(
+            workspace_spec.get("connectionRef")
+            or existing_repository_target_mapping.get("connectionRef")
+            or ""
+        ).strip()
         workspace_spec["repository"] = repository.strip()
-        workspace_spec["startingBranch"] = branch
+        workspace_spec["repositoryTarget"] = {
+            "provider": "git",
+            "repository": {"name": repository.strip()},
+            "branch": {"name": branch},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": head_sha,
+            },
+        }
+        if connection_ref:
+            workspace_spec["repositoryTarget"]["connectionRef"] = connection_ref
+        workspace_spec["startingBranch"] = base_branch
         workspace_spec["targetBranch"] = branch
         workspace_spec.pop("repo", None)
         workspace_spec.pop("branch", None)
@@ -4366,11 +4409,20 @@ class MoonMindRunWorkflow:
                 runtime=self._remediation_loop_runtime_block(),
             )
             if verified_headless_workspace is not None:
-                for attempt_node in (remediation, verification):
+                verification_workspace = dict(verified_headless_workspace)
+                raw_repository_target = verification_workspace.get(
+                    "repositoryTarget"
+                )
+                if isinstance(raw_repository_target, Mapping):
+                    repository_target = dict(raw_repository_target)
+                    repository_target.pop("revision", None)
+                    verification_workspace["repositoryTarget"] = repository_target
+                for attempt_node, workspace_spec in (
+                    (remediation, verified_headless_workspace),
+                    (verification, verification_workspace),
+                ):
                     attempt_inputs = dict(attempt_node.get("inputs") or {})
-                    attempt_inputs["workspaceSpec"] = dict(
-                        verified_headless_workspace
-                    )
+                    attempt_inputs["workspaceSpec"] = dict(workspace_spec)
                     attempt_node["inputs"] = attempt_inputs
             if (
                 workflow.patched(
@@ -15092,16 +15144,8 @@ class MoonMindRunWorkflow:
         return self._coerce_text(raw_base)
 
     def _normalize_native_pr_base_branch(self, value: Any) -> str | None:
-        branch = self._coerce_text(value)
-        if not branch:
-            return None
-        if branch.startswith("refs/remotes/origin/"):
-            branch = branch.removeprefix("refs/remotes/origin/")
-        elif branch.startswith("refs/heads/"):
-            branch = branch.removeprefix("refs/heads/")
-        if branch.startswith("origin/"):
-            branch = branch.removeprefix("origin/")
-        return branch
+        branch = _normalize_git_branch_ref(value)
+        return branch or None
 
     def _resolve_native_pr_branches(
         self,
