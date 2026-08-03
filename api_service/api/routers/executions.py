@@ -11931,6 +11931,8 @@ async def create_remediation_checkpoint_branch(
             "runtimeContextPolicy": runtime_context_policy,
             "gitWorkBranch": payload.gitWorkBranch,
             "maxBudgetUsd": payload.maxBudgetUsd,
+            "providerProfileRef": payload.provider_profile_ref,
+            "agentProfile": payload.agent_profile,
         }
     )
     existing_op = await session.execute(

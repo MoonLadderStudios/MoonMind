@@ -692,11 +692,36 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
         "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
         json=repair_payload,
     )
+    changed_agent_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json={
+            **repair_payload,
+            "agentProfile": {
+                "profileId": "agent-profile-remediation",
+                "version": 3,
+            },
+        },
+    )
+    changed_provider_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json={
+            **repair_payload,
+            "providerProfileRef": "provider-profile-other",
+        },
+    )
 
     assert first.status_code == 201
     assert second.status_code == 201
     assert second.json()["branchId"] == first.json()["branchId"]
     assert first.json()["runtimeContextPolicy"] == "fresh_agent_run"
+    assert changed_agent_profile.status_code == 409
+    assert changed_agent_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
+    assert changed_provider_profile.status_code == 409
+    assert changed_provider_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
 
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
