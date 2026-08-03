@@ -58,6 +58,9 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.omnigent_agent_profile_selection import (
+    resolve_agent_profile_snapshot,
+)
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
@@ -7810,6 +7813,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         "model",
         "effort",
         "providerProfile",
+        "agentProfile",
         "profileId",
         "repository",
         "repo",
@@ -10685,6 +10689,52 @@ async def _create_execution_from_workflow_request(
         )
     initial_parameters = skill_validation.parameters
 
+    # Reserve the canonical identity before launch so profile readiness and the
+    # immutable effective snapshot are persisted in the same transaction as the
+    # execution record.  A failed resolution never starts Temporal work.
+    reserved_workflow_id = f"mm:{uuid4()}"
+    agent_profile_selection = payload.get("agentProfile")
+    if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
+        agent_profile_selection = runtime_payload.get("agentProfile")
+    if agent_profile_selection is not None:
+        if canonical_target_runtime != "omnigent":
+            raise _invalid_workflow_request(
+                "agentProfile is supported only for targetRuntime='omnigent'."
+            )
+        if not isinstance(agent_profile_selection, Mapping):
+            raise _invalid_workflow_request("agentProfile must be an object.")
+        profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=agent_profile_selection,
+            consumer_type=("remediation" if task_payload.get("remediation") else "workflow"),
+            consumer_id=reserved_workflow_id,
+            user=user,
+        )
+        initial_parameters["agentProfileSnapshot"] = profile_snapshot
+        initial_parameters["agentProfile"] = {
+            "profileId": profile_snapshot["profileId"],
+            "version": profile_snapshot["version"],
+            "digest": profile_snapshot["digest"],
+        }
+        effective_profile = profile_snapshot["document"]
+        effective_model = effective_profile.get("model") or {}
+        initial_parameters["profileId"] = profile_snapshot["providerProfileRef"]
+        if effective_model.get("model") is not None:
+            initial_parameters["model"] = effective_model["model"]
+        if effective_model.get("effort") is not None:
+            initial_parameters["effort"] = effective_model["effort"]
+        initial_parameters["omnigent"] = {
+            **dict(initial_parameters.get("omnigent") or {}),
+            "agentProfileRef": (
+                f"{profile_snapshot['profileId']}@{profile_snapshot['version']}"
+            ),
+            "executionProfileRef": profile_snapshot["executionProfileRef"],
+            "launchPolicyRef": profile_snapshot["policyRef"],
+        }
+        initial_parameters["rag"] = effective_profile.get("rag") or {}
+        initial_parameters["capture"] = effective_profile.get("capture") or {}
+        initial_parameters["workspace"] = effective_profile.get("workspace") or {}
+
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
         record = await service.create_execution(
@@ -10703,6 +10753,7 @@ async def _create_execution_from_workflow_request(
             summary=_derive_workflow_summary(task_payload, input_artifact_ref),
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
+            _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
         message = str(exc)
@@ -11270,6 +11321,11 @@ async def _handle_recurring_schedule(
         request_payload,
         runtime_metadata=runtime_metadata,
     )
+    agent_profile_selection = request_payload.get("agentProfile")
+    if agent_profile_selection is not None and not isinstance(
+        agent_profile_selection, Mapping
+    ):
+        raise _invalid_workflow_request("agentProfile must be an object.")
     try:
         definition = await svc.create_definition(
             name=schedule.name or "Inline schedule",
@@ -11283,6 +11339,8 @@ async def _handle_recurring_schedule(
             owner_user_id=user.id,
             target=target,
             policy=schedule.policy,
+            agent_profile_selection=agent_profile_selection,
+            actor=user,
         )
     except RecurringWorkflowValidationError as exc:
         raise HTTPException(
@@ -11437,6 +11495,7 @@ async def create_remediation_execution(
         "publish_mode",
         "profileId",
         "providerProfile",
+        "agentProfile",
         "idempotencyKey",
         "schedule",
         "runtimeInheritance",

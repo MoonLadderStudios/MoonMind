@@ -20,6 +20,10 @@ from api_service.db.models import (
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
     TemporalExecutionRecord,
+    User,
+)
+from api_service.services.omnigent_agent_profile_selection import (
+    resolve_agent_profile_snapshot,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -624,6 +628,8 @@ class RecurringWorkflowsService:
         owner_user_id: UUID | None,
         target: Mapping[str, Any],
         policy: Mapping[str, Any] | None,
+        agent_profile_selection: Mapping[str, Any] | None = None,
+        actor: User | None = None,
     ) -> RecurringWorkflowDefinition:
         schedule_kind = _normalize_schedule_type(schedule_type)
         cron_normalized = str(cron or "").strip()
@@ -672,6 +678,28 @@ class RecurringWorkflowsService:
         )
         self._session.add(definition)
         await self._session.flush()
+
+        if agent_profile_selection is not None:
+            if actor is None:
+                raise RecurringWorkflowValidationError(
+                    "an authenticated actor is required for agent profile selection"
+                )
+            snapshot = await resolve_agent_profile_snapshot(
+                self._session,
+                selection=agent_profile_selection,
+                consumer_type="schedule",
+                consumer_id=str(definition_id),
+                user=actor,
+            )
+            definition.target = {
+                **definition.target,
+                "agentProfile": {
+                    "profileId": snapshot["profileId"],
+                    "version": snapshot["version"],
+                    "digest": snapshot["digest"],
+                },
+                "agentProfileSnapshot": snapshot,
+            }
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(
             definition_id=definition_id,
