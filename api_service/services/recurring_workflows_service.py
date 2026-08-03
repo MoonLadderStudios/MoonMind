@@ -705,7 +705,10 @@ class RecurringWorkflowsService:
             definition_id=definition_id,
             name=name_text,
             owner_user_id=owner_user_id,
-            target_payload=target_payload,
+            # Profile resolution above replaces the authored selection with the
+            # immutable launch snapshot. Build the durable schedule input from
+            # that authoritative target, not the pre-resolution request copy.
+            target_payload=definition.target,
         )
 
         try:
