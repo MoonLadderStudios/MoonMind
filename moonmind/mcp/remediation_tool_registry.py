@@ -63,6 +63,8 @@ class RemediationActionRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(alias="idempotencyKey")
     dry_run: bool = Field(False, alias="dryRun")
+    approval_binding: dict[str, Any] | None = Field(None, alias="approvalBinding")
+    approval_ref: str | None = Field(None, alias="approvalRef")
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +211,8 @@ class RemediationToolRegistry:
             parameters=request.parameters,
             idempotency_key=request.idempotency_key,
             dry_run=request.dry_run,
+            approval_binding=request.approval_binding,
+            approval_ref=request.approval_ref,
             principal=context.principal,
         )
 

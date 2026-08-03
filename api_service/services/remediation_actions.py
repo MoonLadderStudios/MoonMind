@@ -441,6 +441,14 @@ class TemporalRemediationControlPlane:
                         "beforeEvidenceRefs": [],
                         "afterEvidenceRefs": [],
                     }
+                if not str(action_request.get("approvalRef") or "").strip():
+                    return {
+                        "status": "denied",
+                        "reason": "omnigent_approval_reference_required",
+                        "policyAuthority": authority,
+                        "beforeEvidenceRefs": [],
+                        "afterEvidenceRefs": [],
+                    }
                 try:
                     validate_approval_binding(
                         binding,

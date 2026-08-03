@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 
@@ -20,6 +21,7 @@ from moonmind.workflows.temporal.remediation_actions import (
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
     RemediationEvidenceToolService,
+    RemediationEvidenceToolError,
     RemediationTargetHealthSnapshot,
 )
 
@@ -156,6 +158,7 @@ async def test_production_policy_boundary_binds_then_revalidates_approval() -> N
             "actionKind": "host.restart",
             "policySnapshot": snapshot,
             "approvalBinding": pending["approvalBinding"],
+            "approvalRef": "approval://operations/1",
         },
         {},
         _production_target_health(),
@@ -178,6 +181,7 @@ async def test_production_policy_boundary_rejects_stale_policy_and_target_bindin
             "actionKind": "host.restart",
             "policySnapshot": snapshot,
             "approvalBinding": binding,
+            "approvalRef": "approval://operations/1",
         },
         {},
         _production_target_health(),
@@ -185,6 +189,74 @@ async def test_production_policy_boundary_rejects_stale_policy_and_target_bindin
     assert result["status"] == "denied"
     assert result["reason"] == "omnigent_approval_binding_stale"
     assert "targetExpectedState" in result["detail"]
+
+
+async def test_production_policy_boundary_rejects_unapproved_binding() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    binding = bind_approval_request(
+        snapshot, "host.restart", target_expected_state="target-run"
+    )
+
+    async def adapter(*_args):
+        raise AssertionError("an unapproved binding must fail before side effects")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": binding,
+        },
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_approval_reference_required"
+
+
+async def test_real_handoff_resolves_persisted_target_run_policy() -> None:
+    snapshot = _policy_snapshot("allow")
+    bridge = SimpleNamespace(
+        effective_launch_snapshot_json={"policyAuthority": snapshot}
+    )
+    session = AsyncMock()
+    session.execute.return_value.scalar_one_or_none.return_value = bridge
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = session
+
+    policy_service = AsyncMock()
+    policy_service.resolve_runtime_snapshot.return_value = snapshot
+    with patch(
+        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        return_value=policy_service,
+    ):
+        resolved = await service._resolve_target_policy_snapshot(
+            target=_production_target_health()
+        )
+
+    assert resolved == snapshot
+    policy_service.resolve_runtime_snapshot.assert_awaited_once_with("policy-1@7")
+
+
+async def test_real_handoff_rejects_stale_persisted_policy_before_dispatch() -> None:
+    launch_snapshot = _policy_snapshot("allow")
+    current_snapshot = {**launch_snapshot, "policyDigest": "sha256:" + "c" * 64}
+    bridge = SimpleNamespace(
+        effective_launch_snapshot_json={"policyAuthority": launch_snapshot}
+    )
+    session = AsyncMock()
+    session.execute.return_value.scalar_one_or_none.return_value = bridge
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = session
+
+    policy_service = AsyncMock()
+    policy_service.resolve_runtime_snapshot.return_value = current_snapshot
+    with patch(
+        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        return_value=policy_service,
+    ), pytest.raises(RemediationEvidenceToolError, match="stale or unavailable"):
+        await service._resolve_target_policy_snapshot(
+            target=_production_target_health()
+        )
 
 
 async def test_control_plane_executor_dispatches_typed_adapter_with_evidence() -> None:
