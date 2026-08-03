@@ -1,0 +1,35 @@
+{
+  "invariant": "checkpointless remediation and its verifier execute only against the remote-verified repository branch that admitted the attempt",
+  "remediationWorkspaceSpec": {
+    "repository": "MoonLadderStudios/Tactics",
+    "repositoryTarget": {
+      "provider": "git",
+      "repository": {
+        "name": "MoonLadderStudios/Tactics"
+      },
+      "branch": {
+        "name": "github-issue-implement-moonladderstudios-85030dac"
+      },
+      "revision": {
+        "kind": "git_commit",
+        "commitSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5"
+      }
+    },
+    "startingBranch": "main",
+    "targetBranch": "github-issue-implement-moonladderstudios-85030dac"
+  },
+  "verificationWorkspaceSpec": {
+    "repository": "MoonLadderStudios/Tactics",
+    "repositoryTarget": {
+      "provider": "git",
+      "repository": {
+        "name": "MoonLadderStudios/Tactics"
+      },
+      "branch": {
+        "name": "github-issue-implement-moonladderstudios-85030dac"
+      }
+    },
+    "startingBranch": "main",
+    "targetBranch": "github-issue-implement-moonladderstudios-85030dac"
+  }
+}

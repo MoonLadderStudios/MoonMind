@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
     RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
@@ -4164,6 +4165,174 @@ async def test_dynamic_verifier_admits_headless_attempt_without_checkpoint(
     assert decision_payload["reason"] == "verification_requested_remediation"
     assert decision_payload["nextAttempt"] == 1
     assert decision_payload["nextPhase"] == "remediation_pending"
+
+
+@pytest.mark.asyncio
+async def test_headless_remediation_inherits_remote_verified_workspace(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:6ca2d8a6-4804-4434-8c15-6896ec673ac5."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+            RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+        },
+    )
+    source_inputs = {
+        "repository": "MoonLadderStudios/Tactics",
+        "targetBranch": "github-issue-implement-moonladderstudios-85030dac",
+    }
+    outputs = {
+        "acceptedRepositoryEvidence": {
+            "publicationAuthorized": True,
+            "candidateContaminated": False,
+            "pushStatus": "pushed",
+            "remoteVerified": True,
+            "branch": "github-issue-implement-moonladderstudios-85030dac",
+            "baseBranch": "main",
+            "headSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+        }
+    }
+    workspace_spec = (
+        mock_run_workflow._verified_headless_remediation_workspace_spec(
+            node_inputs=source_inputs,
+            outputs=outputs,
+        )
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        headless_workspace_spec=workspace_spec,
+    )
+
+    assert admitted is True
+    expected_remediation_workspace = {
+        "repository": "MoonLadderStudios/Tactics",
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/Tactics"},
+            "branch": {
+                "name": "github-issue-implement-moonladderstudios-85030dac"
+            },
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            },
+        },
+        "startingBranch": "main",
+        "targetBranch": "github-issue-implement-moonladderstudios-85030dac",
+    }
+    expected_verification_workspace = {
+        **expected_remediation_workspace,
+        "repositoryTarget": {
+            key: value
+            for key, value in expected_remediation_workspace[
+                "repositoryTarget"
+            ].items()
+            if key != "revision"
+        },
+    }
+    for node, expected_workspace in zip(
+        ordered_nodes,
+        (expected_remediation_workspace, expected_verification_workspace),
+        strict=True,
+    ):
+        assert node["inputs"]["workspaceSpec"] == expected_workspace
+        request = mock_run_workflow._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_id=str(node["id"]),
+            tool_name=str(node["tool"]["name"]),
+            workflow_parameters={"publishMode": "pr"},
+        )
+        assert request.workspace_spec == expected_workspace
+
+
+def test_headless_remediation_accepts_normalized_no_commit_baseline() -> None:
+    workspace_spec = MoonMindRunWorkflow._verified_headless_remediation_workspace_spec(
+        node_inputs={
+            "repository": "MoonLadderStudios/Tactics",
+            "startingBranch": "origin/main",
+            "targetBranch": "refs/heads/feature/remediation",
+        },
+        outputs={
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "no_commits",
+                "remoteVerified": True,
+                "branch": "feature/remediation",
+                "baseBranch": "refs/remotes/origin/main",
+                "headSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            }
+        },
+    )
+
+    assert workspace_spec == {
+        "repository": "MoonLadderStudios/Tactics",
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/Tactics"},
+            "branch": {"name": "feature/remediation"},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": "1da4e5fed31bb7821999af47c6f04c2865a8c2e5",
+            },
+        },
+        "startingBranch": "main",
+        "targetBranch": "feature/remediation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_headless_remediation_rejects_unverified_workspace_source(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+            RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+        },
+    )
+
+    with pytest.raises(
+        RemediationHeadError,
+        match="no remote-verified workspace source",
+    ):
+        await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=[],
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
 
 
 def test_headless_remediation_execution_skips_checkpoint_materialization_guard(

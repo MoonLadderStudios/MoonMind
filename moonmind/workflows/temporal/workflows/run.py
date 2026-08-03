@@ -801,6 +801,14 @@ RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH = (
 RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH = (
     "run-workflow-headless-remediation-v1"
 )
+# A checkpointless remediation may continue only from the repository branch
+# that the admitting verifier proved was published remotely. Carry that source
+# into both dynamic AgentRun requests so a managed runtime cannot discover an
+# unrelated checkout when no canonical workspace checkpoint exists. The
+# materialized child inputs change, so older histories retain their commands.
+RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH = (
+    "run-headless-remediation-verified-workspace-v1"
+)
 # Complete the headless-remediation cutover at the execution boundary. The
 # admission patch above allows a remediation attempt without a canonical
 # checkpoint; older histories that already failed the later materialization
@@ -820,6 +828,19 @@ RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH = (
 RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH = (
     "run-remediation-continue-managed-session-v1"
 )
+
+
+def _normalize_git_branch_ref(value: Any) -> str:
+    """Return the short branch identity used by managed Git boundaries."""
+
+    normalized = str(value or "").strip()
+    while True:
+        prior = normalized
+        for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+            if normalized.startswith(prefix):
+                normalized = normalized.removeprefix(prefix)
+        if normalized == prior:
+            return normalized
 
 
 @dataclasses.dataclass(frozen=True)
@@ -4094,6 +4115,111 @@ class MoonMindRunWorkflow:
             verification_inputs=verification_inputs,
         )
 
+    @staticmethod
+    def _verified_headless_remediation_workspace_spec(
+        *,
+        node_inputs: Mapping[str, Any],
+        outputs: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve the verifier-proven remote branch for headless remediation."""
+
+        evidence = outputs.get("acceptedRepositoryEvidence")
+        if not isinstance(evidence, Mapping):
+            evidence = outputs.get("accepted_repository_evidence")
+        if not isinstance(evidence, Mapping):
+            return None
+        push_status = str(evidence.get("pushStatus") or "").strip().lower()
+        branch = _normalize_git_branch_ref(evidence.get("branch"))
+        base_branch = _normalize_git_branch_ref(
+            evidence.get("baseBranch") or evidence.get("base_branch")
+        )
+        head_sha = str(
+            evidence.get("headSha") or evidence.get("head_sha") or ""
+        ).strip()
+        if (
+            evidence.get("publicationAuthorized") is not True
+            or evidence.get("candidateContaminated") is True
+            or evidence.get("remoteVerified") is not True
+            or push_status not in {"pushed", "published", "no_commits"}
+            or not branch
+            or not base_branch
+            or not head_sha
+        ):
+            return None
+
+        runtime = node_inputs.get("runtime")
+        runtime_inputs = runtime if isinstance(runtime, Mapping) else {}
+        workspace_spec: dict[str, Any] = {}
+        for raw in (
+            runtime_inputs.get("workspaceSpec"),
+            runtime_inputs.get("workspace_spec"),
+            node_inputs.get("workspaceSpec"),
+            node_inputs.get("workspace_spec"),
+        ):
+            if isinstance(raw, Mapping):
+                workspace_spec.update(dict(raw))
+        for key in (
+            "repository",
+            "repo",
+            "repositoryTarget",
+            "provider",
+            "connectionRef",
+            "startingBranch",
+            "targetBranch",
+            "branch",
+        ):
+            if node_inputs.get(key) is not None:
+                workspace_spec[key] = node_inputs[key]
+
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        if not isinstance(repository, str) or not repository.strip():
+            return None
+        declared_target_branch = _normalize_git_branch_ref(
+            workspace_spec.get("targetBranch")
+        )
+        if declared_target_branch and declared_target_branch != branch:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "verified remediation branch does not match the verifier workspace",
+            )
+        declared_base_branch = _normalize_git_branch_ref(
+            workspace_spec.get("startingBranch") or workspace_spec.get("branch")
+        )
+        if declared_base_branch and declared_base_branch != base_branch:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "verified remediation base does not match the verifier workspace",
+            )
+
+        existing_repository_target = workspace_spec.get("repositoryTarget")
+        existing_repository_target_mapping = (
+            existing_repository_target
+            if isinstance(existing_repository_target, Mapping)
+            else {}
+        )
+        connection_ref = str(
+            workspace_spec.get("connectionRef")
+            or existing_repository_target_mapping.get("connectionRef")
+            or ""
+        ).strip()
+        workspace_spec["repository"] = repository.strip()
+        workspace_spec["repositoryTarget"] = {
+            "provider": "git",
+            "repository": {"name": repository.strip()},
+            "branch": {"name": branch},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": head_sha,
+            },
+        }
+        if connection_ref:
+            workspace_spec["repositoryTarget"]["connectionRef"] = connection_ref
+        workspace_spec["startingBranch"] = base_branch
+        workspace_spec["targetBranch"] = branch
+        workspace_spec.pop("repo", None)
+        workspace_spec.pop("branch", None)
+        return workspace_spec
+
     def _remediation_loop_runtime_block(self) -> dict[str, Any]:
         """Return the loop's resolved runtime block for attempt materialization."""
 
@@ -4112,6 +4238,7 @@ class MoonMindRunWorkflow:
         logical_step_id: str | None = None,
         recoverable_evidence: bool = False,
         workspace_head: Mapping[str, Any] | None = None,
+        headless_workspace_spec: Mapping[str, Any] | None = None,
     ) -> bool:
         """Apply verifier evidence and append exactly one admitted pair.
 
@@ -4254,6 +4381,18 @@ class MoonMindRunWorkflow:
                 REMEDIATION_HEAD_MISMATCH,
                 "dynamic remediation admission has no canonical workspace checkpoint",
             )
+        verified_headless_workspace: dict[str, Any] | None = None
+        if (
+            workflow.patched(RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH)
+            and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
+            and self._remediation_workspace_head is None
+        ):
+            if not isinstance(headless_workspace_spec, Mapping):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "checkpointless remediation has no remote-verified workspace source",
+                )
+            verified_headless_workspace = dict(headless_workspace_spec)
         continue_after_admission = (
             workflow.patched(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH)
             and should_continue_as_new(spec=spec, state=state)
@@ -4269,6 +4408,22 @@ class MoonMindRunWorkflow:
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
             )
+            if verified_headless_workspace is not None:
+                verification_workspace = dict(verified_headless_workspace)
+                raw_repository_target = verification_workspace.get(
+                    "repositoryTarget"
+                )
+                if isinstance(raw_repository_target, Mapping):
+                    repository_target = dict(raw_repository_target)
+                    repository_target.pop("revision", None)
+                    verification_workspace["repositoryTarget"] = repository_target
+                for attempt_node, workspace_spec in (
+                    (remediation, verified_headless_workspace),
+                    (verification, verification_workspace),
+                ):
+                    attempt_inputs = dict(attempt_node.get("inputs") or {})
+                    attempt_inputs["workspaceSpec"] = dict(workspace_spec)
+                    attempt_node["inputs"] = attempt_inputs
             if (
                 workflow.patched(
                     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH
@@ -12492,6 +12647,16 @@ class MoonMindRunWorkflow:
                                     )
                                     else None
                                 ),
+                                headless_workspace_spec=(
+                                    self._verified_headless_remediation_workspace_spec(
+                                        node_inputs=node_inputs,
+                                        outputs=outputs_for_gate,
+                                    )
+                                    if workflow.patched(
+                                        RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH
+                                    )
+                                    else None
+                                ),
                             )
                         )
                         if workflow.patched(
@@ -14979,16 +15144,8 @@ class MoonMindRunWorkflow:
         return self._coerce_text(raw_base)
 
     def _normalize_native_pr_base_branch(self, value: Any) -> str | None:
-        branch = self._coerce_text(value)
-        if not branch:
-            return None
-        if branch.startswith("refs/remotes/origin/"):
-            branch = branch.removeprefix("refs/remotes/origin/")
-        elif branch.startswith("refs/heads/"):
-            branch = branch.removeprefix("refs/heads/")
-        if branch.startswith("origin/"):
-            branch = branch.removeprefix("origin/")
-        return branch
+        branch = _normalize_git_branch_ref(value)
+        return branch or None
 
     def _resolve_native_pr_branches(
         self,
