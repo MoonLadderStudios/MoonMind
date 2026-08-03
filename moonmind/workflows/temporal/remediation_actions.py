@@ -952,23 +952,42 @@ class RemediationActionAuthorityService:
                 if isinstance(link.approval_state, Mapping)
                 else {}
             )
-            if approval_state.get("decision") in {None, "pending"}:
+            expected_action_binding = {
+                "actionKind": action_kind,
+                "actionId": idempotency_key,
+                "risk": risk,
+                "parametersDigest": hashlib.sha256(
+                    json.dumps(
+                        _redact_payload(parameters or {}),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+            if (
+                approval_state.get("decision") != "pending"
+                or approval_state.get("requiredApprovalStrength") != "high_risk"
+                or approval_state.get("actionBinding") != expected_action_binding
+            ):
+                now = datetime.now(timezone.utc)
+                request_id = (
+                    f"{link.remediation_workflow_id}:approval:"
+                    f"{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:16]}"
+                )
                 approval_state.update(
                     {
+                        "requestId": request_id,
                         "decision": "pending",
+                        "canDecide": True,
+                        "createdAt": now.isoformat(),
+                        "expiresAt": (now + timedelta(minutes=30)).isoformat(),
                         "requiredApprovalStrength": "high_risk",
-                        "actionBinding": {
-                            "actionKind": action_kind,
-                            "actionId": idempotency_key,
-                            "risk": risk,
-                            "parametersDigest": hashlib.sha256(
-                                json.dumps(
-                                    _redact_payload(parameters or {}),
-                                    sort_keys=True,
-                                    separators=(",", ":"),
-                                ).encode("utf-8")
-                            ).hexdigest(),
-                        },
+                        "approvalStrength": None,
+                        "decisionActor": None,
+                        "decisionAt": None,
+                        "consumedAt": None,
+                        "consumedByActionId": None,
+                        "actionBinding": expected_action_binding,
                     }
                 )
                 link.approval_state = approval_state

@@ -2928,8 +2928,30 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert weak_high_risk.decision == "approval_required"
         assert weak_high_risk.reason == "high_risk_requires_stronger_approval"
 
+        rebound = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.terminate",
+            parameters={},
+            dry_run=False,
+            idempotency_key="high-risk",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+        )
+        assert rebound.decision == "approval_required"
+        await session.refresh(link)
+        assert link.approval_state["decision"] == "pending"
+        assert link.approval_state["canDecide"] is True
+        assert link.approval_state["approvalStrength"] is None
+        assert link.approval_state["requestId"].startswith(
+            f"{remediation.workflow_id}:approval:"
+        )
+        assert link.approval_state["actionBinding"]["actionId"] == "high-risk"
+
         link.approval_state = {
             **link.approval_state,
+            "requestId": "approval://high-risk/1",
+            "decision": "approved",
             "approvalStrength": "high_risk",
         }
         await session.commit()

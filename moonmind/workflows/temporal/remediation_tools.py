@@ -7,6 +7,7 @@ that the context explicitly names.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -298,6 +299,8 @@ class RemediationEvidenceToolService:
         action_executor: RemediationActionExecutor | None = None,
         cursor_recorder: Callable[[str, dict[str, Any] | None], Awaitable[None]]
         | None = None,
+        stabilization_waiter: Callable[[float], Awaitable[None]] | None = None,
+        stabilization_delay_seconds: float = 0.25,
     ) -> None:
         self._session = session
         self._artifact_service = artifact_service
@@ -309,6 +312,10 @@ class RemediationEvidenceToolService:
             artifact_service=artifact_service,
         )
         self._cursor_recorder = cursor_recorder
+        self._stabilization_waiter = stabilization_waiter or asyncio.sleep
+        self._stabilization_delay_seconds = max(
+            0.0, min(float(stabilization_delay_seconds), 5.0)
+        )
         self._context_payload_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def get_context(
@@ -783,6 +790,11 @@ class RemediationEvidenceToolService:
                 principal=principal,
             )
         )
+        if verification_required := _bool_or_default(
+            raw_result.get("verificationRequired"),
+            default=_normalize_action_result_status(raw_result.get("status")) == "applied",
+        ):
+            await self._stabilization_waiter(self._stabilization_delay_seconds)
         stabilized_snapshot, stabilized_state_artifact = (
             await self._publish_target_state_snapshot(
                 link=link,
@@ -792,10 +804,6 @@ class RemediationEvidenceToolService:
             )
         )
         status = _normalize_action_result_status(raw_result.get("status"))
-        verification_required = _bool_or_default(
-            raw_result.get("verificationRequired"),
-            default=status == "applied",
-        )
         verification_hint = _string_or_none(raw_result.get("verificationHint"))
         if verification_hint is None and verification_required:
             action_result = authority_result.get("result")
@@ -840,6 +848,7 @@ class RemediationEvidenceToolService:
         )
 
         verification_outcome = _derive_verification_outcome(
+            action_kind=action_kind,
             action_status=status,
             before=before_snapshot,
             immediate_after=immediate_snapshot,
@@ -865,6 +874,11 @@ class RemediationEvidenceToolService:
                 "stabilizedStateRef": stabilized_state_artifact.artifact_id,
             },
             "verificationHint": redacted_verification_hint,
+            "verificationContract": {
+                "schemaVersion": "moonmind.remediation-action-verification.v1",
+                "actionKind": action_kind,
+                "stabilizationDelaySeconds": self._stabilization_delay_seconds,
+            },
         }
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
@@ -1339,6 +1353,7 @@ def _normalize_action_result_status(value: Any) -> str:
 
 def _derive_verification_outcome(
     *,
+    action_kind: str,
     action_status: str,
     before: Mapping[str, Any],
     immediate_after: Mapping[str, Any],
@@ -1358,8 +1373,44 @@ def _derive_verification_outcome(
     stabilized_state = _string_or_none(stabilized.get("state"))
     if not before_state or not immediate_state or not stabilized_state:
         return "evidence_unavailable"
-    failed_states = {"failed", "canceled"}
+    failed_states = {"failed", "canceled", "terminated"}
     resolved_states = {"completed"}
+    if action_kind in {
+        "execution.cancel",
+        "execution.force_terminate",
+        "session.cancel",
+        "session.terminate",
+    }:
+        return (
+            "verified_resolved"
+            if stabilized_state in {"canceled", "terminated"}
+            else "verified_no_change"
+            if before_state == stabilized_state
+            else "verification_failed"
+        )
+    if action_kind == "execution.pause":
+        return (
+            "verified_resolved"
+            if stabilized_state in {"paused", "suspended"}
+            else "verified_no_change"
+            if before_state == stabilized_state
+            else "verification_failed"
+        )
+    if action_kind in {
+        "execution.resume",
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+    }:
+        run_changed = _string_or_none(before.get("currentRunId")) != _string_or_none(
+            stabilized.get("currentRunId")
+        )
+        resumed = before_state in {"paused", "failed", "canceled"} and stabilized_state in {
+            "running",
+            "executing",
+            "completed",
+        }
+        if run_changed or resumed:
+            return "verified_resolved"
     if before_state not in failed_states and stabilized_state in failed_states:
         return "regressed"
     if stabilized_state in resolved_states and before_state not in resolved_states:

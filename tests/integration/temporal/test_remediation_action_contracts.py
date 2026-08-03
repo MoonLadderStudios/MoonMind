@@ -67,6 +67,7 @@ async def test_verification_outcome_is_derived_from_fresh_evidence(
 
     assert (
         _derive_verification_outcome(
+            action_kind="workload.restart_helper_container",
             action_status=status,
             before=snapshot(before),
             immediate_after=snapshot(after),

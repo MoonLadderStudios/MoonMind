@@ -7814,7 +7814,7 @@ function RemediationRelationshipsPanel({
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected', approvalStrength: 'standard' | 'high_risk') => void;
   approvalBusy: boolean;
   showEmpty: boolean;
 }) {
@@ -7864,15 +7864,15 @@ function RemediationRelationshipsPanel({
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved', item.approvalState!.requiredApprovalStrength === 'high_risk' ? 'high_risk' : 'standard')}
                     >
-                      Approve remediation action
+                      {item.approvalState.requiredApprovalStrength === 'high_risk' ? 'Confirm high-risk action' : 'Approve remediation action'}
                     </button>
                     <button
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected', 'standard')}
                     >
                       Reject remediation action
                     </button>
@@ -7944,15 +7944,15 @@ function RemediationRelationshipsPanel({
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved', item.approvalState!.requiredApprovalStrength === 'high_risk' ? 'high_risk' : 'standard')}
                     >
-                      Approve remediation action
+                      {item.approvalState.requiredApprovalStrength === 'high_risk' ? 'Confirm high-risk action' : 'Approve remediation action'}
                     </button>
                     <button
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected', 'standard')}
                     >
                       Reject remediation action
                     </button>
@@ -9108,17 +9108,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      approvalStrength,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      approvalStrength: 'standard' | 'high_risk';
     }) => {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify({ decision, approvalStrength }),
         },
       );
       if (!response.ok) {
@@ -10463,9 +10465,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, approvalStrength) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision, approvalStrength });
               }}
             />
           ) : null}

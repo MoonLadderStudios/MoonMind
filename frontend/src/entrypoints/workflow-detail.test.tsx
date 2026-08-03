@@ -6660,6 +6660,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(approvalCall).toBeTruthy();
       expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
         decision: 'approved',
+        approvalStrength: 'standard',
       });
     });
 
