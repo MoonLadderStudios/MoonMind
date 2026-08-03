@@ -474,6 +474,25 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
     )
 
 
+def _policy_bound_checkpoint() -> tuple[OmnigentCheckpointIdentity, dict]:
+    snapshot = compile_policy_snapshot(
+        policy_id="codex-static",
+        version=1,
+        document=policy_document(),
+        validation={"valid": True, "diagnostics": []},
+    )
+    return _checkpoint().model_copy(
+        update={
+            "policy_id": snapshot["policyId"],
+            "policy_version": snapshot["policyVersion"],
+            "policy_ref": snapshot["policyRef"],
+            "policy_digest": snapshot["policyDigest"],
+            "policy_snapshot_ref": snapshot["snapshotRef"],
+            "policy_validation": snapshot["validation"],
+        }
+    ), snapshot
+
+
 def test_legacy_checkpoint_without_effective_launch_ref_remains_loadable() -> None:
     payload = _checkpoint().model_dump(by_alias=True, mode="json")
     payload.pop("effectiveLaunchRef")
@@ -535,6 +554,23 @@ def test_restore_rejects_checkpoint_bound_to_a_different_policy_snapshot() -> No
     assert "policy_authority_mismatch" in validation.reasons
 
 
+def test_restore_rejects_missing_run_bound_policy_snapshot() -> None:
+    checkpoint = _checkpoint()
+
+    validation = validate_restore_material(
+        checkpoint,
+        workflow_id="workflow-1", run_id="run-1", logical_step_id="step-1",
+        step_execution_id="step-execution-1", attempt_ordinal=1,
+        boundary="after_execution", provider_profile_id="codex",
+        credential_generation=3, repository_baseline="abc123",
+        repository_head="def456", artifact_reader=lambda _ref: b"missing",
+        policy_snapshot=None,
+    )
+
+    assert validation.valid is False
+    assert "policy_authority_missing" in validation.reasons
+
+
 def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> None:
     payloads = {
         "artifact://external-state": b"external",
@@ -543,7 +579,8 @@ def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> N
         "artifact://instructions": b"instructions",
         "artifact://context": b"context",
     }
-    checkpoint = _checkpoint().model_copy(
+    checkpoint, policy_snapshot = _policy_bound_checkpoint()
+    checkpoint = checkpoint.model_copy(
         update={
             "external_state_digest": "sha256:" + hashlib.sha256(b"external").hexdigest(),
             "head_digest": "sha256:" + hashlib.sha256(b"head").hexdigest(),
@@ -566,6 +603,7 @@ def test_complete_checkpoint_validates_and_compiles_cold_restore_material() -> N
         repository_baseline="abc123",
         repository_head="def456",
         artifact_reader=payloads.__getitem__,
+        policy_snapshot=policy_snapshot,
     )
     material = materialize_cold_restore_inputs(checkpoint, validation)
 
@@ -596,6 +634,7 @@ def test_restore_validation_reports_bounded_independent_denial_reasons() -> None
         repository_baseline="different",
         repository_head="different",
         artifact_reader=lambda _ref: b"wrong",
+        policy_snapshot=None,
     )
 
     assert validation.valid is False
@@ -1762,6 +1801,7 @@ async def test_cold_restore_intent_materializes_clean_pinned_workspace(tmp_path)
         repository_baseline=baseline,
         repository_head="def456",
         artifact_reader=lambda _ref: b"payload",
+        policy_snapshot=None,
     )
     # Digest mismatches are irrelevant to this boundary test; use the already
     # validated capability shape while preserving the production materializer.

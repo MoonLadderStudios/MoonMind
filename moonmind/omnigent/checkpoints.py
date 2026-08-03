@@ -298,12 +298,14 @@ def validate_restore_material(
     repository_baseline: str,
     repository_head: str,
     artifact_reader: ArtifactReader,
-    policy_snapshot: Mapping[str, Any] | None = None,
+    policy_snapshot: Mapping[str, Any] | None,
 ) -> OmnigentCheckpointValidation:
     """Dereference and digest-check the complete authority set before restore."""
 
     reasons: list[str] = []
-    if policy_snapshot is not None:
+    if policy_snapshot is None:
+        reasons.append("policy_authority_missing")
+    else:
         from moonmind.omnigent.policies import validate_policy_authority_evidence
 
         try:
