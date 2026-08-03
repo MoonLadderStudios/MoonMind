@@ -188,7 +188,6 @@ async def resolve_default_agent_selection(
             )
         document = version.document or {}
         source = document.get("source", {}) if isinstance(document, dict) else {}
-        snapshot = version.upstream_snapshot or {}
         bundle_import = (version.rollout_metadata or {}).get("bundleImport") or {}
         imported_agent = bundle_import.get("upstreamAgent") or {}
         agent_id = _clean(source.get("upstreamId")) or _clean(imported_agent.get("id")) or None
