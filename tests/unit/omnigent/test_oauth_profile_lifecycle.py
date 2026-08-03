@@ -2046,7 +2046,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
 
 
-async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[dict]]:
+async def _drive_authority_chain_coordinator(
+    execute,
+) -> tuple[list[str], list[dict], dict]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
     Returns the ordered lifecycle event-type stream and every emitted
@@ -2130,6 +2132,18 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             return {
                 "hostId": "host-1",
                 "workspacePath": "/workspaces/run",
+                "egressAttestation": {
+                    "profileRef": "omnigent-egress@1",
+                    "profileDigest": "sha256:" + "1" * 64,
+                    "backendRef": "omnigent-host-runtime",
+                    "enforcerImplementation": "squid@1",
+                    "networkRef": "moonmind_sandbox-egress-network",
+                    "gatewayRef": "omnigent-egress-proxy",
+                    "appliedRuleDigest": "sha256:" + "2" * 64,
+                    "attachmentRef": "container:host-1",
+                    "validationState": "attested",
+                    "validatedAt": "2026-08-03T00:00:00Z",
+                },
                 # Bounded, credential-free resolution evidence as produced by the
                 # real runtime; the coordinator folds this into the authority chain.
                 "workspaceResolution": {
@@ -2188,7 +2202,7 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             command_behavior={},
         )
     )
-    await coordinator.execute(
+    coordinator_result = await coordinator.execute(
         AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
@@ -2213,7 +2227,7 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             },
         )
     )
-    return ordered, authority_metadata
+    return ordered, authority_metadata, dict(coordinator_result.metadata or {})
 
 
 @pytest.mark.asyncio
@@ -2232,7 +2246,9 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
             metadata={"pushRef": "artifact://push-1"},
         )
 
-    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
+    ordered, authority_metadata, result_metadata = (
+        await _drive_authority_chain_coordinator(execute)
+    )
 
     assert "authority_chain" in ordered
     assert ordered.index("authority_chain") < ordered.index("terminal")
@@ -2251,6 +2267,14 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
     assert chain["terminal"]["releaseOrdering"][-1] == "terminal"
     assert chain["terminal"]["cleanupCompleted"] is True
     assert chain["runtime"]["hostMode"] == "on_demand_docker"
+    assert chain["runtime"]["egress"]["validationState"] == "attested"
+    assert chain["runtime"]["egress"]["attachmentRef"] == "container:host-1"
+    checkpoint_egress = result_metadata["omnigentCheckpointCapture"][
+        "egressAttestation"
+    ]
+    assert checkpoint_egress["profileRef"] == "omnigent-egress@1"
+    assert checkpoint_egress["appliedRuleDigest"] == "sha256:" + "2" * 64
+    assert checkpoint_egress["attachmentRef"] == "container:host-1"
     assert chain["terminal"]["cleanupMode"] == "on_demand_remove"
     # No credential material or raw daemon path anywhere in the projection.
     flat = repr(chain)
@@ -2276,7 +2300,9 @@ async def test_coordinator_records_returned_runner_failure_in_authority_chain() 
             retryRecommendation="retry_after_provider_cooldown",
         )
 
-    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
+    ordered, authority_metadata, _result_metadata = (
+        await _drive_authority_chain_coordinator(execute)
+    )
 
     assert len(authority_metadata) == 1
     chain = authority_metadata[0]

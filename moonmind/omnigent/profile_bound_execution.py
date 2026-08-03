@@ -611,6 +611,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         authority_result: AgentRunResult | None = None
         authority_bridge_session_id: str | None = None
         authority_cleanup_mode: str | None = None
+        preflight: Mapping[str, Any] = {}
         authority_reasons: list[dict[str, Any]] = []
         try:
             await emit("request_validated", "started")
@@ -1222,6 +1223,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
+                "egressAttestation": dict(preflight.get("egressAttestation") or {}),
                 "externalStateRef": result_metadata.get("externalStateRef"),
                 "captureManifestRef": result_metadata.get("captureManifestRef"),
                 "terminalRef": next(iter(result.output_refs), None),
@@ -1534,6 +1536,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     github_mutation_required=self._github_mutation_required(request),
                     profile_authorization=authorization_evidence,
+                    egress_attestation=(
+                        preflight.get("egressAttestation")
+                        if isinstance(preflight, Mapping)
+                        else None
+                    ),
                     result_output_refs=(
                         authority_result.output_refs
                         if authority_result is not None

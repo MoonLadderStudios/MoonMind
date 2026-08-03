@@ -139,9 +139,18 @@ def test_approved_provider_source_artifact_and_retrieval_endpoints_connect(
     "url",
     [
         "https://example.com/",
+        "https://0.0.0.1/",
+        "https://10.0.0.1/",
+        "https://100.64.0.1/",
         "https://169.254.169.254/",
+        "https://172.17.0.1/",
+        "https://192.168.0.1/",
+        "https://224.0.0.1/",
         "https://127.0.0.1/",
         "https://[::1]/",
+        "https://[fc00::1]/",
+        "https://[fe80::1]/",
+        "https://[ff02::1]/",
         "https://[::ffff:127.0.0.1]/",
         "https://host.docker.internal/",
         "https://temporal-internal/",
@@ -178,6 +187,18 @@ def test_alternate_proxy_methods_are_rejected(method: str) -> None:
     ).returncode != 0
 
 
+def test_connect_tunnel_to_unapproved_authority_is_rejected() -> None:
+    # HTTPS through an HTTP proxy uses CONNECT. Verbose output is bounded to the
+    # assertion failure and proves the gateway, rather than DNS or the client,
+    # rejected the tunnel authority.
+    result = _probe(
+        "https://example.com/",
+        curl_args=("--verbose", "--output", "/dev/null"),
+    )
+    assert result.returncode != 0
+    assert "CONNECT tunnel failed" in result.stderr or "403" in result.stderr
+
+
 def test_redirect_to_an_unapproved_destination_is_rejected() -> None:
     # Google's reviewed redirect endpoint points at a destination outside the
     # profile. Curl follows it, proving policy is re-applied to each hop.
@@ -202,6 +223,27 @@ def test_workload_has_no_docker_socket_for_child_container_bypass() -> None:
         "sh",
         "-c",
         "test ! -S /var/run/docker.sock",
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
+
+
+def test_probe_runtime_is_unprivileged_without_route_or_device_authority() -> None:
+    result = _docker(
+        "run",
+        "--rm",
+        "--network",
+        EGRESS_NETWORK_REF,
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "alpine:3.21",
+        "sh",
+        "-c",
+        "test \"$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)\" = "
+        "\"0000000000000000\"; test ! -e /dev/net/tun; "
+        "ip route add 198.51.100.0/24 via 127.0.0.1 >/dev/null 2>&1 && exit 1; "
+        "exit 0",
     )
     assert result.returncode == 0, result.stderr[-1000:]
 

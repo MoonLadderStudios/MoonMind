@@ -319,6 +319,8 @@ class OmnigentOAuthHostRuntime:
             repository=target_repository,
             mutation_required=github_mutation_required,
         )
+        egress_evidence = egress_attestation.model_dump(by_alias=True, mode="json")
+        egress_evidence["attachmentRef"] = f"container:{host_id}"
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
@@ -333,9 +335,7 @@ class OmnigentOAuthHostRuntime:
             "harness": adapter["harness"],
             "competingCredentialsPresent": False,
             "mountedTools": mounted_tool_evidence,
-            "egressAttestation": egress_attestation.model_dump(
-                by_alias=True, mode="json"
-            ),
+            "egressAttestation": egress_evidence,
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
