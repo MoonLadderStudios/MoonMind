@@ -12,9 +12,11 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
@@ -30,6 +32,7 @@ from moonmind.schemas.container_job_models import (
 from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
 )
+from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 
 pytestmark = [pytest.mark.integration]
 
@@ -400,56 +403,73 @@ async def test_attestation_fails_closed_when_selected_daemon_cannot_prove_policy
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("runtime_class", "profile"),
-    [
-        ("generic-container-job", DEFAULT_EGRESS_PROFILE),
-        ("managed-helper", DEFAULT_EGRESS_PROFILE),
-        ("static-omnigent", OMNIGENT_EGRESS_PROFILE),
-        ("on-demand-omnigent", OMNIGENT_EGRESS_PROFILE),
-    ],
-)
-async def test_named_runtime_classes_attach_only_after_live_gateway_attestation(
-    runtime_class: str, profile
+async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
+    tmp_path: Path,
 ) -> None:
-    """Exercise the shared trusted attachment boundary for every supported class."""
+    """Use the real Container Job adapter, including attestation and evidence."""
 
-    attestation = await attest_docker_egress(
-        runner=_live_runner,
-        profile=profile,
-        backend_ref=f"live-conformance:{runtime_class}",
+    published: dict[str, dict] = {}
+
+    async def publish(_request, name, data):
+        published[name] = json.loads(data)
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_live_runner,
+        evidence_publisher=publish,
     )
-    assert attestation.validation_state == "attested"
-
-    name = f"moonmind-test-{runtime_class}-{uuid.uuid4().hex[:8]}"
+    request = _live_backend_request(tmp_path, command=["sleep", "120"])
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    request.egress_attestation_ref = created.diagnostics_ref
     try:
-        created = _docker(
-            "create",
-            "--name",
-            name,
-            "--label",
-            "moonmind.test.scope=MoonLadderStudios/MoonMind#3516",
-            "--network",
-            attestation.network_ref,
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "alpine:3.21",
-            "sleep",
-            "120",
-        )
-        assert created.returncode == 0, created.stderr[-1000:]
         inspected = _docker(
             "inspect",
             "--format",
             "{{json .NetworkSettings.Networks}}",
-            name,
+            created.container_ref,
         )
         assert inspected.returncode == 0, inspected.stderr[-1000:]
-        assert set(json.loads(inspected.stdout)) == {attestation.network_ref}
+        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
+        evidence = published[f"{request.job_id}-egress-attestation.json"]
+        assert evidence["attestation"]["validationState"] == "attested"
+        assert evidence["attachmentIdentity"] == created.container_ref
     finally:
-        _docker("rm", "--force", name)
+        await backend.remove_container(request)
+        await backend.cleanup(request)
+
+
+@pytest.mark.asyncio
+async def test_managed_helper_crosses_its_live_trusted_attestation_boundary() -> None:
+    """Exercise the real managed-helper adapter instead of relabelling raw Docker."""
+
+    launcher = DockerWorkloadLauncher()
+    request = SimpleNamespace(
+        profile=SimpleNamespace(network_policy="restricted_egress")
+    )
+    attestation = await launcher._attest_egress_before_launch(request)
+    assert attestation is not None
+    assert attestation.validation_state == "attested"
+    assert attestation.network_ref == EGRESS_NETWORK_REF
+    assert attestation.backend_ref == "docker-workload-launcher"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_mode", ["static_compose", "on_demand_docker"])
+async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
+    host_mode: str,
+) -> None:
+    """Prove both Omnigent modes enter the host adapter's trusted boundary."""
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    attestation = await runtime._attest_egress(
+        {"hostMode": host_mode, "networkRef": OMNIGENT_EGRESS_PROFILE.network_ref}
+    )
+    assert attestation.validation_state == "attested"
+    assert attestation.profile_ref == OMNIGENT_EGRESS_PROFILE.ref
+    assert attestation.network_ref == OMNIGENT_EGRESS_PROFILE.network_ref
+    assert attestation.backend_ref == "omnigent-host-runtime"
 
 
 @pytest.mark.asyncio
