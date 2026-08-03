@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from moonmind.omnigent.policies import bind_approval_request
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationPermissionSet,
@@ -71,6 +72,119 @@ def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
     )
 
     assert expected == {item["actionKind"] for item in catalog}
+
+
+def _policy_snapshot(decision: str) -> dict:
+    rule = {"decision": decision, "reason": f"test-{decision}"}
+    if decision == "approval_required":
+        rule.update(approvalClass="operations", reviewerRule="workflow-owner")
+    return {
+        "policyId": "policy-1",
+        "policyVersion": 7,
+        "policyRef": "policy-1@7",
+        "policyDigest": "sha256:" + "a" * 64,
+        "snapshotRef": "omnigent-policy:sha256:" + "b" * 64,
+        "validation": {"valid": True},
+        "boundaries": {"approvals": {"actions": {"host.restart": rule}}},
+    }
+
+
+async def test_production_policy_boundary_allows_and_stamps_exact_authority() -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    wrapped = TemporalRemediationControlPlane._policy_bound(adapter)
+    result = await wrapped(
+        {"actionKind": "host.restart", "policySnapshot": _policy_snapshot("allow")},
+        {},
+        _production_target_health(),
+    )
+
+    assert called is True
+    assert result["status"] == "accepted"
+    assert set(result["policyAuthority"]) == {
+        "policyId", "policyVersion", "policyRef", "policyDigest",
+        "snapshotRef", "validation",
+    }
+
+
+@pytest.mark.parametrize("snapshot", [None, _policy_snapshot("deny")])
+async def test_production_policy_boundary_denies_missing_or_denied_authority(snapshot) -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    request = {"actionKind": "host.restart"}
+    if snapshot is not None:
+        request["policySnapshot"] = snapshot
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        request, {}, _production_target_health()
+    )
+
+    assert called is False
+    assert result["status"] == "denied"
+
+
+async def test_production_policy_boundary_binds_then_revalidates_approval() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    wrapped = TemporalRemediationControlPlane._policy_bound(adapter)
+    pending = await wrapped(
+        {"actionKind": "host.restart", "policySnapshot": snapshot},
+        {},
+        _production_target_health(),
+    )
+    assert pending["status"] == "approval_required"
+    assert pending["approvalBinding"]["targetExpectedState"] == "target-run"
+    assert called is False
+
+    approved = await wrapped(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": pending["approvalBinding"],
+        },
+        {},
+        _production_target_health(),
+    )
+    assert approved["status"] == "accepted"
+    assert called is True
+
+
+async def test_production_policy_boundary_rejects_stale_policy_and_target_bindings() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    binding = bind_approval_request(
+        snapshot, "host.restart", target_expected_state="old-run"
+    )
+
+    async def adapter(*_args):
+        raise AssertionError("stale approval must fail before side effects")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": binding,
+        },
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_approval_binding_stale"
+    assert "targetExpectedState" in result["detail"]
 
 
 async def test_control_plane_executor_dispatches_typed_adapter_with_evidence() -> None:

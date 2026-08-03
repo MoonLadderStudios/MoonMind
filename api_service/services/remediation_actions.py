@@ -9,6 +9,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
+from moonmind.omnigent.policies import (
+    bind_approval_request,
+    policy_authority_evidence,
+    resolve_action,
+    validate_approval_binding,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
@@ -363,7 +369,103 @@ class TemporalRemediationControlPlane:
 
         return execute
 
-    def handlers(self) -> dict[str, ActionHandler]:
+    @staticmethod
+    def _policy_bound(handler: ActionHandler) -> ActionHandler:
+        """Fail closed on the exact run-bound policy before any side effect."""
+
+        async def execute(
+            action_request: Mapping[str, Any],
+            guard_result: Mapping[str, Any],
+            target: RemediationTargetHealthSnapshot,
+        ) -> Mapping[str, Any]:
+            snapshot = action_request.get("policySnapshot")
+            if not isinstance(snapshot, Mapping):
+                return {
+                    "status": "denied",
+                    "reason": "omnigent_policy_snapshot_required",
+                    "beforeEvidenceRefs": [],
+                    "afterEvidenceRefs": [],
+                }
+
+            try:
+                authority = policy_authority_evidence(snapshot)
+            except ValueError as exc:
+                return {
+                    "status": "denied",
+                    "reason": "omnigent_policy_snapshot_invalid",
+                    "detail": str(exc),
+                    "beforeEvidenceRefs": [],
+                    "afterEvidenceRefs": [],
+                }
+
+            action = str(action_request.get("actionKind") or "").strip()
+            decision = resolve_action(snapshot, action)
+            if decision["decision"] == "deny":
+                return {
+                    "status": "denied",
+                    "reason": "omnigent_policy_action_denied",
+                    "policyDecision": decision,
+                    "policyAuthority": authority,
+                    "beforeEvidenceRefs": [],
+                    "afterEvidenceRefs": [],
+                }
+
+            # The run id is the optimistic target identity used by the mutation
+            # guard. A newly requested approval is durably returned with the
+            # action result; an approved retry must present that exact binding.
+            current_target_state = target.current_run_id
+            if decision["decision"] == "approval_required":
+                binding = action_request.get("approvalBinding")
+                if not isinstance(binding, Mapping):
+                    try:
+                        binding = bind_approval_request(
+                            snapshot,
+                            action,
+                            target_expected_state=current_target_state,
+                        )
+                    except ValueError as exc:
+                        return {
+                            "status": "denied",
+                            "reason": "omnigent_approval_binding_invalid",
+                            "detail": str(exc),
+                            "policyAuthority": authority,
+                            "beforeEvidenceRefs": [],
+                            "afterEvidenceRefs": [],
+                        }
+                    return {
+                        "status": "approval_required",
+                        "reason": "omnigent_policy_approval_required",
+                        "approvalBinding": binding,
+                        "policyDecision": decision,
+                        "policyAuthority": authority,
+                        "beforeEvidenceRefs": [],
+                        "afterEvidenceRefs": [],
+                    }
+                try:
+                    validate_approval_binding(
+                        binding,
+                        snapshot,
+                        target_current_state=current_target_state,
+                    )
+                except ValueError as exc:
+                    return {
+                        "status": "denied",
+                        "reason": "omnigent_approval_binding_stale",
+                        "detail": str(exc),
+                        "policyAuthority": authority,
+                        "beforeEvidenceRefs": [],
+                        "afterEvidenceRefs": [],
+                    }
+
+            result = dict(await handler(action_request, guard_result, target))
+            result["policyAuthority"] = authority
+            if decision["decision"] == "approval_required":
+                result["approvalBinding"] = dict(action_request["approvalBinding"])
+            return result
+
+        return execute
+
+    def handlers(self, *, enforce_policy: bool = False) -> dict[str, ActionHandler]:
         handlers = {
             "execution.pause": self.execution_control,
             "execution.resume": self.execution_control,
@@ -390,7 +492,10 @@ class TemporalRemediationControlPlane:
             "target.annotate": self.evidence_only,
             "target.verify": self.evidence_only,
         }
-        return {kind: self._typed(handler) for kind, handler in handlers.items()}
+        typed = {kind: self._typed(handler) for kind, handler in handlers.items()}
+        if not enforce_policy:
+            return typed
+        return {kind: self._policy_bound(handler) for kind, handler in typed.items()}
 
 
 def build_remediation_action_executor(
@@ -411,7 +516,9 @@ def build_remediation_action_executor(
             CheckpointBranchService(session) if session is not None else None
         ),
     )
-    return MoonMindControlPlaneRemediationActionExecutor(plane.handlers())
+    return MoonMindControlPlaneRemediationActionExecutor(
+        plane.handlers(enforce_policy=True)
+    )
 
 
 __all__ = ["TemporalRemediationControlPlane", "build_remediation_action_executor"]
