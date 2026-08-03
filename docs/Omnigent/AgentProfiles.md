@@ -16,10 +16,11 @@ startup and the durable active default profile is the launch-boundary authority,
 with the `OMNIGENT_DEFAULT_AGENT_NAME` fallback retained only when durable active
 state is absent (its use recorded, conflicts fail closed).
 
-Dashboard authoring selectors, transactional snapshot use by workflow and
-continuation submissions, and bundle import/publish into the upstream endpoint
-remain desired state until their corresponding production boundaries and
-controlling tests land.
+Dashboard profile management, readiness-aware workflow and schedule selectors,
+transactional immutable snapshots, bounded bundle import, smoke validation, and
+durable bootstrap authority are implemented. Checkpoint-branch and remediation
+authoring preserve the originating immutable agent-profile and Provider Profile
+selection so continuation cannot silently substitute runtime authority.
 
 ## Purpose and identities
 

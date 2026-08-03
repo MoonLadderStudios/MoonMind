@@ -6764,6 +6764,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       prevProviderProfileRef.current = draft.runtime.profileId;
       setProviderProfile(draft.runtime.profileId);
     }
+    if (draft.agentProfile?.profileId) {
+      setAgentProfile(draft.agentProfile.profileId);
+    }
     if (draft.runtime?.model) {
       setModel(draft.runtime.model);
       setModelManualOverride(true);
@@ -11067,7 +11070,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(runtime === "omnigent" && agentProfile
-          ? { agentProfile: { profileId: agentProfile } }
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
+                  ? { version: remediationDraft.agentProfile.version }
+                  : {}),
+                providerProfileRef: providerProfile,
+              },
+            }
           : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }
@@ -11124,7 +11135,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : {}),
         targetRuntime: normalizedRuntime,
         ...(normalizedRuntime === "omnigent" && agentProfile
-          ? { agentProfile: { profileId: agentProfile } }
+          ? {
+              agentProfile: {
+                profileId: agentProfile,
+                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
+                  ? { version: remediationDraft.agentProfile.version }
+                  : {}),
+                providerProfileRef: providerProfile,
+              },
+            }
           : {}),
         ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
           ? {

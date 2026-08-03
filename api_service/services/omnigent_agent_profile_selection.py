@@ -20,8 +20,52 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
 )
+from api_service.services.provider_profile_readiness import provider_profile_launch_ready
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+
+def _enforce_override_ceilings(
+    *, defaults: Mapping[str, Any], overrides: Mapping[str, Any]
+) -> None:
+    """Reject authored values that exceed ceilings stored in the version."""
+    rag_defaults = defaults.get("rag") or {}
+    rag_overrides = overrides.get("rag") or {}
+    for key in ("maxTokens", "maxLatencyMs"):
+        ceiling = rag_defaults.get(key)
+        requested = rag_overrides.get(key)
+        if ceiling is not None and requested is not None and requested > ceiling:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"rag.{key} override exceeds the selected profile policy ceiling",
+            )
+
+    capture_defaults = defaults.get("capture") or {}
+    capture_overrides = overrides.get("capture") or {}
+    retention_ceiling = capture_defaults.get("retentionDays")
+    requested_retention = capture_overrides.get("retentionDays")
+    if (
+        retention_ceiling is not None
+        and requested_retention is not None
+        and requested_retention > retention_ceiling
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "capture.retentionDays override exceeds the selected profile policy ceiling",
+        )
+
+    publish_rank = {"none": 0, "draft": 1, "ready": 2, "auto": 3}
+    publish_default = (defaults.get("publish") or {}).get("mode")
+    publish_override = (overrides.get("publish") or {}).get("mode")
+    if (
+        publish_default in publish_rank
+        and publish_override in publish_rank
+        and publish_rank[publish_override] > publish_rank[publish_default]
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "publish.mode override exceeds the selected profile policy ceiling",
+        )
 
 
 async def resolve_agent_profile_snapshot(
@@ -84,6 +128,7 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"unsupported profile overrides: {', '.join(sorted(rejected))}",
         )
+    _enforce_override_ceilings(defaults=document, overrides=overrides)
     for key, value in overrides.items():
         if not isinstance(value, Mapping):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{key} override must be an object")
@@ -100,9 +145,28 @@ async def resolve_agent_profile_snapshot(
         provider_query = provider_query.where(
             ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
         )
+    requested_provider_profile = str(
+        selection.get("providerProfileRef") or selection.get("providerProfileId") or ""
+    ).strip()
+    if not requested_provider_profile:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.providerProfileRef is required",
+        )
+    provider_query = provider_query.where(
+        ManagedAgentProviderProfile.profile_id == requested_provider_profile
+    )
     compatible_provider = await session.scalar(provider_query.limit(1))
     if compatible_provider is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "no enabled compatible Provider Profile")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "selected Provider Profile is not enabled or compatible",
+        )
+    if not provider_profile_launch_ready(compatible_provider):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "selected Provider Profile is not launch ready or has no capacity",
+        )
 
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",

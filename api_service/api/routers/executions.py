@@ -11953,6 +11953,24 @@ async def create_remediation_checkpoint_branch(
     instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -13447,6 +13465,15 @@ async def create_checkpoint_branch(
             "runtimeContextPolicy": payload.runtime_context_policy,
             "publishMode": payload.publish_mode,
             "gitWorkBranch": payload.git_work_branch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
         },
     }
     session.add(
