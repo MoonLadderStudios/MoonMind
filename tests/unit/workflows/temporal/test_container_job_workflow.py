@@ -580,6 +580,33 @@ async def test_terminal_projection_carries_timing_and_events(
 
 
 @pytest.mark.asyncio
+async def test_terminal_projection_carries_post_cleanup_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.publish_evidence":
+            return ContainerJobActivityResult(diagnosticsRef="art:runtime")
+        if name == "container_job.cleanup":
+            assert request.publication.diagnostics_ref == "art:runtime"
+            return ContainerJobActivityResult(diagnosticsRef="art:lifecycle")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["cleanup"] == {
+        "state": "succeeded",
+        "diagnosticsRef": "art:lifecycle",
+    }
+    assert projections[-1].cleanup_outcome.diagnostics_ref == "art:lifecycle"
+
+
+@pytest.mark.asyncio
 async def test_image_observation_threads_into_terminal_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

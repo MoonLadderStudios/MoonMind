@@ -2078,8 +2078,6 @@ class DockerContainerJobBackend:
             + hashlib.sha256(client_address.encode()).hexdigest(),
             "deniedConnectionCount": len(denial_diagnostics),
             "denialDiagnostics": list(denial_diagnostics),
-            "cleanupResult": "pending",
-            "reconciliationResult": "not-required",
         }
 
     async def _persist_live_events_journal(
@@ -2134,4 +2132,53 @@ class DockerContainerJobBackend:
                 ContainerJobFailureClass.CREDENTIAL_CLEANUP_FAILED,
                 "ephemeral registry credential directory could not be removed",
             ) from exc
-        return ContainerJobActivityResult()
+
+        diagnostics_ref = None
+        if (
+            request.request.spec.network_mode == "bridge"
+            and request.container_ref is not None
+        ):
+            # remove_container runs immediately before cleanup. Observe that no
+            # job-owned attachment remains rather than turning an attempted
+            # delete into terminal evidence. Filters are ownership scoped, so
+            # this check neither discovers nor mutates another job's resource.
+            code, stdout, _ = await self._runner(
+                (
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    f"label={LABEL_CONTAINER_JOB}={request.job_id}",
+                    "--filter",
+                    f"label={LABEL_OWNERSHIP}={request.ownership_token}",
+                )
+            )
+            if code or stdout.strip():
+                raise RuntimeError(
+                    "restricted-egress workload cleanup could not be attested"
+                )
+            if self._publish is None:
+                raise RuntimeError(
+                    "restricted-egress lifecycle evidence publisher is unavailable"
+                )
+            lifecycle = {
+                "schemaVersion": 1,
+                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+                "workloadAttachmentIdentity": request.container_ref
+                or self._name(request),
+                "runtimeDiagnosticsRef": (
+                    request.publication.diagnostics_ref
+                    if request.publication is not None
+                    else None
+                ),
+                "reconciliationResult": "succeeded",
+                "cleanupResult": "succeeded",
+            }
+            diagnostics_ref = await self._publish(
+                request,
+                f"{request.job_id}-egress-lifecycle.json",
+                json.dumps(
+                    lifecycle, sort_keys=True, separators=(",", ":")
+                ).encode(),
+            )
+        return ContainerJobActivityResult(diagnosticsRef=diagnostics_ref)

@@ -284,15 +284,25 @@ class MoonMindContainerJobWorkflow:
             artifacts_ref = published.artifacts_ref
             events_ref = published.events_ref
 
+        # Cleanup publishes the observed post-removal restricted-egress record.
+        # Thread the runtime diagnostics ref into that Activity so the two
+        # immutable artifacts remain correlated without embedding either body
+        # in workflow history.
+        request.publication = publication
+
         await self._project(request, ContainerJobState.CLEANING_UP)
         removed = await self._best_effort("container_job.remove_container", request)
         cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(
-            state="succeeded" if removed is not None and cleaned is not None else "failed"
+            state=(
+                "succeeded"
+                if removed is not None and cleaned is not None
+                else "failed"
+            ),
+            diagnosticsRef=cleaned.diagnostics_ref if cleaned is not None else None,
         )
 
         self._state = terminal_state
-        request.publication = publication
         request.cleanup_outcome = cleanup
         request.logs_ref = logs_ref
         request.artifacts_ref = artifacts_ref

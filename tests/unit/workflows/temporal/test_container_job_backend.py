@@ -20,7 +20,10 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
-from moonmind.schemas.container_job_models import ContainerJobActivityRequest
+from moonmind.schemas.container_job_models import (
+    AuxiliaryOutcome,
+    ContainerJobActivityRequest,
+)
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
     LABEL_CORRELATION,
@@ -257,6 +260,47 @@ async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None
     assert evidence["deniedConnectionCount"] == 1
     assert evidence["denialDiagnostics"] == [
         "denied 169.254.169.254:443 TCP_DENIED/403"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> None:
+    published: list[tuple[str, dict]] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"", b""
+        raise AssertionError(args)
+
+    async def publish(_request, name, data):
+        published.append((name, json.loads(data)))
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+    request.publication = AuxiliaryOutcome(
+        state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
+    )
+
+    result = await backend.cleanup(request)
+
+    assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
+    assert published == [
+        (
+            f"{JOB_ID}-egress-lifecycle.json",
+            {
+                "cleanupResult": "succeeded",
+                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+                "reconciliationResult": "succeeded",
+                "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
+                "schemaVersion": 1,
+                "workloadAttachmentIdentity": "owned-workload",
+            },
+        )
     ]
 
 
