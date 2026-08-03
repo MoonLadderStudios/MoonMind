@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -541,6 +541,8 @@ class RemediationMutationGuardPolicy:
     lock_ttl_seconds: int = 1800
     max_actions_per_target: int = 3
     max_attempts_per_action_kind: int = 2
+    max_branches_per_target: int = 2
+    max_total_elapsed_seconds: int = 3600
     cooldown_seconds: int = 300
     allow_nested_remediation: bool = False
     allow_self_target: bool = False
@@ -596,6 +598,10 @@ class RemediationActionBudgetDecision:
     max_actions_per_target: int
     attempts_for_action_kind: int
     max_attempts_per_action_kind: int
+    branches_used: int
+    max_branches_per_target: int
+    elapsed_seconds: int
+    max_total_elapsed_seconds: int
     cooldown_seconds: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -605,6 +611,10 @@ class RemediationActionBudgetDecision:
             "maxActionsPerTarget": self.max_actions_per_target,
             "attemptsForActionKind": self.attempts_for_action_kind,
             "maxAttemptsPerActionKind": self.max_attempts_per_action_kind,
+            "branchesUsed": self.branches_used,
+            "maxBranchesPerTarget": self.max_branches_per_target,
+            "elapsedSeconds": self.elapsed_seconds,
+            "maxTotalElapsedSeconds": self.max_total_elapsed_seconds,
             "cooldownSeconds": self.cooldown_seconds,
         }
 
@@ -1268,6 +1278,7 @@ class RemediationMutationGuardService:
         )
         self._last_attempt_by_shape: dict[tuple[str, str, str], datetime] = {}
         self._last_target_activity: dict[str, datetime] = {}
+        self._started_at_by_target: dict[str, datetime] = {}
 
     async def release_lock(self, lock_id: str) -> None:
         """Mark a lock as lost/released so the holder cannot silently continue."""
@@ -1317,6 +1328,7 @@ class RemediationMutationGuardService:
             now=current_time,
         )
         self._cleanup_state(now=current_time)
+        elapsed_seconds = self._elapsed_seconds(target_id, current_time)
         redacted_parameters = _redact_payload(parameters or {})
         shape_hash = _request_shape_hash(
             action_kind=normalized_action,
@@ -1344,6 +1356,10 @@ class RemediationMutationGuardService:
                 (target_id, normalized_action)
             ],
             max_attempts_per_action_kind=active_policy.max_attempts_per_action_kind,
+            branches_used=self._branch_count(target_id),
+            max_branches_per_target=active_policy.max_branches_per_target,
+            elapsed_seconds=elapsed_seconds,
+            max_total_elapsed_seconds=active_policy.max_total_elapsed_seconds,
             cooldown_seconds=active_policy.cooldown_seconds,
         )
         nested_decision = _nested_decision(
@@ -1544,7 +1560,12 @@ class RemediationMutationGuardService:
             decision = (
                 "escalate"
                 if budget_reason
-                in {"action_budget_exhausted", "action_kind_attempt_budget_exhausted"}
+                in {
+                    "action_budget_exhausted",
+                    "action_kind_attempt_budget_exhausted",
+                    "branch_budget_exhausted",
+                    "total_elapsed_budget_exhausted",
+                }
                 else "denied"
             )
             return self._guard_result(
@@ -1567,6 +1588,7 @@ class RemediationMutationGuardService:
             )
 
         self._action_counts_by_target[target_id] += 1
+        self._started_at_by_target.setdefault(target_id, current_time)
         self._attempts_by_target_action[(target_id, normalized_action)] += 1
         self._last_target_activity[target_id] = current_time
         self._last_attempt_by_shape[(target_id, normalized_action, shape_hash)] = (
@@ -1580,6 +1602,14 @@ class RemediationMutationGuardService:
                 (target_id, normalized_action)
             ],
             max_attempts_per_action_kind=active_policy.max_attempts_per_action_kind,
+            branches_used=self._branch_count(target_id)
+            + int(
+                normalized_action
+                == "checkpoint_branch.create_from_remediation_context"
+            ),
+            max_branches_per_target=active_policy.max_branches_per_target,
+            elapsed_seconds=self._elapsed_seconds(target_id, current_time),
+            max_total_elapsed_seconds=active_policy.max_total_elapsed_seconds,
             cooldown_seconds=active_policy.cooldown_seconds,
         )
         return await self._record_guard_result(
@@ -1685,6 +1715,10 @@ class RemediationMutationGuardService:
             max_actions_per_target=policy.max_actions_per_target,
             attempts_for_action_kind=attempts,
             max_attempts_per_action_kind=policy.max_attempts_per_action_kind,
+            branches_used=self._branch_count(target_workflow_id),
+            max_branches_per_target=policy.max_branches_per_target,
+            elapsed_seconds=self._elapsed_seconds(target_workflow_id, now),
+            max_total_elapsed_seconds=policy.max_total_elapsed_seconds,
             cooldown_seconds=policy.cooldown_seconds,
         )
         if actions_used >= policy.max_actions_per_target:
@@ -1695,9 +1729,26 @@ class RemediationMutationGuardService:
                     max_actions_per_target=policy.max_actions_per_target,
                     attempts_for_action_kind=attempts,
                     max_attempts_per_action_kind=policy.max_attempts_per_action_kind,
+                    branches_used=base.branches_used,
+                    max_branches_per_target=policy.max_branches_per_target,
+                    elapsed_seconds=base.elapsed_seconds,
+                    max_total_elapsed_seconds=policy.max_total_elapsed_seconds,
                     cooldown_seconds=policy.cooldown_seconds,
                 ),
                 "action_budget_exhausted",
+            )
+        if base.elapsed_seconds >= policy.max_total_elapsed_seconds:
+            return (
+                replace(base, status="total_elapsed_budget_exhausted"),
+                "total_elapsed_budget_exhausted",
+            )
+        if (
+            action_kind == "checkpoint_branch.create_from_remediation_context"
+            and base.branches_used >= policy.max_branches_per_target
+        ):
+            return (
+                replace(base, status="branch_budget_exhausted"),
+                "branch_budget_exhausted",
             )
         if attempts >= policy.max_attempts_per_action_kind:
             return (
@@ -1707,6 +1758,10 @@ class RemediationMutationGuardService:
                     max_actions_per_target=policy.max_actions_per_target,
                     attempts_for_action_kind=attempts,
                     max_attempts_per_action_kind=policy.max_attempts_per_action_kind,
+                    branches_used=base.branches_used,
+                    max_branches_per_target=policy.max_branches_per_target,
+                    elapsed_seconds=base.elapsed_seconds,
+                    max_total_elapsed_seconds=policy.max_total_elapsed_seconds,
                     cooldown_seconds=policy.cooldown_seconds,
                 ),
                 "action_kind_attempt_budget_exhausted",
@@ -1726,11 +1781,31 @@ class RemediationMutationGuardService:
                     max_actions_per_target=policy.max_actions_per_target,
                     attempts_for_action_kind=attempts,
                     max_attempts_per_action_kind=policy.max_attempts_per_action_kind,
+                    branches_used=base.branches_used,
+                    max_branches_per_target=policy.max_branches_per_target,
+                    elapsed_seconds=base.elapsed_seconds,
+                    max_total_elapsed_seconds=policy.max_total_elapsed_seconds,
                     cooldown_seconds=policy.cooldown_seconds,
                 ),
                 "action_cooldown_active",
             )
         return (base, None)
+
+    def _branch_count(self, target_workflow_id: str) -> int:
+        return sum(
+            1
+            for entry in self._ledger.values()
+            if entry.result.target_workflow_id == target_workflow_id
+            and entry.result.action_kind
+            == "checkpoint_branch.create_from_remediation_context"
+            and entry.result.executable
+        )
+
+    def _elapsed_seconds(self, target_workflow_id: str, now: datetime) -> int:
+        started_at = self._started_at_by_target.get(target_workflow_id)
+        if started_at is None:
+            return 0
+        return max(int((now - started_at).total_seconds()), 0)
 
     @staticmethod
     def _guard_result(
@@ -1813,6 +1888,7 @@ class RemediationMutationGuardService:
             )
         )
         for link in result.scalars():
+            self._hydrate_ledger_from_link(link)
             lock = _active_lock_from_payload(
                 getattr(link, "mutation_guard_lock_state", None),
             )
@@ -1835,6 +1911,30 @@ class RemediationMutationGuardService:
             if existing is None or existing.expires_at < lock.expires_at:
                 self._locks[lock_key] = lock
                 self._locks_by_id[lock.lock_id] = lock
+        self._rebuild_target_budget_state(target_workflow_id)
+
+    def _rebuild_target_budget_state(self, target_workflow_id: str) -> None:
+        accepted = [
+            entry
+            for entry in self._ledger.values()
+            if entry.result.target_workflow_id == target_workflow_id
+            and entry.result.executable
+        ]
+        self._action_counts_by_target[target_workflow_id] = len(accepted)
+        for key in list(self._attempts_by_target_action):
+            if key[0] == target_workflow_id:
+                self._attempts_by_target_action.pop(key, None)
+        for entry in accepted:
+            result = entry.result
+            self._attempts_by_target_action[
+                (target_workflow_id, result.action_kind)
+            ] += 1
+        if accepted:
+            started_at = min(entry.recorded_at for entry in accepted)
+            self._started_at_by_target[target_workflow_id] = started_at
+            self._last_target_activity[target_workflow_id] = max(
+                entry.recorded_at for entry in accepted
+            )
 
     def _hydrate_ledger_from_link(
         self, link: db_models.TemporalExecutionRemediationLink
@@ -1940,6 +2040,7 @@ class RemediationMutationGuardService:
             if last_activity > cutoff:
                 continue
             self._last_target_activity.pop(target_id, None)
+            self._started_at_by_target.pop(target_id, None)
             self._action_counts_by_target.pop(target_id, None)
             for action_key in list(self._attempts_by_target_action):
                 if action_key[0] == target_id:
@@ -1988,6 +2089,8 @@ def _normalize_guard_policy(
         lock_ttl_seconds=max(int(policy.lock_ttl_seconds), 1),
         max_actions_per_target=max(int(policy.max_actions_per_target), 0),
         max_attempts_per_action_kind=max(int(policy.max_attempts_per_action_kind), 0),
+        max_branches_per_target=max(int(policy.max_branches_per_target), 0),
+        max_total_elapsed_seconds=max(int(policy.max_total_elapsed_seconds), 0),
         cooldown_seconds=max(int(policy.cooldown_seconds), 0),
         allow_nested_remediation=bool(policy.allow_nested_remediation),
         allow_self_target=bool(policy.allow_self_target),
@@ -2168,6 +2271,14 @@ def _guard_result_from_payload(
         ),
         max_attempts_per_action_kind=_int_or_zero(
             budget_payload.get("maxAttemptsPerActionKind")
+        ),
+        branches_used=_int_or_zero(budget_payload.get("branchesUsed")),
+        max_branches_per_target=_int_or_zero(
+            budget_payload.get("maxBranchesPerTarget")
+        ),
+        elapsed_seconds=_int_or_zero(budget_payload.get("elapsedSeconds")),
+        max_total_elapsed_seconds=_int_or_zero(
+            budget_payload.get("maxTotalElapsedSeconds")
         ),
         cooldown_seconds=_int_or_zero(budget_payload.get("cooldownSeconds")),
     )

@@ -2962,7 +2962,7 @@ class CancelExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    action: Literal["cancel", "reject"] = Field("cancel", alias="action")
+    action: Literal["cancel", "reject", "takeover"] = Field("cancel", alias="action")
     reason: Optional[str] = Field(None, alias="reason")
     graceful: bool = Field(True, alias="graceful")
 

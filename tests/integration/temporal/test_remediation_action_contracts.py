@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
-from api_service.db.models import TemporalArtifactLink
+from api_service.db.models import TemporalArtifactLink, TemporalExecutionRemediationLink
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationEvidenceToolService,
     _execute_verification_contract,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.unit.workflows.temporal.test_remediation_context import (
     RecordingActionExecutor,
     _admin_permissions,
@@ -42,6 +43,116 @@ from tests.unit.workflows.temporal.test_remediation_context import (
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+async def test_durable_guard_enforces_branch_and_elapsed_budgets_after_restart(
+    tmp_path, mock_client_adapter
+) -> None:
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        now = datetime(2026, 5, 9, tzinfo=timezone.utc)
+        policy = RemediationMutationGuardPolicy(
+            max_actions_per_target=10,
+            max_attempts_per_action_kind=10,
+            max_branches_per_target=2,
+            max_total_elapsed_seconds=60,
+            cooldown_seconds=0,
+            lock_ttl_seconds=1,
+        )
+
+        for ordinal in (1, 2):
+            result = await RemediationMutationGuardService(session=session).evaluate(
+                remediation_workflow_id=remediation.workflow_id,
+                remediation_run_id=remediation.run_id,
+                target_workflow_id=target.workflow_id,
+                target_run_id=target.run_id,
+                action_kind="checkpoint_branch.create_from_remediation_context",
+                idempotency_key=f"branch-{ordinal}",
+                parameters={"reason": f"candidate {ordinal}"},
+                policy=policy,
+                now=now + timedelta(seconds=ordinal - 1),
+            )
+            assert result.decision == "allowed"
+
+        branch_exhausted = await RemediationMutationGuardService(
+            session=session
+        ).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="checkpoint_branch.create_from_remediation_context",
+            idempotency_key="branch-3",
+            parameters={"reason": "candidate 3"},
+            policy=policy,
+            now=now + timedelta(seconds=2),
+        )
+        elapsed_exhausted = await RemediationMutationGuardService(
+            session=session
+        ).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="execution.pause",
+            idempotency_key="elapsed-1",
+            parameters={"reason": "too late"},
+            policy=policy,
+            now=now + timedelta(seconds=61),
+        )
+
+        assert branch_exhausted.decision == "escalate"
+        assert branch_exhausted.reason == "branch_budget_exhausted"
+        assert branch_exhausted.budget.branches_used == 2
+        assert elapsed_exhausted.decision == "escalate"
+        assert elapsed_exhausted.reason == "total_elapsed_budget_exhausted"
+        assert elapsed_exhausted.budget.elapsed_seconds == 61
+
+
+async def test_operator_takeover_cancels_remediator_and_releases_durable_guard(
+    tmp_path, mock_client_adapter
+) -> None:
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="execution.pause",
+            idempotency_key="takeover-lock",
+            parameters={"reason": "bounded mutation"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 5, 9, tzinfo=timezone.utc),
+        )
+        assert guard.executable is True
+
+        await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).cancel_execution(
+            workflow_id=remediation.workflow_id,
+            reason="operator will continue manually",
+            graceful=True,
+            action="takeover",
+            actor="user:operator-1",
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.status == "operator_takeover"
+        assert link.outcome == "operator_takeover"
+        assert link.active_lock_holder is None
+        assert link.mutation_guard_lock_state["released"] is True
+        assert link.operator_state["operatorControl"]["action"] == "takeover"
+        assert link.operator_state["operatorControl"]["actor"] == "user:operator-1"
+        assert link.operator_state["cleanup"]["lockRelease"]["state"] == "released"
+        assert link.operator_state["cleanup"]["leaseRelease"]["state"] == "requested"
 
 
 @pytest.mark.parametrize(

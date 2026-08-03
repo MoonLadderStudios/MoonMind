@@ -15038,6 +15038,7 @@ async def cancel_execution(
         reason=request.reason,
         graceful=request.graceful,
         action=request.action,
+        actor=f"user:{user.id}" if request.action == "takeover" else None,
     )
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:

@@ -92,6 +92,9 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
         "policy_blocked",
     }
 )
+REMEDIATION_PREVENTION_VERIFICATION_STATUSES = frozenset(
+    {"pending", "passed", "failed", "evidence_unavailable", "not_applicable"}
+)
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
     {"attempted", "released", "not_held", "failed"}
 )
@@ -1218,6 +1221,8 @@ def build_remediation_prevention_outcome(
     pull_request_url: str | None = None,
     findings_ref: str | None = None,
     blocked_reason: str | None = None,
+    verification_status: str | None = None,
+    verification_ref: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a bounded recurrence-prevention outcome."""
@@ -1228,6 +1233,19 @@ def build_remediation_prevention_outcome(
     safe_pr_url = _safe_public_url(pull_request_url)
     safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
     safe_blocked_reason = _redacted_optional_text(blocked_reason)
+    normalized_verification_status = _validated_choice(
+        verification_status
+        or (
+            "pending"
+            if normalized_status == "reviewable_change_created"
+            else "not_applicable"
+        ),
+        REMEDIATION_PREVENTION_VERIFICATION_STATUSES,
+        "verification_status",
+    )
+    safe_verification_ref = _artifact_ref_string(
+        verification_ref, "verification_ref"
+    )
     if normalized_status == "reviewable_change_created" and not safe_pr_url:
         raise ValueError("pullRequestUrl is required for reviewable_change_created")
     if normalized_status == "findings_reported" and not (
@@ -1248,6 +1266,10 @@ def build_remediation_prevention_outcome(
             root_cause_category, "root_cause_category"
         ),
         "summary": _required_redacted_text(summary, "summary"),
+        "verification": {
+            "status": normalized_verification_status,
+            "artifactRef": safe_verification_ref,
+        },
     }
     if safe_branch := _redacted_optional_text(branch):
         payload["branch"] = safe_branch
@@ -1552,6 +1574,14 @@ def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
         raise ValueError("prevention must be an object")
     _validated_choice(
         value.get("status"), REMEDIATION_PREVENTION_STATUSES, "prevention.status"
+    )
+    verification = value.get("verification")
+    if not isinstance(verification, Mapping):
+        raise ValueError("prevention.verification must be an object")
+    _validated_choice(
+        verification.get("status"),
+        REMEDIATION_PREVENTION_VERIFICATION_STATUSES,
+        "prevention.verification.status",
     )
 
 def _artifact_ref_list(value: Any) -> list[dict[str, str]]:

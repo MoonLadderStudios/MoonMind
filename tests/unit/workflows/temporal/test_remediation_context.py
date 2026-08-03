@@ -1234,6 +1234,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         "status": "findings_reported",
         "rootCauseCategory": "provider_profile_lease_recovery_gap",
         "summary": "Investigated recurrence without creating a PR.",
+        "verification": {"status": "not_applicable", "artifactRef": None},
         "findingsRef": "art_findings",
         "metadata": {"safe": "value"},
     }

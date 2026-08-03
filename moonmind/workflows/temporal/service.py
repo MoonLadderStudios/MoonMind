@@ -2756,12 +2756,15 @@ class TemporalExecutionService:
         reason: str | None,
         graceful: bool,
         action: str = "cancel",
+        actor: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_cancel_target_execution(workflow_id)
 
-        action_name = "reject" if action == "reject" else "cancel"
+        action_name = action if action in {"reject", "takeover"} else "cancel"
         if action_name == "reject":
             default_reason = "Rejected by operator."
+        elif action_name == "takeover":
+            default_reason = "Remediation canceled for operator takeover."
         elif graceful:
             default_reason = "Canceled by user."
         else:
@@ -2769,6 +2772,13 @@ class TemporalExecutionService:
         reason_text = (reason or default_reason).strip() or default_reason
 
         if record.state in TERMINAL_STATES:
+            await self._record_remediation_operator_stop(
+                workflow_id=record.workflow_id,
+                action=action_name,
+                reason=reason_text,
+                actor=actor,
+            )
+            await self._session.commit()
             if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
                 # The Temporal close may have committed before auxiliary
                 # managed-session cleanup ran. Retrying cancel against a
@@ -2810,6 +2820,12 @@ class TemporalExecutionService:
             transport="temporal_cancel",
             summary=reason_text,
         )
+        await self._record_remediation_operator_stop(
+            workflow_id=record.workflow_id,
+            action=action_name,
+            reason=reason_text,
+            actor=actor,
+        )
         if graceful:
             self._set_state(
                 record,
@@ -2841,6 +2857,75 @@ class TemporalExecutionService:
         if isinstance(record, TemporalExecutionCanonicalRecord):
             return await self._sync_projection_best_effort(record)
         return record
+
+    async def _record_remediation_operator_stop(
+        self,
+        *,
+        workflow_id: str,
+        action: str,
+        reason: str,
+        actor: str | None,
+    ) -> None:
+        """Persist cancellation/takeover and mutation-lease cleanup evidence."""
+
+        link = await self._session.get(
+            TemporalExecutionRemediationLink,
+            workflow_id,
+        )
+        if link is None:
+            return
+        stopped_at = _utc_now().isoformat()
+        lock_state = dict(link.mutation_guard_lock_state or {})
+        if lock_state:
+            lock_state.update(
+                {
+                    "released": True,
+                    "releasedAt": stopped_at,
+                    "releaseReason": "operator_takeover"
+                    if action == "takeover"
+                    else "operator_cancellation",
+                }
+            )
+            link.mutation_guard_lock_state = lock_state
+        link.active_lock_scope = None
+        link.active_lock_holder = None
+        approval_state = dict(link.approval_state or {})
+        if approval_state.get("decision") == "pending":
+            approval_state.update(
+                {
+                    "decision": "canceled",
+                    "canDecide": False,
+                    "decidedAt": stopped_at,
+                    "decisionReason": reason,
+                }
+            )
+            link.approval_state = approval_state
+        operator_state = dict(link.operator_state or {})
+        operator_state.update(
+            {
+                "phase": "operator_takeover" if action == "takeover" else "canceled",
+                "operatorControl": {
+                    "action": action,
+                    "actor": str(actor or "authenticated_operator"),
+                    "reason": reason,
+                    "recordedAt": stopped_at,
+                },
+                "cleanup": {
+                    "lockRelease": {
+                        "state": "released",
+                        "recordedAt": stopped_at,
+                    },
+                    "leaseRelease": {
+                        "state": "requested",
+                        "owner": "temporal_cancel",
+                        "recordedAt": stopped_at,
+                    },
+                },
+            }
+        )
+        link.operator_state = operator_state
+        link.status = "operator_takeover" if action == "takeover" else "canceled"
+        link.outcome = link.status
 
     async def mark_execution_succeeded(
         self,
