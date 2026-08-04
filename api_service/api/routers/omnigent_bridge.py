@@ -271,10 +271,16 @@ async def get_omnigent_bridge_readiness(
     """Expose selected protocol and conformance gates without secret material."""
 
     auth: dict[str, Any] | None = None
-    policy_authority = await _resolve_bridge_policy_authority()
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        # Proxy readiness does not depend on embedded image pins, so a missing
+        # persisted default policy degrades the diagnostics projection rather
+        # than failing readiness for the default proxy-first deployment.
+        policy_authority = await _resolve_bridge_policy_authority_optional()
         readiness = config.readiness()
     else:
+        # Embedded mode resolves evidence and images from the policy authority
+        # and must fail closed when that authority is unavailable.
+        policy_authority = await _resolve_bridge_policy_authority()
         readiness = config.readiness(
             evidence_validation=await _resolve_embedded_evidence(
                 config, policy_authority=policy_authority
@@ -309,7 +315,7 @@ def _compatibility_diagnostics(
     config: OmnigentBridgeConfig,
     readiness: dict[str, Any],
     auth: dict[str, Any] | None = None,
-    policy_authority: dict[str, Any],
+    policy_authority: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build one bounded support projection shared by readiness surfaces."""
 
@@ -350,10 +356,10 @@ def _compatibility_diagnostics(
         for item in validation.values()
         if item.get("status") == "passed" and isinstance(item.get("images"), dict)
     ]
-    host = policy_authority["boundaries"]["host"]
+    authority_host = (policy_authority or {}).get("boundaries", {}).get("host", {})
     images = image_sets[0] if image_sets else {
-        "server": host["serverImageRef"],
-        "host": host["hostImageRef"],
+        "server": authority_host.get("serverImageRef"),
+        "host": authority_host.get("hostImageRef"),
     }
     projection = {
         "bridgeMode": config.host_protocol_mode,
@@ -373,12 +379,16 @@ def _compatibility_diagnostics(
         },
         "supportMatrix": support_matrix,
         "failureReason": failure_reason,
-        "policyAuthority": {
-            "policyRef": policy_authority["policyRef"],
-            "policyDigest": policy_authority["policyDigest"],
-            "policySnapshotRef": policy_authority["snapshotRef"],
-            "validation": policy_authority["validation"],
-        },
+        "policyAuthority": (
+            {
+                "policyRef": policy_authority["policyRef"],
+                "policyDigest": policy_authority["policyDigest"],
+                "policySnapshotRef": policy_authority["snapshotRef"],
+                "validation": policy_authority["validation"],
+            }
+            if policy_authority is not None
+            else None
+        ),
         "rollbackRecommendation": (
             _PROXY_ROLLBACK_RECOMMENDATION
             if selected_embedded and failure_reason
@@ -495,6 +505,26 @@ async def _resolve_bridge_policy_authority() -> dict[str, Any]:
                 "message": "The persisted Omnigent bridge policy is unavailable.",
             },
         ) from exc
+
+
+async def _resolve_bridge_policy_authority_optional() -> dict[str, Any] | None:
+    """Resolve the persisted default authority, tolerating its absence.
+
+    Proxy mode does not embed image pins, so the default proxy-first Compose
+    deployment can be fully ready before a usable default policy is seeded.
+    Readiness surfaces must degrade the policy-authority projection instead of
+    returning 503 in that mode; embedded mode still resolves the authority with
+    the fail-closed variant because it drives evidence and image resolution.
+    Delegates to the fail-closed resolver so both surfaces share one resolution
+    path, only softening its 503 into an absent (None) projection.
+    """
+
+    try:
+        return await _resolve_bridge_policy_authority()
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            return None
+        raise
 
 
 def _require_proxy_mode(
@@ -1962,14 +1992,14 @@ async def list_omnigent_hosts(
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
         hosts = await facade.list_hosts()
-        policy_authority = await _resolve_bridge_policy_authority()
-        evidence = (
-            await _resolve_embedded_evidence(
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            policy_authority = await _resolve_bridge_policy_authority()
+            evidence = await _resolve_embedded_evidence(
                 config, policy_authority=policy_authority
             )
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-            else None
-        )
+        else:
+            policy_authority = await _resolve_bridge_policy_authority_optional()
+            evidence = None
         readiness = config.readiness(evidence_validation=evidence)
         diagnostics = _compatibility_diagnostics(
             config=config,

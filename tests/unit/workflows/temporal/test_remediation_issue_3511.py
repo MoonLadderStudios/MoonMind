@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -213,15 +214,29 @@ async def test_production_policy_boundary_rejects_unapproved_binding() -> None:
     assert result["reason"] == "omnigent_approval_reference_required"
 
 
+def _bridge_session(session_execute_result) -> AsyncMock:
+    """Wire an async session whose ``execute`` returns a sync SQLAlchemy result.
+
+    ``await AsyncMock().execute(...)`` returns an AsyncMock, so calling the sync
+    ``scalar_one_or_none()`` on it would yield an un-awaited coroutine. The real
+    ``AsyncSession.execute`` resolves to a synchronous ``Result``; model that by
+    pinning ``execute.return_value`` to a MagicMock.
+    """
+
+    session = AsyncMock()
+    session.execute.return_value = session_execute_result
+    return session
+
+
 async def test_real_handoff_resolves_persisted_target_run_policy() -> None:
     snapshot = _policy_snapshot("allow")
     bridge = SimpleNamespace(
         effective_launch_snapshot_json={"policyAuthority": snapshot}
     )
-    session = AsyncMock()
-    session.execute.return_value.scalar_one_or_none.return_value = bridge
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = bridge
     service = object.__new__(RemediationEvidenceToolService)
-    service._session = session
+    service._session = _bridge_session(result)
 
     policy_service = AsyncMock()
     policy_service.resolve_runtime_snapshot.return_value = snapshot
@@ -243,10 +258,10 @@ async def test_real_handoff_rejects_stale_persisted_policy_before_dispatch() -> 
     bridge = SimpleNamespace(
         effective_launch_snapshot_json={"policyAuthority": launch_snapshot}
     )
-    session = AsyncMock()
-    session.execute.return_value.scalar_one_or_none.return_value = bridge
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = bridge
     service = object.__new__(RemediationEvidenceToolService)
-    service._session = session
+    service._session = _bridge_session(result)
 
     policy_service = AsyncMock()
     policy_service.resolve_runtime_snapshot.return_value = current_snapshot
@@ -257,6 +272,79 @@ async def test_real_handoff_rejects_stale_persisted_policy_before_dispatch() -> 
         await service._resolve_target_policy_snapshot(
             target=_production_target_health()
         )
+
+
+async def test_resolve_returns_none_for_non_omnigent_target() -> None:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None  # no Omnigent bridge session
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    target = RemediationTargetHealthSnapshot(
+        workflow_id="target",
+        pinned_run_id="run",
+        current_run_id="run",
+        state="failed",
+        close_status="failed",
+        title=None,
+        summary=None,
+        target_run_changed=False,
+        runtime="codex_cli",
+    )
+    assert await service._resolve_target_policy_snapshot(target=target) is None
+
+
+async def test_resolve_fails_closed_for_declared_omnigent_without_bridge() -> None:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    target = RemediationTargetHealthSnapshot(
+        workflow_id="target",
+        pinned_run_id="run",
+        current_run_id="run",
+        state="failed",
+        close_status="failed",
+        title=None,
+        summary=None,
+        target_run_changed=False,
+        runtime="omnigent",
+    )
+    with pytest.raises(
+        RemediationEvidenceToolError, match="immutable Omnigent policy authority"
+    ):
+        await service._resolve_target_policy_snapshot(target=target)
+
+
+async def test_policy_bound_allows_verified_non_omnigent_target() -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {"actionKind": "execution.pause", "targetRuntime": "codex_cli"},
+        {},
+        _production_target_health(),
+    )
+    assert called is True
+    assert result["status"] == "accepted"
+
+
+async def test_policy_bound_denies_omnigent_target_missing_snapshot() -> None:
+    async def adapter(*_args):
+        raise AssertionError("must not dispatch without an Omnigent snapshot")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {"actionKind": "host.restart", "targetRuntime": "omnigent"},
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_policy_snapshot_required"
 
 
 async def test_control_plane_executor_dispatches_typed_adapter_with_evidence() -> None:

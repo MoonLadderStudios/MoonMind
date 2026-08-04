@@ -336,6 +336,95 @@ async def test_usage_projects_live_and_historical_bridge_dependents(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_usage_filters_bridge_dependents_in_the_database(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        snapshot = await service.snapshot("policy", 1)
+        other = {**snapshot, "policyRef": "policy@2"}
+        rows = (
+            ("match-live", "wf-match-live", "running", {"policyAuthority": snapshot}),
+            ("match-done", "wf-match-done", "completed", {"policyAuthority": snapshot}),
+            ("other-policy", "wf-other", "running", {"policyAuthority": other}),
+            ("no-authority", "wf-none", "running", {"foo": "bar"}),
+            ("null-launch", "wf-null", "running", None),
+        )
+        for session_id, workflow_id, state, launch in rows:
+            session.add(OmnigentBridgeSession(
+                bridge_session_id=session_id,
+                provider="omnigent",
+                compatibility_profile="v1",
+                moonmind_workflow_id=workflow_id,
+                moonmind_agent_run_id=f"agent-{session_id}",
+                idempotency_key=f"key-{session_id}",
+                provider_profile_id="profile-x",
+                effective_launch_snapshot_json=launch,
+                omnigent_endpoint_ref="default",
+                host_type="static_compose",
+                status=state,
+            ))
+        await session.commit()
+
+        usage = await service.usage("policy", 1)
+
+        # Only the two policy@1 sessions are dependents; policy@2, the snapshot
+        # without policyAuthority, and the null launch are all excluded in SQL.
+        assert usage["dependents"]["bridgeSessions"] == ["match-done", "match-live"]
+        assert usage["dependents"]["bridgeSessionCount"] == 2
+        assert usage["dependents"]["activeBridgeSessions"] == ["match-live"]
+        assert usage["dependents"]["activeBridgeSessionCount"] == 1
+        assert usage["dependents"]["workflows"] == ["wf-match-done", "wf-match-live"]
+        assert usage["dependents"]["workflowCount"] == 2
+
+
+@pytest.mark.asyncio
+async def test_usage_bounds_dependent_lists_but_counts_reflect_totals(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies._USAGE_DEPENDENT_PAGE_SIZE", 1
+    )
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        snapshot = await service.snapshot("policy", 1)
+        for session_id, workflow_id, state in (
+            ("s-a", "wf-a", "running"),
+            ("s-b", "wf-b", "running"),
+            ("s-c", "wf-c", "completed"),
+        ):
+            session.add(OmnigentBridgeSession(
+                bridge_session_id=session_id,
+                provider="omnigent",
+                compatibility_profile="v1",
+                moonmind_workflow_id=workflow_id,
+                moonmind_agent_run_id=f"agent-{session_id}",
+                idempotency_key=f"key-{session_id}",
+                provider_profile_id="profile-x",
+                effective_launch_snapshot_json={"policyAuthority": snapshot},
+                omnigent_endpoint_ref="default",
+                host_type="static_compose",
+                status=state,
+            ))
+        await session.commit()
+
+        usage = await service.usage("policy", 1)
+
+        # Lists are bounded to the page size; counts still report true totals.
+        assert len(usage["dependents"]["bridgeSessions"]) == 1
+        assert usage["dependents"]["bridgeSessionCount"] == 3
+        assert len(usage["dependents"]["activeBridgeSessions"]) == 1
+        assert usage["dependents"]["activeBridgeSessionCount"] == 2
+        assert len(usage["dependents"]["workflows"]) == 1
+        assert usage["dependents"]["workflowCount"] == 3
+        # The active-session blocker keys off the count, not the truncated list.
+        assert any(
+            "dependent bridge sessions" in blocker
+            for blocker in usage["unavailabilityBlockers"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_runtime_resolution_requires_exact_active_valid_version(tmp_path):
     async with policy_db(tmp_path) as sessions, sessions() as session:
         service = OmnigentPolicyService(session)

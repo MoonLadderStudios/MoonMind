@@ -876,16 +876,16 @@ def test_retrieval_manifest_stamps_exact_validated_policy_authority() -> None:
         {"query": "policy evidence", "policyAuthority": authority}
     )
 
+    # The stamped authority pins the stable validation decision only, never the
+    # mutable validation metadata, so re-validating an unchanged policy does not
+    # detach this manifest from its launch authority.
     assert manifest.policy_authority == {
-        key: authority[key]
-        for key in (
-            "policyId",
-            "policyVersion",
-            "policyRef",
-            "policyDigest",
-            "snapshotRef",
-            "validation",
-        )
+        "policyId": authority["policyId"],
+        "policyVersion": authority["policyVersion"],
+        "policyRef": authority["policyRef"],
+        "policyDigest": authority["policyDigest"],
+        "snapshotRef": authority["snapshotRef"],
+        "validation": {"valid": True},
     }
 
 

@@ -42,6 +42,11 @@ class PolicyNotFound(LookupError):
 
 
 _BRIDGE_TERMINAL_STATES = frozenset({"completed", "failed", "canceled", "timed_out"})
+# Policy usage inspection is invoked by the UI on every version selection. Bound
+# the dependent identifier lists it returns so response cost tracks the selected
+# policy's useful page size rather than the deployment's entire bridge history;
+# the accompanying counts still report true totals from the database.
+_USAGE_DEPENDENT_PAGE_SIZE = 50
 
 
 def _split_policy_ref(policy_ref: str) -> tuple[str, int]:
@@ -268,23 +273,22 @@ class OmnigentPolicyService:
                 raise PolicyConflict(
                     "policy version is bound to an active host profile and cannot be made unavailable"
                 )
-            bridge_rows = list((await self.session.execute(
-                select(OmnigentBridgeSession)
-            )).scalars())
             policy_ref = f"{policy_id}@{version}"
-            active_bridge = next((
-                bridge.bridge_session_id
-                for bridge in bridge_rows
-                if str(bridge.status).lower() not in _BRIDGE_TERMINAL_STATES
-                and isinstance(bridge.effective_launch_snapshot_json, dict)
-                and isinstance(
-                    bridge.effective_launch_snapshot_json.get("policyAuthority"),
-                    dict,
+            # Bound this safety gate to the selected policy in the database
+            # instead of scanning the deployment's entire bridge history.
+            active_bridge = (await self.session.execute(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(
+                    OmnigentBridgeSession.effective_launch_snapshot_json[
+                        "policyAuthority"
+                    ]["policyRef"].as_string()
+                    == policy_ref,
+                    func.lower(OmnigentBridgeSession.status).notin_(
+                        _BRIDGE_TERMINAL_STATES
+                    ),
                 )
-                and bridge.effective_launch_snapshot_json["policyAuthority"].get(
-                    "policyRef"
-                ) == policy_ref
-            ), None)
+                .limit(1)
+            )).scalar_one_or_none()
             if active_bridge is not None:
                 raise PolicyConflict(
                     "policy version is bound to an active bridge session and cannot be made unavailable"
@@ -332,16 +336,51 @@ class OmnigentPolicyService:
             ).order_by(OmnigentOAuthHostBindingRecord.binding_ref)
         )).scalars())
         # Bridge sessions keep the complete immutable authority in their launch
-        # snapshot. Resolve dependents from persisted evidence instead of mutable
-        # current defaults so historical usage remains inspectable after rollout.
-        bridge_rows = list((await self.session.execute(
-            select(OmnigentBridgeSession).order_by(
-                OmnigentBridgeSession.bridge_session_id
-            )
+        # snapshot. Filter the persisted policy reference in the database so
+        # inspection cost tracks the selected policy's dependents, not the
+        # deployment's entire bridge history. Return true counts plus a bounded
+        # page of dependent identifiers. Resolving from persisted evidence keeps
+        # historical usage inspectable after rollout.
+        matches_policy = (
+            OmnigentBridgeSession.effective_launch_snapshot_json["policyAuthority"][
+                "policyRef"
+            ].as_string()
+            == policy_ref
+        )
+        active_predicate = func.lower(OmnigentBridgeSession.status).notin_(
+            _BRIDGE_TERMINAL_STATES
+        )
+        bridge_session_count = (await self.session.execute(
+            select(func.count()).select_from(OmnigentBridgeSession).where(matches_policy)
+        )).scalar_one()
+        active_bridge_session_count = (await self.session.execute(
+            select(func.count())
+            .select_from(OmnigentBridgeSession)
+            .where(matches_policy, active_predicate)
+        )).scalar_one()
+        workflow_count = (await self.session.execute(
+            select(func.count(func.distinct(OmnigentBridgeSession.moonmind_workflow_id)))
+            .where(matches_policy)
+        )).scalar_one()
+        bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
         )).scalars())
-        bridge_sessions: list[str] = []
-        active_bridge_sessions: list[str] = []
-        workflow_ids: set[str] = set()
+        active_bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy, active_predicate)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        workflow_ids = list((await self.session.execute(
+            select(OmnigentBridgeSession.moonmind_workflow_id)
+            .where(matches_policy)
+            .distinct()
+            .order_by(OmnigentBridgeSession.moonmind_workflow_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
         provider_profile_ids = {
             str(value)
             for value in (await self.session.execute(
@@ -349,20 +388,17 @@ class OmnigentPolicyService:
                     OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
                 )
             )).scalars()
+            if value
         }
-        for bridge in bridge_rows:
-            launch = bridge.effective_launch_snapshot_json
-            if not isinstance(launch, dict):
-                continue
-            authority = launch.get("policyAuthority")
-            if not isinstance(authority, dict) or authority.get("policyRef") != policy_ref:
-                continue
-            bridge_sessions.append(bridge.bridge_session_id)
-            workflow_ids.add(bridge.moonmind_workflow_id)
-            if bridge.provider_profile_id:
-                provider_profile_ids.add(bridge.provider_profile_id)
-            if str(bridge.status).lower() not in _BRIDGE_TERMINAL_STATES:
-                active_bridge_sessions.append(bridge.bridge_session_id)
+        provider_profile_ids.update(
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentBridgeSession.provider_profile_id)
+                .where(matches_policy, OmnigentBridgeSession.provider_profile_id.is_not(None))
+                .distinct()
+            )).scalars()
+            if value
+        )
 
         is_default = policy.default_version == version
         blockers = []
@@ -370,7 +406,7 @@ class OmnigentPolicyService:
             blockers.append("Switch the policy default before disabling or deprecating this version.")
         if host_bindings:
             blockers.append("Move dependent host profiles before disabling or deprecating this version.")
-        if active_bridge_sessions:
+        if active_bridge_session_count:
             blockers.append("Wait for dependent bridge sessions to finish before disabling or deprecating this version.")
         return {
             "policyRef": policy_ref,
@@ -381,12 +417,12 @@ class OmnigentPolicyService:
                 "hostBindingCount": len(host_bindings),
                 "providerProfiles": sorted(provider_profile_ids),
                 "providerProfileCount": len(provider_profile_ids),
-                "workflows": sorted(workflow_ids),
-                "workflowCount": len(workflow_ids),
+                "workflows": workflow_ids,
+                "workflowCount": workflow_count,
                 "bridgeSessions": bridge_sessions,
-                "bridgeSessionCount": len(bridge_sessions),
+                "bridgeSessionCount": bridge_session_count,
                 "activeBridgeSessions": active_bridge_sessions,
-                "activeBridgeSessionCount": len(active_bridge_sessions),
+                "activeBridgeSessionCount": active_bridge_session_count,
             },
             "activationImpact": {
                 "willSwitchDefault": not is_default,
@@ -459,6 +495,73 @@ class OmnigentPolicyService:
         ))
 
 
+# Every production remediation adapter registered by
+# ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
+# dispatches by its canonical action identity, and ``resolve_action`` performs an
+# exact-match lookup against ``approvals.actions``. The bootstrap policy must
+# therefore carry an explicit rule for each identity or the default deployment
+# authorizes none of them. Non-mutating evidence actions are allowed; every
+# state-mutating remediation action stays approval-gated, matching this
+# bootstrap's ``remediation.autonomous: False`` posture. The identities are
+# listed explicitly (not imported) to keep the seed reviewable and to avoid a
+# circular import with the temporal remediation package; a unit test guards
+# against catalog drift.
+_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "cleanup.verify",
+    "target.annotate",
+    "target.verify",
+)
+_BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+    "checkpoint_branch.create_from_remediation_context",
+    "session.interrupt_turn",
+    "session.clear",
+    "session.cancel",
+    "session.terminate",
+    "session.restart_container",
+    "provider_profile.evict_stale_lease",
+    "workload.restart_helper_container",
+    "workload.reap_orphan_container",
+    "host.drain",
+    "host.stop",
+    "host.restart",
+    "host.remove",
+    "host_lease.reconcile_stale",
+    "cleanup.request_janitor",
+)
+
+
+def _bootstrap_approval_actions() -> dict[str, dict[str, str]]:
+    """Seed exact approval rules for every canonical remediation action identity."""
+
+    actions: dict[str, dict[str, str]] = {
+        "read": {"decision": "allow"},
+        "publish": {
+            "decision": "approval_required",
+            "approvalClass": "publication",
+            "reviewerRule": "workflow-owner",
+        },
+    }
+    for action in _BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "allow",
+            "reason": "non-mutating remediation evidence",
+        }
+    for action in _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "approval_required",
+            "approvalClass": "remediation",
+            "reviewerRule": "workflow-owner",
+            "reason": "state-mutating remediation requires approval",
+        }
+    return actions
+
+
 def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyDocument:
     """Project legacy built-ins into an explicit, reviewable bootstrap policy."""
 
@@ -491,8 +594,7 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
                         "locks": True, "maxActions": 3, "autonomous": False},
         "rag": {"initialScope": "workflow", "followupScope": "session", "collectionRefs": ["workflow-default"],
                 "tokenBudget": 8000, "fallback": "deny", "credentialRef": "retrieval-profile"},
-        "approvals": {"actions": {"read": {"decision": "allow"}, "publish": {"decision": "approval_required",
-                      "approvalClass": "publication", "reviewerRule": "workflow-owner"}, "host_mutation": {"decision": "deny"}}},
+        "approvals": {"actions": _bootstrap_approval_actions()},
         "retention": {"days": 30, "deletion": "after-expiry"},
         "rollout": {"cohort": "bootstrap", "gate": "deployment-ready", "diagnostics": True},
     })

@@ -380,6 +380,17 @@ class TemporalRemediationControlPlane:
         ) -> Mapping[str, Any]:
             snapshot = action_request.get("policySnapshot")
             if not isinstance(snapshot, Mapping):
+                # A verified non-Omnigent target carries no Omnigent policy
+                # authority, so Omnigent policy binding does not apply and its
+                # owning adapter enforces its own runtime. The runtime marker is
+                # stamped by execute_action from the persisted target execution
+                # record, never from caller tool arguments. Any other case
+                # (Omnigent target, or an unverifiable runtime) fails closed.
+                runtime = (
+                    str(action_request.get("targetRuntime") or "").strip().casefold()
+                )
+                if runtime and runtime != "omnigent":
+                    return await handler(action_request, guard_result, target)
                 return {
                     "status": "denied",
                     "reason": "omnigent_policy_snapshot_required",

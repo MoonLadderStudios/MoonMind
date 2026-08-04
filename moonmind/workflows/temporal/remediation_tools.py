@@ -110,6 +110,7 @@ class RemediationTargetHealthSnapshot:
     title: str | None
     summary: str | None
     target_run_changed: bool
+    runtime: str | None = None
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
@@ -659,13 +660,26 @@ class RemediationEvidenceToolService:
                     else None
                 ),
                 target_run_changed=target.run_id != link.target_run_id,
+                runtime=_string_or_none(
+                    target.search_attributes.get("mm_target_runtime")
+                    if isinstance(target.search_attributes, Mapping)
+                    else None
+                ),
             ),
             context_target=context_target_mapping,
         )
 
     async def _resolve_target_policy_snapshot(
         self, *, target: RemediationTargetHealthSnapshot
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
+        # Only Omnigent targets carry immutable Omnigent policy authority. The
+        # control-plane executor is constructed for every runtime, so gate this
+        # resolution on the target's verified runtime and the presence of an
+        # Omnigent bridge session rather than the executor type. Direct Codex,
+        # Claude, and other non-Omnigent targets return ``None`` so their owning
+        # adapters apply their own authority; a target that declares the
+        # Omnigent runtime but has no immutable authority still fails closed.
+        declared_omnigent = (target.runtime or "").strip().casefold() == "omnigent"
         bridge = (
             await self._session.execute(
                 select(db_models.OmnigentBridgeSession)
@@ -679,10 +693,15 @@ class RemediationEvidenceToolService:
                 .limit(1)
             )
         ).scalar_one_or_none()
+        if bridge is None:
+            if declared_omnigent:
+                raise RemediationEvidenceToolError(
+                    "Target run has no immutable Omnigent policy authority."
+                )
+            return None
         launch = (
             bridge.effective_launch_snapshot_json
-            if bridge is not None
-            and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            if isinstance(bridge.effective_launch_snapshot_json, Mapping)
             else None
         )
         authority = launch.get("policyAuthority") if launch is not None else None
@@ -732,6 +751,18 @@ class RemediationEvidenceToolService:
             normalized_idempotency_key = _required_string(
                 idempotency_key, "idempotencyKey"
             )
+            # SECURITY: an admin_auto remediation agent is the action *requester*
+            # and can never act as its own approver. A caller-supplied approvalRef
+            # or approvalBinding is untrusted tool input, not approval authority:
+            # no reviewer-issued decision in the authoritative approval store backs
+            # it, and _policy_bound only checks that the binding matches the
+            # policy/run, never that a persisted approval exists. Drop both so the
+            # agent cannot self-approve an approval-gated or high-risk mutation at
+            # either the MoonMind authority boundary (below) or the downstream
+            # Omnigent policy boundary. Such actions fail closed to
+            # approval_required and must be routed through the human approval path.
+            approval_ref = None
+            approval_binding = None
             authority = await RemediationActionAuthorityService(
                 session=self._session
             ).evaluate_action_request(
@@ -744,14 +775,14 @@ class RemediationEvidenceToolService:
             permissions=RemediationPermissionSet(
                 can_view_target=True,
                 can_request_admin_profile=True,
-                can_approve_high_risk=bool(str(approval_ref or "").strip()),
+                can_approve_high_risk=False,
             ),
             security_profile=RemediationSecurityProfile(
                 profile_ref="persisted:admin_auto",
                 execution_principal=principal,
                 allowed_action_kinds=(normalized_action_kind,),
             ),
-            approval_ref=approval_ref,
+            approval_ref=None,
             )
             authority_result = authority.to_dict()
             guard = await RemediationMutationGuardService(
@@ -809,10 +840,19 @@ class RemediationEvidenceToolService:
             policy_snapshot = await self._resolve_target_policy_snapshot(
                 target=preparation.target
             )
+            # ``targetRuntime`` is authoritative metadata from the persisted target
+            # execution record, never a caller-supplied tool argument. It tells the
+            # policy-bound dispatcher whether Omnigent policy binding applies.
             action_request = {
                 **dict(action_request),
-                "policySnapshot": policy_snapshot,
+                "targetRuntime": preparation.target.runtime,
             }
+            if policy_snapshot is not None:
+                action_request["policySnapshot"] = policy_snapshot
+            else:
+                # Non-Omnigent targets must never carry an Omnigent policy
+                # snapshot, including one a caller may have tried to smuggle in.
+                action_request.pop("policySnapshot", None)
             if approval_binding is not None:
                 action_request["approvalBinding"] = dict(approval_binding)
                 action_request["approvalRef"] = _required_string(
