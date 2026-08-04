@@ -19,6 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
+from moonmind.config.settings import settings
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionClearRequest,
@@ -30,6 +32,8 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
     ManagedSessionRecordStatus,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
@@ -42,6 +46,9 @@ from moonmind.workflows.codex_session_timeouts import (
 )
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_github_token_for_launch,
+)
+from moonmind.security.container_job_capabilities import (
+    mint_container_job_session_capability,
 )
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
@@ -81,6 +88,10 @@ _SESSION_DOCKER_CONFIG_FILENAME = "config.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
 _LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES = 4 * 1024
+_SESSION_DOCKER_SOCKET_DIR = "/var/run/moonmind-docker"
+_SESSION_DOCKER_SOCKET_PATH = f"{_SESSION_DOCKER_SOCKET_DIR}/docker.sock"
+_SESSION_DOCKER_GRAPH_PATH = "/var/lib/docker"
+_DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE = "docker:27-dind"
 # Grace window before an orphaned managed-session container is eligible for
 # reaping. A session writes its durable store record early in launch, but the
 # window protects against reaping a container whose record is not yet active
@@ -88,6 +99,7 @@ _LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES = 4 * 1024
 _DEFAULT_SESSION_REAP_GRACE_SECONDS = 900.0
 _DEFAULT_SESSION_REAP_MAX_AGE_SECONDS = 48 * 60 * 60
 _MANAGED_SESSION_LABEL_KEY = "moonmind.session_id"
+_MANAGED_SESSION_SIDECAR_VOLUME_KIND = "session-docker-sidecar-volume"
 _MANAGED_SESSION_SIDECAR_VOLUME_NAME = re.compile(
     r"^moonmind-session-.+-docker-(graph|socket)$"
 )
@@ -495,6 +507,336 @@ class DockerCodexManagedSessionController:
         await self._remove_volume(
             self._sidecar_socket_volume_name(session_id),
             ignore_failure=ignore_failure,
+        )
+
+    def _legacy_sidecar_image(self) -> str:
+        return str(
+            os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_SIDECAR_IMAGE")
+            or _DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE
+        ).strip() or _DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE
+
+    @staticmethod
+    def _legacy_sidecar_image_is_pinned(image: str) -> bool:
+        if "@sha256:" in image:
+            return True
+        final_segment = image.rsplit("/", 1)[-1]
+        if ":" not in final_segment:
+            return False
+        tag = final_segment.rsplit(":", 1)[-1].strip().lower()
+        return bool(tag) and tag != "latest"
+
+    @staticmethod
+    def _legacy_sidecar_volume_labels(
+        *,
+        session_id: str,
+        role: str,
+        agent_run_id: str,
+        session_epoch: int,
+    ) -> dict[str, str]:
+        return {
+            "moonmind.session_id": session_id,
+            "moonmind.kind": _MANAGED_SESSION_SIDECAR_VOLUME_KIND,
+            "moonmind.volume_role": role,
+            "moonmind.agent_run_id": agent_run_id,
+            "moonmind.session_epoch": str(session_epoch),
+        }
+
+    async def _create_legacy_sidecar_volume(
+        self,
+        volume_name: str,
+        *,
+        labels: Mapping[str, str],
+    ) -> None:
+        command = [self._docker_binary, "volume", "create"]
+        for key, value in labels.items():
+            command.extend(("--label", f"{key}={value}"))
+        command.append(volume_name)
+        await self._run(command)
+
+    async def _create_legacy_sidecar_volumes(
+        self,
+        *,
+        session_id: str,
+        session_epoch: int,
+        agent_run_id: str,
+    ) -> None:
+        for volume_name, role in (
+            (self._sidecar_socket_volume_name(session_id), "docker-socket"),
+            (self._sidecar_graph_volume_name(session_id), "docker-graph"),
+        ):
+            await self._create_legacy_sidecar_volume(
+                volume_name,
+                labels=self._legacy_sidecar_volume_labels(
+                    session_id=session_id,
+                    role=role,
+                    agent_run_id=agent_run_id,
+                    session_epoch=session_epoch,
+                ),
+            )
+
+    async def _wait_legacy_sidecar_ready(self, sidecar_id: str) -> str:
+        command = (
+            self._docker_binary,
+            "exec",
+            "-e",
+            f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            sidecar_id,
+            "docker",
+            "info",
+            "--format",
+            "{{json .ServerVersion}}",
+        )
+        last_error = ""
+        for attempt in range(max(1, self._ready_poll_attempts)):
+            code, stdout, stderr = await self._command_runner(
+                command,
+                env=self._docker_env(),
+            )
+            if code == 0 and stdout.strip():
+                return stdout.strip().strip('"')
+            last_error = stderr.strip() or stdout.strip() or f"exit code {code}"
+            if attempt + 1 < max(1, self._ready_poll_attempts):
+                await asyncio.sleep(self._ready_poll_interval_seconds)
+        raise RuntimeError(f"Docker sidecar daemon did not become ready: {last_error}")
+
+    async def _prepare_legacy_sidecar_workspace_volume(
+        self,
+        sidecar_id: str,
+    ) -> None:
+        inner_docker = (
+            self._docker_binary,
+            "exec",
+            "-e",
+            f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            sidecar_id,
+            "docker",
+        )
+        inspect_command = (
+            *inner_docker,
+            "volume",
+            "inspect",
+            "--format",
+            "{{json .Options}}",
+            self._workspace_volume_name,
+        )
+        code, stdout, stderr = await self._command_runner(
+            inspect_command,
+            env=self._docker_env(),
+        )
+        existing_options: dict[str, Any] | None = None
+        if code == 0:
+            try:
+                decoded = json.loads(stdout.strip() or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "failed to inspect the legacy Docker sidecar workspace volume"
+                ) from exc
+            existing_options = decoded if isinstance(decoded, dict) else {}
+        elif "no such volume" not in (stderr or stdout).lower():
+            raise RuntimeError(
+                "failed to inspect the legacy Docker sidecar workspace volume"
+            )
+        expected_options = {
+            "device": self._workspace_root,
+            "o": "bind",
+            "type": "none",
+        }
+        if existing_options == expected_options:
+            return
+        if existing_options is not None:
+            await self._run(
+                (*inner_docker, "volume", "rm", "-f", self._workspace_volume_name)
+            )
+        await self._run(
+            (
+                *inner_docker,
+                "volume",
+                "create",
+                "--driver",
+                "local",
+                "--opt",
+                "type=none",
+                "--opt",
+                "o=bind",
+                "--opt",
+                f"device={self._workspace_root}",
+                self._workspace_volume_name,
+            )
+        )
+
+    async def _launch_legacy_docker_sidecar(
+        self,
+        *,
+        session_id: str,
+        session_epoch: int,
+        agent_run_id: str,
+        docker_network: str | None,
+    ) -> tuple[str, str]:
+        image = self._legacy_sidecar_image()
+        if not self._legacy_sidecar_image_is_pinned(image):
+            raise RuntimeError(
+                "MOONMIND_MANAGED_SESSION_DOCKER_SIDECAR_IMAGE must be pinned "
+                "to a non-latest tag or digest"
+            )
+        await self._create_legacy_sidecar_volumes(
+            session_id=session_id,
+            session_epoch=session_epoch,
+            agent_run_id=agent_run_id,
+        )
+        sidecar_name = self._sidecar_container_name(session_id)
+        command = [
+            self._docker_binary,
+            "run",
+            "-d",
+            "--name",
+            sidecar_name,
+            "--privileged",
+            "--label",
+            "moonmind.kind=session-docker-sidecar",
+            "--label",
+            f"moonmind.session_id={session_id}",
+            "--label",
+            f"moonmind.session_epoch={session_epoch}",
+            "--label",
+            f"moonmind.agent_run_id={agent_run_id}",
+            "-e",
+            "DOCKER_TLS_CERTDIR=",
+            "--mount",
+            self._volume_mount(self._workspace_volume_name, self._workspace_root),
+            "--mount",
+            self._volume_mount(
+                self._sidecar_socket_volume_name(session_id),
+                _SESSION_DOCKER_SOCKET_DIR,
+            ),
+            "--mount",
+            self._volume_mount(
+                self._sidecar_graph_volume_name(session_id),
+                _SESSION_DOCKER_GRAPH_PATH,
+            ),
+        ]
+        if docker_network:
+            command.extend(("--network", docker_network))
+        command.extend(
+            (
+                image,
+                "dockerd",
+                f"--host=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                f"--data-root={_SESSION_DOCKER_GRAPH_PATH}",
+                f"--group={_MANAGED_SESSION_CONTAINER_GID}",
+            )
+        )
+        stdout, _stderr = await self._run(command)
+        sidecar_id = stdout.strip()
+        if not sidecar_id:
+            raise RuntimeError("legacy Docker sidecar returned a blank container id")
+        version = await self._wait_legacy_sidecar_ready(sidecar_id)
+        await self._prepare_legacy_sidecar_workspace_volume(sidecar_id)
+        return sidecar_id, version
+
+    async def ensure_docker_sidecar(
+        self,
+        request: ManagedSessionEnsureDockerSidecarRequest,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        """Complete only pre-cutover, already-authorized sidecar histories."""
+
+        if self._session_store is None:
+            raise RuntimeError(
+                "legacy Docker sidecar compatibility requires the session store"
+            )
+        record = self._session_store.load(request.session_id)
+        if record is None:
+            raise RuntimeError(
+                f"managed session record not found: {request.session_id}"
+            )
+        if (
+            record.session_epoch != request.session_epoch
+            or record.container_id != request.container_id
+            or (request.thread_id is not None and record.thread_id != request.thread_id)
+        ):
+            raise RuntimeError(
+                "legacy Docker sidecar request does not match the durable session"
+            )
+        metadata = dict(record.metadata)
+        docker_status = metadata.get("capabilities", {}).get("docker", {})
+        if not isinstance(docker_status, Mapping) or not str(
+            docker_status.get("mode") or ""
+        ).startswith("sidecar-dind"):
+            return ManagedSessionEnsureDockerSidecarResponse(
+                state="not_allowed",
+                metadata={"reason": "not_a_pre_cutover_sidecar_session"},
+            )
+        if docker_status.get("allowed") is False:
+            return ManagedSessionEnsureDockerSidecarResponse(
+                state="not_allowed",
+                metadata={"reason": "docker_not_allowed"},
+            )
+        if not await self._container_exists(request.container_id):
+            raise RuntimeError("managed session container is not running")
+
+        sidecar_name = self._sidecar_container_name(request.session_id)
+        if await self._container_exists(sidecar_name):
+            await self._run((self._docker_binary, "start", sidecar_name))
+            version = await self._wait_legacy_sidecar_ready(sidecar_name)
+            await self._prepare_legacy_sidecar_workspace_volume(sidecar_name)
+        else:
+            _sidecar_id, version = await self._launch_legacy_docker_sidecar(
+                session_id=request.session_id,
+                session_epoch=request.session_epoch,
+                agent_run_id=record.agent_run_id,
+                docker_network=str(metadata.get("dockerNetwork") or "").strip()
+                or self._network_name,
+            )
+
+        compose_command = (
+            self._docker_binary,
+            "exec",
+            "-e",
+            f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            request.container_id,
+            "docker",
+            "compose",
+            "version",
+        )
+        compose_code, _stdout, _stderr = await self._command_runner(
+            compose_command,
+            env=self._docker_env(),
+        )
+        compose_available = compose_code == 0
+        if request.compose_required and not compose_available:
+            return ManagedSessionEnsureDockerSidecarResponse(
+                state="failed",
+                dockerHost=f"unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                composeAvailable=False,
+                daemon={"ready": True, "version": version},
+                metadata={"reason": "compose_unavailable"},
+            )
+        ready_status = {
+            **dict(docker_status),
+            "allowed": True,
+            "state": "ready",
+            "mode": "sidecar-dind",
+            "dockerHost": f"unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            "composeAvailable": compose_available,
+            "daemon": {"ready": True, "version": version},
+        }
+        next_metadata = self._merge_capability_metadata(
+            metadata,
+            {"capabilities": {"docker": ready_status}},
+        )
+        self._session_store.save(
+            record.model_copy(
+                update={
+                    "metadata": next_metadata,
+                    "updated_at": datetime.now(tz=UTC),
+                }
+            )
+        )
+        return ManagedSessionEnsureDockerSidecarResponse(
+            state="ready",
+            dockerHost=f"unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            composeAvailable=compose_available,
+            daemon={"ready": True, "version": version},
+            metadata={"capabilities": {"docker": ready_status}},
         )
 
     def _validate_workspace_path(self, value: str, *, field_name: str) -> None:
@@ -2162,13 +2504,47 @@ class DockerCodexManagedSessionController:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
-        # Repository container work is submitted through MoonMind's authenticated,
-        # asynchronous MCP surface.  Keep the logical workspace identity separate
-        # from the host path that the trusted container-job worker resolves.
-        if session_environment.get("MOONMIND_URL"):
-            session_environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] = (
-                session_environment["MOONMIND_URL"].rstrip("/") + "/mcp"
+        container_secret_environment: dict[str, str] = {}
+        for key in (
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN",
+            "MOONMIND_CONTAINER_JOBS_MCP_URL",
+            "MOONMIND_CONTAINER_JOBS_RUNTIME_ID",
+            "MOONMIND_CONTAINER_JOBS_SESSION_ID",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
+        ):
+            session_environment.pop(key, None)
+        if request.workload_mode == "kubernetes-job":
+            raise RuntimeError(
+                "workloadMode kubernetes-job is not supported by the configured "
+                "managed-session container-job backend"
             )
+        # Repository container work is submitted through a session-scoped,
+        # authenticated MCP endpoint. Keep the logical workspace identity separate
+        # from the host path that the trusted container-job worker resolves.
+        container_jobs_available = bool(
+            request.workload_mode == "container-jobs"
+            and session_environment.get("MOONMIND_URL")
+        )
+        if container_jobs_available:
+            owner = request.container_job_owner or OwnerIdentity(
+                principalId=request.agent_run_id,
+                principalType="service",
+            )
+            capability_token = mint_container_job_session_capability(
+                secret=str(settings.security.JWT_SECRET_KEY or ""),
+                owner=owner,
+                agent_run_id=request.agent_run_id,
+                session_id=request.session_id,
+                runtime_id=runtime_id,
+                lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] = (
+                session_environment["MOONMIND_URL"].rstrip("/")
+                + "/mcp/container"
+            )
+            container_secret_environment[
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"
+            ] = capability_token
             session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
                 "managed_runtime"
             )
@@ -2213,16 +2589,17 @@ class DockerCodexManagedSessionController:
             "--label",
             f"moonmind.agent_run_id={request.agent_run_id}",
             "--label",
-            "moonmind.workload_mode=container-jobs",
+            f"moonmind.workload_mode={request.workload_mode}",
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
         github_broker_started = False
-        container_secret_environment: dict[str, str] = {}
         try:
-            container_secret_environment = await self._configure_session_github_auth(
-                request,
-                session_environment,
+            container_secret_environment.update(
+                await self._configure_session_github_auth(
+                    request,
+                    session_environment,
+                )
             )
             github_broker_started = "GIT_CONFIG_GLOBAL" in session_environment
         except Exception:
@@ -2313,31 +2690,40 @@ class DockerCodexManagedSessionController:
             raise
         try:
             await self._wait_ready(container_id=container_id)
-            docker_capability_metadata = {
+            container_job_capability_metadata = {
                 "capabilities": {
                     "containerJobs": {
-                        "available": bool(session_environment.get("MOONMIND_URL")),
+                        "available": container_jobs_available,
                         "transport": "moonmind-mcp",
-                        "backendKind": "docker-engine",
+                        "workloadMode": request.workload_mode,
+                        **(
+                            {"backendKind": "docker-engine"}
+                            if container_jobs_available
+                            else {"reason": "profile_workload_mode"}
+                        ),
                         "workspace": {
                             "kind": "managed_runtime",
                             "runtimeId": runtime_id,
                             "agentRunId": request.agent_run_id,
                             "relativePath": "repo",
                         },
-                        "tools": [
-                            "container.submit",
-                            "container.status",
-                            "container.logs",
-                            "container.artifacts",
-                            "container.cancel",
-                        ],
+                        "tools": (
+                            [
+                                "container.submit",
+                                "container.status",
+                                "container.logs",
+                                "container.artifacts",
+                                "container.cancel",
+                            ]
+                            if container_jobs_available
+                            else []
+                        ),
                     }
                 }
             }
             launch_metadata = self._merge_capability_metadata(
                 request.metadata,
-                docker_capability_metadata,
+                container_job_capability_metadata,
             )
             container_request = request.model_copy(
                 update={
@@ -2365,12 +2751,12 @@ class DockerCodexManagedSessionController:
             CodexManagedSessionHandle.model_validate(payload),
             request,
         )
-        if docker_capability_metadata:
+        if container_job_capability_metadata:
             handle = handle.model_copy(
                 update={
                     "metadata": self._merge_capability_metadata(
                         handle.metadata,
-                        docker_capability_metadata,
+                        container_job_capability_metadata,
                     )
                 }
             )

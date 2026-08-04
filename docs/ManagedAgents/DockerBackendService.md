@@ -747,7 +747,11 @@ When `AUTH_PROVIDER` requires authentication, the managed-session credential
 boundary supplies a scoped Bearer credential as
 `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
 An authenticated deployment must not expose a shared or deployment-wide token
-to managed sessions.
+to managed sessions. The token is signed by the trusted session launcher,
+expires with the bounded session lifetime, and is accepted only by
+`/mcp/container/tools/call`. Its claims bind the owner, runtime, agent run, and
+session; submissions whose logical workspace or correlation differs from those
+claims fail before job creation.
 
 The command derives the canonical `managed_runtime` locator from the active
 session, submits durable work, polls `container.status`, and exits from the
@@ -818,11 +822,26 @@ idempotency correlation. The spec may name an approved `imageSourceRef` and
 approved `cacheRef` values, but it cannot choose Docker endpoints, host paths,
 raw volume names, or registry credentials.
 
+The validated runtime profile remains authoritative for workload capability.
+`workloadMode=container-jobs` enables the scoped endpoint,
+`workloadMode=no-docker` advertises no container tools, and
+`workloadMode=kubernetes-job` fails before launch until a configured Kubernetes
+backend exists. Workflow text and runtime environment overrides cannot elevate
+that profile decision.
+
 The `tactics-unreal` source selects the operator-provisioned Unreal image in the
 deployment daemon. Its default `pullPolicy=never` deliberately treats a missing
 private image as an actionable provisioning error rather than attempting an
 anonymous pull. The `unreal-ccache` and `unreal-ubt` cache refs resolve to exact
-deployment-owned volumes and targets.
+deployment-owned targets and owner-scoped host volumes derived from the
+configured base names. Jobs owned by the same authorized principal reuse their
+cache; another user or service identity receives a different writable volume.
+
+The checked-in `tactics-test` Skill detects managed-session identity and routes
+its existing `run_dood_unreal_tactics.sh` entrypoint through
+`moonmind container run`. Outside MoonMind the same entrypoint retains its
+direct-Docker behavior, so the portable capability does not depend on a
+MoonMind-only fork.
 
 ---
 

@@ -42,6 +42,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
 )
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
@@ -1900,24 +1901,31 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
     assert launched_request.environment["MOONMIND_UNREAL_ENGINE_IMAGE"] == pinned
 
 
-async def test_pre_cutover_ensure_sidecar_activity_fails_non_retryably() -> None:
-    activities = TemporalAgentRuntimeActivities()
-
-    with pytest.raises(
-        activity_runtime_module.temporal_exceptions.ApplicationError,
-        match="submit typed work through MoonMind container jobs",
-    ) as exc_info:
-        await activities.agent_runtime_ensure_docker_sidecar(
-            {
-                "sessionId": "sess-old",
-                "sessionEpoch": 1,
-                "containerId": "container-old",
-                "composeRequired": True,
-            }
+async def test_pre_cutover_ensure_sidecar_activity_remains_executable() -> None:
+    controller = AsyncMock()
+    controller.ensure_docker_sidecar = AsyncMock(
+        return_value=ManagedSessionEnsureDockerSidecarResponse(
+            state="ready",
+            dockerHost="unix:///var/run/moonmind-docker/docker.sock",
+            composeAvailable=True,
+            daemon={"ready": True, "version": "27.0.0"},
         )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
 
-    assert exc_info.value.non_retryable is True
-    assert exc_info.value.type == "MANAGED_SESSION_DOCKER_SIDECAR_REMOVED"
+    result = await activities.agent_runtime_ensure_docker_sidecar(
+        {
+            "sessionId": "sess-old",
+            "sessionEpoch": 1,
+            "containerId": "container-old",
+            "composeRequired": True,
+        }
+    )
+
+    assert result.state == "ready"
+    assert result.compose_available is True
+    validated = controller.ensure_docker_sidecar.await_args.args[0]
+    assert validated.session_id == "sess-old"
 
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -3652,6 +3660,22 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
                         "credential_source": "secret_ref",
                         "tags": ["proxy-first"],
                         "provider_id": "anthropic",
+                        "owner_user_id": "user-boundary",
+                        "runtime_profile": {
+                            "workloadMode": "no-docker",
+                            "workspace": {
+                                "mountPath": "/work/agent_jobs",
+                                "lifecycle": "session",
+                            },
+                            "agent": {
+                                "workspace": {"mountPath": "/work/agent_jobs"},
+                                "dockerClient": {
+                                    "enabled": False,
+                                    "composePlugin": False,
+                                    "daemonInAgent": False,
+                                },
+                            },
+                        },
                         "secret_refs": {"anthropic_api_key": "db://123"},
                     },
                     "runtime_for_profile": "claude_code",
@@ -3665,6 +3689,8 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
             assert result["profile_id"] == "proxy-prof"
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
             assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
+            assert result["workload_mode"] == "no-docker"
+            assert result["owner_user_id"] == "user-boundary"
 
 @pytest.mark.asyncio
 async def test_agent_runtime_build_launch_context_prefers_proxy_for_supported_secret_ref(

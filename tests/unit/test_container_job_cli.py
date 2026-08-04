@@ -134,6 +134,42 @@ def test_generic_submission_injects_authoritative_identity_and_workspace() -> No
     }
 
 
+def test_generic_submission_hashes_the_full_long_idempotency_identity() -> None:
+    long_run_id = "run-" + "a" * 240
+    common_prefix = "request-" + "b" * 260
+
+    first = container_job_submission(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+        env={
+            **_ENV,
+            "MOONMIND_AGENT_RUN_ID": long_run_id,
+            "MOONMIND_TASK_WORKFLOW_ID": long_run_id,
+        },
+        request_id=common_prefix + "one",
+    )
+    second = container_job_submission(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+        env={
+            **_ENV,
+            "MOONMIND_AGENT_RUN_ID": long_run_id,
+            "MOONMIND_TASK_WORKFLOW_ID": long_run_id,
+        },
+        request_id=common_prefix + "two",
+    )
+
+    assert len(first["idempotencyKey"]) == 255
+    assert len(second["idempotencyKey"]) == 255
+    assert first["idempotencyKey"] != second["idempotencyKey"]
+
+
 def test_load_generic_spec_rejects_submission_envelope(tmp_path) -> None:
     path = tmp_path / "job.json"
     path.write_text('{"spec": {"image": "alpine:3.20"}}', encoding="utf-8")

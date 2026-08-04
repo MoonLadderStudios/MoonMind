@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -181,12 +182,20 @@ def container_job_submission(
     normalized_spec["workspaceRef"] = _managed_workspace(source)
     try:
         validated_spec = ContainerJobSpec.model_validate(normalized_spec)
+        idempotency_components = (
+            f"container-run:{agent_run_id}:{normalized_request_id}"
+        )
+        idempotency_key = idempotency_components
+        if len(idempotency_key) > 255:
+            digest = hashlib.sha256(idempotency_components.encode("utf-8")).hexdigest()
+            readable_prefix = f"container-run:{agent_run_id}:"
+            idempotency_key = (
+                readable_prefix[: 255 - len(digest) - 1] + ":" + digest
+            )
         submission = ContainerJobSubmitRequest.model_validate(
             {
                 "contractVersion": "v1",
-                "idempotencyKey": (
-                    f"container-run:{agent_run_id}:{normalized_request_id}"
-                )[:255],
+                "idempotencyKey": idempotency_key,
                 "source": {
                     "source": "managed_session",
                     "workflowId": workflow_id,

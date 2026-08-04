@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.temporal_payload_policy import (
     MAX_TEMPORAL_METADATA_REF_CHARS,
     MAX_TEMPORAL_METADATA_STRING_CHARS,
@@ -77,6 +78,11 @@ ManagedSessionRuntimeFamily = Literal["codex"]
 ManagedSessionRuntimeId = Literal["codex_cli"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
+ManagedSessionWorkloadMode = Literal[
+    "container-jobs",
+    "no-docker",
+    "kubernetes-job",
+]
 ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
 ManagedSessionHandleStatus = Literal[
     "launching",
@@ -1096,6 +1102,57 @@ class ManagedGitHubCredentialDescriptor(BaseModel):
             )
         return self
 
+
+ManagedSessionDockerCapabilityMode = Literal[
+    "sidecar-dind",
+    "sidecar-dind-rootless",
+]
+ManagedSessionDockerState = Literal[
+    "not_allowed",
+    "not_started",
+    "starting",
+    "ready",
+    "failed",
+]
+
+
+class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
+    """Replay-compatible request retained for pre-cutover workflow histories."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    container_id: NonBlankStr = Field(..., alias="containerId")
+    thread_id: NonBlankStr | None = Field(None, alias="threadId")
+    reason: NonBlankStr | None = Field(None, alias="reason")
+    compose_required: bool = Field(False, alias="composeRequired")
+
+
+class ManagedSessionDockerDaemonStatus(BaseModel):
+    """Observed readiness for a replay-compatible Docker sidecar."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    ready: bool = Field(False, alias="ready")
+    version: str = Field("", alias="version")
+
+
+class ManagedSessionEnsureDockerSidecarResponse(BaseModel):
+    """Replay-compatible result for already-scheduled sidecar Activities."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    state: ManagedSessionDockerState = Field(..., alias="state")
+    docker_host: str | None = Field(None, alias="dockerHost")
+    mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
+    compose_available: bool = Field(False, alias="composeAvailable")
+    daemon: ManagedSessionDockerDaemonStatus = Field(
+        default_factory=ManagedSessionDockerDaemonStatus,
+        alias="daemon",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a workflow-scoped remote Codex session container."""
 
@@ -1112,6 +1169,12 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
+    workload_mode: ManagedSessionWorkloadMode = Field(
+        "container-jobs", alias="workloadMode"
+    )
+    container_job_owner: OwnerIdentity | None = Field(
+        None, alias="containerJobOwner"
+    )
     turn_completion_timeout_seconds: int = Field(
         3600,
         alias="turnCompletionTimeoutSeconds",
@@ -4785,7 +4848,13 @@ __all__ = [
     "ManagedSessionRuntimeId",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
+    "ManagedSessionDockerCapabilityMode",
+    "ManagedSessionDockerDaemonStatus",
+    "ManagedSessionDockerState",
+    "ManagedSessionEnsureDockerSidecarRequest",
+    "ManagedSessionEnsureDockerSidecarResponse",
     "ManagedSessionContainerBackend",
+    "ManagedSessionWorkloadMode",
     "MANAGED_SESSION_CONTROL_ACTIONS",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",

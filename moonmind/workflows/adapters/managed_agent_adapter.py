@@ -42,6 +42,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
     ManagedAgentRuntimeProfile,
+    ManagedRuntimeWorkloadMode,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
@@ -522,6 +523,8 @@ class ManagedProfileLaunchContext:
     delta_env_overrides: dict[str, str]
     passthrough_env_keys: list[str]
     env_keys_count: int
+    workload_mode: ManagedRuntimeWorkloadMode = "container-jobs"
+    owner_user_id: str | None = None
 
 def default_credential_source_for_runtime(runtime_id: str) -> str:
     """Return the deterministic default credential source for one runtime."""
@@ -543,13 +546,16 @@ def build_managed_profile_launch_context(
 
     del workflow_id  # Reserved for activity-side shaping.
     runtime_profile = profile.get("runtime_profile") or profile.get("runtimeProfile")
+    workload_mode: ManagedRuntimeWorkloadMode = "container-jobs"
     if runtime_profile is not None:
         if not isinstance(runtime_profile, Mapping):
             raise ValueError(
                 "runtime_profile must be a mapping of profile fields; "
                 "non-object runtime profiles cannot satisfy launch invariants"
             )
-        ManagedAgentRuntimeProfile.model_validate(runtime_profile)
+        workload_mode = ManagedAgentRuntimeProfile.model_validate(
+            runtime_profile
+        ).workload_mode
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
@@ -565,6 +571,9 @@ def build_managed_profile_launch_context(
 
     profile_id = str(profile.get("profile_id") or "").strip()
     profile_runtime = str(runtime_for_profile or "").strip()
+    owner_user_id = str(
+        profile.get("owner_user_id") or profile.get("ownerUserId") or ""
+    ).strip() or None
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
@@ -593,6 +602,8 @@ def build_managed_profile_launch_context(
         delta_env_overrides=delta_env_overrides,
         passthrough_env_keys=passthrough_env_keys,
         env_keys_count=len(delta_env_overrides) + len(passthrough_env_keys),
+        workload_mode=workload_mode,
+        owner_user_id=owner_user_id,
     )
 
 def _in_workflow_context() -> bool:

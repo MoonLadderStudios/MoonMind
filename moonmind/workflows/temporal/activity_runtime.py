@@ -205,6 +205,8 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
@@ -8315,6 +8317,8 @@ class TemporalAgentRuntimeActivities:
             delta_env_overrides=delta_env_overrides,
             passthrough_env_keys=passthrough_env_keys,
             env_keys_count=len(combined_env_keys),
+            workload_mode=context.workload_mode,
+            owner_user_id=context.owner_user_id,
         )
         return {
             "profile_id": result.profile_id,
@@ -8322,6 +8326,8 @@ class TemporalAgentRuntimeActivities:
             "delta_env_overrides": result.delta_env_overrides,
             "passthrough_env_keys": result.passthrough_env_keys,
             "env_keys_count": result.env_keys_count,
+            "workload_mode": result.workload_mode,
+            "owner_user_id": result.owner_user_id,
         }
 
     async def agent_runtime_launch(
@@ -11183,22 +11189,33 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_ensure_docker_sidecar(
         self,
-        request: Mapping[str, Any] | None = None,
+        request: Mapping[str, Any]
+        | ManagedSessionEnsureDockerSidecarRequest
+        | None = None,
         /,
-    ) -> None:
-        """Fail pre-cutover activity histories without exposing Docker authority."""
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        """Finish sidecar work already scheduled by a pre-cutover history."""
 
-        session_id = ""
-        if isinstance(request, Mapping):
-            session_id = str(
-                request.get("sessionId") or request.get("session_id") or ""
-            ).strip()
-        detail = f" for session {session_id}" if session_id else ""
-        raise temporal_exceptions.ApplicationError(
-            "managed-session Docker sidecars were removed"
-            f"{detail}; submit typed work through MoonMind container jobs",
-            type="MANAGED_SESSION_DOCKER_SIDECAR_REMOVED",
-            non_retryable=True,
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.ensure_docker_sidecar"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarRequest,
+        )
+        response = await _await_with_activity_heartbeats(
+            controller.ensure_docker_sidecar(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.ensure_docker_sidecar",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+            },
+        )
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarResponse,
         )
 
     async def agent_runtime_fetch_session_summary(
