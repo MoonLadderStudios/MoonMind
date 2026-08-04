@@ -301,13 +301,13 @@ async def _sync_env_managed_secrets() -> int:
 
 
 async def _sync_omnigent_bootstrap_agent_profile() -> str | None:
-    """Materialize OMNIGENT_DEFAULT_AGENT_NAME as a durable bootstrap profile.
+    """Materialize the durable active Codex-via-Omnigent bootstrap profile.
 
-    Section 8 of MoonLadderStudios/MoonMind#3517: when no durable Omnigent
-    agent-profile state exists yet, the environment default is materialized as
-    an explicit draft bootstrap profile version so operators can validate and
-    promote it. Durable state always wins; this is idempotent and skipped once
-    any profile exists. Kept resilient so it never blocks startup.
+    When no durable Omnigent agent-profile state exists, the portable ``codex``
+    identity (or an explicit first-start environment override) is materialized
+    as the active runtime default. It contains no credential or host authority;
+    live catalog readiness remains authoritative for launch admission. Durable
+    state always wins, and seeding remains idempotent and startup-resilient.
     """
 
     try:

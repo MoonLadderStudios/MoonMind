@@ -634,6 +634,7 @@ interface OmnigentCodexCatalogReadiness {
     gateReasons: OmnigentCatalogGateReason[];
   }>;
   gateReasons: OmnigentCatalogGateReason[];
+  supportGateReasons: OmnigentCatalogGateReason[];
 }
 
 interface ProviderModelEffortTier {
@@ -6026,7 +6027,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes ||
     dashboardConfig.system?.supportedRuntimes || ["codex_cli", "claude_code"];
-  const runtimeOptions = Array.from(new Set([...supportedAgentRuntimes, "omnigent"]));
+  const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -13506,18 +13507,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               }}
             >
               {runtimeOptions.map((runtimeOption) => (
-                <option
-                  key={runtimeOption}
-                  value={runtimeOption}
-                  disabled={runtimeOption === "omnigent" && omnigentCatalogQuery.data?.available !== true}
-                >
+                <option key={runtimeOption} value={runtimeOption}>
                   {formatRuntimeLabel(runtimeOption)}
                 </option>
               ))}
             </select>
-            {omnigentCatalogQuery.data?.available === false ? (
+            {runtime === "omnigent" && omnigentCatalogQuery.data?.available === false ? (
               <span className="small" role="status">
-                Codex via Omnigent is unavailable: {omnigentCatalogQuery.data.gateReasons[0]?.message || "readiness checks failed."}{" "}
+                Codex via Omnigent needs setup: {omnigentCatalogQuery.data.gateReasons[0]?.message || "readiness checks failed."}{" "}
                 <button type="button" onClick={() => void omnigentCatalogQuery.refetch()}>
                   Refresh readiness
                 </button>

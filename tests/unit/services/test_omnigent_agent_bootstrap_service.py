@@ -123,7 +123,7 @@ async def test_default_marked_but_not_active_fails_closed(session):
         )
 
 
-async def test_seed_materializes_draft_bootstrap_profile(session):
+async def test_seed_materializes_active_bootstrap_profile(session):
     seeded = await seed_bootstrap_agent_profile(
         session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
     )
@@ -131,9 +131,9 @@ async def test_seed_materializes_draft_bootstrap_profile(session):
 
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
-    assert profile.state == "draft"
-    assert profile.default_for_runtime is False
-    assert profile.active_version is None
+    assert profile.state == "active"
+    assert profile.default_for_runtime is True
+    assert profile.active_version == 1
 
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
@@ -144,6 +144,7 @@ async def test_seed_materializes_draft_bootstrap_profile(session):
     assert version.document["source"]["upstreamId"] == "codex-default"
     assert version.digest == router_digest(build_bootstrap_document("codex-default"))
     assert version.rollout_metadata["origin"] == "env_bootstrap"
+    assert version.validation_result["ready"] is True
 
     audit = await session.scalar(
         select(OmnigentAgentProfileAuditEvent).where(
@@ -152,12 +153,11 @@ async def test_seed_materializes_draft_bootstrap_profile(session):
     )
     assert audit.action == "bootstrap_materialized"
 
-    # A seeded draft is not active, so the env fallback still governs and is
-    # recorded until an operator validates and promotes the version.
     resolution = await resolve_default_agent_selection(
         session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
     )
-    assert resolution.source == "env_fallback"
+    assert resolution.source == "durable_profile"
+    assert resolution.default_agent_name == "codex-default"
 
 
 async def test_seed_is_idempotent(session):
@@ -184,9 +184,19 @@ async def test_seed_skipped_when_durable_state_exists(session):
     assert await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID) is None
 
 
-async def test_seed_skipped_when_env_absent(session):
-    assert await seed_bootstrap_agent_profile(session, env={}) is None
+async def test_seed_uses_builtin_codex_when_env_absent(session):
+    assert await seed_bootstrap_agent_profile(session, env={}) == BOOTSTRAP_PROFILE_ID
     count = await session.scalar(
         select(func.count()).select_from(OmnigentAgentProfile)
     )
-    assert count == 0
+    assert count == 1
+    profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert profile is not None
+    assert profile.state == "active"
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
+        )
+    )
+    assert version.document["source"]["upstreamId"] == "codex"
+    assert version.rollout_metadata["origin"] == "builtin_default"

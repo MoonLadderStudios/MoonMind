@@ -4515,6 +4515,14 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_binding.handler = "agent_runtime_handler"
     mock_build_bindings.return_value = [mock_binding]
 
+    async def attest(*, profile, **_kwargs):
+        return SimpleNamespace(
+            network_ref=profile.network_ref,
+            profile_ref=profile.ref,
+        )
+
+    attest_mock = AsyncMock(side_effect=attest)
+
     with (
         patch("moonmind.workflows.temporal.worker_runtime.settings") as mock_settings,
         patch(
@@ -4526,7 +4534,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         ) as mock_backend_cls,
         patch(
             "moonmind.security.egress.attest_docker_egress",
-            new=AsyncMock(return_value=MagicMock()),
+            new=attest_mock,
         ),
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
@@ -4534,6 +4542,15 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         resources, handlers = await _build_runtime_activities(topology)
 
     mock_backend_cls.return_value.check_readiness.assert_awaited_once()
+    assert attest_mock.await_count == 2
+    assert set(resources.enforced_network_refs) == {
+        "moonmind_restricted-egress-network",
+        "moonmind_omnigent-egress-network",
+    }
+    assert set(resources.enforced_egress_profile_refs) == {
+        "moonmind-provider-egress@1",
+        "moonmind-omnigent-egress@1",
+    }
 
     assert handlers == [
         "agent_runtime_handler",

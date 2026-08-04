@@ -9898,6 +9898,8 @@ export interface components {
             hostModes: string[];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+            /** Supportgatereasons */
+            supportGateReasons: components["schemas"]["GateReason"][];
             /** Compatibilitydiagnostics */
             compatibilityDiagnostics: {
                 [key: string]: unknown;

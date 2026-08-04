@@ -182,15 +182,20 @@ before acquiring a Provider Profile lease or mutating a host. Existing durable
 bindings remain authoritative for retry and conflicting explicit policy fails
 closed.
 
-`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` is bootstrap compatibility for local
-development only. It is consulted only when a request has no product-owned
-selection and no durable binding; it cannot override either authority. Workflow
-requests cannot provide host IDs, Docker volume names, credential bodies, or
-absolute bind sources.
+On-demand Docker is the built-in Codex default; static Compose is an explicit
+advanced policy. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when configured, supplies
+host-substrate settings after on-demand policy selection and cannot override a
+product-owned selection or durable binding. Workflow requests cannot provide
+host IDs, Docker volume names, credential bodies, or absolute bind sources.
 
 ### 5.4 Image authority
 
-Production and credentialed conformance prefer immutable `OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` values containing digest-pinned server and host images. Legacy repository/tag pairs remain bootstrap-compatible, but a policy or conformance profile that requires immutability fails closed when only a mutable tag is available.
+Stock repository/tag values, including `latest`, are convenient bootstrap
+inputs. MoonMind acquires and resolves them at the service boundary, then
+persists only digest-pinned server and host references in active policy.
+Launches never treat the mutable input as authority. Production release and
+credentialed conformance evidence continues to name the resolved immutable
+images explicitly.
 
 ---
 

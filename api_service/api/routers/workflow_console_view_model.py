@@ -545,7 +545,12 @@ def status_maps() -> dict[str, dict[str, str]]:
     return deepcopy(_STATUS_MAPS)
 
 def _build_supported_runtimes() -> list[str]:
-    supported: list[str] = ["codex_cli", "claude_code", "codex_cloud"]
+    supported: list[str] = [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported

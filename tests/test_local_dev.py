@@ -316,6 +316,26 @@ def test_api_service_runs_with_container_init():
     )
 
 
+def test_api_service_enables_omnigent_with_stock_images_by_default():
+    compose_data = _load_compose()
+    api_env = _env_map(compose_data["services"]["api"]["environment"])
+
+    assert api_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+    assert api_env["OMNIGENT_SERVER_URL"] == (
+        "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+    )
+    assert api_env["OMNIGENT_IMAGE"] == (
+        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
+    )
+    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_HOST_IMAGE"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
+    )
+    assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
+
+
 def test_api_service_mounts_agent_runtime_workspace_volume():
     """Dashboard observability must read managed-run records from agent_workspaces."""
     compose_path = Path("docker-compose.yaml")
@@ -529,6 +549,9 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
 def test_omnigent_env_template_and_optional_config_for_mm_970():
     env_template = Path(".env-template").read_text(encoding="utf-8")
     for expected_name in (
+        "OMNIGENT_ENABLED",
+        "OMNIGENT_SERVER_URL",
+        "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
         "OMNIGENT_PORT",
@@ -557,6 +580,7 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_OIDC_ALLOW_INVITES",
         "OMNIGENT_DOMAIN",
         "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
     ):

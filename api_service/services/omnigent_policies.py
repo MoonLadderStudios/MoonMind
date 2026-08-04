@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 import os
 import platform
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +32,20 @@ from moonmind.omnigent.policies import (
     document_digest,
     normalize_document,
 )
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+from moonmind.workflows.temporal.container_image_acquisition import (
+    normalize_image_reference,
+)
+from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
+
+
+logger = logging.getLogger(__name__)
+
+_DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
+_HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
+_IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
+ImageResolver = Callable[[str], Awaitable[str | None]]
 
 
 class PolicyConflict(ValueError):
@@ -64,7 +80,11 @@ def validate_policy(
     payload = document.model_dump(by_alias=True, mode="json")
     image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
     for field in ("serverImageRef", "hostImageRef"):
-        if not image_pattern.fullmatch(payload["host"][field]):
+        image_ref = payload["host"][field]
+        if (
+            not image_pattern.fullmatch(image_ref)
+            or image_ref.endswith("@sha256:" + "0" * 64)
+        ):
             diagnostics.append({
                 "code": "OMNIGENT_INVALID_IMAGE_REF",
                 "path": f"host.{field}",
@@ -339,12 +359,151 @@ class OmnigentPolicyService:
         ))
 
 
-def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyDocument:
+def _configured_image_ref(
+    *,
+    env: Mapping[str, str],
+    ref_variable: str,
+    repository_variable: str,
+    tag_variable: str,
+    default_repository: str,
+) -> str:
+    explicit = str(env.get(ref_variable, "") or "").strip()
+    if explicit:
+        return explicit
+    repository = str(env.get(repository_variable, "") or "").strip()
+    repository = repository or default_repository
+    if "@" in repository:
+        return repository
+    tag = str(env.get(tag_variable, "") or "").strip() or "latest"
+    return f"{repository}:{tag}"
+
+
+def configured_bootstrap_image_refs(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return the operator-facing server and host image inputs.
+
+    Mutable tags are intentionally accepted at this bootstrap boundary. They
+    are resolved to repository digests before an immutable policy is created;
+    mutable values never become launch authority.
+    """
+
+    source = os.environ if env is None else env
+    return (
+        _configured_image_ref(
+            env=source,
+            ref_variable="OMNIGENT_IMAGE_REF",
+            repository_variable="OMNIGENT_IMAGE",
+            tag_variable="OMNIGENT_IMAGE_TAG",
+            default_repository=_SERVER_IMAGE_REPOSITORY,
+        ),
+        _configured_image_ref(
+            env=source,
+            ref_variable="OMNIGENT_HOST_IMAGE_REF",
+            repository_variable="OMNIGENT_HOST_IMAGE",
+            tag_variable="OMNIGENT_HOST_IMAGE_TAG",
+            default_repository=_HOST_IMAGE_REPOSITORY,
+        ),
+    )
+
+
+def _repository_digest(image_ref: str, inspect_output: bytes) -> str | None:
+    """Select the exact repository digest that matches ``image_ref``."""
+
+    _, _, raw_repo_digests = inspect_output.decode(
+        "utf-8", errors="replace"
+    ).strip().partition("\t")
+    requested = normalize_image_reference(image_ref)
+    for candidate in re.split(r"[,\s]+", raw_repo_digests):
+        candidate = candidate.strip()
+        if not _DIGEST_IMAGE.fullmatch(candidate):
+            continue
+        normalized = normalize_image_reference(candidate)
+        if (
+            normalized.registry == requested.registry
+            and normalized.repository == requested.repository
+        ):
+            return candidate
+    return None
+
+
+async def resolve_bootstrap_image_ref(image_ref: str) -> str | None:
+    """Acquire a stock image and return immutable launch authority.
+
+    The API already has narrowly proxied Docker image authority for its
+    existing runtime duties. Bootstrap uses that boundary to turn convenient
+    tags (including ``latest``) into repository digests. If the registry is
+    temporarily unavailable, a previously acquired local repository digest is
+    still safe to use.
+    """
+
+    image_ref = image_ref.strip()
+    if _DIGEST_IMAGE.fullmatch(image_ref):
+        return image_ref
+
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
+
+    async def inspect() -> str | None:
+        code, stdout, _ = await run_runtime_command(
+            (docker_binary, "image", "inspect", "--format", _IMAGE_INSPECT_FORMAT, image_ref),
+            timeout_seconds=30,
+            output_limit_bytes=64_000,
+        )
+        return None if code else _repository_digest(image_ref, stdout)
+
+    try:
+        local_digest = await inspect()
+    except OSError:
+        local_digest = None
+    try:
+        code, _, stderr = await run_runtime_command(
+            (docker_binary, "pull", image_ref),
+            timeout_seconds=600,
+            output_limit_bytes=64_000,
+        )
+    except OSError:
+        code, stderr = 1, b"Docker image acquisition was unavailable"
+    if code:
+        if local_digest:
+            logger.warning(
+                "Could not refresh Omnigent bootstrap image %s; using the "
+                "previously acquired immutable repository digest",
+                image_ref,
+            )
+            return local_digest
+        logger.warning(
+            "Could not acquire Omnigent bootstrap image %s: %s",
+            image_ref,
+            stderr.decode("utf-8", errors="replace").strip()
+            or "Docker pull failed",
+        )
+        return None
+    try:
+        return await inspect() or local_digest
+    except OSError:
+        return local_digest
+
+
+async def resolve_bootstrap_image_refs(
+    *,
+    env: Mapping[str, str] | None = None,
+    image_resolver: ImageResolver = resolve_bootstrap_image_ref,
+) -> tuple[str | None, str | None]:
+    server_input, host_input = configured_bootstrap_image_refs(env)
+    server_image = await image_resolver(server_input)
+    host_image = await image_resolver(host_input)
+    return server_image, host_image
+
+
+def bootstrap_document(
+    *,
+    host_mode: str,
+    execution_profile_ref: str,
+    server_image_ref: str | None = None,
+    host_image_ref: str | None = None,
+) -> PolicyDocument:
     """Project legacy built-ins into an explicit, reviewable bootstrap policy."""
 
-    image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
-    server_image = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
-    host_image = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
         platform.machine().lower(), platform.machine().lower()
     )
@@ -354,11 +513,14 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
         "execution": {"profileRef": execution_profile_ref, "harness": "codex-native", "agentIdentities": ["codex"]},
         "host": {"mode": host_mode, "backendRef": "compose" if host_mode == "static_compose" else "container-backend",
                  "architectures": [architecture],
-                 "serverImageRef": server_image if image_pattern.fullmatch(server_image) else "image-ref:omnigent-server",
-                 "hostImageRef": host_image if image_pattern.fullmatch(host_image) else "image-ref:omnigent-codex-host"},
+                 "serverImageRef": server_image_ref if _DIGEST_IMAGE.fullmatch(server_image_ref or "") else "image-ref:omnigent-server",
+                 "hostImageRef": host_image_ref if _DIGEST_IMAGE.fullmatch(host_image_ref or "") else "image-ref:omnigent-codex-host"},
         "resources": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400,
                       "temporaryStorageMiB": 256, "concurrency": 1},
-        "network": {"attachmentRef": "local-network", "egressProfileRef": "enforced-default"},
+        "network": {
+            "attachmentRef": OMNIGENT_EGRESS_PROFILE.network_ref,
+            "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+        },
         "workspace": {"allowedClasses": ["workflow"], "repositoryMutation": True,
                       "mountClasses": ["workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"],
                       "runtimeUid": 1000, "runtimeGid": 1000},
@@ -378,17 +540,52 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
     })
 
 
-async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
+async def seed_bootstrap_policies(
+    session: AsyncSession,
+    *,
+    env: Mapping[str, str] | None = None,
+    image_resolver: ImageResolver = resolve_bootstrap_image_ref,
+) -> list[str]:
     """Idempotently persist the three pre-existing built-in authorities."""
 
     service = OmnigentPolicyService(session)
-    seeded: list[str] = []
-    for policy_id, name, host_mode, profile_ref in (
+    definitions = (
         ("omnigent-codex", "Omnigent Codex execution", "static_compose", "omnigent-codex@1"),
         ("codex-static", "Codex static host", "static_compose", "omnigent-codex@1"),
         ("codex-on-demand", "Codex on-demand host", "on_demand_docker", "omnigent-codex@1"),
-    ):
-        document = bootstrap_document(host_mode=host_mode, execution_profile_ref=profile_ref)
+    )
+    reconciliation_required = False
+    for policy_id, *_ in definitions:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None:
+            reconciliation_required = True
+            break
+        try:
+            row = await service.get_version(policy_id, 1)
+        except PolicyNotFound:
+            reconciliation_required = True
+            break
+        if (
+            row.state != PolicyState.ACTIVE.value
+            or not row.validation_json.get("valid")
+            or policy.default_version != 1
+        ):
+            reconciliation_required = True
+            break
+    if not reconciliation_required:
+        return []
+
+    seeded: list[str] = []
+    server_image, host_image = await resolve_bootstrap_image_refs(
+        env=env, image_resolver=image_resolver
+    )
+    for policy_id, name, host_mode, profile_ref in definitions:
+        document = bootstrap_document(
+            host_mode=host_mode,
+            execution_profile_ref=profile_ref,
+            server_image_ref=server_image,
+            host_image_ref=host_image,
+        )
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
             row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",

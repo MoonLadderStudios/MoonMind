@@ -48,6 +48,17 @@ services:
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      # Omnigent is a normal local runtime. Operators can still disable or
+      # redirect it explicitly, but the canonical Compose path needs no hidden
+      # enablement variables.
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_HOST_IMAGE_REF=${OMNIGENT_HOST_IMAGE_REF:-}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
       - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
