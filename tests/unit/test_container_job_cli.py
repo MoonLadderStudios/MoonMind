@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from moonmind.cli import app
@@ -32,10 +33,10 @@ def test_python_test_cli_accepts_optional_variadic_targets() -> None:
 
 
 def test_generic_container_cli_requires_a_spec_file() -> None:
-    result = CliRunner().invoke(app, ["container", "run", "--help"])
+    result = CliRunner().invoke(app, ["container", "run"])
 
-    assert result.exit_code == 0
-    assert "--spec" in result.stdout
+    assert result.exit_code == 2
+    assert "Missing option '--spec'." in unstyle(result.output)
 
 
 class _FakeClient:
