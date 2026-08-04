@@ -708,6 +708,7 @@ def test_pre_egress_lifecycle_activity_payload_remains_compatible() -> None:
     assert legacy.cleanup_succeeded is None
     assert legacy.model_dump(by_alias=True, exclude_none=True) == {
         "contractVersion": "v1",
+        "resolvedCacheRefs": (),
         "diagnosticsRef": "art:legacy-cleanup",
     }
 
