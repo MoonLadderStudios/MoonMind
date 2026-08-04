@@ -23,6 +23,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
     _get_create_embedded_facade,
     _get_execution_service,
+    _get_launch_default_agent_name,
     _require_bridge_enabled,
     embedded_host_auth_preflight,
     router,
@@ -64,7 +65,20 @@ def _validated_embedded_evidence(monkeypatch):
 
     module = importlib.import_module("api_service.api.routers.omnigent_bridge")
 
-    async def resolved(_config):
+    policy_authority = {
+        "policyRef": "omnigent-codex@1",
+        "policyDigest": "sha256:durable-policy",
+        "snapshotRef": "omnigent-policy:sha256:durable-snapshot",
+        "validation": {"valid": True, "diagnostics": []},
+        "boundaries": {
+            "host": {
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            }
+        },
+    }
+
+    async def resolved(_config, **_kwargs):
         return {
             key: {
                 "status": "passed",
@@ -74,6 +88,11 @@ def _validated_embedded_evidence(monkeypatch):
         }
 
     monkeypatch.setattr(module, "_resolve_embedded_evidence", resolved)
+    monkeypatch.setattr(
+        module,
+        "_resolve_bridge_policy_authority",
+        AsyncMock(return_value=policy_authority),
+    )
 
 
 def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
@@ -98,6 +117,12 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
         "static_compose",
         "on_demand_docker",
     ]
+    assert diagnostics["policyAuthority"] == {
+        "policyRef": "omnigent-codex@1",
+        "policyDigest": "sha256:durable-policy",
+        "policySnapshotRef": "omnigent-policy:sha256:durable-snapshot",
+        "validation": {"valid": True, "diagnostics": []},
+    }
 
 
 @pytest.mark.asyncio
@@ -148,7 +173,7 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
         }
     )
 
-    async def invalid(_config):
+    async def invalid(_config, **_kwargs):
         return {
             key: {
                 "status": "failed",
@@ -231,10 +256,18 @@ class _FakeProxy:
             else session_owner
         )
 
-    async def create_session(self, *, request, binding):
+    async def create_session(
+        self, *, request, binding, default_agent_name_override=None
+    ):
         if self.create_error is not None:
             raise self.create_error
-        self.created.append({"binding": binding, "request": request})
+        self.created.append(
+            {
+                "binding": binding,
+                "request": request,
+                "default_agent_name_override": default_agent_name_override,
+            }
+        )
         return {"id": "sess-1", "status": "running", "moonmind": {"reused": False}}
 
     async def get_session_owner(self, session_id: str):
@@ -475,6 +508,7 @@ def _build(
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
+    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
     if registry is not None:
         app.dependency_overrides[get_capability_registry] = lambda: registry
     if config is not None:
@@ -1513,6 +1547,7 @@ def test_superuser_owns_any_workflow() -> None:
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
@@ -1542,6 +1577,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
     app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
     client = TestClient(app)
 
     resp = client.post(

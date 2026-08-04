@@ -1217,6 +1217,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/agent-profiles/{profile_id}/smoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Smoke Validate Profile
+         * @description Run an operator-triggered bounded smoke preflight (Sec 7).
+         *
+         *     Reuses the shared readiness checks, adds the strongest *safe* session-start
+         *     capability probe (bridge reachability, never a real launch), bounds the
+         *     whole preflight by a time budget, secret-scans diagnostics, and guarantees
+         *     release of any validation-owned lease. A pass is readiness evidence, not a
+         *     workflow-success guarantee, so it never mutates the version's activation
+         *     validation result.
+         */
+        post: operations["smoke_validate_profile_api_omnigent_agent_profiles__profile_id__smoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/agent-profiles/{profile_id}/import-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Profile Bundle
+         * @description Publish one validated immutable bundle through the authorized facade.
+         */
+        post: operations["import_profile_bundle_api_omnigent_agent_profiles__profile_id__import_bundle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/agent-profiles/{profile_id}/default": {
         parameters: {
             query?: never;
@@ -3692,6 +3739,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/policies/{policy_id}/versions/{version}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Policy Usage */
+        get: operations["policy_usage_api_omnigent_policies__policy_id__versions__version__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/policies/{policy_id}/versions/{version}/transition": {
         parameters: {
             query?: never;
@@ -5696,6 +5760,11 @@ export interface components {
             /** Evidenceincompletereason */
             evidenceIncompleteReason?: string | null;
         };
+        /** BundleImportCreate */
+        BundleImportCreate: {
+            /** Version */
+            version?: number | null;
+        };
         /** CacheMount */
         CacheMount: {
             /** Cacheref */
@@ -5918,6 +5987,10 @@ export interface components {
             maxBudgetUsd?: number | null;
             /** Providerprofileref */
             providerProfileRef?: string | null;
+            /** Agentprofile */
+            agentProfile?: {
+                [key: string]: unknown;
+            } | null;
             /** Executionprofileref */
             executionProfileRef?: string | null;
             /** Model */
@@ -11646,6 +11719,12 @@ export interface components {
             gitWorkBranch?: string | null;
             /** Maxbudgetusd */
             maxBudgetUsd?: number | null;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Agentprofile */
+            agentProfile?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RemediationCollectionItemModel */
         RemediationCollectionItemModel: {
@@ -12405,6 +12484,11 @@ export interface components {
             warnings?: {
                 [key: string]: string;
             }[];
+        };
+        /** SmokeCreate */
+        SmokeCreate: {
+            /** Version */
+            version?: number | null;
         };
         /** SnapshotCreate */
         SnapshotCreate: {
@@ -16147,6 +16231,80 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ValidateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    smoke_validate_profile_api_omnigent_agent_profiles__profile_id__smoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmokeCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_profile_bundle_api_omnigent_agent_profiles__profile_id__import_bundle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundleImportCreate"];
             };
         };
         responses: {
@@ -22067,6 +22225,40 @@ export interface operations {
             header?: never;
             path: {
                 policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    policy_usage_api_omnigent_policies__policy_id__versions__version__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_id: string;
+                version: number;
             };
             cookie?: never;
         };

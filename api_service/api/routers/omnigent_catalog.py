@@ -565,8 +565,12 @@ async def get_omnigent_codex_catalog_readiness(
 
     available = any(item.available for item in profile_views)
     top_reasons = [] if available else (profile_views[0].gate_reasons if profile_views else [_reason("execution_profile_unavailable")])
+    # The catalog readiness projection does not depend on the immutable policy
+    # authority (that lives on the bridge /readiness surface), so it is not
+    # resolved here: doing so would add a fail-closed dependency that returns
+    # 503 in a proxy-first deployment without a seeded default policy.
     diagnostics = _compatibility_diagnostics(
-        config=config, readiness=bridge, auth=auth
+        config=config, readiness=bridge, auth=auth, policy_authority=None
     )
     diagnostics["capabilitySummary"] = sorted({
         str(capability)

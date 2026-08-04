@@ -87,4 +87,39 @@ describe('remediationCreateDraft', () => {
     clearRemediationCreateDraft(draftId);
     expect(readRemediationCreateDraft(draftId)).toBeNull();
   });
+
+  it('preserves the immutable agent and Provider Profile selection', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      targetRuntime: 'omnigent',
+      profileId: 'oauth-team',
+      agentProfile: { profileId: 'team-codex', version: 2 },
+    });
+
+    expect(draft.agentProfile).toEqual({
+      profileId: 'team-codex',
+      version: 2,
+      providerProfileRef: 'oauth-team',
+    });
+  });
+
+  it('recovers the immutable selection from execution input parameters', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      targetRuntime: 'omnigent',
+      profileId: 'oauth-team',
+      inputParameters: {
+        agentProfile: { profileId: 'team-codex', version: 2 },
+        agentProfileSnapshot: { providerProfileRef: 'oauth-team' },
+      },
+    });
+
+    expect(draft.agentProfile).toEqual({
+      profileId: 'team-codex',
+      version: 2,
+      providerProfileRef: 'oauth-team',
+    });
+  });
 });
