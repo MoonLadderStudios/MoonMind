@@ -607,6 +607,14 @@ may evict unused images under disk pressure while protecting images used by
 active containers and operator-pinned digests. Job cleanup never performs global
 image pruning.
 
+The operator recovery path is `tools/cleanup-docker-space.sh`. It must remain
+usable when the Docker data root has no free space: inspection must not launch a
+diagnostic container, and `--dry-run` must execute only read operations. During
+the pre-cutover cleanup window, the utility may discover sidecars through the
+`moonmind.kind=session-docker-sidecar` ownership label and prune only images that
+their nested daemons report as unused. This compatibility cleanup is bounded to
+labeled MoonMind sidecars and must not remove active workload images.
+
 ---
 
 ## 12. Container security and resources

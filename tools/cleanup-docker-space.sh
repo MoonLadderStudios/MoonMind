@@ -8,12 +8,13 @@ Usage: cleanup-docker-space.sh [--dry-run] [--aggressive] [--help]
 Run Docker-space cleanup tasks to reclaim local disk.
 
 Default mode is safe/recovering:
+  - Remove unused images from labeled pre-cutover MoonMind session sidecars
   - Remove stopped containers
   - Remove dangling images
   - Prune builder cache
 
 Use --aggressive to also remove all unused images and unused volumes.
-Use --dry-run to print what would be removed without deleting it.
+Use --dry-run to inspect disk usage and print cleanup commands without deleting.
 USAGE
 }
 
@@ -46,47 +47,102 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "== Docker disk check for MoonMind postgres volume (best-effort) =="
-if docker volume inspect moonmind_postgres-data >/dev/null 2>&1; then
-  docker run --rm -v moonmind_postgres-data:/data alpine sh -c 'df -h /data'
-else
-  echo "Note: moonmind_postgres-data volume is not present yet."
-fi
+cleanup_failed=0
 
-prune_arg=()
+print_command() {
+  printf 'Would run:'
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+run_cleanup() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    print_command "$@"
+    return 0
+  fi
+
+  printf 'Running:'
+  printf ' %q' "$@"
+  printf '\n'
+  if ! "$@"; then
+    echo "Warning: cleanup command failed; continuing with the remaining recovery steps." >&2
+    cleanup_failed=1
+  fi
+}
+
+show_docker_usage() {
+  echo "== Docker disk usage (best-effort) =="
+  if ! docker system df; then
+    echo "Warning: Docker disk usage is unavailable; continuing with cleanup." >&2
+  fi
+}
+
+prune_pre_cutover_sidecars() {
+  local sidecar_output
+  local sidecar_id
+
+  echo "== Pre-cutover MoonMind session sidecars =="
+  if ! sidecar_output="$(
+    docker ps \
+      --filter 'label=moonmind.kind=session-docker-sidecar' \
+      --format '{{.ID}}'
+  )"; then
+    echo "Warning: could not discover managed-session sidecars." >&2
+    cleanup_failed=1
+    return
+  fi
+
+  if [[ -z "$sidecar_output" ]]; then
+    echo "No active pre-cutover session sidecars found."
+    return
+  fi
+
+  while IFS= read -r sidecar_id; do
+    [[ -n "$sidecar_id" ]] || continue
+    if [[ ! "$sidecar_id" =~ ^[0-9a-f]{12,64}$ ]]; then
+      echo "Warning: refusing unexpected Docker container id: $sidecar_id" >&2
+      cleanup_failed=1
+      continue
+    fi
+
+    echo "Sidecar $sidecar_id disk usage (best-effort):"
+    if ! docker exec "$sidecar_id" docker \
+      -H unix:///var/run/moonmind-docker/docker.sock system df; then
+      echo "Warning: sidecar $sidecar_id disk usage is unavailable." >&2
+    fi
+    run_cleanup docker exec "$sidecar_id" docker \
+      -H unix:///var/run/moonmind-docker/docker.sock image prune -af
+  done <<<"$sidecar_output"
+}
+
+show_docker_usage
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  prune_arg+=(--dry-run)
   echo "Dry-run mode: no data will be removed."
 fi
 
-echo "== Stopping cleanup plan =="
+prune_pre_cutover_sidecars
+
+echo "== Host cleanup plan =="
 if [[ "$AGGRESSIVE" -eq 1 ]]; then
   echo "Mode: aggressive"
 else
-  echo "Mode: safe (non-destructive by default)"
+  echo "Mode: safe recovery"
 fi
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "Would run: docker container prune -f ${prune_arg[*]}"
-  echo "Would run: docker image prune -f ${prune_arg[*]}"
-  echo "Would run: docker builder prune -f --all ${prune_arg[*]}"
-  if [[ "$AGGRESSIVE" -eq 1 ]]; then
-    echo "Would run: docker image prune -f -a ${prune_arg[*]}"
-    echo "Would run: docker volume prune -f ${prune_arg[*]}"
-  fi
-else
-  echo "Running docker container prune -f"
-  docker container prune -f
-  echo "Running docker image prune -f"
-  docker image prune -f
-  echo "Running docker builder prune -af"
-  docker builder prune -af
-  if [[ "$AGGRESSIVE" -eq 1 ]]; then
-    echo "Running docker image prune -af"
-    docker image prune -af
-    echo "Running docker volume prune -f"
-    docker volume prune -f
-  fi
+run_cleanup docker container prune -f
+run_cleanup docker image prune -f
+run_cleanup docker builder prune -af
+if [[ "$AGGRESSIVE" -eq 1 ]]; then
+  run_cleanup docker image prune -af
+  run_cleanup docker volume prune -f
+fi
+
+show_docker_usage
+
+if [[ "$cleanup_failed" -ne 0 ]]; then
+  echo "Cleanup completed with one or more failures." >&2
+  exit 1
 fi
 
 echo "Cleanup complete."
