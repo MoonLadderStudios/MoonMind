@@ -3002,6 +3002,9 @@ async def _run_coordinator_failure_case(
     # exercises coordinator failure/cleanup evidence, so treat enforcement as
     # already attested and let the intended failure stages surface.
     runtime._attest_egress = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    runtime._attest_workload_attachment = AsyncMock(  # type: ignore[method-assign]
+        return_value="container-1"
+    )
     runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
     runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
     runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
