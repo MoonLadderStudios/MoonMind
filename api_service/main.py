@@ -498,6 +498,7 @@ async def lifespan(app: FastAPI):
             try:
                 await retry_task
             except asyncio.CancelledError:
+                # Shutdown owns this task, so cancellation is the expected outcome.
                 pass
         # Shutdown logic
         teardown_providers()
