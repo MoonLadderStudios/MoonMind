@@ -48,6 +48,7 @@ type PolicyUsage = {
 type ProfileVersion = {
   version: number;
   digest: string;
+  document?: Record<string, unknown>;
   validationResult?: { ready?: boolean } | null;
 };
 type AgentProfile = {
@@ -59,6 +60,50 @@ type AgentProfile = {
   defaultForRuntime?: boolean;
   versions: ProfileVersion[];
 };
+type AgentProfileEditor = {
+  mode: 'create' | 'clone' | 'version'; source?: AgentProfile; id: string;
+  name: string; description: string; document: string;
+  sourceKind?: 'upstream' | 'bundle'; sourceRef?: string; bundleDigest?: string;
+  endpointRef?: string; executionProfileRef?: string; launchPolicyRef?: string;
+  policyRef?: string; providerRuntime?: string;
+};
+
+function structuredProfileDocument(draft: AgentProfileEditor): Record<string, unknown> {
+  const source = draft.sourceKind === 'bundle'
+    ? { bundleArtifactRef: draft.sourceRef, bundleDigest: draft.bundleDigest }
+    : { upstreamId: draft.sourceRef };
+  return {
+    schemaVersion: 'moonmind.omnigent-agent-profile.v1',
+    endpointRef: draft.endpointRef || 'default', bridgeMode: 'proxy', source,
+    harness: 'codex-native', requiredCapabilities: ['session.start'],
+    execution: {
+      defaultExecutionProfileRef: draft.executionProfileRef || 'omnigent-codex@1',
+      allowedLaunchPolicyRefs: [draft.launchPolicyRef || 'on-demand@1'],
+    },
+    providerRequirements: {
+      runtimeId: draft.providerRuntime || 'codex_cli', providerIds: [],
+      credentialSource: 'oauth_volume', materializationMode: 'oauth_home',
+    },
+    workspace: { mutation: 'allowed', requiredCapabilities: [] },
+    continuations: { checkpoint: true, branch: true, remediation: true },
+    capture: { stream: true, evidence: true }, rag: {}, publish: { mode: 'none' },
+    policyRef: draft.policyRef || 'default@1',
+  };
+}
+
+function normalizedDocumentDiff(from: Record<string, unknown>, to: Record<string, unknown>): string {
+  const flatten = (value: unknown, path = '', rows: Record<string, unknown> = {}) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+        .forEach(([key, child]) => flatten(child, path ? `${path}.${key}` : key, rows));
+    } else rows[path] = value;
+    return rows;
+  };
+  const before = flatten(from); const after = flatten(to);
+  const paths = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
+  const changes = paths.filter((path) => JSON.stringify(before[path]) !== JSON.stringify(after[path]));
+  return changes.length ? changes.map((path) => `${path}: ${JSON.stringify(before[path])} → ${JSON.stringify(after[path])}`).join('\n') : 'No document differences.';
+}
 
 /**
  * Assisted RAG editor for a policy document (MoonMind#3514). The policy `rag`
@@ -169,6 +214,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const [selectedVersion, setSelectedVersion] = useState<PolicyVersion | null>(null);
   const [notice, setNotice] = useState('');
   const [editor, setEditor] = useState<{ mode: 'create' | 'clone' | 'version'; id: string; name: string; document: string } | null>(null);
+  const [agentEditor, setAgentEditor] = useState<AgentProfileEditor | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<AgentProfile | null>(null);
   const kind: InventoryKind = location.pathname === '/omnigent/policies'
     || location.pathname.startsWith('/omnigent/policies/')
     ? 'policies'
@@ -216,10 +263,10 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       const response = await fetch(
         `/api/omnigent/agent-profiles/${encodeURIComponent(profile.profileId)}/${suffix}`,
         {
-          method: 'POST',
+          method: action === 'delete' ? 'DELETE' : 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          ...(action === 'validate'
+          ...(['validate', 'smoke', 'import-bundle'].includes(action)
             ? { body: JSON.stringify({ version: profile.versions[0]?.version ?? null }) }
             : {}),
         },
@@ -227,6 +274,44 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       if (!response.ok) throw new Error(`${action} failed (${response.status})`);
     },
     onSuccess: () => void profiles.refetch(),
+  });
+  const saveAgentProfile = useMutation({
+    mutationFn: async (draft: NonNullable<typeof agentEditor>) => {
+      const document = draft.mode === 'create'
+        ? structuredProfileDocument(draft)
+        : JSON.parse(draft.document) as Record<string, unknown>;
+      let url = '/api/omnigent/agent-profiles';
+      let body: Record<string, unknown> = { profileId: draft.id, displayName: draft.name, description: draft.description || null, visibility: 'private', document };
+      if (draft.mode === 'version') {
+        url = `/api/omnigent/agent-profiles/${encodeURIComponent(draft.source!.profileId)}/versions`;
+        body = { document };
+      } else if (draft.mode === 'clone') {
+        url = `/api/omnigent/agent-profiles/${encodeURIComponent(draft.source!.profileId)}/clone`;
+        body = { profileId: draft.id, displayName: draft.name, version: draft.source!.activeVersion || draft.source!.versions[0]?.version };
+      }
+      const response = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(`Agent profile save failed (${response.status})`);
+      return response.json();
+    },
+    onSuccess: async () => { setAgentEditor(null); await profiles.refetch(); },
+  });
+  const profileAudit = useQuery({
+    queryKey: ['omnigent-agent-profile-audit', selectedProfile?.profileId],
+    enabled: Boolean(selectedProfile),
+    queryFn: async (): Promise<Array<Record<string, unknown>>> => {
+      const response = await fetch(`/api/omnigent/agent-profiles/${encodeURIComponent(selectedProfile!.profileId)}/audit`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Audit request failed (${response.status})`);
+      return response.json();
+    },
+  });
+  const profileUsage = useQuery({
+    queryKey: ['omnigent-agent-profile-usage', selectedProfile?.profileId],
+    enabled: Boolean(selectedProfile),
+    queryFn: async (): Promise<Array<Record<string, unknown>>> => {
+      const response = await fetch(`/api/omnigent/agent-profiles/${encodeURIComponent(selectedProfile!.profileId)}/usage`, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(`Usage request failed (${response.status})`);
+      return response.json();
+    },
   });
   const versions = useQuery({
     queryKey: ['omnigent-policy-versions', selected?.id],
@@ -415,12 +500,30 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     {kind === 'agents' ? <section aria-labelledby="omnigent-profiles-heading">
       <div className="omnigent-inventory__toolbar">
         <div><p className="eyebrow">Reusable configuration</p><h2 id="omnigent-profiles-heading">Agent profiles</h2></div>
-        <button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button>
+        <div className="actions"><button type="button" onClick={() => setAgentEditor({ mode: 'create', id: '', name: '', description: '', document: '{}', sourceKind: 'upstream', sourceRef: '', endpointRef: 'default', executionProfileRef: 'omnigent-codex@1', launchPolicyRef: 'on-demand@1', policyRef: 'default@1', providerRuntime: 'codex_cli' })}>Create from upstream or bundle</button><button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button></div>
       </div>
       <p>Immutable, validated selections used by workflows and continuations.</p>
       {profiles.isPending ? <p role="status">Loading agent profiles…</p> : null}
       {profiles.isError ? <p role="alert">{profiles.error.message}</p> : null}
       {profileAction.isError ? <p role="alert">{profileAction.error.message}</p> : null}
+      {agentEditor ? <form className="omnigent-policy-editor" onSubmit={(event) => { event.preventDefault(); saveAgentProfile.mutate(agentEditor); }}>
+        <h3>{agentEditor.mode === 'version' ? 'Edit as immutable new version' : agentEditor.mode === 'clone' ? 'Clone agent profile' : 'Create agent profile'}</h3>
+        <label><span>Profile id</span><input value={agentEditor.id} disabled={agentEditor.mode === 'version'} onChange={(event) => setAgentEditor({ ...agentEditor, id: event.target.value })} required /></label>
+        <label><span>Display name</span><input value={agentEditor.name} disabled={agentEditor.mode === 'version'} onChange={(event) => setAgentEditor({ ...agentEditor, name: event.target.value })} required /></label>
+        <label><span>Description</span><input value={agentEditor.description} disabled={agentEditor.mode !== 'create'} onChange={(event) => setAgentEditor({ ...agentEditor, description: event.target.value })} /></label>
+        {agentEditor.mode === 'create' ? <>
+          <label><span>Source type</span><select value={agentEditor.sourceKind} onChange={(event) => setAgentEditor({ ...agentEditor, sourceKind: event.target.value as 'upstream' | 'bundle', sourceRef: '', bundleDigest: '' })}><option value="upstream">Existing upstream agent</option><option value="bundle">Artifact-backed bundle</option></select></label>
+          <label><span>{agentEditor.sourceKind === 'bundle' ? 'Bundle artifact reference' : 'Stable upstream agent id'}</span><input value={agentEditor.sourceRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, sourceRef: event.target.value })} required /></label>
+          {agentEditor.sourceKind === 'bundle' ? <label><span>Bundle SHA-256 digest</span><input pattern="sha256:[0-9a-f]{64}" value={agentEditor.bundleDigest || ''} onChange={(event) => setAgentEditor({ ...agentEditor, bundleDigest: event.target.value })} required /></label> : null}
+          <label><span>Endpoint reference</span><input value={agentEditor.endpointRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, endpointRef: event.target.value })} required /></label>
+          <label><span>Execution profile reference</span><input value={agentEditor.executionProfileRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, executionProfileRef: event.target.value })} required /></label>
+          <label><span>Launch policy reference</span><input value={agentEditor.launchPolicyRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, launchPolicyRef: event.target.value })} required /></label>
+          <label><span>Policy reference</span><input value={agentEditor.policyRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, policyRef: event.target.value })} required /></label>
+          <label><span>Provider runtime</span><input value={agentEditor.providerRuntime || ''} onChange={(event) => setAgentEditor({ ...agentEditor, providerRuntime: event.target.value })} required /></label>
+        </> : agentEditor.mode === 'version' ? <label><span>Normalized profile document (JSON)</span><textarea rows={18} value={agentEditor.document} onChange={(event) => setAgentEditor({ ...agentEditor, document: event.target.value })} required /></label> : null}
+        {saveAgentProfile.isError ? <p role="alert">{saveAgentProfile.error.message}</p> : null}
+        <button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</button><button type="button" onClick={() => setAgentEditor(null)}>Cancel</button>
+      </form> : null}
       {profiles.data?.length === 0 ? <p>No persistent agent profiles are available.</p> : null}
       {profiles.data?.length ? <div className="omnigent-inventory__table-wrap"><table>
         <thead><tr><th>Profile</th><th>Lifecycle</th><th>Version history</th><th>Readiness</th><th>Actions</th></tr></thead>
@@ -433,15 +536,29 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             <td>{latest ? <><span>Version {latest.version}</span><small title={latest.digest}>{latest.digest.slice(0, 18)}…</small><small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small></> : 'No versions'}</td>
             <td>{ready ? 'Ready' : 'Validation required'}</td>
             <td>
+              <button type="button" onClick={() => setSelectedProfile(profile)}>View details, history, diff, audit, and usage</button>
+              <button type="button" onClick={() => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })}>Clone {profile.displayName}</button>
+              {latest?.document ? <button type="button" onClick={() => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })}>Edit {profile.displayName} as new version</button> : null}
               <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
+              <button type="button" disabled={profileAction.isPending || !ready} onClick={() => profileAction.mutate({ profile, action: 'smoke' })}>Smoke test {profile.displayName}</button>
+              {latest?.document && (latest.document.source as { bundleArtifactRef?: unknown } | undefined)?.bundleArtifactRef ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'import-bundle' })}>Import bundle for {profile.displayName}</button> : null}
               {ready && (profile.state !== 'active' || latest.version !== profile.activeVersion) ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
               {profile.state === 'active' && !profile.defaultForRuntime ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'default' })}>Make {profile.displayName} default</button> : null}
               {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
               {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}
+              {profile.state === 'draft' ? <button type="button" className="destructive" disabled={profileAction.isPending} onClick={() => { if (window.confirm(`Delete unused draft ${profile.displayName}? This cannot be undone.`)) profileAction.mutate({ profile, action: 'delete' }); }}>Delete unused draft {profile.displayName}</button> : null}
             </td>
           </tr>;
         })}</tbody>
       </table></div> : null}
+      {selectedProfile ? <section className="card" aria-labelledby="agent-profile-detail-heading">
+        <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><button type="button" onClick={() => setSelectedProfile(null)}>Close details</button></div>
+        <p><code>{selectedProfile.profileId}</code> · {selectedProfile.state} · {selectedProfile.versions.length} immutable version{selectedProfile.versions.length === 1 ? '' : 's'}</p>
+        <h4>Version history and normalized diff</h4>
+        {selectedProfile.versions.map((version, index) => <details key={version.version}><summary>Version {version.version} · {version.digest}</summary><pre>{JSON.stringify(version.document, null, 2)}</pre>{index < selectedProfile.versions.length - 1 && version.document && selectedProfile.versions[index + 1]!.document ? <pre aria-label={`Normalized diff version ${selectedProfile.versions[index + 1]!.version} to ${version.version}`}>{normalizedDocumentDiff(selectedProfile.versions[index + 1]!.document!, version.document)}</pre> : null}</details>)}
+        <h4>Dependent workflows and schedules</h4>{profileUsage.isPending ? <p role="status">Loading usage…</p> : <pre>{JSON.stringify(profileUsage.data || [], null, 2)}</pre>}
+        <h4>Audit history</h4>{profileAudit.isPending ? <p role="status">Loading audit…</p> : <pre>{JSON.stringify(profileAudit.data || [], null, 2)}</pre>}
+      </section> : null}
     </section> : null}
   </div>;
 }

@@ -406,6 +406,66 @@ async def test_checkpoint_branch_create_prepares_git_binding_before_launch(
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_create_persists_exact_agent_profile_snapshot(
+    checkpoint_branch_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "digest": "sha256:profile-v3",
+        "providerProfileRef": "provider-profile-1",
+        "model": "gpt-5.4",
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        resolver,
+    )
+    payload = _create_payload("mm-3517:create-profile")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {"profileId": "agent-profile-1", "version": 3}
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 201
+    branch_id = response.json()["branchId"]
+    resolver.assert_awaited_once()
+    assert resolver.await_args.kwargs["selection"] == {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "providerProfileRef": "provider-profile-1",
+    }
+    assert resolver.await_args.kwargs["consumer_id"] == branch_id
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        branch = await session.get(WorkflowCheckpointBranch, branch_id)
+    assert branch is not None
+    assert branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_create_rejects_profile_provider_conflict(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    payload = _create_payload("mm-3517:profile-conflict")
+    payload["providerProfileRef"] = "provider-profile-1"
+    payload["agentProfile"] = {
+        "profileId": "agent-profile-1",
+        "providerProfileRef": "provider-profile-2",
+    }
+
+    response = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempotent(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
@@ -605,21 +665,48 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
         "api_service.api.routers.executions.get_temporal_artifact_service",
         lambda session: _ArtifactService(),
     )
+    snapshot = {
+        "profileId": "agent-profile-remediation",
+        "version": 2,
+        "digest": "sha256:remediation-profile-v2",
+        "providerProfileRef": "provider-profile-remediation",
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        resolver,
+    )
 
+    repair_payload = {
+        "checkpointRef": "artifact://checkpoints/after-implement",
+        "instructions": {"text": "Repair with corrected instructions."},
+        "idempotencyKey": "MM-1119:remediation-branch",
+        "providerProfileRef": "provider-profile-remediation",
+        "agentProfile": {"profileId": "agent-profile-remediation", "version": 2},
+    }
     first = await checkpoint_branch_client.post(
         "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
-        json={
-            "checkpointRef": "artifact://checkpoints/after-implement",
-            "instructions": {"text": "Repair with corrected instructions."},
-            "idempotencyKey": "MM-1119:remediation-branch",
-        },
+        json=repair_payload,
     )
     second = await checkpoint_branch_client.post(
         "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json=repair_payload,
+    )
+    changed_agent_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
         json={
-            "checkpointRef": "artifact://checkpoints/after-implement",
-            "instructions": {"text": "Repair with corrected instructions."},
-            "idempotencyKey": "MM-1119:remediation-branch",
+            **repair_payload,
+            "agentProfile": {
+                "profileId": "agent-profile-remediation",
+                "version": 3,
+            },
+        },
+    )
+    changed_provider_profile = await checkpoint_branch_client.post(
+        "/api/executions/mm:remediation-1/remediation/checkpoint-branches",
+        json={
+            **repair_payload,
+            "providerProfileRef": "provider-profile-other",
         },
     )
 
@@ -627,6 +714,14 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
     assert second.status_code == 201
     assert second.json()["branchId"] == first.json()["branchId"]
     assert first.json()["runtimeContextPolicy"] == "fresh_agent_run"
+    assert changed_agent_profile.status_code == 409
+    assert changed_agent_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
+    assert changed_provider_profile.status_code == 409
+    assert changed_provider_profile.json()["detail"]["code"] == (
+        "idempotency_key_conflict"
+    )
 
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
@@ -646,6 +741,9 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
     assert branch.diagnostics["repairActionKind"] == (
         "checkpoint_branch.create_from_remediation_context"
     )
+    assert branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+    assert operation.response_payload["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+    resolver.assert_awaited_once()
     assert operation.response_payload["remediation"] == {
         "workflowId": "mm:remediation-1",
         "runId": "run-remediation-1",

@@ -150,6 +150,7 @@ class _FakeClient:
         self.posted_events: list[tuple[str, dict[str, Any]]] = []
         self.resolved_elicitations: list[tuple[str, str, dict[str, Any]]] = []
         self.list_agents_calls = 0
+        self.imported_bundles: list[tuple[str, bytes, str]] = []
 
     async def list_agents(self) -> list[dict[str, Any]]:
         self.list_agents_calls += 1
@@ -160,6 +161,12 @@ class _FakeClient:
         if self.create_error is not None:
             raise self.create_error
         return {"id": "sess-9"}
+
+    async def create_agent_bundle(
+        self, *, filename: str, content: bytes, content_type: str
+    ) -> dict[str, Any]:
+        self.imported_bundles.append((filename, content, content_type))
+        return {"id": "agent-imported", "version": "v1"}
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         self.get_calls.append(session_id)
@@ -615,6 +622,18 @@ async def test_list_agents_proxies() -> None:
     assert agents == [{"id": "agent-1", "name": "codex"}]
 
 
+async def test_import_agent_bundle_uses_authenticated_upstream_client() -> None:
+    client = _FakeClient()
+    proxy = _proxy(_FakeStore(), client)
+
+    result = await proxy.import_agent_bundle(
+        filename="agent.bundle", content=b"archive", content_type="application/zip"
+    )
+
+    assert result == {"id": "agent-imported", "version": "v1"}
+    assert client.imported_bundles == [("agent.bundle", b"archive", "application/zip")]
+
+
 async def test_post_event_forwards_native_control() -> None:
     client = _FakeClient()
     proxy = _proxy(_FakeStore(), client)
@@ -854,3 +873,40 @@ async def test_stop_session_preserves_stock_control_event_type() -> None:
     await _proxy(_FakeStore(), client).stop_session("sess-9")
 
     assert client.posted_events == [("sess-9", {"type": "stop_session"})]
+
+
+async def test_default_agent_name_override_takes_precedence() -> None:
+    # MoonLadderStudios/MoonMind#3517 §8: the launch boundary supplies the
+    # durable default agent selection, which must win over the env-derived
+    # baked-in fallback when the request carries no explicit agent.
+    store, client = _FakeStore(), _FakeClient()
+    proxy = OmnigentBridgeSessionProxy(
+        run_store=store, client=client, default_agent_name="does-not-exist"
+    )
+    req = BridgeSessionCreateRequest(
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(
+        request=req, binding=_binding(), default_agent_name_override="codex"
+    )
+
+    assert response["id"] == "sess-9"
+    assert client.created_payloads[0]["agent_id"] == "agent-1"
+
+
+async def test_baked_in_default_used_when_override_absent() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    proxy = _proxy(store, client)  # baked-in default_agent_name="codex"
+    req = BridgeSessionCreateRequest(
+        host_type="managed",
+        workspace="https://github.com/org/repo#main",
+    )
+
+    response = await proxy.create_session(
+        request=req, binding=_binding(), default_agent_name_override=None
+    )
+
+    assert client.created_payloads[0]["agent_id"] == "agent-1"
+    assert response["id"] == "sess-9"

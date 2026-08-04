@@ -625,6 +625,14 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     compatibilityDiagnostics: {},
     cutover: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+  const readyAgentProfiles = [{
+    profileId: "team-codex",
+    displayName: "Team Codex",
+    state: "active",
+    activeVersion: 1,
+    defaultForRuntime: true,
+    versions: [{ version: 1, digest: `sha256:${"a".repeat(64)}`, validationResult: { ready: true } }],
+  }];
 
   it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);
@@ -697,6 +705,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
@@ -804,6 +815,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
       }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: `mm:omnigent-${mode}` }) } as Response);
       }
@@ -841,6 +855,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -889,6 +906,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
             },
           ],
         } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       return Promise.resolve({
         ok: true,

@@ -88,6 +88,30 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
   });
 
+  it('creates an upstream profile through structured controls without raw JSON', async () => {
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+    await screen.findByText('Team Codex');
+    fireEvent.click(screen.getByRole('button', { name: 'Create from upstream or bundle' }));
+    expect(screen.queryByLabelText('Normalized profile document (JSON)')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Profile id'), { target: { value: 'new-codex' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Codex' } });
+    fireEvent.change(screen.getByLabelText('Stable upstream agent id'), { target: { value: 'agent-42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save immutable profile version' }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) =>
+      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST')).toBe(true));
+    const call = vi.mocked(fetch).mock.calls.find(([url, init]) =>
+      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST');
+    const body = JSON.parse(String((call?.[1] as RequestInit).body));
+    expect(body.document).toMatchObject({
+      endpointRef: 'default', source: { upstreamId: 'agent-42' }, harness: 'codex-native',
+      continuations: { checkpoint: true, branch: true, remediation: true },
+    });
+  });
+
   it('does not fetch policy actions without a capability contract', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     renderPage({ page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: false } });

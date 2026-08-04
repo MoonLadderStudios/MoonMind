@@ -26,6 +26,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -34,7 +35,7 @@ from api_service.api.execution_principal import (
 from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
-from api_service.db.base import async_session_maker
+from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 from api_service.services.omnigent_agent_profile_service import (
@@ -751,6 +752,29 @@ async def _resolve_bridge_binding(
     )
 
 
+async def _get_launch_default_agent_name(
+    session: AsyncSession = Depends(get_async_session),
+) -> str | None:
+    """Resolve the durable default Omnigent agent for a proxy-mode launch.
+
+    MoonLadderStudios/MoonMind#3517 §8: an active default agent profile is the
+    durable authority; ``OMNIGENT_DEFAULT_AGENT_NAME`` is only a recorded
+    bootstrap/local-development fallback. A profile marked default but not
+    launch-ready is a conflict and fails closed at this launch boundary.
+    """
+
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        BootstrapDefaultConflictError,
+        resolve_default_agent_selection,
+    )
+
+    try:
+        resolution = await resolve_default_agent_selection(session)
+    except BootstrapDefaultConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return resolution.default_agent_name or None
+
+
 @router.post(
     _ROUTES.create_session,
     response_model=OmnigentSessionResponse,
@@ -767,6 +791,7 @@ async def create_omnigent_session(
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
+    launch_default_agent_name: str | None = Depends(_get_launch_default_agent_name),
 ) -> dict[str, Any]:
     """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
@@ -798,7 +823,11 @@ async def create_omnigent_session(
                 failure_class="system_error",
                 status_code=501,
             )
-        return await proxy.create_session(request=payload, binding=binding)
+        return await proxy.create_session(
+            request=payload,
+            binding=binding,
+            default_agent_name_override=launch_default_agent_name,
+        )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
