@@ -862,6 +862,50 @@ def test_retrieval_manifest_records_explicit_statuses() -> None:
     assert unavailable.status == "unavailable"
 
 
+def test_retrieval_manifest_stamps_exact_validated_policy_authority() -> None:
+    authority = {
+        "policyId": "restricted",
+        "policyVersion": 3,
+        "policyRef": "restricted@3",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "omnigent-policy:sha256:" + "2" * 64,
+        "validation": {"valid": True, "diagnosticCodes": []},
+        "boundaries": {"rag": {"tokenBudget": 1000}},
+    }
+    manifest = build_retrieval_manifest(
+        {"query": "policy evidence", "policyAuthority": authority}
+    )
+
+    # The stamped authority pins the stable validation decision only, never the
+    # mutable validation metadata, so re-validating an unchanged policy does not
+    # detach this manifest from its launch authority.
+    assert manifest.policy_authority == {
+        "policyId": authority["policyId"],
+        "policyVersion": authority["policyVersion"],
+        "policyRef": authority["policyRef"],
+        "policyDigest": authority["policyDigest"],
+        "snapshotRef": authority["snapshotRef"],
+        "validation": {"valid": True},
+    }
+
+
+def test_retrieval_manifest_rejects_unvalidated_policy_authority() -> None:
+    with pytest.raises(ValueError, match="not validated"):
+        build_retrieval_manifest(
+            {
+                "query": "policy evidence",
+                "policyAuthority": {
+                    "policyId": "restricted",
+                    "policyVersion": 3,
+                    "policyRef": "restricted@3",
+                    "policyDigest": "sha256:" + "1" * 64,
+                    "snapshotRef": "omnigent-policy:sha256:" + "2" * 64,
+                    "validation": {"valid": False},
+                },
+            }
+        )
+
+
 def test_durable_retrieval_manifest_artifact_preserves_captured_status() -> None:
     artifact = build_durable_retrieval_manifest_artifact(
         {

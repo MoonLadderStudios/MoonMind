@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
@@ -37,6 +38,7 @@ async def policy_db(tmp_path):
                     OmnigentPolicyVersion.__table__,
                     OmnigentPolicyEvent.__table__,
                     OmnigentOAuthHostBindingRecord.__table__,
+                    OmnigentBridgeSession.__table__,
                 ],
             )
         )
@@ -55,6 +57,36 @@ async def create_policy(service: OmnigentPolicyService, policy_id: str = "policy
         document=PolicyDocument.model_validate(policy_document()),
         actor="operator",
     )
+
+
+@pytest.mark.asyncio
+async def test_default_runtime_snapshot_is_durable_active_authority(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        await service.transition(
+            policy_id="policy",
+            version=1,
+            state=PolicyState.ACTIVE,
+            actor="operator",
+            make_default=True,
+        )
+
+        snapshot = await service.resolve_default_runtime_snapshot("policy")
+
+        assert snapshot["policyRef"] == "policy@1"
+        assert snapshot["validation"]["valid"] is True
+        assert snapshot["boundaries"]["host"] == policy_document()["host"]
+
+
+@pytest.mark.asyncio
+async def test_default_runtime_snapshot_rejects_missing_default(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+
+        with pytest.raises(PolicyConflict, match="no default version"):
+            await service.resolve_default_runtime_snapshot("policy")
 
 
 @pytest.mark.asyncio
@@ -120,6 +152,12 @@ async def test_lifecycle_default_switch_rollback_and_historical_read(tmp_path):
                 state=PolicyState.DISABLED,
                 actor="operator",
             )
+        usage = await service.usage("policy", 2)
+        assert usage["default"] is True
+        assert usage["activationImpact"]["compatible"] is True
+        assert usage["unavailabilityBlockers"] == [
+            "Switch the policy default before disabling or deprecating this version."
+        ]
 
         # Roll back by selecting the still-valid historical authority, then retire v2.
         await service.transition(
@@ -226,11 +264,164 @@ async def test_bound_policy_version_cannot_be_retired(tmp_path):
         ))
         await session.commit()
 
+        usage = await service.usage("policy", 1)
+        assert usage["dependents"] == {
+            "hostBindings": ["binding"],
+            "hostBindingCount": 1,
+            "providerProfiles": ["profile"],
+            "providerProfileCount": 1,
+            "workflows": [],
+            "workflowCount": 0,
+            "bridgeSessions": [],
+            "bridgeSessionCount": 0,
+            "activeBridgeSessions": [],
+            "activeBridgeSessionCount": 0,
+        }
+        assert usage["unavailabilityBlockers"] == [
+            "Move dependent host profiles before disabling or deprecating this version."
+        ]
+
         with pytest.raises(PolicyConflict, match="bound to an active host profile"):
             await service.transition(
                 policy_id="policy", version=1, state=PolicyState.DISABLED,
                 actor="operator",
             )
+
+
+@pytest.mark.asyncio
+async def test_usage_projects_live_and_historical_bridge_dependents(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        snapshot = await service.snapshot("policy", 1)
+        for session_id, workflow_id, state in (
+            ("bridge-live", "workflow-live", "running"),
+            ("bridge-history", "workflow-history", "completed"),
+        ):
+            session.add(OmnigentBridgeSession(
+                bridge_session_id=session_id,
+                provider="omnigent",
+                compatibility_profile="v1",
+                moonmind_workflow_id=workflow_id,
+                moonmind_agent_run_id=f"agent-{session_id}",
+                idempotency_key=f"key-{session_id}",
+                provider_profile_id="profile-from-session",
+                effective_launch_snapshot_json={"policyAuthority": snapshot},
+                omnigent_endpoint_ref="default",
+                host_type="static_compose",
+                status=state,
+            ))
+        await session.commit()
+
+        usage = await service.usage("policy", 1)
+
+        assert usage["dependents"]["providerProfiles"] == ["profile-from-session"]
+        assert usage["dependents"]["workflows"] == [
+            "workflow-history", "workflow-live",
+        ]
+        assert usage["dependents"]["bridgeSessions"] == [
+            "bridge-history", "bridge-live",
+        ]
+        assert usage["dependents"]["activeBridgeSessions"] == ["bridge-live"]
+        assert usage["unavailabilityBlockers"] == [
+            "Wait for dependent bridge sessions to finish before disabling or deprecating this version."
+        ]
+        with pytest.raises(PolicyConflict, match="active bridge session"):
+            await service.transition(
+                policy_id="policy",
+                version=1,
+                state=PolicyState.DISABLED,
+                actor="operator",
+            )
+
+
+@pytest.mark.asyncio
+async def test_usage_filters_bridge_dependents_in_the_database(tmp_path):
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        snapshot = await service.snapshot("policy", 1)
+        other = {**snapshot, "policyRef": "policy@2"}
+        rows = (
+            ("match-live", "wf-match-live", "running", {"policyAuthority": snapshot}),
+            ("match-done", "wf-match-done", "completed", {"policyAuthority": snapshot}),
+            ("other-policy", "wf-other", "running", {"policyAuthority": other}),
+            ("no-authority", "wf-none", "running", {"foo": "bar"}),
+            ("null-launch", "wf-null", "running", None),
+        )
+        for session_id, workflow_id, state, launch in rows:
+            session.add(OmnigentBridgeSession(
+                bridge_session_id=session_id,
+                provider="omnigent",
+                compatibility_profile="v1",
+                moonmind_workflow_id=workflow_id,
+                moonmind_agent_run_id=f"agent-{session_id}",
+                idempotency_key=f"key-{session_id}",
+                provider_profile_id="profile-x",
+                effective_launch_snapshot_json=launch,
+                omnigent_endpoint_ref="default",
+                host_type="static_compose",
+                status=state,
+            ))
+        await session.commit()
+
+        usage = await service.usage("policy", 1)
+
+        # Only the two policy@1 sessions are dependents; policy@2, the snapshot
+        # without policyAuthority, and the null launch are all excluded in SQL.
+        assert usage["dependents"]["bridgeSessions"] == ["match-done", "match-live"]
+        assert usage["dependents"]["bridgeSessionCount"] == 2
+        assert usage["dependents"]["activeBridgeSessions"] == ["match-live"]
+        assert usage["dependents"]["activeBridgeSessionCount"] == 1
+        assert usage["dependents"]["workflows"] == ["wf-match-done", "wf-match-live"]
+        assert usage["dependents"]["workflowCount"] == 2
+
+
+@pytest.mark.asyncio
+async def test_usage_bounds_dependent_lists_but_counts_reflect_totals(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies._USAGE_DEPENDENT_PAGE_SIZE", 1
+    )
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        service = OmnigentPolicyService(session)
+        await create_policy(service)
+        snapshot = await service.snapshot("policy", 1)
+        for session_id, workflow_id, state in (
+            ("s-a", "wf-a", "running"),
+            ("s-b", "wf-b", "running"),
+            ("s-c", "wf-c", "completed"),
+        ):
+            session.add(OmnigentBridgeSession(
+                bridge_session_id=session_id,
+                provider="omnigent",
+                compatibility_profile="v1",
+                moonmind_workflow_id=workflow_id,
+                moonmind_agent_run_id=f"agent-{session_id}",
+                idempotency_key=f"key-{session_id}",
+                provider_profile_id="profile-x",
+                effective_launch_snapshot_json={"policyAuthority": snapshot},
+                omnigent_endpoint_ref="default",
+                host_type="static_compose",
+                status=state,
+            ))
+        await session.commit()
+
+        usage = await service.usage("policy", 1)
+
+        # Lists are bounded to the page size; counts still report true totals.
+        assert len(usage["dependents"]["bridgeSessions"]) == 1
+        assert usage["dependents"]["bridgeSessionCount"] == 3
+        assert len(usage["dependents"]["activeBridgeSessions"]) == 1
+        assert usage["dependents"]["activeBridgeSessionCount"] == 2
+        assert len(usage["dependents"]["workflows"]) == 1
+        assert usage["dependents"]["workflowCount"] == 3
+        # The active-session blocker keys off the count, not the truncated list.
+        assert any(
+            "dependent bridge sessions" in blocker
+            for blocker in usage["unavailabilityBlockers"]
+        )
 
 
 @pytest.mark.asyncio

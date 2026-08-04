@@ -1222,6 +1222,17 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
+                # Stamp the immutable policy-authority evidence resolved for this
+                # launch so the Step Execution checkpoint can prove which compiled
+                # policy snapshot governed the run at cold-restore time. Only the
+                # six compact fields are carried (never the boundaries block) to
+                # stay within the compact-history bound.
+                "policyId": policy_snapshot["policyId"],
+                "policyVersion": policy_snapshot["policyVersion"],
+                "policyRef": policy_snapshot["policyRef"],
+                "policyDigest": policy_snapshot["policyDigest"],
+                "policySnapshotRef": policy_snapshot["snapshotRef"],
+                "policyValidation": policy_snapshot["validation"],
                 "externalStateRef": result_metadata.get("externalStateRef"),
                 "captureManifestRef": result_metadata.get("captureManifestRef"),
                 "terminalRef": next(iter(result.output_refs), None),

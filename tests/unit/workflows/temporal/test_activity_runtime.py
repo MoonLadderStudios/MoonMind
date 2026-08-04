@@ -160,6 +160,12 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
                 "effectiveLaunchRef": "omnigent-launch:sha256:" + "3" * 64,
                 "executionProfileRef": "profile://codex",
                 "launchPolicyRef": "policy://default",
+                "policyId": "omnigent-codex",
+                "policyVersion": 1,
+                "policyRef": "omnigent-codex@1",
+                "policyDigest": "sha256:" + "4" * 64,
+                "policySnapshotRef": "omnigent-policy:sha256:" + "5" * 64,
+                "policyValidation": {"valid": True},
                 "externalStateRef": external_ref,
                 "captureManifestRef": manifest_ref,
                 "terminalRef": "artifact://terminal/result",
@@ -185,6 +191,14 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
     assert identity["externalStateRef"] == external_ref
     assert identity["externalStateDigest"].startswith("sha256:")
     assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    # Immutable policy-authority evidence stamped from the trusted launch flows
+    # through to the persisted checkpoint so it stays cold-restore eligible.
+    assert identity["policyId"] == "omnigent-codex"
+    assert identity["policyVersion"] == 1
+    assert identity["policyRef"] == "omnigent-codex@1"
+    assert identity["policyDigest"] == "sha256:" + "4" * 64
+    assert identity["policySnapshotRef"] == "omnigent-policy:sha256:" + "5" * 64
+    assert identity["policyValidation"] == {"valid": True}
     assert identity["validation"] == {
         "valid": True,
         "liveReattachAvailable": True,
