@@ -232,6 +232,20 @@ def document_digest(document: PolicyDocument | Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _stable_validation_decision(validation: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a policy validation record to its immutable decision.
+
+    Validation is derived evidence: revalidating an unchanged document rewrites
+    mutable metadata such as ``validatedAt`` (and may reorder ``diagnostics``)
+    without changing the policy document or its digest. Only the boolean
+    decision is durable authority, so the immutable snapshot identity and the
+    authority evidence compared against launched runs pin exactly that and
+    nothing time-varying.
+    """
+
+    return {"valid": validation.get("valid") is True}
+
+
 def compile_policy_snapshot(
     *,
     policy_id: str,
@@ -250,9 +264,58 @@ def compile_policy_snapshot(
         "validation": dict(validation),
         "boundaries": normalized,
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    # The snapshot ref is immutable runtime authority pinned at launch. Hash the
+    # stable validation decision only, so an operator re-validating an active
+    # policy against the deployment does not detach already-launched runs from
+    # their persisted authority when the document and digest are unchanged.
+    identity = {**payload, "validation": _stable_validation_decision(validation)}
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     payload["snapshotRef"] = "omnigent-policy:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
     return payload
+
+
+def policy_authority_evidence(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compact immutable authority stamp shared by runtime evidence."""
+
+    required = (
+        "policyId",
+        "policyVersion",
+        "policyRef",
+        "policyDigest",
+        "snapshotRef",
+        "validation",
+    )
+    missing = [field for field in required if snapshot.get(field) in (None, "")]
+    if missing:
+        raise ValueError(
+            f"policy snapshot lacks authority evidence: {', '.join(missing)}"
+        )
+    if snapshot.get("validation", {}).get("valid") is not True:
+        raise ValueError("policy snapshot is not validated")
+    evidence = {field: snapshot[field] for field in required}
+    # Pin the stable validation decision, never mutable validation metadata
+    # (for example ``validatedAt``), so re-validating an unchanged policy does
+    # not spuriously stale runs launched against it.
+    evidence["validation"] = _stable_validation_decision(snapshot.get("validation", {}))
+    return evidence
+
+
+def validate_policy_authority_evidence(
+    evidence: Mapping[str, Any], snapshot: Mapping[str, Any]
+) -> None:
+    """Fail closed when durable evidence is detached from its compiled snapshot."""
+
+    expected = policy_authority_evidence(snapshot)
+    provided = dict(evidence)
+    # Compare only the stable validation decision on both sides. Evidence pinned
+    # at launch may carry the full validation record (with mutable metadata);
+    # projecting it here keeps a benign re-validation from reading as a mismatch.
+    provided["validation"] = _stable_validation_decision(
+        provided.get("validation") or {}
+    )
+    stale = [field for field, value in expected.items() if provided.get(field) != value]
+    if stale:
+        raise ValueError(f"policy authority evidence mismatch: {', '.join(stale)}")
 
 
 def resolve_action(snapshot: Mapping[str, Any], action: str) -> dict[str, str]:

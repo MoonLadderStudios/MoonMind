@@ -137,6 +137,20 @@ describe('OmnigentInventoryPage', () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith('/versions/2/usage')) return {
+        ok: true, json: async () => ({
+          policyRef: 'codex-static@2', default: true,
+          dependents: {
+            hostBindings: ['oauth-host-codex'], hostBindingCount: 1,
+            providerProfiles: ['codex-profile'], providerProfileCount: 1,
+            workflows: ['workflow-1'], workflowCount: 1,
+            bridgeSessions: ['bridge-1'], bridgeSessionCount: 1,
+            activeBridgeSessions: ['bridge-1'], activeBridgeSessionCount: 1,
+          },
+          activationImpact: { willSwitchDefault: false, compatible: true, diagnostics: [] },
+          unavailabilityBlockers: ['Switch the policy default before disabling or deprecating this version.'],
+        }),
+      } as Response;
       if (url.endsWith('/versions')) return {
         ok: true, json: async () => ({ items: [
           { policyId: 'codex-static', version: 2, ref: 'codex-static@2', state: 'active', digest: 'sha256:2',
@@ -172,5 +186,9 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByRole('button', { name: 'codex-static@1 · superseded' })).toBeTruthy();
     expect(await screen.findByText(/default_changed/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate against deployment' })).toBeTruthy();
+    expect(await screen.findByText('Dependent host profiles: 1')).toBeTruthy();
+    expect(screen.getByText('oauth-host-codex')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Disable codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Deprecate codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

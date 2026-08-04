@@ -203,6 +203,9 @@ class RetrievalManifest(BaseModel):
         default_factory=list,
         alias="compactSummaries",
     )
+    policy_authority: dict[str, Any] | None = Field(
+        default=None, alias="policyAuthority"
+    )
     retrieval_manifest_ref: str = Field(alias="retrievalManifestRef")
 
     @model_validator(mode="after")
@@ -927,6 +930,15 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
             retrieval.get("compactSummaries") or retrieval.get("compact_summaries")
         ),
     }
+    policy_authority = retrieval.get("policyAuthority") or retrieval.get(
+        "policy_authority"
+    )
+    if policy_authority is not None:
+        if not isinstance(policy_authority, Mapping):
+            raise ValueError("retrieval policyAuthority must be an object")
+        from moonmind.omnigent.policies import policy_authority_evidence
+
+        payload["policyAuthority"] = policy_authority_evidence(policy_authority)
     digest = _digest_payload(payload)
     payload["retrievalManifestRef"] = f"attempt-retrieval-manifest://{digest}"
     return RetrievalManifest.model_validate(payload)

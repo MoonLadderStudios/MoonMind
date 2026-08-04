@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
@@ -54,6 +55,14 @@ class PolicyConflict(ValueError):
 
 class PolicyNotFound(LookupError):
     pass
+
+
+_BRIDGE_TERMINAL_STATES = frozenset({"completed", "failed", "canceled", "timed_out"})
+# Policy usage inspection is invoked by the UI on every version selection. Bound
+# the dependent identifier lists it returns so response cost tracks the selected
+# policy's useful page size rather than the deployment's entire bridge history;
+# the accompanying counts still report true totals from the database.
+_USAGE_DEPENDENT_PAGE_SIZE = 50
 
 
 def _split_policy_ref(policy_ref: str) -> tuple[str, int]:
@@ -284,6 +293,26 @@ class OmnigentPolicyService:
                 raise PolicyConflict(
                     "policy version is bound to an active host profile and cannot be made unavailable"
                 )
+            policy_ref = f"{policy_id}@{version}"
+            # Bound this safety gate to the selected policy in the database
+            # instead of scanning the deployment's entire bridge history.
+            active_bridge = (await self.session.execute(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(
+                    OmnigentBridgeSession.effective_launch_snapshot_json[
+                        "policyAuthority"
+                    ]["policyRef"].as_string()
+                    == policy_ref,
+                    func.lower(OmnigentBridgeSession.status).notin_(
+                        _BRIDGE_TERMINAL_STATES
+                    ),
+                )
+                .limit(1)
+            )).scalar_one_or_none()
+            if active_bridge is not None:
+                raise PolicyConflict(
+                    "policy version is bound to an active bridge session and cannot be made unavailable"
+                )
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
@@ -315,6 +344,114 @@ class OmnigentPolicyService:
             .order_by(OmnigentPolicyEvent.created_at, OmnigentPolicyEvent.event_id)
         )).scalars())
 
+    async def usage(self, policy_id: str, version: int) -> dict[str, Any]:
+        """Return persisted dependents and lifecycle impact for one immutable version."""
+
+        policy = await self.get_policy(policy_id)
+        row = await self.get_version(policy_id, version)
+        policy_ref = f"{policy_id}@{version}"
+        host_bindings = list((await self.session.execute(
+            select(OmnigentOAuthHostBindingRecord.binding_ref).where(
+                OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+            ).order_by(OmnigentOAuthHostBindingRecord.binding_ref)
+        )).scalars())
+        # Bridge sessions keep the complete immutable authority in their launch
+        # snapshot. Filter the persisted policy reference in the database so
+        # inspection cost tracks the selected policy's dependents, not the
+        # deployment's entire bridge history. Return true counts plus a bounded
+        # page of dependent identifiers. Resolving from persisted evidence keeps
+        # historical usage inspectable after rollout.
+        matches_policy = (
+            OmnigentBridgeSession.effective_launch_snapshot_json["policyAuthority"][
+                "policyRef"
+            ].as_string()
+            == policy_ref
+        )
+        active_predicate = func.lower(OmnigentBridgeSession.status).notin_(
+            _BRIDGE_TERMINAL_STATES
+        )
+        bridge_session_count = (await self.session.execute(
+            select(func.count()).select_from(OmnigentBridgeSession).where(matches_policy)
+        )).scalar_one()
+        active_bridge_session_count = (await self.session.execute(
+            select(func.count())
+            .select_from(OmnigentBridgeSession)
+            .where(matches_policy, active_predicate)
+        )).scalar_one()
+        workflow_count = (await self.session.execute(
+            select(func.count(func.distinct(OmnigentBridgeSession.moonmind_workflow_id)))
+            .where(matches_policy)
+        )).scalar_one()
+        bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        active_bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy, active_predicate)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        workflow_ids = list((await self.session.execute(
+            select(OmnigentBridgeSession.moonmind_workflow_id)
+            .where(matches_policy)
+            .distinct()
+            .order_by(OmnigentBridgeSession.moonmind_workflow_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        provider_profile_ids = {
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentOAuthHostBindingRecord.provider_profile_id).where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+                )
+            )).scalars()
+            if value
+        }
+        provider_profile_ids.update(
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentBridgeSession.provider_profile_id)
+                .where(matches_policy, OmnigentBridgeSession.provider_profile_id.is_not(None))
+                .distinct()
+            )).scalars()
+            if value
+        )
+
+        is_default = policy.default_version == version
+        blockers = []
+        if is_default:
+            blockers.append("Switch the policy default before disabling or deprecating this version.")
+        if host_bindings:
+            blockers.append("Move dependent host profiles before disabling or deprecating this version.")
+        if active_bridge_session_count:
+            blockers.append("Wait for dependent bridge sessions to finish before disabling or deprecating this version.")
+        return {
+            "policyRef": policy_ref,
+            "state": row.state,
+            "default": is_default,
+            "dependents": {
+                "hostBindings": host_bindings,
+                "hostBindingCount": len(host_bindings),
+                "providerProfiles": sorted(provider_profile_ids),
+                "providerProfileCount": len(provider_profile_ids),
+                "workflows": workflow_ids,
+                "workflowCount": workflow_count,
+                "bridgeSessions": bridge_sessions,
+                "bridgeSessionCount": bridge_session_count,
+                "activeBridgeSessions": active_bridge_sessions,
+                "activeBridgeSessionCount": active_bridge_session_count,
+            },
+            "activationImpact": {
+                "willSwitchDefault": not is_default,
+                "compatible": bool(row.compatibility_json.get("compatible")),
+                "diagnostics": row.validation_json.get("diagnostics", []),
+            },
+            "unavailabilityBlockers": blockers,
+        }
+
     async def snapshot(self, policy_id: str, version: int) -> dict[str, Any]:
         row = await self.get_version(policy_id, version)
         return compile_policy_snapshot(policy_id=policy_id, version=version, document=row.document_json, validation=row.validation_json)
@@ -337,6 +474,25 @@ class OmnigentPolicyService:
         if snapshot["policyDigest"] != row.digest:
             raise PolicyConflict(f"runtime policy digest conflict: {policy_ref}")
         return snapshot
+
+    async def resolve_default_runtime_snapshot(
+        self, policy_id: str
+    ) -> dict[str, Any]:
+        """Resolve a policy's durable default as exact runtime authority.
+
+        Environment-backed values are bootstrap inputs only.  Normal runtime
+        callers must resolve the persisted default and then apply the same
+        active/validation/digest gates as an explicitly selected version.
+        """
+
+        policy = await self.get_policy(policy_id)
+        if policy.default_version is None:
+            raise PolicyConflict(
+                f"runtime policy has no default version: {policy_id}"
+            )
+        return await self.resolve_runtime_snapshot(
+            f"{policy.policy_id}@{policy.default_version}"
+        )
 
     @staticmethod
     def _version(policy_id: str, version: int, document: PolicyDocument, actor: str, **lineage: Any) -> OmnigentPolicyVersion:
@@ -495,6 +651,73 @@ async def resolve_bootstrap_image_refs(
     return server_image, host_image
 
 
+# Every production remediation adapter registered by
+# ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
+# dispatches by its canonical action identity, and ``resolve_action`` performs an
+# exact-match lookup against ``approvals.actions``. The bootstrap policy must
+# therefore carry an explicit rule for each identity or the default deployment
+# authorizes none of them. Non-mutating evidence actions are allowed; every
+# state-mutating remediation action stays approval-gated, matching this
+# bootstrap's ``remediation.autonomous: False`` posture. The identities are
+# listed explicitly (not imported) to keep the seed reviewable and to avoid a
+# circular import with the temporal remediation package; a unit test guards
+# against catalog drift.
+_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "cleanup.verify",
+    "target.annotate",
+    "target.verify",
+)
+_BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+    "checkpoint_branch.create_from_remediation_context",
+    "session.interrupt_turn",
+    "session.clear",
+    "session.cancel",
+    "session.terminate",
+    "session.restart_container",
+    "provider_profile.evict_stale_lease",
+    "workload.restart_helper_container",
+    "workload.reap_orphan_container",
+    "host.drain",
+    "host.stop",
+    "host.restart",
+    "host.remove",
+    "host_lease.reconcile_stale",
+    "cleanup.request_janitor",
+)
+
+
+def _bootstrap_approval_actions() -> dict[str, dict[str, str]]:
+    """Seed exact approval rules for every canonical remediation action identity."""
+
+    actions: dict[str, dict[str, str]] = {
+        "read": {"decision": "allow"},
+        "publish": {
+            "decision": "approval_required",
+            "approvalClass": "publication",
+            "reviewerRule": "workflow-owner",
+        },
+    }
+    for action in _BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "allow",
+            "reason": "non-mutating remediation evidence",
+        }
+    for action in _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "approval_required",
+            "approvalClass": "remediation",
+            "reviewerRule": "workflow-owner",
+            "reason": "state-mutating remediation requires approval",
+        }
+    return actions
+
+
 def bootstrap_document(
     *,
     host_mode: str,
@@ -533,8 +756,7 @@ def bootstrap_document(
                         "locks": True, "maxActions": 3, "autonomous": False},
         "rag": {"initialScope": "workflow", "followupScope": "session", "collectionRefs": ["workflow-default"],
                 "tokenBudget": 8000, "fallback": "deny", "credentialRef": "retrieval-profile"},
-        "approvals": {"actions": {"read": {"decision": "allow"}, "publish": {"decision": "approval_required",
-                      "approvalClass": "publication", "reviewerRule": "workflow-owner"}, "host_mutation": {"decision": "deny"}}},
+        "approvals": {"actions": _bootstrap_approval_actions()},
         "retention": {"days": 30, "deletion": "after-expiry"},
         "rollout": {"cohort": "bootstrap", "gate": "deployment-ready", "diagnostics": True},
     })

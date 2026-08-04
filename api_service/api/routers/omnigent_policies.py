@@ -150,6 +150,17 @@ async def policy_audit(policy_id: str, session: AsyncSession = Depends(get_async
     } for event in events]}
 
 
+@router.get("/{policy_id}/versions/{version}/usage")
+async def policy_usage(policy_id: str, version: int, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
+    _require(user, "settings.catalog.read")
+    service = OmnigentPolicyService(session)
+    try:
+        await _require_policy_read(service, policy_id, user)
+        return await service.usage(policy_id, version)
+    except PolicyNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.post("/{policy_id}/versions", status_code=201)
 async def create_version(policy_id: str, body: NewVersion, session: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user())) -> dict[str, Any]:
     _require(user, "settings.system.write")
