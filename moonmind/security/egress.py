@@ -13,6 +13,7 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Awaitable, Callable, Literal, Sequence
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -176,6 +177,134 @@ class EgressAttestation(BaseModel):
     validation_result: Literal["passed"] = Field("passed", alias="validationResult")
     denied_connection_count: int = Field(0, alias="deniedConnectionCount", ge=0)
     diagnostics: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+
+
+def _iter_scoped_denials(
+    access_log: bytes,
+    *,
+    client_address: str,
+    started_at: datetime | None,
+    finished_at: datetime | None,
+):
+    """Yield ``(authority, result)`` for each denial owned by one workload.
+
+    Denials are scoped to the workload both by client address and, when the
+    container start/finish interval is known, by the Squid completion timestamp.
+    Docker reuses a bridge IP once a prior restricted-egress container is
+    removed, so filtering by address alone would attribute a previous holder's
+    denials (still present in the gateway's line tail) to the new job. Bracketing
+    on the container lifetime keeps terminal evidence per-launch.
+    """
+
+    if not client_address:
+        return
+    start_epoch = started_at.timestamp() if started_at is not None else None
+    finish_epoch = finished_at.timestamp() if finished_at is not None else None
+    # A small tolerance absorbs clock granularity between the daemon-reported
+    # container interval and Squid's completion timestamp without widening the
+    # window enough to readmit a prior IP holder's denials.
+    tolerance_seconds = 2.0
+    for raw_line in access_log.decode("utf-8", errors="replace").splitlines():
+        fields = raw_line.split()
+        if len(fields) < 7 or fields[2] != client_address:
+            continue
+        result = fields[3]
+        if "DENIED" not in result:
+            continue
+        if start_epoch is not None or finish_epoch is not None:
+            try:
+                entry_epoch = float(fields[0])
+            except ValueError:
+                # A denial that cannot be placed in the container lifetime is not
+                # attributable to this launch; exclude it rather than overcount.
+                continue
+            if start_epoch is not None and entry_epoch < start_epoch - tolerance_seconds:
+                continue
+            if (
+                finish_epoch is not None
+                and entry_epoch > finish_epoch + tolerance_seconds
+            ):
+                continue
+        target = fields[6]
+        try:
+            if "://" in target:
+                parsed = urlsplit(target)
+                host = parsed.hostname
+                if not host:
+                    continue
+                display_host = f"[{host}]" if ":" in host else host
+                authority = (
+                    f"{display_host}:{parsed.port}" if parsed.port else display_host
+                )
+            else:
+                authority = target.split("/", 1)[0].rsplit("@", 1)[-1]
+                parsed = urlsplit(f"//{authority}")
+                if not parsed.hostname or any(char.isspace() for char in authority):
+                    continue
+                # Accessing port validates malformed bracket/port forms.
+                _ = parsed.port
+        except ValueError:
+            continue
+        if authority in {"", "-"}:
+            continue
+        yield authority[:253], result
+
+
+def bounded_denial_diagnostics(
+    access_log: bytes,
+    *,
+    client_address: str,
+    limit: int = 20,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> tuple[str, ...]:
+    """Extract bounded, payload-free denial evidence for one workload.
+
+    Squid's native access log is read only at the trusted backend.  The durable
+    form deliberately retains a normalized destination authority and status,
+    never the request path, query, credentials, or complete traffic log. The
+    optional container start/finish interval scopes denials to this launch so a
+    reused bridge IP cannot attribute a prior holder's traffic here.
+    """
+
+    if limit < 1:
+        return ()
+    diagnostics: list[str] = []
+    for authority, result in _iter_scoped_denials(
+        access_log,
+        client_address=client_address,
+        started_at=started_at,
+        finished_at=finished_at,
+    ):
+        diagnostics.append(f"denied {authority} {result[:64]}")
+        if len(diagnostics) >= min(limit, 20):
+            break
+    return tuple(diagnostics)
+
+
+def denied_connection_count(
+    access_log: bytes,
+    *,
+    client_address: str,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> int:
+    """Count all in-lifetime denials for one workload, ignoring the diagnostic cap.
+
+    ``bounded_denial_diagnostics`` intentionally truncates the retained sample at
+    20 entries; the terminal denied-connection counter must keep scanning so
+    evidence does not silently underreport denied traffic above that cap.
+    """
+
+    return sum(
+        1
+        for _ in _iter_scoped_denials(
+            access_log,
+            client_address=client_address,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    )
 
 
 DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
