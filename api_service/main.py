@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -495,8 +495,10 @@ async def lifespan(app: FastAPI):
         )
         if retry_task is not None and not retry_task.done():
             retry_task.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await retry_task
+            except asyncio.CancelledError:
+                pass
         # Shutdown logic
         teardown_providers()
 
