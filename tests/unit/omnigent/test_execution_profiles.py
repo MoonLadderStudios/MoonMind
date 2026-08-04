@@ -146,6 +146,10 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
         "claude-static@1",
         "claude-on-demand@1",
     }
+    codex_profile = next(
+        profile for profile in catalog["profiles"] if profile["ref"] == "omnigent-codex@1"
+    )
+    assert codex_profile["defaultPolicyRef"] == "codex-on-demand@1"
     assert "credential" not in str(catalog).lower()
 
 

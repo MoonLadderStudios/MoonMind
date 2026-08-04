@@ -2694,6 +2694,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     resources = AsyncExitStack()
     container_job_backend = None
     enforced_network_refs: list[str] = []
+    enforced_egress_profile_refs: list[str] = []
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
@@ -2815,29 +2816,39 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
-                from moonmind.omnigent.execution_profiles import POLICIES
                 from moonmind.security.egress import (
                     DEFAULT_EGRESS_PROFILE,
+                    OMNIGENT_EGRESS_PROFILE,
                     attest_docker_egress,
                 )
 
-                enforced_network_refs = []
-                egress_attestation = await attest_docker_egress(
-                    runner=container_job_backend.command_runner,
-                    profile=DEFAULT_EGRESS_PROFILE,
-                    backend_ref=container_backend_settings.default_backend_ref,
-                )
-                for policy in POLICIES.values():
-                    if (
-                        policy.enabled
-                        and policy.enforced_egress
-                        and policy.network_ref == egress_attestation.network_ref
-                    ):
-                        enforced_network_refs.append(policy.network_ref)
-                resources.egress_attestation = egress_attestation  # type: ignore[attr-defined]
+                egress_attestations = []
+                for egress_profile in (
+                    DEFAULT_EGRESS_PROFILE,
+                    OMNIGENT_EGRESS_PROFILE,
+                ):
+                    egress_attestations.append(
+                        await attest_docker_egress(
+                            runner=container_job_backend.command_runner,
+                            profile=egress_profile,
+                            backend_ref=container_backend_settings.default_backend_ref,
+                        )
+                    )
+                enforced_network_refs = [
+                    attestation.network_ref for attestation in egress_attestations
+                ]
+                enforced_egress_profile_refs = [
+                    attestation.profile_ref for attestation in egress_attestations
+                ]
+                # Preserve the established single-attestation projection for
+                # existing diagnostics while publishing the complete authority
+                # set used by runtime-specific readiness checks.
+                resources.egress_attestation = egress_attestations[0]  # type: ignore[attr-defined]
+                resources.egress_attestations = tuple(egress_attestations)  # type: ignore[attr-defined]
             else:
                 container_job_backend = None
                 enforced_network_refs = []
+                enforced_egress_profile_refs = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2900,6 +2911,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         )
         resources.container_job_backend = container_job_backend  # type: ignore[attr-defined]
         resources.enforced_network_refs = tuple(enforced_network_refs)  # type: ignore[attr-defined]
+        resources.enforced_egress_profile_refs = tuple(  # type: ignore[attr-defined]
+            enforced_egress_profile_refs
+        )
         return resources, [
             binding.handler for binding in bindings
         ] + [
@@ -3064,9 +3078,15 @@ async def main_async() -> None:
             enforced_network_refs = getattr(
                 runtime_resources, "enforced_network_refs", ()
             )
+            enforced_egress_profile_refs = getattr(
+                runtime_resources, "enforced_egress_profile_refs", ()
+            )
             health_state.readiness_metadata["containerBackend"] = {
                 "ready": container_job_backend is not None,
                 "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+                "enforcedEgressProfileRefs": sorted(
+                    set(enforced_egress_profile_refs)
+                ),
             }
             egress_attestation = getattr(
                 runtime_resources, "egress_attestation", None
@@ -3075,6 +3095,16 @@ async def main_async() -> None:
                 health_state.readiness_metadata["containerBackend"][
                     "egressAttestation"
                 ] = egress_attestation.model_dump(by_alias=True, mode="json")
+            egress_attestations = getattr(
+                runtime_resources, "egress_attestations", ()
+            )
+            if egress_attestations:
+                health_state.readiness_metadata["containerBackend"][
+                    "egressAttestations"
+                ] = [
+                    attestation.model_dump(by_alias=True, mode="json")
+                    for attestation in egress_attestations
+                ]
 
         logger.info(
             "Temporal executable worker specification: %s",
