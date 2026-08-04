@@ -19,6 +19,7 @@ from api_service.db.models import (
 from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
+    bootstrap_policies_ready,
     bootstrap_document,
     configured_bootstrap_image_refs,
     resolve_bootstrap_image_ref,
@@ -578,6 +579,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             version.document_json["host"]["serverImageRef"] == server_digest
             for version in versions
         )
+        assert await bootstrap_policies_ready(session) is True
         assert await seed_bootstrap_policies(
             session, env={}, image_resolver=resolver
         ) == []

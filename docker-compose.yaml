@@ -608,6 +608,8 @@ services:
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
       - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
       # Optional prebuilt override. Empty selects the deployment-owned local
       # recipe, which is built lazily by the first Python-test job.
@@ -781,6 +783,8 @@ services:
       - JULES_ENABLED=${JULES_ENABLED:-true}
       - JULES_API_URL=${JULES_API_URL:-}
       - JULES_API_KEY=${JULES_API_KEY:-}
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}

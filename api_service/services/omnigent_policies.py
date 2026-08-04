@@ -47,6 +47,26 @@ _SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
 _HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
 _IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
 ImageResolver = Callable[[str], Awaitable[str | None]]
+_BOOTSTRAP_POLICY_DEFINITIONS = (
+    (
+        "omnigent-codex",
+        "Omnigent Codex execution",
+        "static_compose",
+        "omnigent-codex@1",
+    ),
+    (
+        "codex-static",
+        "Codex static host",
+        "static_compose",
+        "omnigent-codex@1",
+    ),
+    (
+        "codex-on-demand",
+        "Codex on-demand host",
+        "on_demand_docker",
+        "omnigent-codex@1",
+    ),
+)
 
 
 class PolicyConflict(ValueError):
@@ -771,17 +791,26 @@ async def seed_bootstrap_policies(
     """Idempotently persist the three pre-existing built-in authorities."""
 
     service = OmnigentPolicyService(session)
-    definitions = (
-        ("omnigent-codex", "Omnigent Codex execution", "static_compose", "omnigent-codex@1"),
-        ("codex-static", "Codex static host", "static_compose", "omnigent-codex@1"),
-        ("codex-on-demand", "Codex on-demand host", "on_demand_docker", "omnigent-codex@1"),
-    )
     reconciliation_required = False
-    for policy_id, *_ in definitions:
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
             reconciliation_required = True
             break
+        if policy.default_version is not None:
+            try:
+                default_row = await service.get_version(
+                    policy_id,
+                    policy.default_version,
+                )
+            except PolicyNotFound:
+                default_row = None
+            if (
+                default_row is not None
+                and default_row.state == PolicyState.ACTIVE.value
+                and default_row.validation_json.get("valid")
+            ):
+                continue
         try:
             row = await service.get_version(policy_id, 1)
         except PolicyNotFound:
@@ -790,7 +819,6 @@ async def seed_bootstrap_policies(
         if (
             row.state != PolicyState.ACTIVE.value
             or not row.validation_json.get("valid")
-            or policy.default_version != 1
         ):
             reconciliation_required = True
             break
@@ -801,7 +829,7 @@ async def seed_bootstrap_policies(
     server_image, host_image = await resolve_bootstrap_image_refs(
         env=env, image_resolver=image_resolver
     )
-    for policy_id, name, host_mode, profile_ref in definitions:
+    for policy_id, name, host_mode, profile_ref in _BOOTSTRAP_POLICY_DEFINITIONS:
         document = bootstrap_document(
             host_mode=host_mode,
             execution_profile_ref=profile_ref,
@@ -840,3 +868,23 @@ async def seed_bootstrap_policies(
             )
         seeded.append(policy_id)
     return seeded
+
+
+async def bootstrap_policies_ready(session: AsyncSession) -> bool:
+    """Return whether every built-in policy has immutable active authority."""
+
+    service = OmnigentPolicyService(session)
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None or policy.default_version is None:
+            return False
+        try:
+            row = await service.get_version(policy_id, policy.default_version)
+        except PolicyNotFound:
+            return False
+        if (
+            row.state != PolicyState.ACTIVE.value
+            or not row.validation_json.get("valid")
+        ):
+            return False
+    return True

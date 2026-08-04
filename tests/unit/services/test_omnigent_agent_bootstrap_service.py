@@ -22,11 +22,24 @@ from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
+    reconcile_bootstrap_agent_profile,
     resolve_default_agent_selection,
     seed_bootstrap_agent_profile,
 )
+from api_service.services.omnigent_agent_profile_service import (
+    synchronize_upstream_inventory,
+)
 
 pytestmark = [pytest.mark.asyncio]
+
+
+def _inventory(agent_id: str, *, name: str | None = None):
+    return [{
+        "id": agent_id,
+        "name": name or agent_id,
+        "harness": "codex-native",
+        "capabilities": ["session.start"],
+    }]
 
 
 @pytest_asyncio.fixture()
@@ -124,10 +137,12 @@ async def test_default_marked_but_not_active_fails_closed(session):
 
 
 async def test_seed_materializes_active_bootstrap_profile(session):
-    seeded = await seed_bootstrap_agent_profile(
-        session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
+    ready = await reconcile_bootstrap_agent_profile(
+        session,
+        env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"},
+        inventory=_inventory("codex-default"),
     )
-    assert seeded == BOOTSTRAP_PROFILE_ID
+    assert ready is True
 
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
@@ -161,6 +176,12 @@ async def test_seed_materializes_active_bootstrap_profile(session):
 
 
 async def test_seed_is_idempotent(session):
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref="default",
+        bridge_mode="proxy",
+        inventory=_inventory("codex-default"),
+    )
     first = await seed_bootstrap_agent_profile(
         session, env={"OMNIGENT_DEFAULT_AGENT_NAME": "codex-default"}
     )
@@ -185,7 +206,11 @@ async def test_seed_skipped_when_durable_state_exists(session):
 
 
 async def test_seed_uses_builtin_codex_when_env_absent(session):
-    assert await seed_bootstrap_agent_profile(session, env={}) == BOOTSTRAP_PROFILE_ID
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex"),
+    ) is True
     count = await session.scalar(
         select(func.count()).select_from(OmnigentAgentProfile)
     )
@@ -200,3 +225,22 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
     )
     assert version.document["source"]["upstreamId"] == "codex"
     assert version.rollout_metadata["origin"] == "builtin_default"
+
+
+async def test_seed_does_not_claim_ready_before_upstream_identity_is_observed(session):
+    assert await seed_bootstrap_agent_profile(session, env={}) is None
+    assert await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID) is None
+
+
+async def test_reconcile_uses_stable_upstream_id_when_selector_matches_name(session):
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("agent-1", name="codex"),
+    ) is True
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
+        )
+    )
+    assert version.document["source"]["upstreamId"] == "agent-1"

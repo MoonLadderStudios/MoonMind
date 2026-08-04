@@ -253,6 +253,15 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
+    for worker_name in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ):
+        worker_env = _env_map(services[worker_name]["environment"])
+        assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+        assert worker_env["OMNIGENT_SERVER_URL"] == (
+            "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+        )
 
     assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == (
         "${POSTGRES_PASSWORD:-password}"

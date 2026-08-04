@@ -334,6 +334,17 @@ def test_api_service_enables_omnigent_with_stock_images_by_default():
     assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
+    for worker_name in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ):
+        worker_env = _env_map(
+            compose_data["services"][worker_name]["environment"]
+        )
+        assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+        assert worker_env["OMNIGENT_SERVER_URL"] == (
+            "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+        )
 
 
 def test_api_service_mounts_agent_runtime_workspace_volume():
