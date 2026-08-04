@@ -189,7 +189,13 @@ class MoonMindContainerJobWorkflow:
                         "container_job.create_container", request
                     )
                     request.container_ref = created.container_ref
+                    request.egress_attestation_ref = created.diagnostics_ref
                     request.resolved_cache_refs = created.resolved_cache_refs
+                else:
+                    # A reconciled container skips create; recover its republished
+                    # launch attestation ref so terminal evidence still correlates
+                    # the running workload with its enforced egress policy.
+                    request.egress_attestation_ref = reconciled.diagnostics_ref
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)
@@ -285,15 +291,29 @@ class MoonMindContainerJobWorkflow:
             artifacts_ref = published.artifacts_ref
             events_ref = published.events_ref
 
+        # Cleanup publishes the observed post-removal restricted-egress record.
+        # Thread the runtime diagnostics ref into that Activity so the two
+        # immutable artifacts remain correlated without embedding either body
+        # in workflow history.
+        request.publication = publication
+
         await self._project(request, ContainerJobState.CLEANING_UP)
         removed = await self._best_effort("container_job.remove_container", request)
         cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(
-            state="succeeded" if removed is not None and cleaned is not None else "failed"
+            state=(
+                "succeeded"
+                if (
+                    removed is not None
+                    and cleaned is not None
+                    and cleaned.cleanup_succeeded is not False
+                )
+                else "failed"
+            ),
+            diagnosticsRef=cleaned.diagnostics_ref if cleaned is not None else None,
         )
 
         self._state = terminal_state
-        request.publication = publication
         request.cleanup_outcome = cleanup
         request.logs_ref = logs_ref
         request.artifacts_ref = artifacts_ref

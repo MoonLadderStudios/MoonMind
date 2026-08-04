@@ -7,6 +7,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from datetime import UTC, datetime
+
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
@@ -15,9 +17,124 @@ from moonmind.security.egress import (
     ENFORCER_IMPLEMENTATION,
     OMNIGENT_EGRESS_NETWORK_REF,
     attest_docker_egress,
+    bounded_denial_diagnostics,
+    denied_connection_count,
     omnigent_proxy_env,
     restricted_proxy_env,
 )
+
+
+def test_denial_diagnostics_are_bounded_scoped_and_strip_request_data():
+    lines = [
+        # Explicit ``+`` keeps each list element a single squid log line while
+        # avoiding implicit string concatenation that reads like a missing comma.
+        b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+        + b"metadata.invalid:443/path?token=secret - HIER_NONE/- text/html",
+        b"1 2 172.31.0.8 TCP_DENIED/403 0 CONNECT "
+        + b"other.invalid:443/ - HIER_NONE/- text/html",
+    ] * 30
+
+    diagnostics = bounded_denial_diagnostics(
+        b"\n".join(lines), client_address="172.31.0.7"
+    )
+
+    assert len(diagnostics) == 20
+    assert diagnostics[0] == "denied metadata.invalid:443 TCP_DENIED/403"
+    assert all(
+        "secret" not in item and "172.31.0.8" not in item
+        for item in diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("CONNECT", "metadata.invalid:443"),
+        ("HTTP", "example.invalid:8080"),
+        ("HTTP_IPV6", "[2001:db8::1]:8443"),
+    ],
+)
+def test_denial_diagnostics_normalize_authority_forms(target, expected):
+    request_target = {
+        "CONNECT": "user:secret@metadata.invalid:443/path?token=secret",
+        "HTTP": "http://user:secret@example.invalid:8080/private?token=secret",
+        "HTTP_IPV6": "https://user:secret@[2001:db8::1]:8443/private",
+    }[target]
+    line = (
+        f"1 2 172.31.0.7 TCP_DENIED/403 0 GET {request_target} "
+        "- HIER_NONE/- text/html"
+    ).encode()
+
+    assert bounded_denial_diagnostics(line, client_address="172.31.0.7") == (
+        f"denied {expected} TCP_DENIED/403",
+    )
+    assert "secret" not in bounded_denial_diagnostics(
+        line, client_address="172.31.0.7"
+    )[0]
+
+
+def test_denial_diagnostics_scope_to_container_lifetime():
+    start = datetime(2026, 8, 4, 0, 0, 30, tzinfo=UTC)
+    finish = datetime(2026, 8, 4, 0, 5, 0, tzinfo=UTC)
+    prior = start.timestamp() - 300
+    inside = start.timestamp() + 10
+    after = finish.timestamp() + 300
+    log = (
+        f"{prior} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT prior.invalid:443/ "
+        "- HIER_NONE/- text/html\n"
+        f"{inside} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT current.invalid:443/ "
+        "- HIER_NONE/- text/html\n"
+        f"{after} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT later.invalid:443/ "
+        "- HIER_NONE/- text/html\n"
+    ).encode()
+
+    diagnostics = bounded_denial_diagnostics(
+        log, client_address="172.31.0.7", started_at=start, finished_at=finish
+    )
+
+    # Only the denial inside the container lifetime is attributed to this launch.
+    assert diagnostics == ("denied current.invalid:443 TCP_DENIED/403",)
+
+
+def test_denied_connection_count_ignores_diagnostic_cap():
+    lines = [
+        f"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT blocked{index}.invalid:443/ "
+        "- HIER_NONE/- text/html"
+        for index in range(30)
+    ]
+    log = ("\n".join(lines) + "\n").encode()
+
+    diagnostics = bounded_denial_diagnostics(log, client_address="172.31.0.7")
+    count = denied_connection_count(log, client_address="172.31.0.7")
+
+    # The retained sample stays capped while the counter reflects every denial.
+    assert len(diagnostics) == 20
+    assert count == 30
+
+
+def test_denied_connection_count_excludes_prior_ip_holder():
+    start = datetime(2026, 8, 4, 0, 0, 30, tzinfo=UTC)
+    prior = start.timestamp() - 300
+    inside = start.timestamp() + 10
+    log = (
+        f"{prior} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT prior.invalid:443/ "
+        "- HIER_NONE/- text/html\n"
+        f"{inside} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT current.invalid:443/ "
+        "- HIER_NONE/- text/html\n"
+    ).encode()
+
+    assert denied_connection_count(
+        log, client_address="172.31.0.7", started_at=start
+    ) == 1
+
+
+@pytest.mark.parametrize("target", ["-", "http://", "http://[bad", "http://:bad"])
+def test_denial_diagnostics_drop_malformed_targets(target):
+    line = (
+        f"1 2 172.31.0.7 TCP_DENIED/403 0 GET {target} "
+        "- HIER_NONE/- text/html"
+    ).encode()
+    assert bounded_denial_diagnostics(line, client_address="172.31.0.7") == ()
 
 
 def _profile(**updates):

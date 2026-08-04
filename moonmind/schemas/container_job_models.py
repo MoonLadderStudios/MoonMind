@@ -658,6 +658,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
         None, alias="imageObservation"
     )
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
+    egress_attestation_ref: str | None = Field(
+        None, alias="egressAttestationRef", max_length=1024
+    )
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
     publication_token: str | None = Field(
@@ -715,6 +718,7 @@ class ContainerJobActivityResult(TemporalContractModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
     )
+    cleanup_succeeded: bool | None = Field(None, alias="cleanupSucceeded")
     # Durable observability-event journal ref (the terminal fallback for the
     # bounded live log stream) and the resumable live-log paging cursor (#3258).
     events_ref: str | None = Field(None, alias="eventsRef", max_length=1024)
