@@ -43,6 +43,7 @@ from moonmind.omnigent.execution_profiles import (
     validate_effective_launch_snapshot,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
@@ -4015,3 +4016,56 @@ async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
 
     assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
     resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attest_workload_attachment_records_actual_on_demand_container(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    networks = {OMNIGENT_EGRESS_PROFILE.network_ref: {"IPAddress": "172.31.5.5"}}
+    runtime._run = AsyncMock(return_value=(0, json.dumps(networks), ""))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+
+    identity = await runtime._attest_workload_attachment(
+        binding=binding,
+        host_lease=_host_lease(),
+        container_name="mm-host-lease-1",
+    )
+
+    # The attachment records the real Docker container, verified against the
+    # attested egress network, not the logical registered host id.
+    assert identity == "mm-host-lease-1"
+    inspect = runtime._run.await_args_list[-1].args
+    assert inspect[:3] == ("docker", "inspect", "--format")
+    assert inspect[-1] == "mm-host-lease-1"
+
+
+@pytest.mark.asyncio
+async def test_attest_workload_attachment_fails_when_network_absent(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    # The container is attached to some other network, not the attested one.
+    runtime._run = AsyncMock(
+        return_value=(0, json.dumps({"local-network": {"IPAddress": "10.0.0.2"}}), "")
+    )
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        await runtime._attest_workload_attachment(
+            binding=binding,
+            host_lease=_host_lease(),
+            container_name="mm-host-lease-1",
+        )
+    assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"

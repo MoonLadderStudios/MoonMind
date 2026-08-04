@@ -300,6 +300,38 @@ def _result_for(name: str) -> ContainerJobActivityResult:
 
 
 @pytest.mark.asyncio
+async def test_reconciled_container_recovers_launch_attestation_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    cleanup_request: ContainerJobActivityRequest | None = None
+
+    async def activity(name, request):
+        nonlocal cleanup_request
+        if name == "container_job.create_container":
+            raise AssertionError("create must be skipped for a reconciled container")
+        if name == "container_job.cleanup":
+            cleanup_request = request.model_copy(deep=True)
+        if name.endswith("reconcile_container"):
+            # A reconciled container carries its republished attestation ref.
+            return ContainerJobActivityResult(
+                containerRef="owned:reconciled",
+                running=True,
+                diagnosticsRef="artifact:recovered-attestation",
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    assert cleanup_request is not None
+    assert (
+        cleanup_request.egress_attestation_ref == "artifact:recovered-attestation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_workspace_volume_mount_survives_activity_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

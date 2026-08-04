@@ -190,6 +190,11 @@ class MoonMindContainerJobWorkflow:
                     )
                     request.container_ref = created.container_ref
                     request.egress_attestation_ref = created.diagnostics_ref
+                else:
+                    # A reconciled container skips create; recover its republished
+                    # launch attestation ref so terminal evidence still correlates
+                    # the running workload with its enforced egress policy.
+                    request.egress_attestation_ref = reconciled.diagnostics_ref
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)

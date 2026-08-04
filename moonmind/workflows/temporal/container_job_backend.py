@@ -81,6 +81,7 @@ from moonmind.workloads.docker_launcher import structured_container_security_arg
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     bounded_denial_diagnostics,
+    denied_connection_count,
     attest_docker_egress,
     restricted_proxy_env,
 )
@@ -251,6 +252,10 @@ class _LocalImageObservation:
 _MAX_LIVE_LOG_EVENTS = 5000
 _LIVE_LOG_ENTRY_MAX_CHARS = 8192
 _LIVE_EVENTS_JOURNAL_NAME = "observability.events.jsonl"
+# Bounded in-Activity retry for transient credential-directory removal failures.
+# The removal is idempotent, so retrying a transient OSError cannot leak state.
+_CREDENTIAL_CLEANUP_ATTEMPTS = 3
+_CREDENTIAL_CLEANUP_BACKOFF_SECONDS = 0.1
 # ``docker logs --timestamps`` prefixes every line with an RFC3339Nano instant.
 _DOCKER_TS_LINE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))(?:\s(?P<text>.*))?$"
@@ -1384,8 +1389,45 @@ class DockerContainerJobBackend:
         )
         if code:
             return ContainerJobActivityResult()
+        # A reconciled container skips the authoritative create step, so its
+        # durable launch-attestation reference would otherwise be lost and both
+        # the runtime diagnostics and post-cleanup lifecycle artifacts would
+        # publish launchAttestationRef=null. Re-attest the live restricted-egress
+        # state and republish the attestation evidence so the recovery path can
+        # correlate the running workload with its enforced launch policy.
+        diagnostics_ref = await self._recover_launch_attestation(request, name)
         return ContainerJobActivityResult(
-            containerRef=name, running=stdout.strip() == b"true"
+            containerRef=name,
+            running=stdout.strip() == b"true",
+            diagnosticsRef=diagnostics_ref,
+        )
+
+    async def _recover_launch_attestation(
+        self, request: ContainerJobActivityRequest, name: str
+    ) -> str | None:
+        """Re-attest and republish launch evidence for a reconciled bridge job."""
+
+        if request.request.spec.network_mode != "bridge" or self._publish is None:
+            return None
+        egress_attestation = await attest_docker_egress(
+            runner=self._runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref=self._backend_ref,
+        )
+        evidence = {
+            "schemaVersion": 1,
+            "kind": "restricted-egress-launch-attestation",
+            "attachmentIdentity": name,
+            "attestation": egress_attestation.model_dump(by_alias=True, mode="json"),
+            "deniedConnectionCount": 0,
+            "denialDiagnostics": [],
+            "cleanupResult": "pending",
+            "reconciliationResult": "recovered",
+        }
+        return await self._publish(
+            request,
+            f"{request.job_id}-egress-attestation.json",
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
         )
 
     async def _materialized_env(
@@ -2015,7 +2057,18 @@ class DockerContainerJobBackend:
     ) -> str | None:
         if self._publish is None:
             return None
-        egress_evidence = await self._runtime_egress_evidence(request)
+        # Egress evidence is auxiliary diagnostic collection performed after the
+        # logs and output artifacts have already been uploaded. If the gateway,
+        # its access log, or the workload attachment cannot be inspected, isolate
+        # that failure into the diagnostics body rather than letting it propagate
+        # and discard the already-published primary terminal evidence.
+        egress_evidence: dict | None
+        egress_error: str | None = None
+        try:
+            egress_evidence = await self._runtime_egress_evidence(request)
+        except Exception as exc:
+            egress_evidence = None
+            egress_error = str(exc)[:512] or type(exc).__name__
         diagnostics = {
             "jobId": request.job_id,
             "contractVersion": "v1",
@@ -2047,6 +2100,13 @@ class DockerContainerJobBackend:
                 request.egress_attestation_ref
             )
             diagnostics["egressEvidence"] = egress_evidence
+        elif egress_error is not None:
+            # Record the auxiliary failure without discarding the primary refs.
+            diagnostics["egressEvidence"] = {
+                "state": "unavailable",
+                "error": egress_error,
+                "launchAttestationRef": request.egress_attestation_ref,
+            }
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
         ).encode("utf-8")
@@ -2062,19 +2122,39 @@ class DockerContainerJobBackend:
         if request.request.spec.network_mode != "bridge":
             return None
         ref = request.container_ref or self._name(request)
+        # Inspect the complete network map, not just the approved network. If
+        # daemon state drifted or another trusted client attached a second
+        # network, indexing only the approved network would still return a valid
+        # IP and let terminal evidence claim restricted egress while the workload
+        # holds a direct bypass route. Require the approved network to be the sole
+        # attachment before emitting passing evidence.
         code, stdout, _ = await self._runner(
             (
                 "inspect",
                 "--format",
-                "{{with index .NetworkSettings.Networks \""
-                + DEFAULT_EGRESS_PROFILE.network_ref
-                + "\"}}{{.IPAddress}}{{end}}",
+                "{{json .NetworkSettings.Networks}}",
                 ref,
             )
         )
         if code or not stdout.strip():
             raise RuntimeError("restricted-egress attachment evidence is unavailable")
-        client_address = stdout.decode(errors="replace").strip()
+        try:
+            networks = json.loads(stdout.decode(errors="replace"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                "restricted-egress attachment evidence is malformed"
+            ) from exc
+        if not isinstance(networks, dict) or set(networks) != {
+            DEFAULT_EGRESS_PROFILE.network_ref
+        }:
+            raise RuntimeError(
+                "restricted-egress attachment is not the sole approved network"
+            )
+        client_address = str(
+            (networks[DEFAULT_EGRESS_PROFILE.network_ref] or {}).get("IPAddress") or ""
+        ).strip()
+        if not client_address:
+            raise RuntimeError("restricted-egress attachment evidence is unavailable")
         code, access_log, _ = await self._runner(
             (
                 "exec",
@@ -2087,8 +2167,22 @@ class DockerContainerJobBackend:
         )
         if code:
             raise RuntimeError("restricted-egress denial evidence is unavailable")
+        # Scope denials to this launch by client address and, when known, the
+        # container start/finish interval so a reused bridge IP cannot attribute
+        # a prior holder's denials from the gateway's line tail to this job.
         denial_diagnostics = bounded_denial_diagnostics(
-            access_log, client_address=client_address
+            access_log,
+            client_address=client_address,
+            started_at=request.started_at,
+            finished_at=request.finished_at,
+        )
+        # The retained diagnostic sample is capped; count denials independently so
+        # terminal evidence does not underreport traffic above the cap.
+        denied_count = denied_connection_count(
+            access_log,
+            client_address=client_address,
+            started_at=request.started_at,
+            finished_at=request.finished_at,
         )
         return {
             "profileRef": DEFAULT_EGRESS_PROFILE.ref,
@@ -2098,7 +2192,7 @@ class DockerContainerJobBackend:
             "attachmentIdentity": ref,
             "attachmentAddressDigest": "sha256:"
             + hashlib.sha256(client_address.encode()).hexdigest(),
-            "deniedConnectionCount": len(denial_diagnostics),
+            "deniedConnectionCount": denied_count,
             "denialDiagnostics": list(denial_diagnostics),
         }
 
@@ -2149,11 +2243,22 @@ class DockerContainerJobBackend:
         auth_dir = self._auth_dir(request)
         cleanup_succeeded = True
         failure_code: str | None = None
-        try:
-            self._remove_auth_dir(auth_dir, best_effort=False)
-        except OSError:
-            cleanup_succeeded = False
-            failure_code = "credential_cleanup_failed"
+        # Retry the credential removal in-Activity for transient OSErrors before
+        # surrendering. Reporting cleanupSucceeded=false returns the Activity
+        # normally (to still publish durable lifecycle evidence), which suppresses
+        # the workflow's configured cleanup retries; a bounded inner retry keeps a
+        # transient filesystem error from leaving registry credentials on disk.
+        for attempt in range(_CREDENTIAL_CLEANUP_ATTEMPTS):
+            try:
+                self._remove_auth_dir(auth_dir, best_effort=False)
+                cleanup_succeeded = True
+                failure_code = None
+                break
+            except OSError:
+                cleanup_succeeded = False
+                failure_code = "credential_cleanup_failed"
+                if attempt + 1 < _CREDENTIAL_CLEANUP_ATTEMPTS:
+                    await asyncio.sleep(_CREDENTIAL_CLEANUP_BACKOFF_SECONDS)
 
         diagnostics_ref = None
         if request.request.spec.network_mode == "bridge":
