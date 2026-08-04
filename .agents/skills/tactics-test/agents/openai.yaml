@@ -1,0 +1,4 @@
+interface:
+  display_name: "DOOD Unreal Tactics Build/Test"
+  short_description: "Build and test Tactics on the shared container backend"
+  default_prompt: "Use $tactics-test to build Tactics and run targeted Unreal automation tests through the available container backend."

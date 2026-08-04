@@ -33,6 +33,12 @@ _FALSEY: Final[frozenset[str]] = frozenset({"0", "false", "no", "off", ""})
 
 PYTHON_TEST_IMAGE_SOURCE_REF: Final[str] = "moonmind-python-tests"
 PYTHON_TEST_LOCAL_IMAGE: Final[str] = "moonmind-python-tests:local"
+TACTICS_UNREAL_IMAGE_SOURCE_REF: Final[str] = "tactics-unreal"
+DEFAULT_TACTICS_UNREAL_IMAGE: Final[str] = (
+    "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+)
+UNREAL_CCACHE_CACHE_REF: Final[str] = "unreal-ccache"
+UNREAL_UBT_CACHE_REF: Final[str] = "unreal-ubt"
 PYTHON_TEST_RECIPE_VERSION: Final[str] = "v1"
 PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
     ".dockerignore",
@@ -120,6 +126,16 @@ ImageSource = RegistryImageSource | LocalImageRecipe
 
 
 @dataclass(frozen=True)
+class CacheSource:
+    """Deployment-owned named-volume mount selected through an opaque ref."""
+
+    cache_ref: str
+    volume_name: str
+    target: str
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
 class ContainerBackendSettings:
     """Resolved, deployment-owned container-job backend configuration.
 
@@ -142,6 +158,7 @@ class ContainerBackendSettings:
     max_output_files: int
     max_output_total_bytes: int
     image_sources: tuple[ImageSource, ...]
+    cache_sources: tuple[CacheSource, ...]
 
     def require_endpoint(self) -> str:
         """Return the configured endpoint or fail readiness with a bounded error."""
@@ -162,6 +179,37 @@ class ContainerBackendSettings:
         raise ContainerBackendConfigError(
             f"container image source {source_ref!r} is not configured"
         )
+
+    def cache_source(self, cache_ref: str) -> CacheSource:
+        """Resolve one deployment-approved cache source or fail closed."""
+
+        for source in self.cache_sources:
+            if source.cache_ref == cache_ref:
+                return source
+        raise ContainerBackendConfigError(
+            f"container cache source {cache_ref!r} is not configured"
+        )
+
+
+def _named_volume(value: object, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or not all(
+        character.isalnum() or character in "_.-" for character in normalized
+    ):
+        raise ContainerBackendConfigError(
+            f"{field_name} must be a non-empty Docker named volume"
+        )
+    return normalized
+
+
+def _registry_pull_policy(value: object, *, default: str) -> str:
+    normalized = str(value or default).strip().lower()
+    if normalized not in {"if-missing", "always", "never"}:
+        raise ContainerBackendConfigError(
+            "container registry image pull policy must be one of "
+            "if-missing, always, never"
+        )
+    return normalized
 
 
 def resolve_container_backend_settings(
@@ -232,6 +280,46 @@ def resolve_container_backend_settings(
             validation_command=("python", "-c", "import pytest"),
         )
 
+    image_sources: list[ImageSource] = [python_test_source]
+    tactics_unreal_image = str(
+        source.get("MOONMIND_UNREAL_ENGINE_IMAGE")
+        or DEFAULT_TACTICS_UNREAL_IMAGE
+    ).strip()
+    image_sources.append(
+        RegistryImageSource(
+            source_ref=TACTICS_UNREAL_IMAGE_SOURCE_REF,
+            image=tactics_unreal_image,
+            # Unreal images are commonly private and operator-provisioned.
+            # Reuse the deployment daemon's copy without silently attempting
+            # an anonymous pull when the host cache is missing.
+            pull_policy=_registry_pull_policy(
+                source.get("MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"),
+                default="never",
+            ),
+        )
+    )
+
+    cache_sources = (
+        CacheSource(
+            cache_ref=UNREAL_CCACHE_CACHE_REF,
+            volume_name=_named_volume(
+                source.get("MOONMIND_UNREAL_CCACHE_VOLUME_NAME")
+                or "unreal_ccache_volume",
+                field_name="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
+            ),
+            target="/home/ue4/.ccache",
+        ),
+        CacheSource(
+            cache_ref=UNREAL_UBT_CACHE_REF,
+            volume_name=_named_volume(
+                source.get("MOONMIND_UNREAL_UBT_VOLUME_NAME")
+                or "unreal_ubt_volume",
+                field_name="MOONMIND_UNREAL_UBT_VOLUME_NAME",
+            ),
+            target="/home/ue4/.config/Epic/UnrealBuildTool",
+        ),
+    )
+
     return ContainerBackendSettings(
         enabled=_coerce_bool(
             source.get("MOONMIND_CONTAINER_BACKEND_ENABLED"), default=True
@@ -285,5 +373,6 @@ def resolve_container_backend_settings(
             default=256 * 1024 * 1024,
             minimum=1024,
         ),
-        image_sources=(python_test_source,),
+        image_sources=tuple(image_sources),
+        cache_sources=cache_sources,
     )

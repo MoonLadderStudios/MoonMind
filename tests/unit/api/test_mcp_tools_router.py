@@ -16,6 +16,10 @@ from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistr
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
 from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
 from moonmind.mcp.tool_registry import QueueToolRegistry, ResourceListResponse
+from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.security.container_job_capabilities import (
+    mint_container_job_session_capability,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -65,6 +69,112 @@ def router_app(
 
 def _mcp_headers() -> dict[str, str]:
     return {"Accept": "application/json, text/event-stream"}
+
+
+def _managed_container_capability() -> str:
+    return mint_container_job_session_capability(
+        secret="test-container-capability-secret",
+        owner=OwnerIdentity(principalId="user-1", principalType="user"),
+        agent_run_id="run-1",
+        session_id="session-1",
+        runtime_id="codex_cli",
+        lifetime_seconds=300,
+    )
+
+
+def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, Any]:
+    return {
+        "contractVersion": "v1",
+        "idempotencyKey": "container-run:run-1:test",
+        "source": {
+            "source": "managed_session",
+            "workflowId": "workflow-1",
+            "managedSessionId": "session-1",
+            "agentRunId": agent_run_id,
+        },
+        "spec": {
+            "imageSourceRef": "tactics-unreal",
+            "workspaceRef": {
+                "kind": "managed_runtime",
+                "runtimeId": "codex_cli",
+                "agentRunId": agent_run_id,
+                "relativePath": "repo",
+            },
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+    }
+
+
+async def test_scoped_container_endpoint_dispatches_as_capability_owner(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _dispatch(
+        payload: Any,
+        owner: OwnerIdentity,
+        session: Any,
+    ) -> dict[str, Any]:
+        captured.update(payload=payload, owner=owner, session=session)
+        return {"jobId": "container-job:" + "1" * 32, "state": "queued"}
+
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_container_job_tool", _dispatch)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_managed_container_capability()}"},
+            json={
+                "tool": "container.submit",
+                "arguments": _managed_container_submission(),
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["owner"] == OwnerIdentity(
+        principalId="user-1", principalType="user"
+    )
+
+
+async def test_scoped_container_endpoint_rejects_workspace_identity_mismatch(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_managed_container_capability()}"},
+            json={
+                "tool": "container.submit",
+                "arguments": _managed_container_submission(
+                    agent_run_id="different-run"
+                ),
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == (
+        "container_capability_scope_mismatch"
+    )
 
 
 async def test_list_tools_includes_enabled_jira_tools(

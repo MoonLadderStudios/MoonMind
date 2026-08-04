@@ -916,14 +916,9 @@ _PROPOSAL_TELEMETRY_TAG_LABELS = {
 _AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = (
     "MOONMIND_URL",
-    # Non-secret Unreal toolchain image refs. Threaded into the managed-session
-    # launch environment so the docker-sidecar manifest preflight and the agent's
-    # build/test skill see the operator-configured image instead of falling back
-    # to a gated, late-failing pull. GHCR pull *credentials* are intentionally not
-    # here: they are secrets resolved separately by
-    # resolve_ghcr_pull_credentials_for_launch.
+    # Non-secret Unreal toolchain image ref consumed by portable skills that submit
+    # typed container jobs through MoonMind's API-owned Docker Backend.
     "MOONMIND_UNREAL_ENGINE_IMAGE",
-    "MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF",
 )
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
@@ -1152,11 +1147,6 @@ class ManagedSessionController(Protocol):
     async def clear_session(
         self, request: CodexManagedSessionClearRequest, /
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
-        pass
-
-    async def ensure_docker_sidecar(
-        self, request: ManagedSessionEnsureDockerSidecarRequest, /
-    ) -> ManagedSessionEnsureDockerSidecarResponse | Mapping[str, Any]:
         pass
 
     async def terminate_session(
@@ -8327,7 +8317,8 @@ class TemporalAgentRuntimeActivities:
             delta_env_overrides=delta_env_overrides,
             passthrough_env_keys=passthrough_env_keys,
             env_keys_count=len(combined_env_keys),
-            docker_sidecar_launch_plan=context.docker_sidecar_launch_plan,
+            workload_mode=context.workload_mode,
+            owner_user_id=context.owner_user_id,
         )
         return {
             "profile_id": result.profile_id,
@@ -8335,7 +8326,8 @@ class TemporalAgentRuntimeActivities:
             "delta_env_overrides": result.delta_env_overrides,
             "passthrough_env_keys": result.passthrough_env_keys,
             "env_keys_count": result.env_keys_count,
-            "docker_sidecar_launch_plan": result.docker_sidecar_launch_plan,
+            "workload_mode": result.workload_mode,
+            "owner_user_id": result.owner_user_id,
         }
 
     async def agent_runtime_launch(
@@ -11167,35 +11159,6 @@ class TemporalAgentRuntimeActivities:
             model_type=CodexManagedSessionHandle,
         )
 
-    async def agent_runtime_ensure_docker_sidecar(
-        self,
-        request: Mapping[str, Any]
-        | ManagedSessionEnsureDockerSidecarRequest
-        | None = None,
-        /,
-    ) -> ManagedSessionEnsureDockerSidecarResponse:
-        controller = self._require_session_controller(
-            activity_type="agent_runtime.ensure_docker_sidecar"
-        )
-        validated = self._validate_session_request(
-            request,
-            activity_type="agent_runtime.ensure_docker_sidecar",
-            model_type=ManagedSessionEnsureDockerSidecarRequest,
-        )
-        response = await _await_with_activity_heartbeats(
-            controller.ensure_docker_sidecar(validated),
-            heartbeat_payload={
-                "activityType": "agent_runtime.ensure_docker_sidecar",
-                "sessionId": validated.session_id,
-                "containerId": validated.container_id,
-            },
-        )
-        return self._validate_session_response(
-            response,
-            activity_type="agent_runtime.ensure_docker_sidecar",
-            model_type=ManagedSessionEnsureDockerSidecarResponse,
-        )
-
     async def agent_runtime_terminate_session(
         self,
         request: Mapping[str, Any] | TerminateCodexManagedSessionRequest | None = None,
@@ -11222,6 +11185,37 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.terminate_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_ensure_docker_sidecar(
+        self,
+        request: Mapping[str, Any]
+        | ManagedSessionEnsureDockerSidecarRequest
+        | None = None,
+        /,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        """Finish sidecar work already scheduled by a pre-cutover history."""
+
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.ensure_docker_sidecar"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarRequest,
+        )
+        response = await _await_with_activity_heartbeats(
+            controller.ensure_docker_sidecar(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.ensure_docker_sidecar",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+            },
+        )
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarResponse,
         )
 
     async def agent_runtime_fetch_session_summary(

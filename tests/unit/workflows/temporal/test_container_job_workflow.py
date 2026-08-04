@@ -322,6 +322,35 @@ async def test_workspace_volume_mount_survives_activity_boundaries(
 
 
 @pytest.mark.asyncio
+async def test_resolved_cache_refs_survive_activity_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    publish_request: ContainerJobActivityRequest | None = None
+
+    async def activity(name, request):
+        nonlocal publish_request
+        if name == "container_job.create_container":
+            return ContainerJobActivityResult(
+                containerRef="owned:3277",
+                resolvedCacheRefs=("unreal-ccache", "unreal-ubt"),
+            )
+        if name == "container_job.publish_evidence":
+            publish_request = request.model_copy(deep=True)
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    assert publish_request is not None
+    assert publish_request.resolved_cache_refs == (
+        "unreal-ccache",
+        "unreal-ubt",
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("cancel_on", "expected"),
     [

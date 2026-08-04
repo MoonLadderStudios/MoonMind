@@ -1,7 +1,7 @@
 # Activity Catalog and Worker Topology
 
 Status: Implemented in core runtime (catalog live; some target-state families still pending)
-Last updated: 2026-07-11
+Last updated: 2026-08-04
 Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
 ## Related docs
@@ -490,7 +490,6 @@ Current implemented activities:
 - `agent_runtime.steer_turn`
 - `agent_runtime.interrupt_turn`
 - `agent_runtime.clear_session`
-- `agent_runtime.ensure_docker_sidecar`
 - `agent_runtime.terminate_session`
 - `agent_runtime.fetch_session_summary`
 - `agent_runtime.publish_session_artifacts`
@@ -517,7 +516,6 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.steer_turn(...) -> ManagedSessionTurnResponse`
 - `agent_runtime.interrupt_turn(...) -> ManagedSessionTurnResponse`
 - `agent_runtime.clear_session(...) -> ManagedSessionHandle`
-- `agent_runtime.ensure_docker_sidecar(...) -> ManagedSessionEnsureDockerSidecarResponse`
 - `agent_runtime.terminate_session(...) -> ManagedSessionHandle`
 - `agent_runtime.fetch_session_summary(...) -> ManagedSessionSummary`
 - `agent_runtime.publish_session_artifacts(...) -> ManagedSessionArtifactsPublication`
@@ -525,6 +523,10 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.evaluate_terminal_evidence(...) -> AgentRunResult`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
+
+Temporal workers also keep `agent_runtime.ensure_docker_sidecar` registered as a
+non-retryable rejection for durable pre-cutover histories. It is not a supported
+capability and cannot create a daemon, socket, graph volume, or container.
 
 `agent_runtime.capture_workspace_checkpoint` accepts only a typed managed-runtime
 locator, resolves it through the managed run store, and supports Codex CLI

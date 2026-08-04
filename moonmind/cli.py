@@ -7,7 +7,13 @@ from typing import List, Optional
 
 import typer
 
-from moonmind.container_job_cli import ContainerJobCliError, run_python_tests
+from moonmind.container_job_cli import (
+    ContainerJobCliError,
+    ContainerJobResult,
+    load_container_job_spec,
+    run_container_job,
+    run_python_tests,
+)
 from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
@@ -22,6 +28,57 @@ app.add_typer(rag_app, name="rag")
 app.add_typer(worker_app, name="worker")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(container_app, name="container")
+
+
+def _print_container_job_result(result: ContainerJobResult) -> None:
+    for line in result.log_tail:
+        typer.echo(line)
+    if result.log_error:
+        typer.secho(
+            f"Warning: terminal logs could not be read: {result.log_error}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    typer.echo(
+        f"container job {result.job_id}: {result.state} "
+        f"(exitCode={result.exit_code}, logsRef={result.logs_ref}, "
+        f"artifactsRef={result.artifacts_ref})"
+    )
+    if result.state != "succeeded" or result.exit_code not in {None, 0}:
+        raise typer.Exit(code=1)
+
+
+@container_app.command(
+    "run",
+    help=(
+        "Run a validated JSON workload spec in the active managed workspace "
+        "through MoonMind's durable Docker backend."
+    ),
+)
+def container_run(
+    spec: Path = typer.Option(
+        ...,
+        "--spec",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="JSON file containing ContainerJobSpec workload fields.",
+    ),
+    request_id: str | None = typer.Option(
+        None,
+        "--request-id",
+        help="Stable caller request id for idempotent retries.",
+    ),
+) -> None:
+    try:
+        result = run_container_job(
+            load_container_job_spec(spec),
+            request_id=request_id,
+        )
+    except ContainerJobCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
 
 
 @container_app.command(
@@ -42,21 +99,7 @@ def container_python_tests(
     except ContainerJobCliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    for line in result.log_tail:
-        typer.echo(line)
-    if result.log_error:
-        typer.secho(
-            f"Warning: terminal logs could not be read: {result.log_error}",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
-    typer.echo(
-        f"container job {result.job_id}: {result.state} "
-        f"(exitCode={result.exit_code}, logsRef={result.logs_ref}, "
-        f"artifactsRef={result.artifacts_ref})"
-    )
-    if result.state != "succeeded" or result.exit_code not in {None, 0}:
-        raise typer.Exit(code=1)
+    _print_container_job_result(result)
 
 
 @rag_app.command(
