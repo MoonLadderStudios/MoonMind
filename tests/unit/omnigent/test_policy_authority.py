@@ -250,6 +250,20 @@ def test_activation_validation_checks_deployment_capabilities_and_digest_images(
         "OMNIGENT_WORKSPACE_CLASS_UNSUPPORTED",
     }
 
+    placeholder = policy_document()
+    placeholder["host"]["serverImageRef"] = "images/omnigent@sha256:" + "0" * 64
+    validation, _ = validate_policy(
+        PolicyDocument.model_validate(placeholder),
+        capabilities={
+            "hostModes": {"static_compose"},
+            "backends": {"compose"},
+            "architectures": {"amd64"},
+            "providers": {"codex"},
+            "workspaceClasses": {"workflow"},
+        },
+    )
+    assert validation["valid"] is False
+
 
 def test_approval_required_rule_must_be_complete_at_document_validation():
     document = policy_document()

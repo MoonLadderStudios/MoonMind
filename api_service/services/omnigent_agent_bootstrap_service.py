@@ -1,23 +1,21 @@
 """Durable bootstrap default for Omnigent agent selection (MoonLadderStudios/MoonMind#3517).
 
-Section 8 of MoonLadderStudios/MoonMind#3517 requires migrating the
-``OMNIGENT_DEFAULT_AGENT_NAME`` environment default and its single-default
-behavior into an explicit, durable, seeded bootstrap agent profile. The
-environment value is retained only as a bootstrap/local-development fallback,
-its use is recorded, durable state wins, and conflicts fail closed.
+The normal local deployment has one portable Codex agent identity, ``codex``.
+MoonMind materializes that identity as an explicit, durable, active bootstrap
+profile. ``OMNIGENT_DEFAULT_AGENT_NAME`` remains an optional first-start
+override; durable state wins after materialization and conflicts fail closed.
 
 This module owns two side-effect-free-by-default primitives:
 
 * :func:`resolve_default_agent_selection` — the authority that prefers the
   durable active default profile and records env-fallback use; and
-* :func:`seed_bootstrap_agent_profile` — startup materialization of the env
-  default as an explicit draft bootstrap profile version when no durable
-  agent-profile state exists.
+* :func:`reconcile_bootstrap_agent_profile` — synchronizes live upstream
+  inventory and materializes the matching safe built-in default as an active
+  bootstrap profile when no durable agent-profile state exists.
 
-The seeded bootstrap profile is a **draft**: activation requires bridge-backed
-validation evidence that cannot be produced offline, so an operator promotes
-the materialized version once the endpoint is reachable. Until an active
-default profile exists, the recorded environment fallback governs selection.
+This profile carries no credentials or host authority. Catalog readiness still
+checks the live bridge, provider OAuth profile, immutable launch policy, worker,
+and enforced network before it advertises the runtime as available.
 """
 from __future__ import annotations
 
@@ -37,12 +35,19 @@ from api_service.db.models import (
     OmnigentAgentProfile,
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileVersion,
+    OmnigentUpstreamAgentProjection,
+)
+from api_service.services.omnigent_agent_profile_service import (
+    projection_identity,
+    projection_readiness,
+    synchronize_upstream_inventory,
 )
 
 logger = logging.getLogger(__name__)
 
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
+_BUILTIN_DEFAULT_AGENT_NAME = "codex"
 
 # Canonical Codex-via-Omnigent defaults for the materialized bootstrap version.
 # These mirror the built-in ``omnigent-codex@1`` execution path and carry no
@@ -95,6 +100,13 @@ def _env_default_agent_name(env: Mapping[str, Any] | None) -> str:
     return _clean(source.get(_ENV_DEFAULT_AGENT_NAME))
 
 
+def _bootstrap_agent_name(env: Mapping[str, Any] | None) -> tuple[str, str]:
+    env_name = _env_default_agent_name(env)
+    if env_name:
+        return env_name, "env_bootstrap"
+    return _BUILTIN_DEFAULT_AGENT_NAME, "builtin_default"
+
+
 def _digest(document: Mapping[str, Any]) -> str:
     encoded = json.dumps(
         document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -102,13 +114,15 @@ def _digest(document: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def build_bootstrap_document(agent_name: str) -> dict[str, Any]:
-    """Build the normalized bootstrap profile document for an env agent name.
+def build_bootstrap_document(
+    agent_name: str, *, upstream_version: str | None = None
+) -> dict[str, Any]:
+    """Build the normalized bootstrap profile document for a stable agent ID.
 
     The environment provides only a stable upstream agent selector; the
     remaining fields use the canonical Codex-via-Omnigent defaults so the
-    materialized draft is a coherent starting point an operator can validate
-    and promote. The result is the fully-normalized document form (identical
+    materialized version is a coherent launch authority after upstream
+    synchronization. The result is the fully-normalized document form (identical
     to what the profile API persists for an equivalent create) so digests
     stay consistent across the system without coupling to the router models.
     """
@@ -136,7 +150,10 @@ def build_bootstrap_document(agent_name: str) -> dict[str, Any]:
         "requiredCapabilities": list(_BOOTSTRAP_REQUIRED_CAPABILITIES),
         "schemaVersion": "moonmind.omnigent-agent-profile.v1",
         "skills": [],
-        "source": {"upstreamId": agent_name},
+        "source": {
+            "upstreamId": agent_name,
+            **({"upstreamVersion": upstream_version} if upstream_version else {}),
+        },
         "tools": [],
         "workspace": {"mutation": "allowed", "requiredCapabilities": []},
     }
@@ -227,18 +244,18 @@ async def seed_bootstrap_agent_profile(
     *,
     env: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    upstream_id: str | None = None,
+    upstream_version: str | None = None,
 ) -> str | None:
-    """Materialize the env default as a draft bootstrap profile when absent.
+    """Materialize an active profile only for a synchronized upstream identity.
 
     Idempotent and fail-closed: skips when any durable agent-profile state
-    already exists (durable state wins) or when no environment default is
-    configured. Returns the seeded profile id, or ``None`` when nothing was
-    materialized.
+    already exists (durable state wins). Returns the seeded profile id, or
+    ``None`` when nothing was materialized.
     """
 
-    env_name = _env_default_agent_name(env)
-    if not env_name:
-        return None
+    agent_name, origin = _bootstrap_agent_name(env)
+    stable_upstream_id = _clean(upstream_id) or agent_name
 
     existing_count = int(
         await session.scalar(select(func.count()).select_from(OmnigentAgentProfile))
@@ -249,18 +266,41 @@ async def seed_bootstrap_agent_profile(
         return None
 
     observed_at = now or datetime.now(timezone.utc)
-    document = build_bootstrap_document(env_name)
+    projection = await session.get(
+        OmnigentUpstreamAgentProjection,
+        projection_identity(
+            _BOOTSTRAP_ENDPOINT_REF,
+            stable_upstream_id,
+            upstream_version,
+        ),
+    )
+    upstream_readiness = projection_readiness(
+        projection,
+        now=observed_at,
+        bridge_mode=_BOOTSTRAP_BRIDGE_MODE,
+        harness=_BOOTSTRAP_HARNESS,
+        required_capabilities=_BOOTSTRAP_REQUIRED_CAPABILITIES,
+    )
+    if not upstream_readiness["ready"]:
+        return None
+
+    document = build_bootstrap_document(
+        stable_upstream_id,
+        upstream_version=upstream_version,
+    )
     profile = OmnigentAgentProfile(
         profile_id=BOOTSTRAP_PROFILE_ID,
-        display_name="Bootstrap Omnigent Default",
+        display_name="Codex via Omnigent",
         description=(
-            "Materialized from the OMNIGENT_DEFAULT_AGENT_NAME environment "
-            "default. Validate and activate this version to make it the "
-            "durable runtime default."
+            "MoonMind-managed portable default for Codex execution through "
+            "Omnigent. Runtime launch authority remains policy- and "
+            "readiness-gated."
         ),
         owner_id=None,
         visibility="workspace",
-        state="draft",
+        state="active",
+        active_version=1,
+        default_for_runtime=True,
     )
     version = OmnigentAgentProfileVersion(
         profile_id=BOOTSTRAP_PROFILE_ID,
@@ -268,9 +308,24 @@ async def seed_bootstrap_agent_profile(
         digest=_digest(document),
         document=document,
         created_by=None,
+        upstream_snapshot=projection.metadata_snapshot,
+        validation_result={
+            "schemaVersion": "moonmind.omnigent-agent-profile-validation.v1",
+            "ready": True,
+            "checks": [
+                {
+                    "id": "portable_builtin_contract",
+                    "status": "ready",
+                    "message": (
+                        "The built-in Codex profile is structurally ready; "
+                        "live launch dependencies are checked by the runtime catalog."
+                    ),
+                }
+            ],
+        },
         rollout_metadata={
-            "origin": "env_bootstrap",
-            "envVar": _ENV_DEFAULT_AGENT_NAME,
+            "origin": origin,
+            **({"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}),
             "materializedAt": observed_at.isoformat(),
         },
     )
@@ -279,7 +334,12 @@ async def seed_bootstrap_agent_profile(
         action="bootstrap_materialized",
         version=1,
         actor_id=None,
-        metadata_json={"origin": "env_bootstrap", "envVar": _ENV_DEFAULT_AGENT_NAME},
+        metadata_json={
+            "origin": origin,
+            **({"envVar": _ENV_DEFAULT_AGENT_NAME} if origin == "env_bootstrap" else {}),
+            "state": "active",
+            "defaultForRuntime": True,
+        },
     )
     session.add_all([profile, version, audit])
     try:
@@ -289,11 +349,122 @@ async def seed_bootstrap_agent_profile(
         await session.rollback()
         return None
     logger.info(
-        "Materialized Omnigent bootstrap agent profile '%s' from %s",
+        "Materialized active Omnigent bootstrap agent profile '%s' from %s",
         BOOTSTRAP_PROFILE_ID,
-        _ENV_DEFAULT_AGENT_NAME,
+        origin,
     )
     return BOOTSTRAP_PROFILE_ID
+
+
+def _inventory_text(item: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+async def default_agent_profile_ready(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether the durable default and its observed identity are ready."""
+
+    profile = await session.scalar(
+        select(OmnigentAgentProfile).where(
+            OmnigentAgentProfile.default_for_runtime.is_(True)
+        )
+    )
+    if (
+        profile is None
+        or profile.state != "active"
+        or profile.active_version is None
+        or not profile.default_for_runtime
+    ):
+        return False
+    version = await _load_active_version(session, profile)
+    if (
+        version is None
+        or not version.validation_result
+        or version.validation_result.get("ready") is not True
+    ):
+        return False
+    document = version.document or {}
+    source = document.get("source") or {}
+    upstream_id = _clean(source.get("upstreamId"))
+    if not upstream_id:
+        return bool(source.get("bundleArtifactRef") and version.upstream_snapshot)
+    projection = await session.get(
+        OmnigentUpstreamAgentProjection,
+        projection_identity(
+            str(document.get("endpointRef") or ""),
+            upstream_id,
+            _clean(source.get("upstreamVersion")) or None,
+        ),
+    )
+    return bool(
+        projection_readiness(
+            projection,
+            now=now,
+            bridge_mode=str(document.get("bridgeMode") or ""),
+            harness=str(document.get("harness") or ""),
+            required_capabilities=document.get("requiredCapabilities") or (),
+        )["ready"]
+    )
+
+
+async def reconcile_bootstrap_agent_profile(
+    session: AsyncSession,
+    *,
+    inventory: list[Mapping[str, Any]],
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Synchronize observed inventory, then materialize the built-in default."""
+
+    observed_at = now or datetime.now(timezone.utc)
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref=_BOOTSTRAP_ENDPOINT_REF,
+        bridge_mode=_BOOTSTRAP_BRIDGE_MODE,
+        inventory=inventory,
+        now=observed_at,
+    )
+    selector, _ = _bootstrap_agent_name(env)
+    exact = next(
+        (
+            item
+            for item in inventory
+            if _inventory_text(item, "id", "agentId", "agent_id") == selector
+        ),
+        None,
+    )
+    candidate = exact or next(
+        (
+            item
+            for item in inventory
+            if _inventory_text(item, "name", "displayName") == selector
+        ),
+        None,
+    )
+    if candidate is None:
+        return False
+    upstream_id = _inventory_text(candidate, "id", "agentId", "agent_id")
+    if not upstream_id:
+        return False
+    upstream_version = (
+        _inventory_text(candidate, "version", "agentVersion", "agent_version")
+        or None
+    )
+    await seed_bootstrap_agent_profile(
+        session,
+        env=env,
+        now=observed_at,
+        upstream_id=upstream_id,
+        upstream_version=upstream_version,
+    )
+    return await default_agent_profile_ready(session, now=observed_at)
 
 
 __all__ = [
@@ -301,6 +472,8 @@ __all__ = [
     "BootstrapDefaultConflictError",
     "DefaultAgentResolution",
     "build_bootstrap_document",
+    "default_agent_profile_ready",
+    "reconcile_bootstrap_agent_profile",
     "resolve_default_agent_selection",
     "seed_bootstrap_agent_profile",
 ]

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from moonmind.cli import app
 from moonmind.container_job_cli import (
     ContainerJobMcpClient,
     ContainerJobCliError,
+    container_job_submission,
+    load_container_job_spec,
     python_test_submission,
+    run_container_job,
     run_python_tests,
 )
 
@@ -26,6 +30,13 @@ def test_python_test_cli_accepts_optional_variadic_targets() -> None:
 
     assert result.exit_code == 0
     assert "[targets]..." in result.stdout.lower()
+
+
+def test_generic_container_cli_requires_a_spec_file() -> None:
+    result = CliRunner().invoke(app, ["container", "run"])
+
+    assert result.exit_code == 2
+    assert "Missing option '--spec'." in unstyle(result.output)
 
 
 class _FakeClient:
@@ -97,6 +108,75 @@ def test_python_test_submission_requires_managed_runtime_identity() -> None:
 def test_python_test_submission_does_not_fall_back_from_explicit_empty_env() -> None:
     with pytest.raises(ContainerJobCliError, match="MOONMIND_AGENT_RUN_ID"):
         python_test_submission([], env={})
+
+
+def test_generic_submission_injects_authoritative_identity_and_workspace() -> None:
+    payload = container_job_submission(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "workspaceRef": {
+                "kind": "external_state",
+                "artifactRef": "attacker-selected",
+            },
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+        env={**_ENV, "MOONMIND_CONTAINER_JOBS_SESSION_ID": "sess-1"},
+        request_id="build-1",
+    )
+
+    assert payload["idempotencyKey"] == "container-run:mm:run-1:build-1"
+    assert payload["source"]["managedSessionId"] == "sess-1"
+    assert payload["spec"]["workspaceRef"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "mm:run-1",
+        "relativePath": "repo",
+    }
+
+
+def test_generic_submission_hashes_the_full_long_idempotency_identity() -> None:
+    long_run_id = "run-" + "a" * 240
+    common_prefix = "request-" + "b" * 260
+
+    first = container_job_submission(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+        env={
+            **_ENV,
+            "MOONMIND_AGENT_RUN_ID": long_run_id,
+            "MOONMIND_TASK_WORKFLOW_ID": long_run_id,
+        },
+        request_id=common_prefix + "one",
+    )
+    second = container_job_submission(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+        env={
+            **_ENV,
+            "MOONMIND_AGENT_RUN_ID": long_run_id,
+            "MOONMIND_TASK_WORKFLOW_ID": long_run_id,
+        },
+        request_id=common_prefix + "two",
+    )
+
+    assert len(first["idempotencyKey"]) == 255
+    assert len(second["idempotencyKey"]) == 255
+    assert first["idempotencyKey"] != second["idempotencyKey"]
+
+
+def test_load_generic_spec_rejects_submission_envelope(tmp_path) -> None:
+    path = tmp_path / "job.json"
+    path.write_text('{"spec": {"image": "alpine:3.20"}}', encoding="utf-8")
+
+    with pytest.raises(ContainerJobCliError, match="workload fields only"):
+        load_container_job_spec(path)
 
 
 def test_mcp_client_retries_ambiguous_transport_failure_with_same_payload(
@@ -218,3 +298,25 @@ def test_run_python_tests_polls_to_authoritative_terminal_evidence() -> None:
         "container.status",
         "container.logs",
     ]
+
+
+def test_run_generic_job_uses_same_terminal_evidence_path() -> None:
+    client = _FakeClient(["running", "succeeded"])
+
+    result = run_container_job(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+            "timeoutSeconds": 60,
+        },
+        env=_ENV,
+        request_id="test-1",
+        poll_seconds=0.001,
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert result.state == "succeeded"
+    submitted = client.calls[0][1]
+    assert submitted["spec"]["imageSourceRef"] == "tactics-unreal"
+    assert submitted["source"]["source"] == "managed_session"

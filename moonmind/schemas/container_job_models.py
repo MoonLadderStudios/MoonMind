@@ -651,6 +651,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024
     )
+    resolved_cache_refs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="resolvedCacheRefs", max_length=32
+    )
     image_observation: ImageObservation | None = Field(
         None, alias="imageObservation"
     )
@@ -699,6 +702,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     )
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024
+    )
+    resolved_cache_refs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="resolvedCacheRefs", max_length=32
     )
     image_observation: ImageObservation | None = Field(
         None, alias="imageObservation"

@@ -239,6 +239,29 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
 
     api_env = _env_map(api_service["environment"])
     assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
+    assert api_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+    assert api_env["OMNIGENT_SERVER_URL"] == (
+        "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+    )
+    assert api_env["OMNIGENT_IMAGE"] == (
+        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
+    )
+    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_HOST_IMAGE"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
+    )
+    assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
+    for worker_name in (
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ):
+        worker_env = _env_map(services[worker_name]["environment"])
+        assert worker_env["OMNIGENT_ENABLED"] == "${OMNIGENT_ENABLED:-true}"
+        assert worker_env["OMNIGENT_SERVER_URL"] == (
+            "${OMNIGENT_SERVER_URL:-http://omnigent:8000}"
+        )
 
     assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == (
         "${POSTGRES_PASSWORD:-password}"
@@ -832,6 +855,18 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert worker_env["MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"] == (
         "${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}"
     )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}"
+    )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-never}"
+    )
+    assert worker_env["MOONMIND_UNREAL_CCACHE_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert worker_env["MOONMIND_UNREAL_UBT_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
+    )
     assert worker_env["DOCKER_BUILDKIT"] == "1"
     assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
         "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
@@ -841,6 +876,12 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     )
     assert compose["volumes"]["agent_workspaces"]["name"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+    assert compose["volumes"]["unreal_ccache_volume"]["name"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert compose["volumes"]["unreal_ubt_volume"]["name"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
     )
     assert services["docker-proxy"]["environment"]["BUILD"] == 1
     assert services["docker-proxy"]["environment"]["SESSION"] == 1
@@ -939,6 +980,9 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
 def test_omnigent_env_template_and_example_config_for_mm_970():
     env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
     for expected_name in (
+        "OMNIGENT_ENABLED",
+        "OMNIGENT_SERVER_URL",
+        "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
         "OMNIGENT_PORT",
@@ -967,6 +1011,7 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_OIDC_ALLOW_INVITES",
         "OMNIGENT_DOMAIN",
         "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
         "COMPOSE_PROFILES",

@@ -190,6 +190,7 @@ class MoonMindContainerJobWorkflow:
                     )
                     request.container_ref = created.container_ref
                     request.egress_attestation_ref = created.diagnostics_ref
+                    request.resolved_cache_refs = created.resolved_cache_refs
                 else:
                     # A reconciled container skips create; recover its republished
                     # launch attestation ref so terminal evidence still correlates

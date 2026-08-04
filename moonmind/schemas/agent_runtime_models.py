@@ -1137,8 +1137,7 @@ class OmnigentHostLease(BaseModel):
 
 WorkspaceMode = Literal["tempdir", "shared", "none"]
 ManagedRuntimeWorkloadMode = Literal[
-    "docker-sidecar",
-    "docker-sidecar-rootless",
+    "container-jobs",
     "no-docker",
     "kubernetes-job",
 ]
@@ -1163,41 +1162,8 @@ class RuntimeProfileMount(BaseModel):
     host_path: str | None = Field(None, alias="hostPath")
 
 
-class RuntimeProfileOptionalCacheMount(BaseModel):
-    """Deployment-approved named cache shared with the agent sidecar pair."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(..., min_length=1)
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-    mount_path: str = Field(..., alias="mountPath", min_length=1)
-    approval_ref: str = Field(..., alias="approvalRef", min_length=1)
-    read_only: bool = Field(False, alias="readOnly")
-
-    @model_validator(mode="after")
-    def _validate_cache(self) -> "RuntimeProfileOptionalCacheMount":
-        self.name = require_non_blank(self.name, field_name="optionalCaches[].name")
-        self.volume_name = require_non_blank(
-            self.volume_name,
-            field_name="optionalCaches[].volumeName",
-        )
-        if "/" in self.volume_name or "\\" in self.volume_name:
-            raise ValueError("optionalCaches[].volumeName must be a named volume")
-        self.mount_path = require_non_blank(
-            self.mount_path,
-            field_name="optionalCaches[].mountPath",
-        )
-        self.approval_ref = require_non_blank(
-            self.approval_ref,
-            field_name="optionalCaches[].approvalRef",
-        )
-        if self.mount_path.startswith("/") is False:
-            raise ValueError("optionalCaches[].mountPath must be absolute")
-        return self
-
-
 class RuntimeProfileWorkspace(BaseModel):
-    """Workspace declaration shared by agent and sidecar containers."""
+    """Workspace declaration for a managed agent runtime."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1232,62 +1198,6 @@ class RuntimeProfileAgent(BaseModel):
     mounts: list[RuntimeProfileMount] = Field(default_factory=list)
 
 
-class RuntimeProfileSidecarSocket(BaseModel):
-    """Docker sidecar Unix socket declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    path: str = Field(..., min_length=1)
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-
-
-class RuntimeProfileSidecarStorage(BaseModel):
-    """Docker sidecar graph storage declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    volume_name: str = Field(..., alias="volumeName", min_length=1)
-    mount_path: str = Field(..., alias="mountPath", min_length=1)
-    lifecycle: Literal["session"] = "session"
-    daemon_scope: Literal["session", "shared"] = Field("session", alias="daemonScope")
-
-
-class RuntimeProfileSidecarSecurity(BaseModel):
-    """Docker sidecar security policy declaration."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    privileged: bool = False
-    host_docker_socket: Literal["forbidden"] = Field(
-        "forbidden", alias="hostDockerSocket"
-    )
-    moonmind_deployment_secrets: Literal["forbidden"] = Field(
-        "forbidden", alias="moonmindDeploymentSecrets"
-    )
-
-
-class RuntimeProfileDockerSidecar(BaseModel):
-    """Docker sidecar portion of a managed runtime profile."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    enabled: bool = False
-    mode: Literal["dind", "dind-rootless"] = "dind"
-    image: str | None = None
-    socket: RuntimeProfileSidecarSocket | None = None
-    storage: RuntimeProfileSidecarStorage | None = None
-    workspace: RuntimeProfileWorkspace | None = None
-    security: RuntimeProfileSidecarSecurity = Field(
-        default_factory=RuntimeProfileSidecarSecurity
-    )
-    env: dict[str, str] = Field(default_factory=dict)
-    mounts: list[RuntimeProfileMount] = Field(default_factory=list)
-    optional_caches: list[RuntimeProfileOptionalCacheMount] = Field(
-        default_factory=list,
-        alias="optionalCaches",
-    )
-
-
 class RuntimeProfileSessionResources(BaseModel):
     """Session-wide limits applied by the outer runtime supervisor."""
 
@@ -1313,147 +1223,13 @@ class RuntimeProfileContainerResources(BaseModel):
         return self
 
 
-class RuntimeProfileDockerSidecarResources(RuntimeProfileContainerResources):
-    """Limits for the outer Docker sidecar container."""
-
-    ephemeral_storage: str = Field(..., alias="ephemeralStorage", min_length=1)
-
-    @model_validator(mode="after")
-    def _validate_sidecar_resources(self) -> "RuntimeProfileDockerSidecarResources":
-        super()._validate_container_resources()
-        self.ephemeral_storage = require_non_blank(
-            self.ephemeral_storage,
-            field_name="resources.dockerSidecar.ephemeralStorage",
-        )
-        parse_size_bytes(self.ephemeral_storage)
-        return self
-
-
-class RuntimeProfileNestedContainerResources(BaseModel):
-    """Defaults and caps for containers created through the nested daemon."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    default_cpu: str = Field(..., alias="defaultCpu", min_length=1)
-    default_memory: str = Field(..., alias="defaultMemory", min_length=1)
-    max_containers: int = Field(..., alias="maxContainers", ge=1)
-
-    @model_validator(mode="after")
-    def _validate_nested_resources(self) -> "RuntimeProfileNestedContainerResources":
-        self.default_cpu = require_non_blank(
-            self.default_cpu,
-            field_name="resources.nestedContainers.defaultCpu",
-        )
-        parse_cpu_units(self.default_cpu)
-        self.default_memory = require_non_blank(
-            self.default_memory,
-            field_name="resources.nestedContainers.defaultMemory",
-        )
-        parse_size_bytes(self.default_memory)
-        return self
-
-
 class RuntimeProfileResources(BaseModel):
-    """Resource envelope for a managed session and its Docker sidecar."""
+    """Resource envelope applied to the managed agent container."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     session: RuntimeProfileSessionResources | None = None
     agent: RuntimeProfileContainerResources | None = None
-    docker_sidecar: RuntimeProfileDockerSidecarResources | None = Field(
-        None,
-        alias="dockerSidecar",
-    )
-    nested_containers: RuntimeProfileNestedContainerResources | None = Field(
-        None,
-        alias="nestedContainers",
-    )
-
-
-WorkspaceRetentionPolicy = Literal["retention_policy", "always", "never"]
-
-
-class RuntimeProfileCleanupOnSessionEnd(BaseModel):
-    """Cleanup actions that run when a managed session ends."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    stop_sidecar: bool = Field(True, alias="stopSidecar")
-    stop_nested_containers: bool = Field(True, alias="stopNestedContainers")
-    remove_docker_graph: bool = Field(True, alias="removeDockerGraph")
-    remove_docker_socket: bool = Field(True, alias="removeDockerSocket")
-    preserve_workspace: WorkspaceRetentionPolicy = Field(
-        "retention_policy",
-        alias="preserveWorkspace",
-    )
-
-
-class RuntimeProfileCleanupOnSidecarFailure(BaseModel):
-    """Failure behavior when the sidecar daemon/container fails."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    mark_docker_capability_unavailable: bool = Field(
-        True,
-        alias="markDockerCapabilityUnavailable",
-    )
-    preserve_agent_session: bool = Field(True, alias="preserveAgentSession")
-
-
-class RuntimeProfileCleanupOnAgentFailure(BaseModel):
-    """Failure behavior when the agent exits before normal completion."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    stop_sidecar: bool = Field(True, alias="stopSidecar")
-    preserve_workspace: WorkspaceRetentionPolicy = Field(
-        "retention_policy",
-        alias="preserveWorkspace",
-    )
-
-
-class RuntimeProfileCleanupPolicy(BaseModel):
-    """Idempotent cleanup policy for the per-session Docker sidecar."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    idempotent: bool = True
-    on_session_end: RuntimeProfileCleanupOnSessionEnd = Field(
-        default_factory=RuntimeProfileCleanupOnSessionEnd,
-        alias="onSessionEnd",
-    )
-    on_sidecar_failure: RuntimeProfileCleanupOnSidecarFailure = Field(
-        default_factory=RuntimeProfileCleanupOnSidecarFailure,
-        alias="onSidecarFailure",
-    )
-    on_agent_failure: RuntimeProfileCleanupOnAgentFailure = Field(
-        default_factory=RuntimeProfileCleanupOnAgentFailure,
-        alias="onAgentFailure",
-    )
-
-
-class RuntimeProfileDockerSidecarLaunchPlan(BaseModel):
-    """Compact launch contract applied outside the nested Docker daemon."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    issue_key: str = Field("MM-695", alias="issueKey")
-    apply_limits_outside_nested_daemon: bool = Field(
-        True,
-        alias="applyLimitsOutsideNestedDaemon",
-    )
-    workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
-    labels: dict[str, str] = Field(default_factory=dict)
-    socket_volume_name: str = Field(..., alias="socketVolumeName", min_length=1)
-    socket_path: str = Field(..., alias="socketPath", min_length=1)
-    graph_volume_name: str = Field(..., alias="graphVolumeName", min_length=1)
-    graph_mount_path: str = Field(..., alias="graphMountPath", min_length=1)
-    resources: RuntimeProfileResources
-    cleanup: RuntimeProfileCleanupPolicy
-    optional_caches: tuple[RuntimeProfileOptionalCacheMount, ...] = Field(
-        default_factory=tuple,
-        alias="optionalCaches",
-    )
 
 
 class RuntimeProfilePolicy(BaseModel):
@@ -1528,19 +1304,6 @@ def moonmind_ops_runtime_contract() -> MoonMindOpsRuntime:
     return MoonMindOpsRuntime()
 
 
-def _image_is_pinned(image: str | None) -> bool:
-    text = str(image or "").strip()
-    if not text:
-        return False
-    if "@sha256:" in text:
-        return True
-    last_segment = text.rsplit("/", 1)[-1]
-    if ":" not in last_segment:
-        return False
-    tag = last_segment.rsplit(":", 1)[-1].strip().lower()
-    return bool(tag) and tag != "latest"
-
-
 def _normalize_posix_path(value: str) -> str:
     collapsed = re.sub(r"/+", "/", value)
     return posixpath.normpath(collapsed)
@@ -1589,21 +1352,15 @@ def _normalize_profile_labels(labels: Mapping[str, str]) -> dict[str, str]:
 
 
 class ManagedAgentRuntimeProfile(BaseModel):
-    """Validated managed-session runtime profile for Docker sidecar capability."""
+    """Validated managed-session runtime profile."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
     workspace: RuntimeProfileWorkspace
     agent: RuntimeProfileAgent
-    docker_sidecar: RuntimeProfileDockerSidecar | None = Field(
-        None, alias="dockerSidecar"
-    )
     resources: RuntimeProfileResources = Field(
         default_factory=RuntimeProfileResources
-    )
-    cleanup: RuntimeProfileCleanupPolicy = Field(
-        default_factory=RuntimeProfileCleanupPolicy
     )
     readiness: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -1624,219 +1381,47 @@ class ManagedAgentRuntimeProfile(BaseModel):
                 "session tokens; credential exposure would leak MoonMind or "
                 "cross-session authority into the workload"
             )
-        sidecar = self.docker_sidecar
-        if sidecar is not None and _contains_sensitive_key(sidecar.env):
-            raise ValueError(
-                "dockerSidecar.env must not receive deployment credentials or "
-                "unrelated session tokens; credential exposure would leak MoonMind "
-                "or cross-session authority into the workload"
-            )
-        if _mounts_host_docker_socket(self.agent.mounts) or (
-            sidecar is not None and _mounts_host_docker_socket(sidecar.mounts)
-        ):
+        if _mounts_host_docker_socket(self.agent.mounts):
             raise ValueError(
                 "host Docker socket must not be mounted; exposing "
                 "/var/run/docker.sock would grant host-level Docker control"
             )
-        if _mounts_arbitrary_host_path(self.agent.mounts) or (
-            sidecar is not None and _mounts_arbitrary_host_path(sidecar.mounts)
-        ):
+        if _mounts_arbitrary_host_path(self.agent.mounts):
             raise ValueError(
                 "runtime profile mounts must use declared session volumes or "
-                "deployment-approved optionalCaches; arbitrary host path mounts "
+                "deployment-approved workspace mounts; arbitrary host path mounts "
                 "are not allowed"
             )
         if self.policy.api_container_workload_docker_socket_access:
             raise ValueError(
                 "API container must not have normal workload Docker socket access; "
-                "workload Docker control belongs to the isolated session sidecar"
+                "workload Docker control belongs to the trusted worker backend"
             )
-
-        if self.workload_mode == "kubernetes-job":
-            self._validate_kubernetes_job_profile(sidecar)
-            return self
-
-        if self.workload_mode == "no-docker":
-            if self.agent.docker_client.enabled:
-                raise ValueError(
-                    "agent.dockerClient.enabled must be false for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            if sidecar is not None and sidecar.enabled:
-                raise ValueError(
-                    "dockerSidecar.enabled must be false for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            if "DOCKER_HOST" in self.agent.env:
-                raise ValueError(
-                    "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
-                    "workflow instructions cannot raise Docker capability"
-                )
-            return self
-
-        if sidecar is None or not sidecar.enabled:
+        if self.agent.docker_client.enabled:
             raise ValueError(
-                "dockerSidecar.enabled must be true for Docker-capable profiles; "
-                "otherwise agent Docker commands would have no per-session daemon"
-            )
-        if not self.agent.docker_client.enabled:
-            raise ValueError(
-                "agent.dockerClient.enabled must be true when dockerSidecar.enabled "
-                "is true; otherwise Docker commands cannot reach the sidecar daemon"
+                "agent.dockerClient.enabled must be false; managed sessions submit "
+                "typed container jobs instead of receiving a Docker endpoint"
             )
         if self.agent.docker_client.daemon_in_agent:
             raise ValueError(
-                "agent.dockerClient.daemonInAgent must be false; running the daemon "
-                "inside the agent breaks sidecar isolation"
+                "agent.dockerClient.daemonInAgent must be false; managed sessions "
+                "must not run a Docker daemon"
             )
-        if sidecar.socket is None:
+        if "DOCKER_HOST" in self.agent.env:
             raise ValueError(
-                "dockerSidecar.socket.path is required; DOCKER_HOST cannot be "
-                "validated without the declared sidecar socket"
+                "agent.env.DOCKER_HOST must not be set; managed sessions submit "
+                "typed container jobs instead of receiving a Docker endpoint"
             )
-        expected_docker_host = f"unix://{sidecar.socket.path}"
-        actual_docker_host = str(self.agent.env.get("DOCKER_HOST") or "").strip()
-        if actual_docker_host != expected_docker_host:
-            raise ValueError(
-                "agent.env.DOCKER_HOST must point at dockerSidecar.socket.path; "
-                "otherwise Docker commands may reach the wrong daemon or fail"
-            )
-        sidecar_workspace_path = (
-            sidecar.workspace.mount_path
-            if sidecar.workspace
-            else self.workspace.mount_path
-        )
-        if self.agent.workspace.mount_path != sidecar_workspace_path:
-            raise ValueError(
-                "agent and dockerSidecar workspace mount paths must match; "
-                "otherwise docker run bind mounts resolve against a different "
-                "filesystem path"
-            )
-        if not _image_is_pinned(sidecar.image):
-            raise ValueError(
-                "dockerSidecar.image sidecar image must be pinned to a non-latest "
-                "tag or digest; floating images make launches non-reproducible"
-            )
-        if sidecar.storage is None:
-            raise ValueError(
-                "dockerSidecar.storage is required; the Docker graph volume must be "
-                "declared per session"
-            )
-        if sidecar.storage.daemon_scope != "session":
-            raise ValueError(
-                "Docker daemon scope must be per session; shared daemons can expose "
-                "containers, images, and credentials across sessions or users"
-            )
-        self._validate_sidecar_resources()
-        self._validate_sidecar_cleanup()
+        if self.workload_mode == "kubernetes-job":
+            self._validate_kubernetes_job_profile()
         return self
 
-    def _validate_kubernetes_job_profile(
-        self, sidecar: RuntimeProfileDockerSidecar | None
-    ) -> None:
+    def _validate_kubernetes_job_profile(self) -> None:
         if not self.policy.kubernetes_job_runtime_supported:
             raise ValueError(
                 "workloadMode kubernetes-job requires explicit deployment support "
                 "via policy.kubernetesJobRuntimeSupported"
             )
-        if self.agent.docker_client.enabled:
-            raise ValueError(
-                "agent.dockerClient.enabled must be false for kubernetes-job profiles; "
-                "Kubernetes Job workloads do not expose a Docker daemon to the agent"
-            )
-        if "DOCKER_HOST" in self.agent.env:
-            raise ValueError(
-                "agent.env.DOCKER_HOST must not be set for kubernetes-job profiles; "
-                "Kubernetes Job workloads are requested through MoonMind capability"
-            )
-        if sidecar is not None and sidecar.enabled:
-            raise ValueError(
-                "dockerSidecar.enabled must be false for kubernetes-job profiles; "
-                "Kubernetes Job workloads are not Docker sidecar materializations"
-            )
-        if self.resources.docker_sidecar is not None:
-            raise ValueError(
-                "resources.dockerSidecar must be omitted for kubernetes-job profiles; "
-                "backend-specific rendering owns Kubernetes Job resource mapping"
-            )
-        if self.resources.nested_containers is not None:
-            raise ValueError(
-                "resources.nestedContainers must be omitted for kubernetes-job "
-                "profiles; Kubernetes Job mode does not use nested Docker containers"
-            )
-
-    def _validate_sidecar_resources(self) -> None:
-        required_resources = (
-            ("session", "resources.session.maxRuntimeSeconds"),
-            ("agent", "resources.agent"),
-            ("docker_sidecar", "resources.dockerSidecar"),
-            ("nested_containers", "resources.nestedContainers"),
-        )
-        missing = [
-            label
-            for field_name, label in required_resources
-            if getattr(self.resources, field_name) is None
-        ]
-        if missing:
-            raise ValueError(
-                "Docker sidecar profiles must declare outer resource limits: "
-                + ", ".join(missing)
-            )
-        assert self.resources.docker_sidecar is not None
-        assert self.resources.nested_containers is not None
-        nested_cpu = parse_cpu_units(self.resources.nested_containers.default_cpu)
-        sidecar_cpu = parse_cpu_units(self.resources.docker_sidecar.cpu)
-        if nested_cpu > sidecar_cpu:
-            raise ValueError(
-                "resources.nestedContainers.defaultCpu must not exceed "
-                "resources.dockerSidecar.cpu"
-            )
-        if parse_size_bytes(
-            self.resources.nested_containers.default_memory
-        ) > parse_size_bytes(self.resources.docker_sidecar.memory):
-            raise ValueError(
-                "resources.nestedContainers.defaultMemory must not exceed "
-                "resources.dockerSidecar.memory"
-            )
-
-    def _validate_sidecar_cleanup(self) -> None:
-        cleanup_checks = (
-            (
-                self.cleanup.idempotent,
-                "cleanup.idempotent must be true for Docker sidecar profiles",
-            ),
-            (
-                self.cleanup.on_session_end.stop_sidecar,
-                "cleanup.onSessionEnd.stopSidecar must be true",
-            ),
-            (
-                self.cleanup.on_session_end.stop_nested_containers,
-                "cleanup.onSessionEnd.stopNestedContainers must be true",
-            ),
-            (
-                self.cleanup.on_session_end.remove_docker_graph,
-                "cleanup.onSessionEnd.removeDockerGraph must be true",
-            ),
-            (
-                self.cleanup.on_session_end.remove_docker_socket,
-                "cleanup.onSessionEnd.removeDockerSocket must be true",
-            ),
-            (
-                self.cleanup.on_sidecar_failure.mark_docker_capability_unavailable,
-                "cleanup.onSidecarFailure.markDockerCapabilityUnavailable must be true",
-            ),
-            (
-                self.cleanup.on_sidecar_failure.preserve_agent_session,
-                "cleanup.onSidecarFailure.preserveAgentSession must be true",
-            ),
-            (
-                self.cleanup.on_agent_failure.stop_sidecar,
-                "cleanup.onAgentFailure.stopSidecar must be true",
-            ),
-        )
-        for valid, message in cleanup_checks:
-            if not valid:
-                raise ValueError(message)
 
 
 def resolve_managed_runtime_workload_mode(
@@ -1849,38 +1434,10 @@ def resolve_managed_runtime_workload_mode(
     requested = str(workflow_requested_workload_mode or "").strip()
     if requested and requested != profile.workload_mode:
         raise ValueError(
-            "workflow instructions cannot raise Docker capability; workloadMode is "
+            "workflow instructions cannot change workload capability; workloadMode is "
             "read from deployment/profile configuration"
         )
     return profile.workload_mode
-
-
-def build_docker_sidecar_launch_plan(
-    profile: ManagedAgentRuntimeProfile,
-) -> RuntimeProfileDockerSidecarLaunchPlan | None:
-    """Return the compact MM-695 launch contract for Docker sidecar profiles."""
-
-    if profile.workload_mode == "kubernetes-job":
-        raise ValueError(
-            "workloadMode kubernetes-job is validated but cannot be launched until "
-            "the Kubernetes Job runtime renderer is wired into managed sessions"
-        )
-    if profile.workload_mode == "no-docker":
-        return None
-    sidecar = profile.docker_sidecar
-    if sidecar is None or sidecar.socket is None or sidecar.storage is None:
-        raise ValueError("validated Docker sidecar profile is missing sidecar shape")
-    return RuntimeProfileDockerSidecarLaunchPlan(
-        workloadMode=profile.workload_mode,
-        labels=profile.labels,
-        socketVolumeName=sidecar.socket.volume_name,
-        socketPath=sidecar.socket.path,
-        graphVolumeName=sidecar.storage.volume_name,
-        graphMountPath=sidecar.storage.mount_path,
-        resources=profile.resources,
-        cleanup=profile.cleanup,
-        optionalCaches=tuple(sidecar.optional_caches),
-    )
 
 class RuntimeFileTemplate(BaseModel):
     """Path-aware file materialization contract for managed runtime launch."""

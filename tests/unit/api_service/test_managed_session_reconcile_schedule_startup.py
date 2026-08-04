@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
 
 from api_service import main as api_main
+
+
+@pytest.mark.asyncio
+async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[int] = []
+    reconciliations: list[bool] = []
+    inventory_refreshes: list[bool] = []
+
+    async def fake_sleep(delay_seconds: int) -> None:
+        delays.append(delay_seconds)
+        if len(delays) == 4:
+            raise asyncio.CancelledError
+
+    async def reconcile_once() -> bool:
+        reconciliations.append(True)
+        return len(reconciliations) > 1
+
+    async def refresh_inventory() -> bool:
+        inventory_refreshes.append(True)
+        return True
+
+    monkeypatch.setattr(api_main.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(api_main, "_reconcile_omnigent_bootstrap_once", reconcile_once)
+    monkeypatch.setattr(
+        api_main,
+        "_sync_omnigent_bootstrap_agent_profile",
+        refresh_inventory,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_main._maintain_omnigent_bootstrap_reconciliation(
+            initial_ready=False
+        )
+
+    assert delays == [5, 10, 120, 120]
+    assert len(reconciliations) == 2
+    assert len(inventory_refreshes) == 1
 
 
 @pytest.mark.asyncio

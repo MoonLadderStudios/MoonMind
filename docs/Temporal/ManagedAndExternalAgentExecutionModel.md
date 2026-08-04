@@ -285,11 +285,26 @@ The hybrid lane supports:
 
 Both modes share the binding, profile lease, host lease, exact registration, readiness, bridge, artifact, checkpoint, and cleanup contracts.
 
-The desired product authority is a versioned host-mode selection compiled from the selected Omnigent agent profile and policy. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` may seed a bootstrap default until that product surface is complete, but it is not workflow-authored authority and must not require manual `hostId` editing.
+The desired product authority is a versioned host-mode selection compiled from
+the selected Omnigent agent profile and policy. On-demand Docker is the normal
+default because it adds no idle host container and can be realized from the
+trusted worker. Static Compose remains an explicit advanced choice for
+deployments that need a long-lived host lifecycle. Neither path requires manual
+`hostId` editing. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE`, when present, is only
+host-substrate configuration after on-demand policy selection; it does not opt
+the runtime in or choose the product policy.
 
 ### 7.5 Image authority
 
-Production policy and credentialed conformance prefer complete immutable `OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` values. Legacy repository/tag pairs remain bootstrap-compatible, but a profile that requires digest-pinned published stock images fails closed when only mutable tags are available.
+Operator configuration may use the stock repository/tag inputs, including
+`latest`. During bootstrap or policy reconciliation MoonMind acquires those
+images through its existing trusted Docker image boundary, resolves repository
+digests, and stores only the exact digest references in the active immutable
+launch policy. A mutable tag is input to reconciliation, never launch authority.
+If a tag cannot be resolved and no safe local repository digest exists, policy
+activation fails closed with image readiness evidence. Credentialed conformance
+and release manifests still name the resolved immutable `OMNIGENT_IMAGE_REF`
+and `OMNIGENT_HOST_IMAGE_REF` values explicitly.
 
 ---
 

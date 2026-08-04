@@ -39,7 +39,7 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceOwner,
     SandboxRemediationWorkspaceOwner,
 )
-from moonmind.omnigent.execution_profiles import selection_from_request
+from moonmind.omnigent.execution_profiles import PROFILES, selection_from_request
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
@@ -675,27 +675,17 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
             elif requested_target:
                 selected_profile_ref = requested_target
-                provider_slug = (
-                    "claude" if provider_runtime == "claude_code" else "codex"
-                )
-                selected_policy_ref = requested_policy or f"{provider_slug}-static@1"
+                selected_policy_ref = requested_policy or PROFILES[
+                    selected_profile_ref
+                ].default_policy_ref
             else:
                 provider_slug = (
                     "claude" if provider_runtime == "claude_code" else "codex"
                 )
-                bootstrap_on_demand = bool(
-                    os.getenv(
-                        "OMNIGENT_CLAUDE_HOST_LAUNCH_PROFILE"
-                        if provider_runtime == "claude_code"
-                        else "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"
-                    )
-                )
                 selected_profile_ref = f"omnigent-{provider_slug}@1"
-                selected_policy_ref = (
-                    f"{provider_slug}-on-demand@1"
-                    if bootstrap_on_demand
-                    else f"{provider_slug}-static@1"
-                )
+                selected_policy_ref = PROFILES[
+                    selected_profile_ref
+                ].default_policy_ref
             current_stage = "policy_authority_resolution"
             await emit(current_stage, "started")
             try:

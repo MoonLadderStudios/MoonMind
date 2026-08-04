@@ -2920,13 +2920,13 @@ class AppSettings(BaseSettings):
         None,
         alias="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
         exclude=True,
-        description="Compatibility passthrough for ccache volume in DooD workflows.",
+        description="Deployment-owned ccache volume for approved container jobs.",
     )
     moonmind_unreal_ubt_volume_name: Optional[str] = Field(
         None,
         alias="MOONMIND_UNREAL_UBT_VOLUME_NAME",
         exclude=True,
-        description="Compatibility passthrough for UBT metadata volume in DooD workflows.",
+        description="Deployment-owned UBT metadata volume for approved container jobs.",
     )
     workflow_git_user_name: Optional[str] = Field(
         None,

@@ -7,9 +7,12 @@
 This is the canonical support, compatibility, and retirement policy for Codex
 through Omnigent. “Supported” means repository evidence or a protected live
 artifact independently proves the row. Code presence alone is “implemented” or
-“unverified,” never “supported.” The current release phase is **1 — opt-in**:
+“unverified,” never “supported.” Codex via Omnigent is a first-class runtime in
+the normal Create catalog; readiness may steer an operator to connect OAuth or
+repair a live dependency, but release evidence does not hide or disable the
+runtime. The current default-selection phase is **1 — explicit selection**:
 the repository does not contain the complete protected-live acceptance artifact,
-so promotion is fail-closed. The end-to-end product-path sequence, field
+so promotion to the preselected Codex default remains fail-closed. The end-to-end product-path sequence, field
 authority, and complete failure matrix that this support state qualifies are
 reconciled in
 [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
@@ -29,7 +32,7 @@ reconciled in
 
 The persisted rollout value is the numbered phase, not an inferred default:
 
-1. `opt_in`: internal/explicit Omnigent selection only.
+1. `opt_in`: Omnigent is normally available for explicit selection; direct Codex remains the preselected default.
 2. `create_default`: new Create defaults to Omnigent; explicit direct remains.
 3. `schedule_default`: schedules and presets use versioned Omnigent defaults.
 4. `broad_default`: all eligible new Codex work defaults to Omnigent.
@@ -84,6 +87,17 @@ advance at `create_default`; schedule and preset defaults advance at
 runtime/profile/model evidence. Invalid phases and explicit direct launches at
 or after `direct_launch_disabled` fail before Temporal submission. Rollback
 changes only future default selection and never rewrites existing run evidence.
+
+Catalog `gateReasons` are operational launch blockers. Protected acceptance
+matrix gaps are published separately as `supportGateReasons`: they qualify
+release support and default promotion, but do not deny an otherwise safe local
+launch. The canonical Compose path enables the bridge and internal endpoint by
+default, seeds an active portable `codex` agent profile, resolves stock image
+tags to immutable policy digests, and uses the on-demand policy unless an
+operator explicitly selects static hosting. The API synchronizes the stable
+upstream agent identity before activating that profile, keeps its projection
+fresh, and retries transient image, bridge, or inventory startup failures with
+capped backoff; no service restart is required for recovery.
 
 ## Support and conformance matrix v1
 

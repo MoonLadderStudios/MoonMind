@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -18,9 +19,23 @@ from api_service.db.models import (
 from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
+    bootstrap_policies_ready,
+    bootstrap_document,
+    configured_bootstrap_image_refs,
+    resolve_bootstrap_image_ref,
+    seed_bootstrap_policies,
 )
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from tests.unit.omnigent.test_policy_authority import policy_document
+
+
+@pytest.fixture(autouse=True)
+def _stable_deployment_architecture(monkeypatch):
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.platform.machine",
+        lambda: "x86_64",
+    )
 
 
 @asynccontextmanager
@@ -449,3 +464,123 @@ async def test_runtime_resolution_requires_exact_active_valid_version(tmp_path):
         await session.commit()
         with pytest.raises(PolicyConflict, match="digest conflict"):
             await service.resolve_runtime_snapshot("policy@1")
+
+
+def test_bootstrap_accepts_latest_as_input_but_persists_only_resolved_authority():
+    server_input, host_input = configured_bootstrap_image_refs({})
+    assert server_input == "ghcr.io/omnigent-ai/omnigent-server:latest"
+    assert host_input == "ghcr.io/omnigent-ai/omnigent-host:latest"
+
+    document = bootstrap_document(
+        host_mode="on_demand_docker",
+        execution_profile_ref="omnigent-codex@1",
+        server_image_ref="ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64,
+        host_image_ref="ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64,
+    ).model_dump(by_alias=True, mode="json")
+
+    assert document["host"]["serverImageRef"].endswith("@sha256:" + "1" * 64)
+    assert document["host"]["hostImageRef"].endswith("@sha256:" + "2" * 64)
+    assert document["network"] == {
+        "attachmentRef": OMNIGENT_EGRESS_PROFILE.network_ref,
+        "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mutable_bootstrap_image_is_refreshed_and_resolved(monkeypatch):
+    digest_ref = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "a" * 64
+    calls: list[tuple[str, ...]] = []
+
+    async def command(argv, **_kwargs):
+        calls.append(tuple(argv))
+        if argv[1:3] == ("image", "inspect"):
+            return 0, f"sha256:{'b' * 64}\t{digest_ref}\n".encode(), b""
+        return 0, b"pulled", b""
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.run_runtime_command", command
+    )
+
+    assert (
+        await resolve_bootstrap_image_ref(
+            "ghcr.io/omnigent-ai/omnigent-server:latest"
+        )
+        == digest_ref
+    )
+    assert any(call[1] == "pull" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_uses_safe_local_digest_when_latest_refresh_times_out(
+    monkeypatch,
+):
+    digest_ref = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "c" * 64
+
+    async def command(argv, **_kwargs):
+        if argv[1:3] == ("image", "inspect"):
+            return 0, f"sha256:{'d' * 64}\t{digest_ref}\n".encode(), b""
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.run_runtime_command", command
+    )
+
+    assert (
+        await resolve_bootstrap_image_ref(
+            "ghcr.io/omnigent-ai/omnigent-host:latest"
+        )
+        == digest_ref
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_policies_activate_with_resolved_latest_images(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    resolution_calls: list[str] = []
+
+    async def resolver(image_ref: str) -> str:
+        resolution_calls.append(image_ref)
+        return host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        seeded = await seed_bootstrap_policies(
+            session,
+            env={
+                "OMNIGENT_IMAGE_TAG": "latest",
+                "OMNIGENT_HOST_IMAGE_TAG": "latest",
+            },
+            image_resolver=resolver,
+        )
+
+        assert set(seeded) == {
+            "omnigent-codex",
+            "codex-static",
+            "codex-on-demand",
+        }
+        versions = list(
+            (
+                await session.execute(
+                    select(OmnigentPolicyVersion).order_by(
+                        OmnigentPolicyVersion.policy_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(versions) == 3
+        assert all(version.state == "active" for version in versions)
+        assert all(version.validation_json["valid"] is True for version in versions)
+        assert all(
+            version.document_json["host"]["serverImageRef"] == server_digest
+            for version in versions
+        )
+        assert await bootstrap_policies_ready(session) is True
+        assert await seed_bootstrap_policies(
+            session, env={}, image_resolver=resolver
+        ) == []
+        assert len(resolution_calls) == 2

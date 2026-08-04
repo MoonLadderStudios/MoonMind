@@ -11,7 +11,7 @@ MoonMind is an open-source framework that makes Claude Code and Codex CLI **safe
 
 For now, MoonMind is focused on software engineering use cases, but can be used for other use cases as well and this will be made easier in the future (e.g. not requiring a git repo).
 
-MoonMind includes a Codex-through-[Omnigent](https://github.com/omnigent-ai/omnigent) managed-runtime path with profile and policy readiness gating, static and on-demand hosts, durable event replay, controls, and artifact harvesting. It is currently an explicit opt-in path while the protected live support matrix is completed; direct Codex remains a truthfully labeled migration fallback and historical-read substrate. See the [versioned support and cutover matrix](docs/Omnigent/CodexSupportAndCutover.md). Claude-through-Omnigent parity is deliberately deferred.
+MoonMind includes a first-class Codex-through-[Omnigent](https://github.com/omnigent-ai/omnigent) managed-runtime path with profile and policy readiness gating, an on-demand default host, optional static hosting, durable event replay, controls, and artifact harvesting. It is available for normal explicit selection; making it the preselected Codex default remains gated by the protected live support matrix. Direct Codex remains a truthfully labeled migration fallback and historical-read substrate. See the [versioned support and cutover matrix](docs/Omnigent/CodexSupportAndCutover.md). Claude-through-Omnigent parity is deliberately deferred.
 
 ## Quick Start
 
@@ -104,7 +104,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, MCP/context surfaces, and the API-owned Docker Backend Service contract. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, external integrations, and durable container-job execution. |
-| **Managed Session Plane** | Workflow-scoped Codex CLI compatibility sessions and profile-bound Codex-through-Omnigent sessions. Omnigent is opt-in until its live matrix permits staged default promotion; container jobs remain separate from session identity. |
+| **Managed Session Plane** | Workflow-scoped Codex CLI compatibility sessions and profile-bound Codex-through-Omnigent sessions. Omnigent is a normal selectable runtime; its live matrix governs staged preselected-default promotion. Container jobs remain separate from session identity. |
 | **Docker Backend Service** | Authenticated MCP/HTTP container-job surface that resolves workspaces, applies policy, dispatches bounded jobs through Temporal, and uses one deployment-selected Docker daemon whose image cache is reusable across workflows. |
 | **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
