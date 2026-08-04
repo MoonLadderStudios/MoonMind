@@ -2,7 +2,7 @@
 
 - **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-07-22
+- **Last updated:** 2026-08-04
 - **Document class:** Canonical declarative design
 
 **Related:**
@@ -279,6 +279,22 @@ dockerBackendService:
       validation:
         command: ["python", "-c", "import pytest"]
         networkMode: none
+
+    tactics-unreal:
+      kind: registry
+      imageFrom: MOONMIND_UNREAL_ENGINE_IMAGE
+      defaultImage: ghcr.io/moonladderstudios/tactics-ue-base:5.8
+      pullPolicy: never
+
+  cacheSources:
+    unreal-ccache:
+      volumeFrom: MOONMIND_UNREAL_CCACHE_VOLUME_NAME
+      target: /home/ue4/.ccache
+      readOnly: false
+    unreal-ubt:
+      volumeFrom: MOONMIND_UNREAL_UBT_VOLUME_NAME
+      target: /home/ue4/.config/Epic/UnrealBuildTool
+      readOnly: false
 
   policy:
     mode: unrestricted
@@ -787,6 +803,26 @@ A missing or stale local image is normal first-use state. Only a failed or
 misconfigured provisioner is an environment blocker. Build failure is not a test
 assertion failure, and the returned evidence must state the recipe, desired build
 key, failure class, and bounded remediation guidance.
+
+### 16.1 Generic managed-session jobs
+
+Other portable Skills submit a workload-only JSON spec with:
+
+```bash
+moonmind container run --spec /path/to/job.json --request-id stable-phase-id
+```
+
+The CLI replaces any supplied workspace locator with the current admitted
+managed-runtime identity and injects workflow, session, run, step, and
+idempotency correlation. The spec may name an approved `imageSourceRef` and
+approved `cacheRef` values, but it cannot choose Docker endpoints, host paths,
+raw volume names, or registry credentials.
+
+The `tactics-unreal` source selects the operator-provisioned Unreal image in the
+deployment daemon. Its default `pullPolicy=never` deliberately treats a missing
+private image as an actionable provisioning error rather than attempting an
+anonymous pull. The `unreal-ccache` and `unreal-ubt` cache refs resolve to exact
+deployment-owned volumes and targets.
 
 ---
 

@@ -42,7 +42,6 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
-    ManagedSessionEnsureDockerSidecarResponse,
 )
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
@@ -1684,34 +1683,6 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
 
-async def test_mm866_ensure_docker_sidecar_delegates_to_remote_controller() -> None:
-    controller = AsyncMock()
-    controller.ensure_docker_sidecar = AsyncMock(
-        return_value=ManagedSessionEnsureDockerSidecarResponse(
-            state="ready",
-            dockerHost="unix:///var/run/moonmind-docker/docker.sock",
-            mode="sidecar-dind",
-            composeAvailable=True,
-            daemon={"ready": True, "version": "27.0.0"},
-        )
-    )
-    activities = TemporalAgentRuntimeActivities(session_controller=controller)
-
-    result = await activities.agent_runtime_ensure_docker_sidecar(
-        {
-            "sessionId": "sess-1",
-            "sessionEpoch": 1,
-            "containerId": "ctr-1",
-            "threadId": "thread-1",
-            "reason": "repo uses docker compose for tests",
-            "composeRequired": True,
-        }
-    )
-
-    assert result.state == "ready"
-    assert result.compose_available is True
-    controller.ensure_docker_sidecar.assert_awaited_once()
-
 async def test_launch_session_heartbeats_while_waiting_for_remote_session_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1896,7 +1867,6 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
 ) -> None:
     pinned = "ghcr.io/moonladderstudios/tactics-ue-base@sha256:abc123"
     monkeypatch.setenv("MOONMIND_UNREAL_ENGINE_IMAGE", pinned)
-    monkeypatch.setenv("MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF", pinned)
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
         return_value=CodexManagedSessionHandle(
@@ -1928,7 +1898,26 @@ async def test_launch_session_injects_unreal_image_refs_from_activity_environmen
 
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["MOONMIND_UNREAL_ENGINE_IMAGE"] == pinned
-    assert launched_request.environment["MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF"] == pinned
+
+
+async def test_pre_cutover_ensure_sidecar_activity_fails_non_retryably() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(
+        activity_runtime_module.temporal_exceptions.ApplicationError,
+        match="submit typed work through MoonMind container jobs",
+    ) as exc_info:
+        await activities.agent_runtime_ensure_docker_sidecar(
+            {
+                "sessionId": "sess-old",
+                "sessionEpoch": 1,
+                "containerId": "container-old",
+                "composeRequired": True,
+            }
+        )
+
+    assert exc_info.value.non_retryable is True
+    assert exc_info.value.type == "MANAGED_SESSION_DOCKER_SIDECAR_REMOVED"
 
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,

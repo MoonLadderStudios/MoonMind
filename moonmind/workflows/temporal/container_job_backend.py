@@ -1487,11 +1487,33 @@ class DockerContainerJobBackend:
             "--mount",
             workspace_mount,
         ]
-        if spec.caches:
-            raise RuntimeError(
-                "cacheRef is unsupported until container-job authority can "
-                "resolve it to an approved volume"
+        resolved_cache_refs: list[str] = []
+        for requested_cache in spec.caches:
+            try:
+                cache = self._settings.cache_source(requested_cache.cache_ref)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"container cache source {requested_cache.cache_ref!r} is not "
+                    "deployment-authorized"
+                ) from exc
+            if requested_cache.target != cache.target:
+                raise RuntimeError(
+                    f"container cache source {cache.cache_ref!r} requires target "
+                    f"{cache.target!r}"
+                )
+            if requested_cache.read_only != cache.read_only:
+                access = "read-only" if cache.read_only else "read-write"
+                raise RuntimeError(
+                    f"container cache source {cache.cache_ref!r} requires "
+                    f"{access} access"
+                )
+            mount = (
+                f"type=volume,src={cache.volume_name},dst={cache.target}"
             )
+            if cache.read_only:
+                mount += ",readonly"
+            args.extend(("--mount", mount))
+            resolved_cache_refs.append(cache.cache_ref)
         args.extend(await self._materialized_env(request))
         if egress_attestation is not None:
             args.extend(
@@ -1549,7 +1571,9 @@ class DockerContainerJobBackend:
                     "restricted-egress launch evidence could not be persisted"
                 ) from exc
         return ContainerJobActivityResult(
-            containerRef=name, diagnosticsRef=egress_evidence_ref
+            containerRef=name,
+            diagnosticsRef=egress_evidence_ref,
+            resolvedCacheRefs=tuple(resolved_cache_refs),
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -2013,6 +2037,16 @@ class DockerContainerJobBackend:
             if request.finished_at
             else None,
             "durationMs": request.duration_ms,
+            "backendRef": self._backend_ref,
+            "imageSourceRef": request.request.spec.image_source_ref,
+            "image": (
+                request.image_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+                if request.image_observation is not None
+                else None
+            ),
+            "resolvedCacheRefs": list(request.resolved_cache_refs),
             "logsRef": logs_ref,
             "stdoutRef": stdout_ref,
             "stderrRef": stderr_ref,

@@ -189,6 +189,7 @@ class MoonMindContainerJobWorkflow:
                         "container_job.create_container", request
                     )
                     request.container_ref = created.container_ref
+                    request.resolved_cache_refs = created.resolved_cache_refs
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)

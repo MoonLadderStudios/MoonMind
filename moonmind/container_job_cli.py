@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
+
+from moonmind.schemas.container_job_models import (
+    ContainerJobSpec,
+    ContainerJobSubmitRequest,
+)
 
 
 TERMINAL_STATES = frozenset(
@@ -23,7 +30,7 @@ class ContainerJobCliError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class PythonTestResult:
+class ContainerJobResult:
     job_id: str
     state: str
     exit_code: int | None
@@ -137,6 +144,90 @@ def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
     )
 
 
+def _managed_workspace(source: Mapping[str, str]) -> dict[str, str]:
+    return {
+        "kind": "managed_runtime",
+        "runtimeId": _required_env(source, "MOONMIND_RUNTIME_ID"),
+        "agentRunId": _required_env(source, "MOONMIND_AGENT_RUN_ID"),
+        "relativePath": "repo",
+    }
+
+
+def container_job_submission(
+    spec: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build and validate one managed-session container-job submission.
+
+    The spec file controls workload intent only. MoonMind overwrites the
+    workspace and correlation identity from the admitted managed session so a
+    file in the repository cannot select another run's workspace.
+    """
+
+    source = os.environ if env is None else env
+    agent_run_id = _required_env(source, "MOONMIND_AGENT_RUN_ID")
+    normalized_request_id = str(request_id or uuid4().hex).strip()
+    if not normalized_request_id:
+        raise ContainerJobCliError("container job request id must not be empty")
+    workflow_id = str(source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id).strip()
+    managed_session_id = str(
+        source.get("MOONMIND_CONTAINER_JOBS_SESSION_ID") or ""
+    ).strip()
+    step_id = str(source.get("MOONMIND_STEP_ID") or "").strip()
+
+    normalized_spec = dict(spec)
+    normalized_spec["workspaceRef"] = _managed_workspace(source)
+    try:
+        validated_spec = ContainerJobSpec.model_validate(normalized_spec)
+        submission = ContainerJobSubmitRequest.model_validate(
+            {
+                "contractVersion": "v1",
+                "idempotencyKey": (
+                    f"container-run:{agent_run_id}:{normalized_request_id}"
+                )[:255],
+                "source": {
+                    "source": "managed_session",
+                    "workflowId": workflow_id,
+                    "managedSessionId": managed_session_id or None,
+                    "agentRunId": agent_run_id,
+                    "stepId": step_id or None,
+                },
+                "spec": validated_spec.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+            }
+        )
+    except ValueError as exc:
+        raise ContainerJobCliError(f"invalid container job spec: {exc}") from exc
+    return submission.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def load_container_job_spec(path: str | Path) -> dict[str, Any]:
+    """Load one JSON job spec without accepting a full submission envelope."""
+
+    spec_path = Path(path)
+    try:
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ContainerJobCliError(
+            f"container job spec could not be read: {spec_path}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ContainerJobCliError(
+            f"container job spec is not valid JSON: {spec_path}: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise ContainerJobCliError("container job spec must be a JSON object")
+    if "spec" in payload or "owner" in payload or "source" in payload:
+        raise ContainerJobCliError(
+            "container job spec must contain workload fields only, not a "
+            "submission envelope"
+        )
+    return dict(payload)
+
+
 def python_test_submission(
     targets: Sequence[str],
     *,
@@ -147,7 +238,6 @@ def python_test_submission(
 
     source = os.environ if env is None else env
     agent_run_id = _required_env(source, "MOONMIND_AGENT_RUN_ID")
-    runtime_id = _required_env(source, "MOONMIND_RUNTIME_ID")
     workflow_id = str(source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id).strip()
     test_targets = [str(target).strip() for target in targets if str(target).strip()]
     command = [
@@ -171,12 +261,7 @@ def python_test_submission(
         },
         "spec": {
             "imageSourceRef": "moonmind-python-tests",
-            "workspaceRef": {
-                "kind": "managed_runtime",
-                "runtimeId": runtime_id,
-                "agentRunId": agent_run_id,
-                "relativePath": "repo",
-            },
+            "workspaceRef": _managed_workspace(source),
             "command": command,
             "workdir": "/workspace",
             "networkMode": "bridge",
@@ -200,17 +285,23 @@ def python_test_submission(
     }
 
 
-def run_python_tests(
-    targets: Sequence[str],
+def run_container_job(
+    spec: Mapping[str, Any],
     *,
     env: Mapping[str, str] | None = None,
-    timeout_seconds: int = 3600,
+    request_id: str | None = None,
     poll_seconds: float = 2.0,
     client: ContainerJobMcpClient | None = None,
-) -> PythonTestResult:
-    """Submit Python tests, wait durably, and return authoritative evidence refs."""
+) -> ContainerJobResult:
+    """Submit one job, wait durably, and return authoritative evidence refs."""
 
     source = os.environ if env is None else env
+    submission = container_job_submission(
+        spec,
+        env=source,
+        request_id=request_id,
+    )
+    timeout_seconds = int(submission["spec"]["timeoutSeconds"])
     owned_client = client is None
     active_client = client or ContainerJobMcpClient(
         endpoint=_mcp_endpoint(source),
@@ -219,9 +310,7 @@ def run_python_tests(
     try:
         accepted = active_client.call(
             "container.submit",
-            python_test_submission(
-                targets, env=source, timeout_seconds=timeout_seconds
-            ),
+            submission,
         )
         job_id = str(accepted.get("jobId") or "").strip()
         if not job_id:
@@ -248,7 +337,7 @@ def run_python_tests(
             # Log retrieval is auxiliary evidence and must not overwrite the
             # authoritative job result.
             log_error = str(exc)
-        return PythonTestResult(
+        return ContainerJobResult(
             job_id=job_id,
             state=state,
             exit_code=(
@@ -264,6 +353,31 @@ def run_python_tests(
     finally:
         if owned_client:
             active_client.close()
+
+
+def run_python_tests(
+    targets: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    timeout_seconds: int = 3600,
+    poll_seconds: float = 2.0,
+    client: ContainerJobMcpClient | None = None,
+) -> ContainerJobResult:
+    """Run the canonical Python-test job through the generic submission path."""
+
+    source = os.environ if env is None else env
+    submission = python_test_submission(
+        targets,
+        env=source,
+        timeout_seconds=timeout_seconds,
+    )
+    return run_container_job(
+        submission["spec"],
+        env=source,
+        request_id=submission["idempotencyKey"].rsplit(":", 1)[-1],
+        poll_seconds=poll_seconds,
+        client=client,
+    )
 
 
 def _read_log_tail(

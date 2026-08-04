@@ -620,15 +620,13 @@ services:
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES=${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH=${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}
-      # GHCR pull credentials for managed-session Docker sidecars (e.g. pulling the
-      # prebuilt Unreal toolchain image). Injected into the session Docker config by
-      # resolve_ghcr_pull_credentials_for_launch when set; empty => anonymous pulls.
-      - GHCR_PULL_USER=${GHCR_PULL_USER:-}
-      - GHCR_PULL_TOKEN=${GHCR_PULL_TOKEN:-}
-      # Optional pinned image (digest or non-latest tag) so the Docker sidecar preflight
-      # can `docker manifest inspect` it and fail fast before the agent runs.
-      - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-}
-      - MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF=${MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF:-}
+      # Operator-provisioned Unreal image in the shared host daemon.
+      # The default pull policy is `never`, so private images are reused without
+      # exposing registry credentials or silently attempting anonymous pulls.
+      - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}
+      - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-never}
+      - MOONMIND_UNREAL_CCACHE_VOLUME_NAME=${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
+      - MOONMIND_UNREAL_UBT_VOLUME_NAME=${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
@@ -1270,11 +1268,11 @@ volumes:
   moonmind_retrieval_state:
     name: ${MOONMIND_RETRIEVAL_STATE_VOLUME_NAME:-moonmind_retrieval_state}
   unreal_ccache_volume:
-    name: unreal_ccache_volume
+    name: ${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
   omnigent-host-artifacts:
   omnigent-host-cache:
   unreal_ubt_volume:
-    name: unreal_ubt_volume
+    name: ${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
   codex_auth_volume:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   claude_auth_volume:

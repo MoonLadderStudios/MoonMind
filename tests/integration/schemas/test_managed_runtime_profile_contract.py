@@ -12,9 +12,9 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
-def _valid_docker_sidecar_profile() -> dict:
+def _container_jobs_profile() -> dict:
     return {
-        "workloadMode": "docker-sidecar",
+        "workloadMode": "container-jobs",
         "workspace": {
             "volume": "agent_workspaces",
             "mountPath": "/work/agent_jobs",
@@ -22,158 +22,7 @@ def _valid_docker_sidecar_profile() -> dict:
             "lifecycle": "session",
         },
         "agent": {
-            "image": "moonmind/managed-agent:2026-05-16",
-            "workspace": {"mountPath": "/work/agent_jobs"},
-            "dockerClient": {
-                "enabled": True,
-                "composePlugin": True,
-                "daemonInAgent": False,
-            },
-            "env": {
-                "DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock",
-            },
-            "mounts": [
-                {"name": "workspace", "mountPath": "/work/agent_jobs"},
-                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
-            ],
-        },
-        "dockerSidecar": {
-            "enabled": True,
-            "mode": "dind",
-            "image": "docker:27-dind",
-            "socket": {
-                "path": "/var/run/moonmind-docker/docker.sock",
-                "volumeName": "docker-socket",
-            },
-            "storage": {
-                "volumeName": "docker-graph",
-                "mountPath": "/var/lib/docker",
-                "lifecycle": "session",
-                "daemonScope": "session",
-            },
-            "workspace": {"mountPath": "/work/agent_jobs"},
-            "security": {
-                "privileged": True,
-                "hostDockerSocket": "forbidden",
-                "moonmindDeploymentSecrets": "forbidden",
-            },
-            "mounts": [
-                {"name": "workspace", "mountPath": "/work/agent_jobs"},
-                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
-                {"name": "docker-graph", "mountPath": "/var/lib/docker"},
-            ],
-            "optionalCaches": [
-                {
-                    "name": "pip-cache",
-                    "volumeName": "mm-cache-pip",
-                    "mountPath": "/cache/pip",
-                    "approvalRef": "deployment-approved-cache-pip",
-                }
-            ],
-        },
-        "resources": {
-            "session": {"maxRuntimeSeconds": 14400},
-            "agent": {"cpu": "2", "memory": "4Gi"},
-            "dockerSidecar": {
-                "cpu": "4",
-                "memory": "8Gi",
-                "ephemeralStorage": "40Gi",
-            },
-            "nestedContainers": {
-                "defaultCpu": "2",
-                "defaultMemory": "4Gi",
-                "maxContainers": 16,
-            },
-        },
-        "cleanup": {
-            "idempotent": True,
-            "onSessionEnd": {
-                "stopSidecar": True,
-                "stopNestedContainers": True,
-                "removeDockerGraph": True,
-                "removeDockerSocket": True,
-                "preserveWorkspace": "retention_policy",
-            },
-            "onSidecarFailure": {
-                "markDockerCapabilityUnavailable": True,
-                "preserveAgentSession": True,
-            },
-            "onAgentFailure": {
-                "stopSidecar": True,
-                "preserveWorkspace": "retention_policy",
-            },
-        },
-        "labels": {
-            "moonmind.kind": "managed-session",
-            "moonmind.workload_mode": "docker-sidecar",
-        },
-        "policy": {
-            "hostDockerSocket": "forbidden",
-            "sharedDaemonAcrossUsers": "forbidden",
-            "moonmindDeploymentSecretsInSession": "forbidden",
-            "appContainerControlFromSession": "forbidden",
-            "apiContainerWorkloadDockerSocketAccess": False,
-        },
-    }
-
-
-def test_launch_context_validates_runtime_profile_before_managed_session_launch() -> None:
-    runtime_profile = _valid_docker_sidecar_profile()
-    runtime_profile["dockerSidecar"]["image"] = "docker:latest"
-
-    with pytest.raises(ValueError, match="sidecar image must be pinned"):
-        build_managed_profile_launch_context(
-            profile={
-                "profile_id": "codex_default",
-                "credential_source": "oauth_volume",
-                "runtime_profile": runtime_profile,
-            },
-            runtime_for_profile="codex_cli",
-            workflow_id="wf-agent-run-1",
-            default_credential_source="oauth_volume",
-        )
-
-
-def test_launch_context_exposes_mm695_sidecar_launch_plan() -> None:
-    context = build_managed_profile_launch_context(
-        profile={
-            "profile_id": "codex_default",
-            "credential_source": "oauth_volume",
-            "runtime_profile": _valid_docker_sidecar_profile(),
-        },
-        runtime_for_profile="codex_cli",
-        workflow_id="wf-agent-run-1",
-        default_credential_source="oauth_volume",
-    )
-
-    plan = context.docker_sidecar_launch_plan
-    assert plan is not None
-    assert plan["issueKey"] == "MM-695"
-    assert plan["applyLimitsOutsideNestedDaemon"] is True
-    assert plan["labels"] == {
-        "moonmind.kind": "managed-session",
-        "moonmind.workload_mode": "docker-sidecar",
-    }
-    assert plan["resources"]["dockerSidecar"]["ephemeralStorage"] == "40Gi"
-    assert plan["resources"]["nestedContainers"]["maxContainers"] == 16
-    assert plan["cleanup"]["onSessionEnd"]["stopNestedContainers"] is True
-    assert plan["cleanup"]["onSidecarFailure"] == {
-        "markDockerCapabilityUnavailable": True,
-        "preserveAgentSession": True,
-    }
-
-
-def _valid_kubernetes_job_profile(*, supported: bool = True) -> dict:
-    return {
-        "workloadMode": "kubernetes-job",
-        "workspace": {
-            "volume": "agent_workspaces",
-            "mountPath": "/work/agent_jobs",
-            "repoEnv": "MOONMIND_REPO_DIR",
-            "lifecycle": "session",
-        },
-        "agent": {
-            "image": "moonmind/managed-agent:2026-05-16",
+            "image": "moonmind/managed-agent:2026-08-04",
             "workspace": {"mountPath": "/work/agent_jobs"},
             "dockerClient": {
                 "enabled": False,
@@ -185,14 +34,13 @@ def _valid_kubernetes_job_profile(*, supported: bool = True) -> dict:
                 {"name": "workspace", "mountPath": "/work/agent_jobs"},
             ],
         },
-        "dockerSidecar": {"enabled": False},
         "resources": {
             "session": {"maxRuntimeSeconds": 14400},
             "agent": {"cpu": "2", "memory": "4Gi"},
         },
         "labels": {
             "moonmind.kind": "managed-session",
-            "moonmind.workload_mode": "kubernetes-job",
+            "moonmind.workload_mode": "container-jobs",
         },
         "policy": {
             "hostDockerSocket": "forbidden",
@@ -200,34 +48,40 @@ def _valid_kubernetes_job_profile(*, supported: bool = True) -> dict:
             "moonmindDeploymentSecretsInSession": "forbidden",
             "appContainerControlFromSession": "forbidden",
             "apiContainerWorkloadDockerSocketAccess": False,
-            "kubernetesJobRuntimeSupported": supported,
         },
     }
 
 
-def test_launch_context_rejects_mm698_ungated_kubernetes_job_mode() -> None:
-    with pytest.raises(ValueError, match="kubernetes-job requires explicit"):
-        build_managed_profile_launch_context(
-            profile={
-                "profile_id": "codex_default",
-                "credential_source": "oauth_volume",
-                "runtime_profile": _valid_kubernetes_job_profile(supported=False),
-            },
-            runtime_for_profile="codex_cli",
-            workflow_id="wf-agent-run-1",
-            default_credential_source="oauth_volume",
-        )
+def _launch(profile: dict) -> None:
+    build_managed_profile_launch_context(
+        profile={
+            "profile_id": "codex_default",
+            "credential_source": "oauth_volume",
+            "runtime_profile": profile,
+        },
+        runtime_for_profile="codex_cli",
+        workflow_id="wf-agent-run-1",
+        default_credential_source="oauth_volume",
+    )
 
 
-def test_launch_context_rejects_mm698_supported_kubernetes_job_without_renderer() -> None:
-    with pytest.raises(ValueError, match="cannot be launched until"):
-        build_managed_profile_launch_context(
-            profile={
-                "profile_id": "codex_default",
-                "credential_source": "oauth_volume",
-                "runtime_profile": _valid_kubernetes_job_profile(),
-            },
-            runtime_for_profile="codex_cli",
-            workflow_id="wf-agent-run-1",
-            default_credential_source="oauth_volume",
-        )
+def test_launch_context_accepts_api_owned_container_jobs_profile() -> None:
+    _launch(_container_jobs_profile())
+
+
+def test_launch_context_rejects_removed_docker_sidecar_profile() -> None:
+    runtime_profile = _container_jobs_profile()
+    runtime_profile["workloadMode"] = "docker-sidecar"
+    runtime_profile["dockerSidecar"] = {"enabled": True}
+
+    with pytest.raises(ValueError, match="workloadMode|dockerSidecar"):
+        _launch(runtime_profile)
+
+
+def test_launch_context_rejects_raw_docker_endpoint() -> None:
+    runtime_profile = _container_jobs_profile()
+    runtime_profile["agent"]["dockerClient"]["enabled"] = True
+    runtime_profile["agent"]["env"]["DOCKER_HOST"] = "unix:///var/run/docker.sock"
+
+    with pytest.raises(ValueError, match="dockerClient.enabled must be false"):
+        _launch(runtime_profile)

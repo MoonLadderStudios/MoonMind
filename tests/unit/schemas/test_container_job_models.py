@@ -8,6 +8,7 @@ from moonmind.schemas.container_job_models import (
     ArtifactCollectionStatus,
     AuxiliaryOutcome,
     ContainerJobAccepted,
+    ContainerJobActivityRequest,
     ContainerJobActivityResult,
     ContainerJobArtifact,
     ContainerJobArtifactPage,
@@ -353,6 +354,18 @@ def test_activity_result_carries_observations_and_cursor() -> None:
     assert dumped["workspaceProbe"] == "visible"
     assert dumped["durationMs"] == 1500
     assert dumped["eventsRef"] == "artifact://events"
+
+
+def test_activity_cache_refs_default_for_inflight_history_payloads() -> None:
+    request = ContainerJobActivityRequest(
+        jobId=JOB_ID,
+        ownershipToken=f"{JOB_ID}:v1",
+        request=payload(),
+    )
+    result = ContainerJobActivityResult.model_validate({})
+
+    assert request.resolved_cache_refs == ()
+    assert result.resolved_cache_refs == ()
 
 
 def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> None:

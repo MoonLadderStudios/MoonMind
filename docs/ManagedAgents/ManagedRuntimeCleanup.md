@@ -2,7 +2,7 @@
 
 - **Status:** Canonical desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-07-11
+- **Last updated:** 2026-08-04
 - **Audience:** Contributors, operators, runtime authors, and infrastructure maintainers
 - **Purpose:** Declarative cleanup design for managed-runtime resources, including managed-session orphan reaping and automatic retained workspace/artifact cleanup.
 
@@ -23,7 +23,8 @@ MoonMind has several cleanup paths today, but they do not share one declarative 
 
 - managed-session termination removes live runtime resources for one session;
 - managed-run supervision cleans short-lived launcher support files;
-- managed-session reconciliation reaps orphaned Docker containers and sidecar volumes;
+- managed-session reconciliation reaps orphaned agent containers and resources left
+  by pre-cutover sidecar sessions;
 - run and session stores keep JSON records and expose active-record views;
 - managed-runtime workspaces and artifact directories under `/work/agent_jobs` are automatically retained and expired according to the policies in this document.
 
@@ -41,9 +42,9 @@ This document covers managed-runtime cleanup resources under the managed-agent s
 
 - managed run process launcher support files,
 - managed session containers,
-- managed session Docker sidecar containers,
-- managed session Docker socket and graph volumes,
-- managed session Docker config files,
+- pre-cutover managed session Docker sidecar containers,
+- pre-cutover managed session Docker socket and graph volumes,
+- pre-cutover managed session Docker config files,
 - workspace-local skill projections,
 - managed runtime workspace roots,
 - managed runtime session roots,
@@ -99,9 +100,9 @@ Filesystem age alone is never enough to delete a workspace, artifact directory, 
 
 | System | Trigger | Resources cleaned | Durable truth | Current boundary |
 |---|---|---|---|---|
-| Managed session termination | Explicit session control action | Session container, Docker sidecar resources, Docker config, GitHub auth broker, skill projections | Session locator and `ManagedSessionStore` record | Per-session live resource cleanup only |
+| Managed session termination | Explicit session control action | Session container, skill projections, and any pre-cutover sidecar resources recorded for that session | Session locator and `ManagedSessionStore` record | Per-session live resource cleanup only |
 | Managed run supervisor cleanup | Run cancel, process exit, startup reconciliation | Launcher support files and deferred runtime files | `ManagedRunStore` active records plus supervised process state | Does not remove durable workspace roots |
-| Managed-session orphan reaping | `MoonMind.ManagedSessionReconcile` schedule | Orphaned session containers and sidecar graph/socket volumes | Active session records, Docker labels, Temporal owner status, grace windows | Does not remove `/work/agent_jobs` workspaces or artifact directories |
+| Managed-session orphan reaping | `MoonMind.ManagedSessionReconcile` schedule | Orphaned session containers and pre-cutover sidecar graph/socket volumes | Active session records, Docker labels, Temporal owner status, grace windows | Does not remove `/work/agent_jobs` workspaces or artifact directories |
 | Run/session store active reconciliation | Store list-active calls | Active-record discovery and stale-process/session marking | JSON record status fields | No retention delete pass |
 | Workspace janitor | Hourly operational workflow | Old terminal workspace roots, session roots, artifact dirs, and optionally old JSON records | All run/session records plus canonical paths and live Docker safety gates | Bounded retained-state cleanup system |
 
@@ -149,7 +150,11 @@ observability:
     - forced_stale
 ```
 
-### 6.2 Managed session Docker sidecar volumes
+### 6.2 Pre-cutover managed session Docker sidecar volumes
+
+New sessions do not create these volumes. This resource class exists only so the
+reconciler can safely retire graph/socket volumes from sessions that started
+before the Docker Backend Service cutover.
 
 ```yaml
 kind: CleanupResourceClass
@@ -349,7 +354,7 @@ A managed-session container is eligible for orphan reaping when:
 5. a terminal session record is protected when Temporal owner status is
    non-terminal or unavailable.
 
-A sidecar volume is eligible when:
+A pre-cutover sidecar volume is eligible when:
 
 1. it is a managed-session sidecar graph/socket volume;
 2. its session id is not active;
@@ -359,7 +364,7 @@ A sidecar volume is eligible when:
 
 ### 7.3 Stale active record handling
 
-If a non-terminal session record points at an owning workflow that has reached a terminal Temporal status, reconcile may mark the session terminated and then reap its containers/sidecar volumes.
+If a non-terminal session record points at an owning workflow that has reached a terminal Temporal status, reconcile may mark the session terminated and then reap its containers and any recorded pre-cutover sidecar volumes.
 
 As a final guardrail, an old `ready` session without `activeTurnId` may be force-marked terminal after the max-age window. This is a live-runtime leak guard, not a workspace retention policy.
 
@@ -368,7 +373,7 @@ As a final guardrail, an old `ready` session without `activeTurnId` may be force
 | Env var | Default | Meaning |
 |---|---:|---|
 | `MOONMIND_MANAGED_SESSION_REAP_ENABLED` | `1` | Enables orphan reaping. Falsey values disable it. |
-| `MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS` | `900` | Minimum age before an orphan container or sidecar volume is eligible. |
+| `MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS` | `900` | Minimum age before an orphan container or pre-cutover sidecar volume is eligible. |
 | `MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS` | `172800` | Maximum age for stale `ready` active-store sessions with no active turn. Falsey disables this guardrail. |
 
 ### 7.5 Non-goal
@@ -626,7 +631,7 @@ The cleanup systems should expose:
 Operators should be able to answer:
 
 - How many managed-session containers were reaped?
-- How many sidecar volumes were reaped?
+- How many pre-cutover sidecar volumes were reaped?
 - How many workspaces are eligible for deletion?
 - Why was a specific workspace skipped?
 - How much disk would dry-run delete?
@@ -643,7 +648,7 @@ The implementation should include tests for:
 3. old terminal workspace is protected when another recent terminal run shares it;
 4. active managed session protects its session root;
 5. terminal managed session becomes eligible only after retention and grace;
-6. orphan reaper continues to delete containers and sidecar volumes but never workspaces;
+6. orphan reaper continues to delete containers and pre-cutover sidecar volumes but never workspaces;
 7. dry-run reports candidates without deleting;
 8. corrupt run/session JSON records fail closed for the paths they name, without
    blocking cleanup of every other candidate;
