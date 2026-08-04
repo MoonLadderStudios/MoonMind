@@ -30,7 +30,6 @@ from api_service.db.models import (
     OmnigentAgentProfileVersion,
     OmnigentUpstreamAgentProjection,
     ManagedAgentProviderProfile,
-    TemporalArtifact,
     User,
 )
 from api_service.services.omnigent_agent_profile_service import (
@@ -38,10 +37,15 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_readiness,
     synchronize_upstream_inventory,
 )
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.services.omnigent_agent_bundle_service import (
     BundleValidationError,
-    validate_agent_bundle,
+    publish_validated_agent_bundle,
+)
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.services.omnigent_agent_smoke_service import (
+    DEFAULT_SMOKE_TIMEOUT_SECONDS,
+    run_profile_readiness_checks,
+    run_smoke_validation,
 )
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.omnigent.bridge_config import (
@@ -194,7 +198,18 @@ class SnapshotCreate(BaseModel):
 class ValidateCreate(BaseModel):
     version: int | None = Field(None, ge=1)
 
+class SmokeCreate(BaseModel):
+    version: int | None = Field(None, ge=1)
+
+class BundleImportCreate(BaseModel):
+    version: int | None = Field(None, ge=1)
+
 def _assert_owner(profile: OmnigentAgentProfile, user: User) -> None:
+    # Ownerless workspace profiles are bootstrap/operator-managed resources.
+    # Callers have already enforced provider_profiles.write before reaching
+    # lifecycle mutations.
+    if profile.owner_id is None and profile.visibility == "workspace":
+        return
     if profile.owner_id != user.id and not user.is_superuser:
         raise HTTPException(403, "profile owner permission required")
 
@@ -227,7 +242,9 @@ def _response(profile: OmnigentAgentProfile, versions: list[OmnigentAgentProfile
             "defaultForRuntime": profile.default_for_runtime, "versions": [{"version": v.version, "digest": v.digest, "document": v.document,
             "parentVersion": v.parent_version, "clonedFromProfileId": v.cloned_from_profile_id,
             "clonedFromVersion": v.cloned_from_version, "upstreamSnapshot": v.upstream_snapshot,
-            "validationResult": v.validation_result, "createdAt": v.created_at} for v in versions]}
+            "validationResult": v.validation_result,
+            "rolloutMetadata": getattr(v, "rollout_metadata", None),
+            "createdAt": v.created_at} for v in versions]}
 
 async def _load(session: AsyncSession, profile_id: str) -> tuple[OmnigentAgentProfile, list[OmnigentAgentProfileVersion]]:
     profile = await session.get(OmnigentAgentProfile, profile_id)
@@ -259,6 +276,38 @@ async def _refresh_upstream_projection(
         bridge_mode=str(config.host_protocol_mode),
         inventory=inventory,
     )
+
+
+def _bridge_refresh(
+    session: AsyncSession,
+    *,
+    config: OmnigentBridgeConfig,
+    proxy: OmnigentBridgeSessionProxy | None,
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
+):
+    """Bind the upstream-projection refresh to the readiness-check core."""
+
+    async def _refresh() -> None:
+        await _refresh_upstream_projection(
+            session, config=config, proxy=proxy, embedded_facade=embedded_facade
+        )
+
+    return _refresh
+
+
+def _artifact_bundle_reader(
+    artifact_service: TemporalArtifactService, current_user: User
+):
+    """Bind artifact-boundary bundle reads to the readiness-check core."""
+
+    async def _read(artifact_id: str) -> bytes:
+        _stored_artifact, bundle_bytes = await artifact_service.read(
+            artifact_id=artifact_id, principal=str(current_user.id)
+        )
+        return bundle_bytes
+
+    return _read
+
 
 @router.get("")
 async def list_profiles(session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> list[dict[str, Any]]:
@@ -406,117 +455,220 @@ async def validate_profile(
     target = next((v for v in versions if v.version == target_number), None)
     if target is None:
         raise HTTPException(404, "profile version not found")
-    document = target.document
-    checks: list[dict[str, Any]] = []
-    source = document["source"]
-    if source.get("upstreamId"):
-        await _refresh_upstream_projection(
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=target.document,
+        refresh_upstream=_bridge_refresh(
             session,
             config=bridge_config,
             proxy=bridge_proxy,
             embedded_facade=embedded_facade,
-        )
-        projection = await session.get(
-            OmnigentUpstreamAgentProjection,
-            projection_identity(
-                document["endpointRef"], source["upstreamId"],
-                source.get("upstreamVersion"),
-            ),
-        )
-        upstream_readiness = projection_readiness(
-            projection,
-            bridge_mode=document["bridgeMode"],
-            harness=document["harness"],
-            required_capabilities=document.get("requiredCapabilities", []),
-        )
-        checks.append({
-            "name": "upstream_identity",
-            **upstream_readiness,
-        })
-        target.upstream_snapshot = projection.metadata_snapshot if projection else None
-    else:
-        artifact_id = source["bundleArtifactRef"].removeprefix("artifact:")
-        artifact = await session.get(TemporalArtifact, artifact_id)
-        expected = source["bundleDigest"].removeprefix("sha256:")
-        safe_types = {
-            "application/zip", "application/x-tar", "application/gzip",
-            "application/vnd.moonmind.omnigent-agent-bundle+zip",
-        }
-        bundle_ready = bool(
-            artifact and artifact.sha256 == expected
-            and artifact.content_type in safe_types
-            and artifact.size_bytes is not None
-            and 0 < artifact.size_bytes <= 50 * 1024 * 1024
-            and artifact.created_by_principal
-        )
-        checks.append({
-            "name": "bundle_provenance", "ready": bundle_ready,
-            "reason": None if bundle_ready else
-            "bundle must resolve to a creator-attributed artifact with matching digest, safe media type, and bounded size",
-        })
-        if bundle_ready:
-            try:
-                _stored_artifact, bundle_bytes = await artifact_service.read(
-                    artifact_id=artifact_id,
-                    principal=str(current_user.id),
-                )
-                bundle_metadata = validate_agent_bundle(
-                    bundle_bytes, artifact.content_type or ""
-                )
-                declared_capabilities = set(bundle_metadata["capabilities"])
-                required_capabilities = set(document["requiredCapabilities"])
-                content_ready = (
-                    bundle_metadata["harness"] == document["harness"]
-                    and required_capabilities.issubset(declared_capabilities)
-                )
-                checks.append({
-                    "name": "bundle_contents",
-                    "ready": content_ready,
-                    "reason": None if content_ready else
-                    "bundle harness or capabilities do not satisfy the profile",
-                    "metadata": bundle_metadata,
-                })
-                target.upstream_snapshot = {
-                    "source": "artifact",
-                    "artifactRef": source["bundleArtifactRef"],
-                    "digest": source["bundleDigest"],
-                    **bundle_metadata,
-                }
-            except BundleValidationError as exc:
-                checks.append({
-                    "name": "bundle_contents", "ready": False,
-                    "reason": str(exc),
-                })
-            except Exception:
-                # Artifact authorization/storage details are intentionally not exposed.
-                checks.append({
-                    "name": "bundle_contents", "ready": False,
-                    "reason": "bundle content could not be read through the artifact boundary",
-                })
-    requirements = document["providerRequirements"]
-    providers = list((await session.execute(select(ManagedAgentProviderProfile).where(
-        ManagedAgentProviderProfile.runtime_id == requirements["runtimeId"],
-        ManagedAgentProviderProfile.enabled.is_(True),
-    ))).scalars())
-    compatible_provider = any(
-        row.credential_source.value == requirements["credentialSource"]
-        and row.runtime_materialization_mode.value == requirements["materializationMode"]
-        and (not requirements.get("providerIds") or row.provider_id in requirements["providerIds"])
-        for row in providers
+        ),
+        read_bundle_bytes=_artifact_bundle_reader(artifact_service, current_user),
     )
-    checks.append({
-        "name": "provider_profile", "ready": compatible_provider,
-        "reason": None if compatible_provider else "no enabled compatible Provider Profile",
-    })
-    ready = all(check["ready"] for check in checks)
+    target.upstream_snapshot = outcome.upstream_snapshot
     target.validation_result = {
         "schemaVersion": "moonmind.omnigent-agent-profile-validation.v1",
-        "ready": ready, "checks": checks,
+        "ready": outcome.ready, "checks": outcome.checks,
     }
     session.add(_audit(profile_id, "validated", current_user, version=target.version,
-                       metadata={"ready": ready}))
+                       metadata={"ready": outcome.ready}))
     await session.commit()
     return target.validation_result
+
+@router.post("/{profile_id}/smoke")
+async def smoke_validate_profile(
+    profile_id: str,
+    body: SmokeCreate,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
+) -> dict[str, Any]:
+    """Run an operator-triggered bounded smoke preflight (Sec 7).
+
+    Reuses the shared readiness checks, adds the strongest *safe* session-start
+    capability probe (bridge reachability, never a real launch), bounds the
+    whole preflight by a time budget, secret-scans diagnostics, and guarantees
+    release of any validation-owned lease. A pass is readiness evidence, not a
+    workflow-success guarantee, so it never mutates the version's activation
+    validation result.
+    """
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile, versions = await _load(session, profile_id)
+    _assert_owner(profile, current_user)
+    target_number = body.version or profile.active_version or (
+        versions[0].version if versions else None
+    )
+    target = next((v for v in versions if v.version == target_number), None)
+    if target is None:
+        raise HTTPException(404, "profile version not found")
+
+    facade = (
+        embedded_facade
+        if bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else bridge_proxy
+    )
+    diagnostics: list[str] = []
+
+    async def _preflight():
+        return await run_profile_readiness_checks(
+            session,
+            document=target.document,
+            refresh_upstream=_bridge_refresh(
+                session,
+                config=bridge_config,
+                proxy=bridge_proxy,
+                embedded_facade=embedded_facade,
+            ),
+            read_bundle_bytes=_artifact_bundle_reader(artifact_service, current_user),
+        )
+
+    async def _session_start_probe() -> dict[str, Any]:
+        # Strongest safe session-start capability: prove the endpoint can be
+        # reached to enumerate hosts without launching a real agent session.
+        if facade is None:
+            return {"ready": False, "reason": "Omnigent bridge is unavailable"}
+        try:
+            await facade.list_hosts()
+            return {"ready": True, "reason": None}
+        except OmnigentBridgeError as exc:
+            diagnostics.append(f"session-start probe failed: {exc}")
+            return {
+                "ready": False,
+                "reason": "bridge endpoint is not reachable for a session-start check",
+            }
+
+    result = await run_smoke_validation(
+        preflight=_preflight,
+        session_start_probe=_session_start_probe,
+        cleanup=None,  # reachability probe creates no durable session or lease
+        diagnostics=diagnostics,
+        timeout_seconds=DEFAULT_SMOKE_TIMEOUT_SECONDS,
+        profile_id=profile_id,
+        version=target.version,
+    )
+    session.add(
+        _audit(
+            profile_id, "smoke_validated", current_user, version=target.version,
+            metadata={
+                "ready": result["ready"],
+                "timedOut": result["timedOut"],
+                "durationMs": result["durationMs"],
+                "checks": [
+                    {"name": check["name"], "ready": check["ready"]}
+                    for check in result["checks"]
+                ],
+            },
+        )
+    )
+    await session.commit()
+    return result
+
+
+@router.post("/{profile_id}/import-bundle")
+async def import_profile_bundle(
+    profile_id: str,
+    body: BundleImportCreate,
+    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    """Publish one validated immutable bundle through the authorized facade."""
+
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile, versions = await _load(session, profile_id)
+    _assert_owner(profile, current_user)
+    target_number = body.version or profile.active_version or (
+        versions[0].version if versions else None
+    )
+    target = next((v for v in versions if v.version == target_number), None)
+    if target is None:
+        raise HTTPException(404, "profile version not found")
+    source = target.document.get("source", {})
+    artifact_ref = str(source.get("bundleArtifactRef") or "")
+    if not artifact_ref:
+        raise HTTPException(409, "profile version is not artifact-backed")
+    if target.document.get("endpointRef") != "default":
+        raise HTTPException(409, "profile endpoint is outside the configured bridge scope")
+    if (
+        bridge_config.host_protocol_mode != "proxy"
+        or target.document.get("bridgeMode") != "proxy"
+        or bridge_proxy is None
+    ):
+        raise HTTPException(409, "bundle import requires the authorized proxy bridge mode")
+    if not target.validation_result or target.validation_result.get("ready") is not True:
+        raise HTTPException(409, "profile version must pass validation before bundle import")
+
+    existing_import = (target.rollout_metadata or {}).get("bundleImport") or {}
+    if existing_import.get("status") == "succeeded":
+        return existing_import
+    if existing_import.get("status") == "publishing":
+        raise HTTPException(
+            409,
+            "bundle import is already reserved; reconcile its audit evidence before retrying",
+        )
+    operation_key = f"{profile_id}@{target.version}:{source['bundleDigest']}"
+    reservation = {
+        "schemaVersion": "moonmind.omnigent-agent-bundle-import.v1",
+        "status": "publishing",
+        "idempotencyKey": operation_key,
+    }
+    target.rollout_metadata = {
+        **(target.rollout_metadata or {}),
+        "bundleImport": reservation,
+    }
+    session.add(
+        _audit(
+            profile_id,
+            "bundle_import_reserved",
+            current_user,
+            version=target.version,
+            metadata=reservation,
+        )
+    )
+    await session.commit()
+
+    artifact_id = artifact_ref.removeprefix("artifact:")
+    stored_artifact, bundle_bytes = await artifact_service.read(
+        artifact_id=artifact_id, principal=str(current_user.id)
+    )
+    filename = f"{profile_id}-v{target.version}.bundle"
+    try:
+        result = await publish_validated_agent_bundle(
+            data=bundle_bytes,
+            content_type=str(stored_artifact.content_type or "application/octet-stream"),
+            expected_digest=str(source["bundleDigest"]),
+            filename=filename,
+            publish=bridge_proxy.import_agent_bundle,
+        )
+    except (BundleValidationError, OmnigentBridgeError) as exc:
+        failure = {
+            "schemaVersion": "moonmind.omnigent-agent-bundle-import.v1",
+            "status": "failed",
+            "failureClass": (
+                exc.failure_class if isinstance(exc, OmnigentBridgeError) else "validation_error"
+            ),
+        }
+        target.rollout_metadata = {**(target.rollout_metadata or {}), "bundleImport": failure}
+        session.add(_audit(profile_id, "bundle_import_failed", current_user,
+                           version=target.version, metadata=failure))
+        await session.commit()
+        raise HTTPException(409 if isinstance(exc, BundleValidationError) else 502,
+                            "bundle import failed; see profile audit evidence") from exc
+
+    result = {**result, "idempotencyKey": operation_key}
+    target.rollout_metadata = {**(target.rollout_metadata or {}), "bundleImport": result}
+    session.add(_audit(profile_id, "bundle_imported", current_user,
+                       version=target.version, metadata=result))
+    await session.commit()
+    return result
 
 @router.post("/{profile_id}/default")
 async def make_default(profile_id: str, session: AsyncSession = Depends(get_async_session), current_user: User = Depends(get_current_user())) -> dict[str, Any]:

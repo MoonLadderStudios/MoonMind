@@ -88,6 +88,30 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
   });
 
+  it('creates an upstream profile through structured controls without raw JSON', async () => {
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+    await screen.findByText('Team Codex');
+    fireEvent.click(screen.getByRole('button', { name: 'Create from upstream or bundle' }));
+    expect(screen.queryByLabelText('Normalized profile document (JSON)')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Profile id'), { target: { value: 'new-codex' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Codex' } });
+    fireEvent.change(screen.getByLabelText('Stable upstream agent id'), { target: { value: 'agent-42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save immutable profile version' }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) =>
+      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST')).toBe(true));
+    const call = vi.mocked(fetch).mock.calls.find(([url, init]) =>
+      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST');
+    const body = JSON.parse(String((call?.[1] as RequestInit).body));
+    expect(body.document).toMatchObject({
+      endpointRef: 'default', source: { upstreamId: 'agent-42' }, harness: 'codex-native',
+      continuations: { checkpoint: true, branch: true, remediation: true },
+    });
+  });
+
   it('does not fetch policy actions without a capability contract', async () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     renderPage({ page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: false } });
@@ -113,6 +137,20 @@ describe('OmnigentInventoryPage', () => {
     window.history.replaceState({}, '', '/omnigent/policies');
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith('/versions/2/usage')) return {
+        ok: true, json: async () => ({
+          policyRef: 'codex-static@2', default: true,
+          dependents: {
+            hostBindings: ['oauth-host-codex'], hostBindingCount: 1,
+            providerProfiles: ['codex-profile'], providerProfileCount: 1,
+            workflows: ['workflow-1'], workflowCount: 1,
+            bridgeSessions: ['bridge-1'], bridgeSessionCount: 1,
+            activeBridgeSessions: ['bridge-1'], activeBridgeSessionCount: 1,
+          },
+          activationImpact: { willSwitchDefault: false, compatible: true, diagnostics: [] },
+          unavailabilityBlockers: ['Switch the policy default before disabling or deprecating this version.'],
+        }),
+      } as Response;
       if (url.endsWith('/versions')) return {
         ok: true, json: async () => ({ items: [
           { policyId: 'codex-static', version: 2, ref: 'codex-static@2', state: 'active', digest: 'sha256:2',
@@ -148,5 +186,9 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByRole('button', { name: 'codex-static@1 · superseded' })).toBeTruthy();
     expect(await screen.findByText(/default_changed/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate against deployment' })).toBeTruthy();
+    expect(await screen.findByText('Dependent host profiles: 1')).toBeTruthy();
+    expect(screen.getByText('oauth-host-codex')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Disable codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Deprecate codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -898,6 +898,12 @@ const ExecutionDetailSchema = z
     resolvedModel: z.string().nullable().optional(),
     modelSource: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
+    inputParameters: z.record(z.string(), z.unknown()).default({}),
+    agentProfile: z.object({
+      profileId: z.string(),
+      version: z.number().int().positive().optional(),
+      providerProfileRef: z.string().optional(),
+    }).nullable().optional(),
     providerId: z.string().nullable().optional(),
     providerLabel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
@@ -4698,9 +4704,22 @@ type BranchCreateDraft = {
   gitWorkBranch: string;
   maxBudgetUsd: string;
   providerProfileRef: string;
+  agentProfileId: string;
+  agentProfileVersion: number | null;
   executionProfileRef: string;
   model: string;
   effort: string;
+};
+
+type CheckpointAgentProfileOption = {
+  profileId: string;
+  displayName: string;
+  state: string;
+  activeVersion: number | null;
+  versions: Array<{
+    version: number;
+    validationResult?: { ready?: boolean } | null;
+  }>;
 };
 
 type BranchMutationKind = 'create' | 'continue' | 'fork' | 'promote' | 'publish' | 'archive' | 'compare';
@@ -4742,6 +4761,8 @@ const DEFAULT_BRANCH_CREATE_DRAFT: BranchCreateDraft = {
   gitWorkBranch: '',
   maxBudgetUsd: '',
   providerProfileRef: '',
+  agentProfileId: '',
+  agentProfileVersion: null,
   executionProfileRef: '',
   model: '',
   effort: '',
@@ -4963,6 +4984,19 @@ function BranchExplorerPanel({
   onBranchAction: (request: BranchMutationRequest) => void;
   retrievalCeilings: ReturnType<typeof retrievalCeilingsFromRuntimeConfig>;
 }) {
+  const agentProfilesQuery = useQuery({
+    queryKey: ['workflow-detail', 'omnigent-agent-profiles'],
+    queryFn: async (): Promise<CheckpointAgentProfileOption[]> => {
+      const response = await fetch(`${apiBase}/omnigent/agent-profiles`, { credentials: 'include' });
+      if (!response.ok) throw new Error(await response.text() || 'Failed to load agent profiles.');
+      const value: unknown = await response.json();
+      return Array.isArray(value) ? value as CheckpointAgentProfileOption[] : [];
+    },
+  });
+  const readyAgentProfiles = (agentProfilesQuery.data || []).filter((profile) => {
+    const active = (profile.versions || []).find((version) => version.version === profile.activeVersion);
+    return profile.state === 'active' && active?.validationResult?.ready === true;
+  });
   const checkpointRows = rows.filter((row) => isSupportedCheckpointRef(stepCheckpointRef(row)));
   const branchGroups = useMemo(() => buildBranchGroups(branches), [branches]);
   const [draft, setDraft] = useState<BranchCreateDraft>(() => DEFAULT_BRANCH_CREATE_DRAFT);
@@ -5158,6 +5192,29 @@ function BranchExplorerPanel({
               <option value="reuse_session_new_epoch">Reuse session new epoch</option>
               <option value="reuse_session_same_epoch">Reuse session same epoch</option>
             </select>
+          </label>
+          <label>
+            Agent profile
+            <select
+              value={draft.agentProfileId}
+              disabled={busy || agentProfilesQuery.isFetching}
+              onChange={(event) => {
+                const selected = readyAgentProfiles.find((profile) => profile.profileId === event.target.value);
+                setDraft((current) => ({
+                  ...current,
+                  agentProfileId: event.target.value,
+                  agentProfileVersion: selected?.activeVersion ?? null,
+                }));
+              }}
+            >
+              <option value="">Inherit no agent profile</option>
+              {readyAgentProfiles.map((profile) => (
+                <option key={profile.profileId} value={profile.profileId}>
+                  {profile.displayName} · v{profile.activeVersion}
+                </option>
+              ))}
+            </select>
+            {agentProfilesQuery.isError ? <span className="small" role="alert">Agent-profile readiness is unavailable.</span> : null}
           </label>
           <label>
             Provider profile
@@ -9088,6 +9145,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           gitWorkBranch: request.draft.gitWorkBranch.trim() || null,
           maxBudgetUsd: Number.isFinite(budget) ? budget : null,
           providerProfileRef: request.draft.providerProfileRef.trim() || null,
+          agentProfile: request.draft.agentProfileId
+            ? {
+                profileId: request.draft.agentProfileId,
+                version: request.draft.agentProfileVersion,
+                providerProfileRef: request.draft.providerProfileRef.trim() || null,
+              }
+            : null,
           executionProfileRef: request.draft.executionProfileRef.trim() || null,
           model: request.draft.model.trim() || null,
           effort: request.draft.effort || null,

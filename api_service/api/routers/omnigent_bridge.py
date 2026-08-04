@@ -26,6 +26,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -34,12 +35,17 @@ from api_service.api.execution_principal import (
 from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
-from api_service.db.base import async_session_maker
+from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 from api_service.services.omnigent_agent_profile_service import (
     record_upstream_sync_failure,
     synchronize_upstream_inventory,
+)
+from api_service.services.omnigent_policies import (
+    OmnigentPolicyService,
+    PolicyConflict,
+    PolicyNotFound,
 )
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -266,10 +272,19 @@ async def get_omnigent_bridge_readiness(
 
     auth: dict[str, Any] | None = None
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        # Proxy readiness does not depend on embedded image pins, so a missing
+        # persisted default policy degrades the diagnostics projection rather
+        # than failing readiness for the default proxy-first deployment.
+        policy_authority = await _resolve_bridge_policy_authority_optional()
         readiness = config.readiness()
     else:
+        # Embedded mode resolves evidence and images from the policy authority
+        # and must fail closed when that authority is unavailable.
+        policy_authority = await _resolve_bridge_policy_authority()
         readiness = config.readiness(
-            evidence_validation=await _resolve_embedded_evidence(config)
+            evidence_validation=await _resolve_embedded_evidence(
+                config, policy_authority=policy_authority
+            )
         )
         try:
             profile = await _active_host_auth_profile()
@@ -281,7 +296,10 @@ async def get_omnigent_bridge_readiness(
             readiness["conformanceState"] = "gated"
             readiness.setdefault("gateReason", auth.get("code"))
     readiness["compatibilityDiagnostics"] = _compatibility_diagnostics(
-        config=config, readiness=readiness, auth=auth
+        config=config,
+        readiness=readiness,
+        auth=auth,
+        policy_authority=policy_authority,
     )
     return readiness
 
@@ -297,6 +315,7 @@ def _compatibility_diagnostics(
     config: OmnigentBridgeConfig,
     readiness: dict[str, Any],
     auth: dict[str, Any] | None = None,
+    policy_authority: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build one bounded support projection shared by readiness surfaces."""
 
@@ -337,7 +356,11 @@ def _compatibility_diagnostics(
         for item in validation.values()
         if item.get("status") == "passed" and isinstance(item.get("images"), dict)
     ]
-    images = image_sets[0] if image_sets else {}
+    authority_host = (policy_authority or {}).get("boundaries", {}).get("host", {})
+    images = image_sets[0] if image_sets else {
+        "server": authority_host.get("serverImageRef"),
+        "host": authority_host.get("hostImageRef"),
+    }
     projection = {
         "bridgeMode": config.host_protocol_mode,
         "compatibilityProfile": readiness.get("protocolProfile"),
@@ -345,12 +368,8 @@ def _compatibility_diagnostics(
             config.host_connection.embedded.auth_mode if selected_embedded else None
         ),
         "upstreamComponentVersion": readiness.get("upstreamComponentVersion"),
-        "serverImage": (
-            images.get("server") or os.getenv("OMNIGENT_IMAGE_REF") or None
-        ),
-        "hostImage": (
-            images.get("host") or os.getenv("OMNIGENT_HOST_IMAGE_REF") or None
-        ),
+        "serverImage": images.get("server"),
+        "hostImage": images.get("host"),
         "hostArchitecture": os.getenv("OMNIGENT_HOST_ARCHITECTURE") or None,
         "auth": auth,
         "evidence": {
@@ -360,6 +379,16 @@ def _compatibility_diagnostics(
         },
         "supportMatrix": support_matrix,
         "failureReason": failure_reason,
+        "policyAuthority": (
+            {
+                "policyRef": policy_authority["policyRef"],
+                "policyDigest": policy_authority["policyDigest"],
+                "policySnapshotRef": policy_authority["snapshotRef"],
+                "validation": policy_authority["validation"],
+            }
+            if policy_authority is not None
+            else None
+        ),
         "rollbackRecommendation": (
             _PROXY_ROLLBACK_RECOMMENDATION
             if selected_embedded and failure_reason
@@ -401,10 +430,14 @@ def _artifact_id_from_evidence_ref(value: str | None) -> str:
 
 async def _resolve_embedded_evidence(
     config: OmnigentBridgeConfig,
+    *,
+    policy_authority: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Resolve claims with the artifact service's trusted service principal."""
 
     results: dict[str, dict[str, Any]] = {}
+    authority = policy_authority or await _resolve_bridge_policy_authority()
+    host = authority["boundaries"]["host"]
     embedded = config.host_connection.embedded
     build_identity = resolve_moonmind_build_id()
     if not build_identity:
@@ -432,8 +465,8 @@ async def _resolve_embedded_evidence(
                         os.getenv("OMNIGENT_HOST_ARCHITECTURE") or ""
                     ),
                     expected_images={
-                        "server": os.getenv("OMNIGENT_IMAGE_REF") or "",
-                        "host": os.getenv("OMNIGENT_HOST_IMAGE_REF") or "",
+                        "server": str(host["serverImageRef"]),
+                        "host": str(host["hostImageRef"]),
                     },
                 )
                 results[key] = {
@@ -454,6 +487,44 @@ async def _resolve_embedded_evidence(
                     "reason": "evidence_unavailable_or_invalid",
                 }
     return results
+
+
+async def _resolve_bridge_policy_authority() -> dict[str, Any]:
+    """Fail closed unless the bridge's persisted default authority is usable."""
+
+    try:
+        async with async_session_maker() as session:
+            return await OmnigentPolicyService(
+                session
+            ).resolve_default_runtime_snapshot("omnigent-codex")
+    except (PolicyConflict, PolicyNotFound) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "omnigent_policy_authority_unavailable",
+                "message": "The persisted Omnigent bridge policy is unavailable.",
+            },
+        ) from exc
+
+
+async def _resolve_bridge_policy_authority_optional() -> dict[str, Any] | None:
+    """Resolve the persisted default authority, tolerating its absence.
+
+    Proxy mode does not embed image pins, so the default proxy-first Compose
+    deployment can be fully ready before a usable default policy is seeded.
+    Readiness surfaces must degrade the policy-authority projection instead of
+    returning 503 in that mode; embedded mode still resolves the authority with
+    the fail-closed variant because it drives evidence and image resolution.
+    Delegates to the fail-closed resolver so both surfaces share one resolution
+    path, only softening its 503 into an absent (None) projection.
+    """
+
+    try:
+        return await _resolve_bridge_policy_authority()
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            return None
+        raise
 
 
 def _require_proxy_mode(
@@ -711,6 +782,29 @@ async def _resolve_bridge_binding(
     )
 
 
+async def _get_launch_default_agent_name(
+    session: AsyncSession = Depends(get_async_session),
+) -> str | None:
+    """Resolve the durable default Omnigent agent for a proxy-mode launch.
+
+    MoonLadderStudios/MoonMind#3517 §8: an active default agent profile is the
+    durable authority; ``OMNIGENT_DEFAULT_AGENT_NAME`` is only a recorded
+    bootstrap/local-development fallback. A profile marked default but not
+    launch-ready is a conflict and fails closed at this launch boundary.
+    """
+
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        BootstrapDefaultConflictError,
+        resolve_default_agent_selection,
+    )
+
+    try:
+        resolution = await resolve_default_agent_selection(session)
+    except BootstrapDefaultConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return resolution.default_agent_name or None
+
+
 @router.post(
     _ROUTES.create_session,
     response_model=OmnigentSessionResponse,
@@ -727,6 +821,7 @@ async def create_omnigent_session(
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
+    launch_default_agent_name: str | None = Depends(_get_launch_default_agent_name),
 ) -> dict[str, Any]:
     """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
@@ -758,7 +853,11 @@ async def create_omnigent_session(
                 failure_class="system_error",
                 status_code=501,
             )
-        return await proxy.create_session(request=payload, binding=binding)
+        return await proxy.create_session(
+            request=payload,
+            binding=binding,
+            default_agent_name_override=launch_default_agent_name,
+        )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
@@ -1893,14 +1992,19 @@ async def list_omnigent_hosts(
         if facade is None:
             raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
         hosts = await facade.list_hosts()
-        evidence = (
-            await _resolve_embedded_evidence(config)
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-            else None
-        )
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            policy_authority = await _resolve_bridge_policy_authority()
+            evidence = await _resolve_embedded_evidence(
+                config, policy_authority=policy_authority
+            )
+        else:
+            policy_authority = await _resolve_bridge_policy_authority_optional()
+            evidence = None
         readiness = config.readiness(evidence_validation=evidence)
         diagnostics = _compatibility_diagnostics(
-            config=config, readiness=readiness
+            config=config,
+            readiness=readiness,
+            policy_authority=policy_authority,
         )
         return [
             {

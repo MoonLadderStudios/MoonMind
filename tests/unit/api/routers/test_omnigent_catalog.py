@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF
+from moonmind.security.egress import (
+    OMNIGENT_EGRESS_NETWORK_REF,
+    OMNIGENT_EGRESS_PROFILE,
+)
 
 from api_service.api.routers import omnigent_catalog as catalog
 from api_service.auth_providers import get_current_user
@@ -106,7 +109,12 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
         lambda: SimpleNamespace(enabled=True),
     )
     async def live_readiness():
-        return True, {OMNIGENT_EGRESS_NETWORK_REF}
+        return catalog.LiveDeploymentReadiness(
+            endpoint_ready=True,
+            backend_ready=True,
+            enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+            enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+        )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
@@ -136,6 +144,7 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     response = client.get("/api/omnigent/codex-catalog-readiness")
 
     assert response.status_code == 200
+    assert response.json()["available"] is True
 
 
 def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
@@ -169,12 +178,12 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         headers={"X-MoonMind-Acceptance-Canary": "wrong"},
     )
 
-    assert "acceptance_evidence_unavailable" in {
-        reason["code"] for reason in response.json()["gateReasons"]
-    }
     body = response.json()
+    assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in body["supportGateReasons"]
+    }
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
-    assert body["available"] is False
+    assert body["available"] is True
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
         "configuredPhase": "opt_in",
@@ -376,7 +385,7 @@ def test_catalog_projects_authoritative_deployment_gates(
         ("/evidence/matrix.json", ""),
     ],
 )
-def test_catalog_fails_closed_without_qualifying_acceptance_evidence(
+def test_catalog_reports_missing_acceptance_evidence_without_blocking_launch(
     monkeypatch, manifest_path, source_commit
 ):
     app = _app(monkeypatch, session=_Session([_profile()]))
@@ -392,8 +401,11 @@ def test_catalog_fails_closed_without_qualifying_acceptance_evidence(
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["available"] is False
+    assert body["available"] is True
     assert "acceptance_evidence_unavailable" in {
+        reason["code"] for reason in body["supportGateReasons"]
+    }
+    assert "acceptance_evidence_unavailable" not in {
         reason["code"] for reason in body["gateReasons"]
     }
 
@@ -408,6 +420,51 @@ def test_catalog_rejects_placeholder_image_digests(monkeypatch):
 
     assert body["available"] is False
     assert "immutable_image_unavailable" in {
+        reason["code"] for reason in body["gateReasons"]
+    }
+
+
+def test_resolved_persisted_policy_keeps_latest_from_being_a_launch_blocker(
+    monkeypatch,
+):
+    identity = SimpleNamespace(policy_id="codex-on-demand")
+    version = SimpleNamespace(
+        version=1,
+        state="active",
+        validation_json={"valid": True},
+        document_json={
+            "execution": {"profileRef": "omnigent-codex@1"},
+            "host": {
+                "mode": "on_demand_docker",
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            },
+            "network": {
+                "attachmentRef": OMNIGENT_EGRESS_NETWORK_REF,
+                "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+            },
+        },
+    )
+    app = _app(
+        monkeypatch,
+        session=_Session([_profile()], policies=[(identity, version)]),
+    )
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "")
+    monkeypatch.setenv("OMNIGENT_IMAGE", "registry.test/server")
+    monkeypatch.setenv("OMNIGENT_IMAGE_TAG", "latest")
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "")
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE", "registry.test/host")
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is True
+    codex_profile = next(
+        profile
+        for profile in body["executionProfiles"]
+        if profile["ref"] == "omnigent-codex@1"
+    )
+    assert "codex-on-demand@1" in codex_profile["policyRefs"]
+    assert "immutable_image_unavailable" not in {
         reason["code"] for reason in body["gateReasons"]
     }
 
@@ -431,8 +488,20 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
 @pytest.mark.parametrize(
     ("live_readiness", "expected"),
     [
-        ((False, {OMNIGENT_EGRESS_NETWORK_REF}), "bridge_endpoint_unavailable"),
-        ((True, set()), "network_policy_unavailable"),
+        (
+            catalog.LiveDeploymentReadiness(
+                backend_ready=True,
+                enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+                enforced_egress_profile_refs=frozenset(
+                    {OMNIGENT_EGRESS_PROFILE.ref}
+                ),
+            ),
+            "bridge_endpoint_unavailable",
+        ),
+        (
+            catalog.LiveDeploymentReadiness(endpoint_ready=True, backend_ready=True),
+            "network_policy_unavailable",
+        ),
     ],
 )
 def test_catalog_fails_closed_on_live_service_readiness(
@@ -460,6 +529,7 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
             "containerBackend": {
                 "ready": True,
                 "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
+                "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
             },
         }),
     ])
@@ -480,9 +550,11 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
     monkeypatch.setattr(catalog.httpx, "AsyncClient", _Client)
     monkeypatch.setattr(catalog, "resolved_server_url", lambda: "http://omnigent")
 
-    assert await catalog._live_deployment_readiness() == (
-        True,
-        {OMNIGENT_EGRESS_NETWORK_REF},
+    assert await catalog._live_deployment_readiness() == catalog.LiveDeploymentReadiness(
+        endpoint_ready=True,
+        backend_ready=True,
+        enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+        enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
     )
 
 
@@ -501,7 +573,9 @@ def test_static_policy_requires_live_connected_host_lease(monkeypatch):
     )).get("/api/omnigent/codex-catalog-readiness").json()
 
     profile = body["executionProfiles"][0]
-    assert "static_host_not_ready" in {reason["code"] for reason in profile["gateReasons"]}
+    assert "static_host_not_ready" not in {
+        reason["code"] for reason in profile["gateReasons"]
+    }
     assert body["hostModes"] == ["on_demand_docker"]
 
 

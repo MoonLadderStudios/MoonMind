@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import re
 import tarfile
 import zipfile
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 MAX_BUNDLE_BYTES = 50 * 1024 * 1024
@@ -121,4 +123,43 @@ def validate_agent_bundle(data: bytes, content_type: str) -> dict[str, Any]:
         "license": manifest.get("license"),
         "fileCount": len(members),
         "expandedBytes": sum(size for _, _, size in members),
+    }
+
+
+async def publish_validated_agent_bundle(
+    *,
+    data: bytes,
+    content_type: str,
+    expected_digest: str,
+    filename: str,
+    publish: Callable[..., Awaitable[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Validate an immutable artifact, then publish it through the bridge.
+
+    The digest and archive are checked before the first upstream side effect.
+    Only stable, bounded upstream identity fields cross back into durable profile
+    evidence; arbitrary provider response content is intentionally discarded.
+    """
+
+    actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if actual_digest != expected_digest:
+        raise BundleValidationError("bundle content digest does not match profile version")
+    validate_agent_bundle(data, content_type)
+    response = await publish(
+        filename=filename,
+        content=data,
+        content_type=content_type,
+    )
+    upstream_id = str(response.get("id") or response.get("agentId") or "").strip()
+    if not upstream_id:
+        raise BundleValidationError("upstream import did not return a stable agent id")
+    upstream = {"id": upstream_id[:255]}
+    for source_key, target_key in (("name", "name"), ("version", "version")):
+        value = str(response.get(source_key) or "").strip()
+        if value:
+            upstream[target_key] = value[:255]
+    return {
+        "schemaVersion": "moonmind.omnigent-agent-bundle-import.v1",
+        "status": "succeeded",
+        "upstreamAgent": upstream,
     }

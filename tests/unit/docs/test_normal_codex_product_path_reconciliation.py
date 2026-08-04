@@ -99,7 +99,9 @@ def test_fail_closed_cutover_is_pinned() -> None:
     assert "one-step, fresh, version-matched, and fail-closed" in text
     # The reconciliation defers row-by-row support state to the cutover owner.
     assert "CodexSupportAndCutover.md" in text
-    assert "phase is **1 — opt-in**" in _read(CUTOVER)
+    cutover = _read(CUTOVER)
+    assert "default-selection phase is **1 — explicit selection**" in cutover
+    assert "1. `opt_in`: Omnigent is normally available for explicit selection" in cutover
 
 
 def test_all_twelve_failure_stages_carry_stable_codes() -> None:

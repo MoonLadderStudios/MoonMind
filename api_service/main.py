@@ -1,5 +1,6 @@
 # main.py
 # Configure logging at the very beginning
+import asyncio
 import logging
 
 from moonmind.config.logging import configure_logging
@@ -299,6 +300,102 @@ async def _sync_env_managed_secrets() -> int:
         )
         return 0
 
+
+async def _sync_omnigent_bootstrap_agent_profile() -> bool:
+    """Synchronize observed inventory before activating the bootstrap profile."""
+
+    try:
+        from api_service.services.omnigent_agent_bootstrap_service import (
+            reconcile_bootstrap_agent_profile,
+        )
+        from moonmind.omnigent.bridge_config import (
+            HOST_PROTOCOL_MODE_PROXY,
+            resolve_bridge_config,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            resolved_api_token,
+            resolved_server_url,
+        )
+        from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+        if not build_omnigent_gate().enabled:
+            return True
+        config = resolve_bridge_config()
+        if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+            # Embedded deployments own their inventory through the authenticated
+            # host protocol; the stock local bootstrap applies only to proxy mode.
+            return True
+        inventory = await OmnigentHttpClient(
+            base_url=resolved_server_url(),
+            api_token=resolved_api_token(),
+            timeout_seconds=5,
+        ).list_agents()
+
+        async with get_async_session_context() as session:
+            return await reconcile_bootstrap_agent_profile(
+                session,
+                inventory=inventory,
+            )
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "Omnigent bootstrap agent synchronization deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Omnigent bootstrap agent synchronization deferred: %s",
+            exc,
+        )
+        return False
+
+
+async def _sync_omnigent_bootstrap_policies() -> bool:
+    """Acquire immutable stock images and reconcile the built-in policies."""
+
+    try:
+        from api_service.services.omnigent_policies import (
+            bootstrap_policies_ready,
+            seed_bootstrap_policies,
+        )
+
+        async with get_async_session_context() as session:
+            await seed_bootstrap_policies(session)
+            return await bootstrap_policies_ready(session)
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning("Omnigent policy bootstrap deferred: %s", exc)
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning("Omnigent policy bootstrap deferred: %s", exc)
+        return False
+
+
+async def _reconcile_omnigent_bootstrap_once() -> bool:
+    policies_ready = await _sync_omnigent_bootstrap_policies()
+    agent_ready = await _sync_omnigent_bootstrap_agent_profile()
+    return policies_ready and agent_ready
+
+
+async def _maintain_omnigent_bootstrap_reconciliation(
+    *, initial_ready: bool
+) -> None:
+    """Retry with capped backoff and keep observed agent inventory fresh."""
+
+    ready = initial_ready
+    retry_delay_seconds = 5
+    while True:
+        await asyncio.sleep(120 if ready else retry_delay_seconds)
+        if ready:
+            ready = await _sync_omnigent_bootstrap_agent_profile()
+        else:
+            ready = await _reconcile_omnigent_bootstrap_once()
+        if ready:
+            retry_delay_seconds = 5
+        else:
+            retry_delay_seconds = min(retry_delay_seconds * 2, 120)
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
@@ -377,9 +474,34 @@ def _load_or_create_vector_index(app_state):
 async def lifespan(app: FastAPI):
     # Startup logic
     await startup_event()
-    yield
-    # Shutdown logic
-    teardown_providers()
+    from moonmind.omnigent.settings import build_omnigent_gate
+
+    if build_omnigent_gate().enabled:
+        app.state.omnigent_bootstrap_reconciliation_task = asyncio.create_task(
+            _maintain_omnigent_bootstrap_reconciliation(
+                initial_ready=bool(
+                    getattr(app.state, "omnigent_bootstrap_initial_ready", False)
+                ),
+            ),
+            name="omnigent-bootstrap-reconciliation",
+        )
+    try:
+        yield
+    finally:
+        retry_task = getattr(
+            app.state,
+            "omnigent_bootstrap_reconciliation_task",
+            None,
+        )
+        if retry_task is not None and not retry_task.done():
+            retry_task.cancel()
+            try:
+                await retry_task
+            except asyncio.CancelledError:
+                # Shutdown owns this task, so cancellation is the expected outcome.
+                pass
+        # Shutdown logic
+        teardown_providers()
 
 app = FastAPI(
     title="MoonMind API",
@@ -1647,12 +1769,8 @@ async def startup_event():
             exc,
         )
     await _sync_preset_seed_catalog()
-    try:
-        from api_service.services.omnigent_policies import seed_bootstrap_policies
-        async with get_async_session_context() as session:
-            await seed_bootstrap_policies(session)
-    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
-        logger.warning("Omnigent policy bootstrap skipped until schema is ready: %s", exc)
+    omnigent_bootstrap_ready = await _reconcile_omnigent_bootstrap_once()
+    app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence
     # refs cannot make it ready when its pinned verifier or SecretRef fails.

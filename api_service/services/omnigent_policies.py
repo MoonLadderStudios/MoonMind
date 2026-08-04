@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 import os
 import platform
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
@@ -30,6 +33,40 @@ from moonmind.omnigent.policies import (
     document_digest,
     normalize_document,
 )
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+from moonmind.workflows.temporal.container_image_acquisition import (
+    normalize_image_reference,
+)
+from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
+
+
+logger = logging.getLogger(__name__)
+
+_DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
+_HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
+_IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
+ImageResolver = Callable[[str], Awaitable[str | None]]
+_BOOTSTRAP_POLICY_DEFINITIONS = (
+    (
+        "omnigent-codex",
+        "Omnigent Codex execution",
+        "static_compose",
+        "omnigent-codex@1",
+    ),
+    (
+        "codex-static",
+        "Codex static host",
+        "static_compose",
+        "omnigent-codex@1",
+    ),
+    (
+        "codex-on-demand",
+        "Codex on-demand host",
+        "on_demand_docker",
+        "omnigent-codex@1",
+    ),
+)
 
 
 class PolicyConflict(ValueError):
@@ -38,6 +75,14 @@ class PolicyConflict(ValueError):
 
 class PolicyNotFound(LookupError):
     pass
+
+
+_BRIDGE_TERMINAL_STATES = frozenset({"completed", "failed", "canceled", "timed_out"})
+# Policy usage inspection is invoked by the UI on every version selection. Bound
+# the dependent identifier lists it returns so response cost tracks the selected
+# policy's useful page size rather than the deployment's entire bridge history;
+# the accompanying counts still report true totals from the database.
+_USAGE_DEPENDENT_PAGE_SIZE = 50
 
 
 def _split_policy_ref(policy_ref: str) -> tuple[str, int]:
@@ -64,7 +109,11 @@ def validate_policy(
     payload = document.model_dump(by_alias=True, mode="json")
     image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
     for field in ("serverImageRef", "hostImageRef"):
-        if not image_pattern.fullmatch(payload["host"][field]):
+        image_ref = payload["host"][field]
+        if (
+            not image_pattern.fullmatch(image_ref)
+            or image_ref.endswith("@sha256:" + "0" * 64)
+        ):
             diagnostics.append({
                 "code": "OMNIGENT_INVALID_IMAGE_REF",
                 "path": f"host.{field}",
@@ -264,6 +313,26 @@ class OmnigentPolicyService:
                 raise PolicyConflict(
                     "policy version is bound to an active host profile and cannot be made unavailable"
                 )
+            policy_ref = f"{policy_id}@{version}"
+            # Bound this safety gate to the selected policy in the database
+            # instead of scanning the deployment's entire bridge history.
+            active_bridge = (await self.session.execute(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(
+                    OmnigentBridgeSession.effective_launch_snapshot_json[
+                        "policyAuthority"
+                    ]["policyRef"].as_string()
+                    == policy_ref,
+                    func.lower(OmnigentBridgeSession.status).notin_(
+                        _BRIDGE_TERMINAL_STATES
+                    ),
+                )
+                .limit(1)
+            )).scalar_one_or_none()
+            if active_bridge is not None:
+                raise PolicyConflict(
+                    "policy version is bound to an active bridge session and cannot be made unavailable"
+                )
         now = datetime.now(UTC)
         row.state = state.value
         if state == PolicyState.ACTIVE:
@@ -295,6 +364,114 @@ class OmnigentPolicyService:
             .order_by(OmnigentPolicyEvent.created_at, OmnigentPolicyEvent.event_id)
         )).scalars())
 
+    async def usage(self, policy_id: str, version: int) -> dict[str, Any]:
+        """Return persisted dependents and lifecycle impact for one immutable version."""
+
+        policy = await self.get_policy(policy_id)
+        row = await self.get_version(policy_id, version)
+        policy_ref = f"{policy_id}@{version}"
+        host_bindings = list((await self.session.execute(
+            select(OmnigentOAuthHostBindingRecord.binding_ref).where(
+                OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+            ).order_by(OmnigentOAuthHostBindingRecord.binding_ref)
+        )).scalars())
+        # Bridge sessions keep the complete immutable authority in their launch
+        # snapshot. Filter the persisted policy reference in the database so
+        # inspection cost tracks the selected policy's dependents, not the
+        # deployment's entire bridge history. Return true counts plus a bounded
+        # page of dependent identifiers. Resolving from persisted evidence keeps
+        # historical usage inspectable after rollout.
+        matches_policy = (
+            OmnigentBridgeSession.effective_launch_snapshot_json["policyAuthority"][
+                "policyRef"
+            ].as_string()
+            == policy_ref
+        )
+        active_predicate = func.lower(OmnigentBridgeSession.status).notin_(
+            _BRIDGE_TERMINAL_STATES
+        )
+        bridge_session_count = (await self.session.execute(
+            select(func.count()).select_from(OmnigentBridgeSession).where(matches_policy)
+        )).scalar_one()
+        active_bridge_session_count = (await self.session.execute(
+            select(func.count())
+            .select_from(OmnigentBridgeSession)
+            .where(matches_policy, active_predicate)
+        )).scalar_one()
+        workflow_count = (await self.session.execute(
+            select(func.count(func.distinct(OmnigentBridgeSession.moonmind_workflow_id)))
+            .where(matches_policy)
+        )).scalar_one()
+        bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        active_bridge_sessions = list((await self.session.execute(
+            select(OmnigentBridgeSession.bridge_session_id)
+            .where(matches_policy, active_predicate)
+            .order_by(OmnigentBridgeSession.bridge_session_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        workflow_ids = list((await self.session.execute(
+            select(OmnigentBridgeSession.moonmind_workflow_id)
+            .where(matches_policy)
+            .distinct()
+            .order_by(OmnigentBridgeSession.moonmind_workflow_id)
+            .limit(_USAGE_DEPENDENT_PAGE_SIZE)
+        )).scalars())
+        provider_profile_ids = {
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentOAuthHostBindingRecord.provider_profile_id).where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref == policy_ref
+                )
+            )).scalars()
+            if value
+        }
+        provider_profile_ids.update(
+            str(value)
+            for value in (await self.session.execute(
+                select(OmnigentBridgeSession.provider_profile_id)
+                .where(matches_policy, OmnigentBridgeSession.provider_profile_id.is_not(None))
+                .distinct()
+            )).scalars()
+            if value
+        )
+
+        is_default = policy.default_version == version
+        blockers = []
+        if is_default:
+            blockers.append("Switch the policy default before disabling or deprecating this version.")
+        if host_bindings:
+            blockers.append("Move dependent host profiles before disabling or deprecating this version.")
+        if active_bridge_session_count:
+            blockers.append("Wait for dependent bridge sessions to finish before disabling or deprecating this version.")
+        return {
+            "policyRef": policy_ref,
+            "state": row.state,
+            "default": is_default,
+            "dependents": {
+                "hostBindings": host_bindings,
+                "hostBindingCount": len(host_bindings),
+                "providerProfiles": sorted(provider_profile_ids),
+                "providerProfileCount": len(provider_profile_ids),
+                "workflows": workflow_ids,
+                "workflowCount": workflow_count,
+                "bridgeSessions": bridge_sessions,
+                "bridgeSessionCount": bridge_session_count,
+                "activeBridgeSessions": active_bridge_sessions,
+                "activeBridgeSessionCount": active_bridge_session_count,
+            },
+            "activationImpact": {
+                "willSwitchDefault": not is_default,
+                "compatible": bool(row.compatibility_json.get("compatible")),
+                "diagnostics": row.validation_json.get("diagnostics", []),
+            },
+            "unavailabilityBlockers": blockers,
+        }
+
     async def snapshot(self, policy_id: str, version: int) -> dict[str, Any]:
         row = await self.get_version(policy_id, version)
         return compile_policy_snapshot(policy_id=policy_id, version=version, document=row.document_json, validation=row.validation_json)
@@ -318,6 +495,25 @@ class OmnigentPolicyService:
             raise PolicyConflict(f"runtime policy digest conflict: {policy_ref}")
         return snapshot
 
+    async def resolve_default_runtime_snapshot(
+        self, policy_id: str
+    ) -> dict[str, Any]:
+        """Resolve a policy's durable default as exact runtime authority.
+
+        Environment-backed values are bootstrap inputs only.  Normal runtime
+        callers must resolve the persisted default and then apply the same
+        active/validation/digest gates as an explicitly selected version.
+        """
+
+        policy = await self.get_policy(policy_id)
+        if policy.default_version is None:
+            raise PolicyConflict(
+                f"runtime policy has no default version: {policy_id}"
+            )
+        return await self.resolve_runtime_snapshot(
+            f"{policy.policy_id}@{policy.default_version}"
+        )
+
     @staticmethod
     def _version(policy_id: str, version: int, document: PolicyDocument, actor: str, **lineage: Any) -> OmnigentPolicyVersion:
         normalized = normalize_document(document)
@@ -339,12 +535,218 @@ class OmnigentPolicyService:
         ))
 
 
-def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyDocument:
+def _configured_image_ref(
+    *,
+    env: Mapping[str, str],
+    ref_variable: str,
+    repository_variable: str,
+    tag_variable: str,
+    default_repository: str,
+) -> str:
+    explicit = str(env.get(ref_variable, "") or "").strip()
+    if explicit:
+        return explicit
+    repository = str(env.get(repository_variable, "") or "").strip()
+    repository = repository or default_repository
+    if "@" in repository:
+        return repository
+    tag = str(env.get(tag_variable, "") or "").strip() or "latest"
+    return f"{repository}:{tag}"
+
+
+def configured_bootstrap_image_refs(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return the operator-facing server and host image inputs.
+
+    Mutable tags are intentionally accepted at this bootstrap boundary. They
+    are resolved to repository digests before an immutable policy is created;
+    mutable values never become launch authority.
+    """
+
+    source = os.environ if env is None else env
+    return (
+        _configured_image_ref(
+            env=source,
+            ref_variable="OMNIGENT_IMAGE_REF",
+            repository_variable="OMNIGENT_IMAGE",
+            tag_variable="OMNIGENT_IMAGE_TAG",
+            default_repository=_SERVER_IMAGE_REPOSITORY,
+        ),
+        _configured_image_ref(
+            env=source,
+            ref_variable="OMNIGENT_HOST_IMAGE_REF",
+            repository_variable="OMNIGENT_HOST_IMAGE",
+            tag_variable="OMNIGENT_HOST_IMAGE_TAG",
+            default_repository=_HOST_IMAGE_REPOSITORY,
+        ),
+    )
+
+
+def _repository_digest(image_ref: str, inspect_output: bytes) -> str | None:
+    """Select the exact repository digest that matches ``image_ref``."""
+
+    _, _, raw_repo_digests = inspect_output.decode(
+        "utf-8", errors="replace"
+    ).strip().partition("\t")
+    requested = normalize_image_reference(image_ref)
+    for candidate in re.split(r"[,\s]+", raw_repo_digests):
+        candidate = candidate.strip()
+        if not _DIGEST_IMAGE.fullmatch(candidate):
+            continue
+        normalized = normalize_image_reference(candidate)
+        if (
+            normalized.registry == requested.registry
+            and normalized.repository == requested.repository
+        ):
+            return candidate
+    return None
+
+
+async def resolve_bootstrap_image_ref(image_ref: str) -> str | None:
+    """Acquire a stock image and return immutable launch authority.
+
+    The API already has narrowly proxied Docker image authority for its
+    existing runtime duties. Bootstrap uses that boundary to turn convenient
+    tags (including ``latest``) into repository digests. If the registry is
+    temporarily unavailable, a previously acquired local repository digest is
+    still safe to use.
+    """
+
+    image_ref = image_ref.strip()
+    if _DIGEST_IMAGE.fullmatch(image_ref):
+        return image_ref
+
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
+
+    async def inspect() -> str | None:
+        code, stdout, _ = await run_runtime_command(
+            (docker_binary, "image", "inspect", "--format", _IMAGE_INSPECT_FORMAT, image_ref),
+            timeout_seconds=30,
+            output_limit_bytes=64_000,
+        )
+        return None if code else _repository_digest(image_ref, stdout)
+
+    try:
+        local_digest = await inspect()
+    except OSError:
+        local_digest = None
+    try:
+        code, _, stderr = await run_runtime_command(
+            (docker_binary, "pull", image_ref),
+            timeout_seconds=600,
+            output_limit_bytes=64_000,
+        )
+    except OSError:
+        code, stderr = 1, b"Docker image acquisition was unavailable"
+    if code:
+        if local_digest:
+            logger.warning(
+                "Could not refresh Omnigent bootstrap image %s; using the "
+                "previously acquired immutable repository digest",
+                image_ref,
+            )
+            return local_digest
+        logger.warning(
+            "Could not acquire Omnigent bootstrap image %s: %s",
+            image_ref,
+            stderr.decode("utf-8", errors="replace").strip()
+            or "Docker pull failed",
+        )
+        return None
+    try:
+        return await inspect() or local_digest
+    except OSError:
+        return local_digest
+
+
+async def resolve_bootstrap_image_refs(
+    *,
+    env: Mapping[str, str] | None = None,
+    image_resolver: ImageResolver = resolve_bootstrap_image_ref,
+) -> tuple[str | None, str | None]:
+    server_input, host_input = configured_bootstrap_image_refs(env)
+    server_image = await image_resolver(server_input)
+    host_image = await image_resolver(host_input)
+    return server_image, host_image
+
+
+# Every production remediation adapter registered by
+# ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
+# dispatches by its canonical action identity, and ``resolve_action`` performs an
+# exact-match lookup against ``approvals.actions``. The bootstrap policy must
+# therefore carry an explicit rule for each identity or the default deployment
+# authorizes none of them. Non-mutating evidence actions are allowed; every
+# state-mutating remediation action stays approval-gated, matching this
+# bootstrap's ``remediation.autonomous: False`` posture. The identities are
+# listed explicitly (not imported) to keep the seed reviewable and to avoid a
+# circular import with the temporal remediation package; a unit test guards
+# against catalog drift.
+_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "cleanup.verify",
+    "target.annotate",
+    "target.verify",
+)
+_BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+    "checkpoint_branch.create_from_remediation_context",
+    "session.interrupt_turn",
+    "session.clear",
+    "session.cancel",
+    "session.terminate",
+    "session.restart_container",
+    "provider_profile.evict_stale_lease",
+    "workload.restart_helper_container",
+    "workload.reap_orphan_container",
+    "host.drain",
+    "host.stop",
+    "host.restart",
+    "host.remove",
+    "host_lease.reconcile_stale",
+    "cleanup.request_janitor",
+)
+
+
+def _bootstrap_approval_actions() -> dict[str, dict[str, str]]:
+    """Seed exact approval rules for every canonical remediation action identity."""
+
+    actions: dict[str, dict[str, str]] = {
+        "read": {"decision": "allow"},
+        "publish": {
+            "decision": "approval_required",
+            "approvalClass": "publication",
+            "reviewerRule": "workflow-owner",
+        },
+    }
+    for action in _BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "allow",
+            "reason": "non-mutating remediation evidence",
+        }
+    for action in _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS:
+        actions[action] = {
+            "decision": "approval_required",
+            "approvalClass": "remediation",
+            "reviewerRule": "workflow-owner",
+            "reason": "state-mutating remediation requires approval",
+        }
+    return actions
+
+
+def bootstrap_document(
+    *,
+    host_mode: str,
+    execution_profile_ref: str,
+    server_image_ref: str | None = None,
+    host_image_ref: str | None = None,
+) -> PolicyDocument:
     """Project legacy built-ins into an explicit, reviewable bootstrap policy."""
 
-    image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
-    server_image = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
-    host_image = os.getenv("OMNIGENT_HOST_IMAGE_REF", "").strip()
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
         platform.machine().lower(), platform.machine().lower()
     )
@@ -354,11 +756,14 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
         "execution": {"profileRef": execution_profile_ref, "harness": "codex-native", "agentIdentities": ["codex"]},
         "host": {"mode": host_mode, "backendRef": "compose" if host_mode == "static_compose" else "container-backend",
                  "architectures": [architecture],
-                 "serverImageRef": server_image if image_pattern.fullmatch(server_image) else "image-ref:omnigent-server",
-                 "hostImageRef": host_image if image_pattern.fullmatch(host_image) else "image-ref:omnigent-codex-host"},
+                 "serverImageRef": server_image_ref if _DIGEST_IMAGE.fullmatch(server_image_ref or "") else "image-ref:omnigent-server",
+                 "hostImageRef": host_image_ref if _DIGEST_IMAGE.fullmatch(host_image_ref or "") else "image-ref:omnigent-codex-host"},
         "resources": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400,
                       "temporaryStorageMiB": 256, "concurrency": 1},
-        "network": {"attachmentRef": "local-network", "egressProfileRef": "enforced-default"},
+        "network": {
+            "attachmentRef": OMNIGENT_EGRESS_PROFILE.network_ref,
+            "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+        },
         "workspace": {"allowedClasses": ["workflow"], "repositoryMutation": True,
                       "mountClasses": ["workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"],
                       "runtimeUid": 1000, "runtimeGid": 1000},
@@ -371,24 +776,66 @@ def bootstrap_document(*, host_mode: str, execution_profile_ref: str) -> PolicyD
                         "locks": True, "maxActions": 3, "autonomous": False},
         "rag": {"initialScope": "workflow", "followupScope": "session", "collectionRefs": ["workflow-default"],
                 "tokenBudget": 8000, "fallback": "deny", "credentialRef": "retrieval-profile"},
-        "approvals": {"actions": {"read": {"decision": "allow"}, "publish": {"decision": "approval_required",
-                      "approvalClass": "publication", "reviewerRule": "workflow-owner"}, "host_mutation": {"decision": "deny"}}},
+        "approvals": {"actions": _bootstrap_approval_actions()},
         "retention": {"days": 30, "deletion": "after-expiry"},
         "rollout": {"cohort": "bootstrap", "gate": "deployment-ready", "diagnostics": True},
     })
 
 
-async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
+async def seed_bootstrap_policies(
+    session: AsyncSession,
+    *,
+    env: Mapping[str, str] | None = None,
+    image_resolver: ImageResolver = resolve_bootstrap_image_ref,
+) -> list[str]:
     """Idempotently persist the three pre-existing built-in authorities."""
 
     service = OmnigentPolicyService(session)
+    reconciliation_required = False
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None:
+            reconciliation_required = True
+            break
+        if policy.default_version is not None:
+            try:
+                default_row = await service.get_version(
+                    policy_id,
+                    policy.default_version,
+                )
+            except PolicyNotFound:
+                default_row = None
+            if (
+                default_row is not None
+                and default_row.state == PolicyState.ACTIVE.value
+                and default_row.validation_json.get("valid")
+            ):
+                continue
+        try:
+            row = await service.get_version(policy_id, 1)
+        except PolicyNotFound:
+            reconciliation_required = True
+            break
+        if (
+            row.state != PolicyState.ACTIVE.value
+            or not row.validation_json.get("valid")
+        ):
+            reconciliation_required = True
+            break
+    if not reconciliation_required:
+        return []
+
     seeded: list[str] = []
-    for policy_id, name, host_mode, profile_ref in (
-        ("omnigent-codex", "Omnigent Codex execution", "static_compose", "omnigent-codex@1"),
-        ("codex-static", "Codex static host", "static_compose", "omnigent-codex@1"),
-        ("codex-on-demand", "Codex on-demand host", "on_demand_docker", "omnigent-codex@1"),
-    ):
-        document = bootstrap_document(host_mode=host_mode, execution_profile_ref=profile_ref)
+    server_image, host_image = await resolve_bootstrap_image_refs(
+        env=env, image_resolver=image_resolver
+    )
+    for policy_id, name, host_mode, profile_ref in _BOOTSTRAP_POLICY_DEFINITIONS:
+        document = bootstrap_document(
+            host_mode=host_mode,
+            execution_profile_ref=profile_ref,
+            server_image_ref=server_image,
+            host_image_ref=host_image,
+        )
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
             row = await service.create(policy_id=policy_id, name=name, owner_user_id=None, visibility="deployment",
@@ -421,3 +868,23 @@ async def seed_bootstrap_policies(session: AsyncSession) -> list[str]:
             )
         seeded.append(policy_id)
     return seeded
+
+
+async def bootstrap_policies_ready(session: AsyncSession) -> bool:
+    """Return whether every built-in policy has immutable active authority."""
+
+    service = OmnigentPolicyService(session)
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None or policy.default_version is None:
+            return False
+        try:
+            row = await service.get_version(policy_id, policy.default_version)
+        except PolicyNotFound:
+            return False
+        if (
+            row.state != PolicyState.ACTIVE.value
+            or not row.validation_json.get("valid")
+        ):
+            return False
+    return True

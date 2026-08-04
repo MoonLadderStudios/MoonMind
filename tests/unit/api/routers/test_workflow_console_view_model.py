@@ -145,7 +145,12 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "defaultModelByRuntime" in config["system"]
     assert "defaultEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
     assert "presetCatalog" in config["system"]
@@ -386,7 +391,12 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
     assert config["system"]["defaultRuntime"] == "claude_code"
     assert config["system"]["defaultModel"] == "claude-opus-4-8"
 
@@ -735,7 +745,12 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
-    assert config["system"]["supportedRuntimes"] == ["codex_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
+        "codex_cli",
+        "claude_code",
+        "codex_cloud",
+    ]
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
@@ -795,6 +810,7 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     config = dashboard_view_model.build_runtime_config("/workflows")
 
     assert config["system"]["supportedRuntimes"] == [
+        "omnigent",
         "codex_cli",
         "claude_code",
         "codex_cloud",

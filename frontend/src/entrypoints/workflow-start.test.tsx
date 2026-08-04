@@ -525,7 +525,7 @@ const mockDashboardConfig = {
       codex_cli: "medium",
       claude_code: "low",
     },
-    supportedAgentRuntimes: ["codex_cli", "claude_code"],
+    supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code"],
     providerProfiles: {
       list: "/api/v1/provider-profiles",
     },
@@ -597,7 +597,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           ...mockDashboardConfig,
           system: {
             ...mockDashboardConfig.system,
-            supportedAgentRuntimes: ["codex_cli", "claude_code", "jules"],
+            supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code", "jules"],
             omnigentExecutionCatalog: {
               profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1", providerRuntime: "codex_cli" }],
               policies: [{ ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker" }],
@@ -622,16 +622,30 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     ineligibleProviderProfiles: [],
     hostModes: ["on_demand_docker"],
     gateReasons: [],
+    supportGateReasons: [],
     compatibilityDiagnostics: {},
     cutover: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+  const readyAgentProfiles = [{
+    profileId: "team-codex",
+    displayName: "Team Codex",
+    state: "active",
+    activeVersion: 1,
+    defaultForRuntime: true,
+    versions: [{ version: 1, digest: `sha256:${"a".repeat(64)}`, validationResult: { ready: true } }],
+  }];
 
-  it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
+  it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);
 
     const option = await screen.findByRole("option", { name: "Codex via Omnigent" });
-    await waitFor(() => expect((option as HTMLOptionElement).disabled).toBe(true));
-    expect(screen.getByText(/Connect and validate a Codex OAuth Provider Profile/)).toBeTruthy();
+    expect((option as HTMLOptionElement).disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    expect(
+      screen.getAllByText(/Connect and validate a Codex OAuth Provider Profile/),
+    ).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
     await waitFor(() => expect(readinessRequests).toBe(2));
@@ -697,6 +711,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
@@ -804,6 +821,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
       }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: `mm:omnigent-${mode}` }) } as Response);
       }
@@ -841,6 +861,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -889,6 +912,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
             },
           ],
         } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       return Promise.resolve({
         ok: true,

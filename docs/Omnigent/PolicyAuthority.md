@@ -67,9 +67,13 @@ re-evaluated.
 ## Bootstrap migration
 
 Startup seeds `omnigent-codex@1`, `codex-static@1`, and
-`codex-on-demand@1` as explicit policies. Immutable image environment values may
-only be projected while seeding and are recorded as fallback. Normal work uses
-persisted selections; durable/environment conflicts fail closed.
+`codex-on-demand@1` as explicit policies. Stock image tags are acquired and
+resolved during seeding; only repository digests are projected into the
+immutable active versions. `codex-on-demand@1` is the normal default and static
+hosting remains an explicit advanced choice. Normal work uses persisted
+selections; durable/environment conflicts fail closed.
+Transient acquisition failures are retried by the API's capped reconciliation
+loop; a failed first pull does not strand the deployment until restart.
 `OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` may be removed after all
 supported installations have durable defaults and report no fallback for one
 release.

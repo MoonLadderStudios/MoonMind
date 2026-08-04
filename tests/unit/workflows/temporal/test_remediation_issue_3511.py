@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from moonmind.omnigent.policies import bind_approval_request
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationPermissionSet,
@@ -19,6 +22,7 @@ from moonmind.workflows.temporal.remediation_actions import (
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
     RemediationEvidenceToolService,
+    RemediationEvidenceToolError,
     RemediationTargetHealthSnapshot,
 )
 
@@ -71,6 +75,276 @@ def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
     )
 
     assert expected == {item["actionKind"] for item in catalog}
+
+
+def _policy_snapshot(decision: str) -> dict:
+    rule = {"decision": decision, "reason": f"test-{decision}"}
+    if decision == "approval_required":
+        rule.update(approvalClass="operations", reviewerRule="workflow-owner")
+    return {
+        "policyId": "policy-1",
+        "policyVersion": 7,
+        "policyRef": "policy-1@7",
+        "policyDigest": "sha256:" + "a" * 64,
+        "snapshotRef": "omnigent-policy:sha256:" + "b" * 64,
+        "validation": {"valid": True},
+        "boundaries": {"approvals": {"actions": {"host.restart": rule}}},
+    }
+
+
+async def test_production_policy_boundary_allows_and_stamps_exact_authority() -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    wrapped = TemporalRemediationControlPlane._policy_bound(adapter)
+    result = await wrapped(
+        {"actionKind": "host.restart", "policySnapshot": _policy_snapshot("allow")},
+        {},
+        _production_target_health(),
+    )
+
+    assert called is True
+    assert result["status"] == "accepted"
+    assert set(result["policyAuthority"]) == {
+        "policyId", "policyVersion", "policyRef", "policyDigest",
+        "snapshotRef", "validation",
+    }
+
+
+@pytest.mark.parametrize("snapshot", [None, _policy_snapshot("deny")])
+async def test_production_policy_boundary_denies_missing_or_denied_authority(snapshot) -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    request = {"actionKind": "host.restart"}
+    if snapshot is not None:
+        request["policySnapshot"] = snapshot
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        request, {}, _production_target_health()
+    )
+
+    assert called is False
+    assert result["status"] == "denied"
+
+
+async def test_production_policy_boundary_binds_then_revalidates_approval() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    wrapped = TemporalRemediationControlPlane._policy_bound(adapter)
+    pending = await wrapped(
+        {"actionKind": "host.restart", "policySnapshot": snapshot},
+        {},
+        _production_target_health(),
+    )
+    assert pending["status"] == "approval_required"
+    assert pending["approvalBinding"]["targetExpectedState"] == "target-run"
+    assert called is False
+
+    approved = await wrapped(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": pending["approvalBinding"],
+            "approvalRef": "approval://operations/1",
+        },
+        {},
+        _production_target_health(),
+    )
+    assert approved["status"] == "accepted"
+    assert called is True
+
+
+async def test_production_policy_boundary_rejects_stale_policy_and_target_bindings() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    binding = bind_approval_request(
+        snapshot, "host.restart", target_expected_state="old-run"
+    )
+
+    async def adapter(*_args):
+        raise AssertionError("stale approval must fail before side effects")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": binding,
+            "approvalRef": "approval://operations/1",
+        },
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_approval_binding_stale"
+    assert "targetExpectedState" in result["detail"]
+
+
+async def test_production_policy_boundary_rejects_unapproved_binding() -> None:
+    snapshot = _policy_snapshot("approval_required")
+    binding = bind_approval_request(
+        snapshot, "host.restart", target_expected_state="target-run"
+    )
+
+    async def adapter(*_args):
+        raise AssertionError("an unapproved binding must fail before side effects")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {
+            "actionKind": "host.restart",
+            "policySnapshot": snapshot,
+            "approvalBinding": binding,
+        },
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_approval_reference_required"
+
+
+def _bridge_session(session_execute_result) -> AsyncMock:
+    """Wire an async session whose ``execute`` returns a sync SQLAlchemy result.
+
+    ``await AsyncMock().execute(...)`` returns an AsyncMock, so calling the sync
+    ``scalar_one_or_none()`` on it would yield an un-awaited coroutine. The real
+    ``AsyncSession.execute`` resolves to a synchronous ``Result``; model that by
+    pinning ``execute.return_value`` to a MagicMock.
+    """
+
+    session = AsyncMock()
+    session.execute.return_value = session_execute_result
+    return session
+
+
+async def test_real_handoff_resolves_persisted_target_run_policy() -> None:
+    snapshot = _policy_snapshot("allow")
+    bridge = SimpleNamespace(
+        effective_launch_snapshot_json={"policyAuthority": snapshot}
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = bridge
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    policy_service = AsyncMock()
+    policy_service.resolve_runtime_snapshot.return_value = snapshot
+    with patch(
+        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        return_value=policy_service,
+    ):
+        resolved = await service._resolve_target_policy_snapshot(
+            target=_production_target_health()
+        )
+
+    assert resolved == snapshot
+    policy_service.resolve_runtime_snapshot.assert_awaited_once_with("policy-1@7")
+
+
+async def test_real_handoff_rejects_stale_persisted_policy_before_dispatch() -> None:
+    launch_snapshot = _policy_snapshot("allow")
+    current_snapshot = {**launch_snapshot, "policyDigest": "sha256:" + "c" * 64}
+    bridge = SimpleNamespace(
+        effective_launch_snapshot_json={"policyAuthority": launch_snapshot}
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = bridge
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    policy_service = AsyncMock()
+    policy_service.resolve_runtime_snapshot.return_value = current_snapshot
+    with patch(
+        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        return_value=policy_service,
+    ), pytest.raises(RemediationEvidenceToolError, match="stale or unavailable"):
+        await service._resolve_target_policy_snapshot(
+            target=_production_target_health()
+        )
+
+
+async def test_resolve_returns_none_for_non_omnigent_target() -> None:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None  # no Omnigent bridge session
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    target = RemediationTargetHealthSnapshot(
+        workflow_id="target",
+        pinned_run_id="run",
+        current_run_id="run",
+        state="failed",
+        close_status="failed",
+        title=None,
+        summary=None,
+        target_run_changed=False,
+        runtime="codex_cli",
+    )
+    assert await service._resolve_target_policy_snapshot(target=target) is None
+
+
+async def test_resolve_fails_closed_for_declared_omnigent_without_bridge() -> None:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    service = object.__new__(RemediationEvidenceToolService)
+    service._session = _bridge_session(result)
+
+    target = RemediationTargetHealthSnapshot(
+        workflow_id="target",
+        pinned_run_id="run",
+        current_run_id="run",
+        state="failed",
+        close_status="failed",
+        title=None,
+        summary=None,
+        target_run_changed=False,
+        runtime="omnigent",
+    )
+    with pytest.raises(
+        RemediationEvidenceToolError, match="immutable Omnigent policy authority"
+    ):
+        await service._resolve_target_policy_snapshot(target=target)
+
+
+async def test_policy_bound_allows_verified_non_omnigent_target() -> None:
+    called = False
+
+    async def adapter(*_args):
+        nonlocal called
+        called = True
+        return {"status": "accepted"}
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {"actionKind": "execution.pause", "targetRuntime": "codex_cli"},
+        {},
+        _production_target_health(),
+    )
+    assert called is True
+    assert result["status"] == "accepted"
+
+
+async def test_policy_bound_denies_omnigent_target_missing_snapshot() -> None:
+    async def adapter(*_args):
+        raise AssertionError("must not dispatch without an Omnigent snapshot")
+
+    result = await TemporalRemediationControlPlane._policy_bound(adapter)(
+        {"actionKind": "host.restart", "targetRuntime": "omnigent"},
+        {},
+        _production_target_health(),
+    )
+    assert result["status"] == "denied"
+    assert result["reason"] == "omnigent_policy_snapshot_required"
 
 
 async def test_control_plane_executor_dispatches_typed_adapter_with_evidence() -> None:

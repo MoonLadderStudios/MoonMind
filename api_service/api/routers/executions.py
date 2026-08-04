@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ from functools import lru_cache
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationError,
     field_validator,
@@ -58,6 +59,9 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.omnigent_agent_profile_selection import (
+    resolve_agent_profile_snapshot,
+)
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
@@ -675,6 +679,8 @@ class PublicationRecoveryResponse(BaseModel):
     rolloutGeneration: str
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     checkpointRef: str
     instructions: CheckpointBranchInstructionsModel
     idempotencyKey: str = Field(..., min_length=1, max_length=512)
@@ -687,6 +693,10 @@ class RemediationCheckpointBranchRepairRequest(BaseModel):
     runtimeContextPolicy: Literal["fresh_agent_run"] = "fresh_agent_run"
     gitWorkBranch: str | None = None
     maxBudgetUsd: float | None = None
+    provider_profile_ref: str | None = Field(
+        None, alias="providerProfileRef", min_length=1, max_length=255
+    )
+    agent_profile: dict[str, Any] | None = Field(None, alias="agentProfile")
 _PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
@@ -7810,6 +7820,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         "model",
         "effort",
         "providerProfile",
+        "agentProfile",
         "profileId",
         "repository",
         "repo",
@@ -10685,6 +10696,60 @@ async def _create_execution_from_workflow_request(
         )
     initial_parameters = skill_validation.parameters
 
+    # Reserve the canonical identity before launch so profile readiness and the
+    # immutable effective snapshot are persisted in the same transaction as the
+    # execution record.  A failed resolution never starts Temporal work.
+    create_idempotency_key = str(
+        task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    reserved_workflow_id = (
+        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
+        if create_idempotency_key
+        else f"mm:{uuid4()}"
+    )
+    agent_profile_selection = payload.get("agentProfile")
+    if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
+        agent_profile_selection = runtime_payload.get("agentProfile")
+    if agent_profile_selection is not None:
+        if canonical_target_runtime != "omnigent":
+            raise _invalid_workflow_request(
+                "agentProfile is supported only for targetRuntime='omnigent'."
+            )
+        if not isinstance(agent_profile_selection, Mapping):
+            raise _invalid_workflow_request("agentProfile must be an object.")
+        profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=agent_profile_selection,
+            consumer_type=("remediation" if task_payload.get("remediation") else "workflow"),
+            consumer_id=reserved_workflow_id,
+            user=user,
+        )
+        initial_parameters["agentProfileSnapshot"] = profile_snapshot
+        initial_parameters["agentProfile"] = {
+            "profileId": profile_snapshot["profileId"],
+            "version": profile_snapshot["version"],
+            "digest": profile_snapshot["digest"],
+        }
+        effective_profile = profile_snapshot["document"]
+        effective_model = effective_profile.get("model") or {}
+        initial_parameters["profileId"] = profile_snapshot["providerProfileRef"]
+        if effective_model.get("model") is not None:
+            initial_parameters["model"] = effective_model["model"]
+        if effective_model.get("effort") is not None:
+            initial_parameters["effort"] = effective_model["effort"]
+        initial_parameters["omnigent"] = {
+            **dict(initial_parameters.get("omnigent") or {}),
+            "agentProfileRef": (
+                f"{profile_snapshot['profileId']}@{profile_snapshot['version']}"
+            ),
+            "executionProfileRef": profile_snapshot["executionProfileRef"],
+            "launchPolicyRef": profile_snapshot["launchPolicyRef"],
+            "agent": {"agentId": profile_snapshot["agentId"]},
+        }
+        initial_parameters["rag"] = effective_profile.get("rag") or {}
+        initial_parameters["capture"] = effective_profile.get("capture") or {}
+        initial_parameters["workspace"] = effective_profile.get("workspace") or {}
+
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
         record = await service.create_execution(
@@ -10703,6 +10768,7 @@ async def _create_execution_from_workflow_request(
             summary=_derive_workflow_summary(task_payload, input_artifact_ref),
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
+            _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
         message = str(exc)
@@ -11270,6 +11336,11 @@ async def _handle_recurring_schedule(
         request_payload,
         runtime_metadata=runtime_metadata,
     )
+    agent_profile_selection = request_payload.get("agentProfile")
+    if agent_profile_selection is not None and not isinstance(
+        agent_profile_selection, Mapping
+    ):
+        raise _invalid_workflow_request("agentProfile must be an object.")
     try:
         definition = await svc.create_definition(
             name=schedule.name or "Inline schedule",
@@ -11283,6 +11354,8 @@ async def _handle_recurring_schedule(
             owner_user_id=user.id,
             target=target,
             policy=schedule.policy,
+            agent_profile_selection=agent_profile_selection,
+            actor=user,
         )
     except RecurringWorkflowValidationError as exc:
         raise HTTPException(
@@ -11437,6 +11510,7 @@ async def create_remediation_execution(
         "publish_mode",
         "profileId",
         "providerProfile",
+        "agentProfile",
         "idempotencyKey",
         "schedule",
         "runtimeInheritance",
@@ -11866,6 +11940,8 @@ async def create_remediation_checkpoint_branch(
             "runtimeContextPolicy": runtime_context_policy,
             "gitWorkBranch": payload.gitWorkBranch,
             "maxBudgetUsd": payload.maxBudgetUsd,
+            "providerProfileRef": payload.provider_profile_ref,
+            "agentProfile": payload.agent_profile,
         }
     )
     existing_op = await session.execute(
@@ -11894,6 +11970,24 @@ async def create_remediation_checkpoint_branch(
     instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=target_record,
@@ -11931,6 +12025,22 @@ async def create_remediation_checkpoint_branch(
         "remediationWorkflowId": workflow_id,
         "remediationContextRef": link.context_artifact_ref,
         "repairActionKind": "checkpoint_branch.create_from_remediation_context",
+        "runtimeSelection": {
+            "providerProfileRef": payload.provider_profile_ref,
+            "runtimeContextPolicy": runtime_context_policy,
+            "publishMode": "none",
+            "gitWorkBranch": payload.gitWorkBranch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot
+                else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
+        },
     }
     session.add(
         WorkflowCheckpointBranchOperation(
@@ -11952,6 +12062,9 @@ async def create_remediation_checkpoint_branch(
                     "actionKind": "checkpoint_branch.create_from_remediation_context",
                     "runtimeContextPolicy": runtime_context_policy,
                 },
+                "runtimeSelection": dict(
+                    branch.diagnostics.get("runtimeSelection") or {}
+                ),
             },
         )
     )
@@ -13342,6 +13455,24 @@ async def create_checkpoint_branch(
     instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    agent_profile_snapshot = None
+    if payload.agent_profile is not None:
+        selection = dict(payload.agent_profile)
+        if payload.provider_profile_ref:
+            selected_ref = selection.get("providerProfileRef")
+            if selected_ref and selected_ref != payload.provider_profile_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="agent profile and branch Provider Profile selections conflict",
+                )
+            selection["providerProfileRef"] = payload.provider_profile_ref
+        agent_profile_snapshot = await resolve_agent_profile_snapshot(
+            session,
+            selection=selection,
+            consumer_type="checkpoint",
+            consumer_id=branch_id,
+            user=user,
+        )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=record,
@@ -13388,6 +13519,15 @@ async def create_checkpoint_branch(
             "runtimeContextPolicy": payload.runtime_context_policy,
             "publishMode": payload.publish_mode,
             "gitWorkBranch": payload.git_work_branch,
+            "agentProfile": (
+                {
+                    "profileId": agent_profile_snapshot["profileId"],
+                    "version": agent_profile_snapshot["version"],
+                    "digest": agent_profile_snapshot["digest"],
+                }
+                if agent_profile_snapshot else None
+            ),
+            "agentProfileSnapshot": agent_profile_snapshot,
         },
     }
     session.add(
