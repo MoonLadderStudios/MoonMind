@@ -4355,6 +4355,70 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
     }
 
 
+def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    with patch(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "providerProfileRef": "codex-openai-oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["profileId"] == "codex-openai-oauth"
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert "agentProfileRef" not in initial_parameters["omnigent"]
+    assert "executionProfileRef" not in initial_parameters["omnigent"]
+    assert "agent" not in initial_parameters["omnigent"]
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

@@ -23,6 +23,7 @@ from api_service.db.models import (
     User,
 )
 from api_service.services.omnigent_agent_profile_selection import (
+    compile_agent_profile_snapshot_parameters,
     resolve_agent_profile_snapshot,
 )
 from moonmind.workflows.recurring.cron import (
@@ -692,20 +693,10 @@ class RecurringWorkflowsService:
                 user=actor,
             )
             initial_parameters = dict(definition.target.get("initialParameters") or {})
-            initial_parameters["agentProfile"] = {
-                "profileId": snapshot["profileId"],
-                "version": snapshot["version"],
-                "digest": snapshot["digest"],
-            }
-            initial_parameters["agentProfileSnapshot"] = snapshot
-            initial_parameters["profileId"] = snapshot["providerProfileRef"]
-            initial_parameters["omnigent"] = {
-                **dict(initial_parameters.get("omnigent") or {}),
-                "agentProfileRef": f"{snapshot['profileId']}@{snapshot['version']}",
-                "executionProfileRef": snapshot["executionProfileRef"],
-                "launchPolicyRef": snapshot["launchPolicyRef"],
-                "agent": {"agentId": snapshot["agentId"]},
-            }
+            initial_parameters = compile_agent_profile_snapshot_parameters(
+                initial_parameters,
+                snapshot=snapshot,
+            )
             definition.target = {
                 **definition.target,
                 "agentProfile": {
@@ -716,6 +707,7 @@ class RecurringWorkflowsService:
                 "agentProfileSnapshot": snapshot,
                 "initialParameters": initial_parameters,
             }
+            await self._session.flush()
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(
             definition_id=definition_id,

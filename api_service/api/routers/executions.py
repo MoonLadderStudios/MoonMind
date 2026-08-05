@@ -60,6 +60,7 @@ from api_service.db.models import (
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
 from api_service.services.omnigent_agent_profile_selection import (
+    compile_agent_profile_snapshot_parameters,
     resolve_agent_profile_snapshot,
 )
 from api_service.services.control_stop_continuation import (
@@ -10724,31 +10725,10 @@ async def _create_execution_from_workflow_request(
             consumer_id=reserved_workflow_id,
             user=user,
         )
-        initial_parameters["agentProfileSnapshot"] = profile_snapshot
-        initial_parameters["agentProfile"] = {
-            "profileId": profile_snapshot["profileId"],
-            "version": profile_snapshot["version"],
-            "digest": profile_snapshot["digest"],
-        }
-        effective_profile = profile_snapshot["document"]
-        effective_model = effective_profile.get("model") or {}
-        initial_parameters["profileId"] = profile_snapshot["providerProfileRef"]
-        if effective_model.get("model") is not None:
-            initial_parameters["model"] = effective_model["model"]
-        if effective_model.get("effort") is not None:
-            initial_parameters["effort"] = effective_model["effort"]
-        initial_parameters["omnigent"] = {
-            **dict(initial_parameters.get("omnigent") or {}),
-            "agentProfileRef": (
-                f"{profile_snapshot['profileId']}@{profile_snapshot['version']}"
-            ),
-            "executionProfileRef": profile_snapshot["executionProfileRef"],
-            "launchPolicyRef": profile_snapshot["launchPolicyRef"],
-            "agent": {"agentId": profile_snapshot["agentId"]},
-        }
-        initial_parameters["rag"] = effective_profile.get("rag") or {}
-        initial_parameters["capture"] = effective_profile.get("capture") or {}
-        initial_parameters["workspace"] = effective_profile.get("workspace") or {}
+        initial_parameters = compile_agent_profile_snapshot_parameters(
+            initial_parameters,
+            snapshot=profile_snapshot,
+        )
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)

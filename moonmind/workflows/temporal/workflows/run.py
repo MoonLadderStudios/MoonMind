@@ -673,6 +673,9 @@ RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
 RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
     "run-omnigent-authored-selection-compiler-v1"
 )
+RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH = (
+    "run-omnigent-agent-profile-snapshot-compiler-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -18552,10 +18555,33 @@ class MoonMindRunWorkflow:
             if self._workflow_patch_enabled(
                 RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
             ):
-                parameters["omnigent"] = self._compile_authored_omnigent_selection(
-                    raw_omnigent_parameters,
-                    path=f"node[{node_id}].omnigent",
+                agent_profile_snapshot = (
+                    workflow_parameters.get("agentProfileSnapshot")
+                    if isinstance(workflow_parameters, Mapping)
+                    else None
                 )
+                if (
+                    agent_id == "omnigent"
+                    and isinstance(agent_profile_snapshot, Mapping)
+                    and self._workflow_patch_enabled(
+                        RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH
+                    )
+                ):
+                    parameters["omnigent"] = (
+                        self._compile_agent_profile_snapshot_omnigent_selection(
+                            raw_omnigent_parameters,
+                            snapshot=agent_profile_snapshot,
+                            execution_profile_ref=execution_profile_ref,
+                            path=f"node[{node_id}].omnigent",
+                        )
+                    )
+                else:
+                    parameters["omnigent"] = (
+                        self._compile_authored_omnigent_selection(
+                            raw_omnigent_parameters,
+                            path=f"node[{node_id}].omnigent",
+                        )
+                    )
             else:
                 # Preserve the exact historical activity input for workflows whose
                 # histories predate the product compiler boundary.
@@ -21675,6 +21701,153 @@ class MoonMindRunWorkflow:
                     f"{path}.agent.harnessOverride must be a supported native harness"
                 )
         return normalized
+
+    def _compile_agent_profile_snapshot_omnigent_selection(
+        self,
+        value: Mapping[str, Any],
+        *,
+        snapshot: Mapping[str, Any],
+        execution_profile_ref: str | None,
+        path: str,
+    ) -> dict[str, Any]:
+        """Merge trusted profile authority after validating authored intent.
+
+        Agent-profile snapshots produced by the API are immutable launch
+        authority.  Older persisted executions also copied some of that
+        authority into ``parameters.omnigent``.  Accept only exact copies of
+        those legacy fields, discard them from the authored surface, then merge
+        the snapshot through the canonical runtime names.
+        """
+
+        normalized_snapshot = self._json_mapping(
+            snapshot,
+            path="workflow.agentProfileSnapshot",
+        )
+        schema_version = self._required_string(
+            normalized_snapshot,
+            "schemaVersion",
+            error_message="agentProfileSnapshot.schemaVersion is required",
+        )
+        if schema_version != "moonmind.omnigent-agent-profile-snapshot.v1":
+            raise ValueError("agentProfileSnapshot.schemaVersion is unsupported")
+
+        profile_id = self._required_string(
+            normalized_snapshot,
+            "profileId",
+            error_message="agentProfileSnapshot.profileId is required",
+        )
+        profile_version = normalized_snapshot.get("version")
+        if (
+            isinstance(profile_version, bool)
+            or not isinstance(profile_version, int)
+            or profile_version < 1
+        ):
+            raise ValueError("agentProfileSnapshot.version must be a positive integer")
+        provider_profile_ref = self._required_string(
+            normalized_snapshot,
+            "providerProfileRef",
+            error_message="agentProfileSnapshot.providerProfileRef is required",
+        )
+        if execution_profile_ref != provider_profile_ref:
+            raise ValueError(
+                "agentProfileSnapshot.providerProfileRef conflicts with "
+                "the resolved execution profile"
+            )
+
+        target_ref = self._required_string(
+            normalized_snapshot,
+            "executionProfileRef",
+            error_message="agentProfileSnapshot.executionProfileRef is required",
+        )
+        launch_policy_ref = self._required_string(
+            normalized_snapshot,
+            "launchPolicyRef",
+            error_message="agentProfileSnapshot.launchPolicyRef is required",
+        )
+        agent_id = self._required_string(
+            normalized_snapshot,
+            "agentId",
+            error_message="agentProfileSnapshot.agentId is required",
+        )
+        document = self._mapping_value(normalized_snapshot, "document")
+        if not document:
+            raise ValueError("agentProfileSnapshot.document is required")
+        endpoint_ref = self._required_string(
+            document,
+            "endpointRef",
+            error_message="agentProfileSnapshot.document.endpointRef is required",
+        )
+        harness = self._required_string(
+            document,
+            "harness",
+            error_message="agentProfileSnapshot.document.harness is required",
+        )
+        if harness not in {"codex-native", "claude-native"}:
+            raise ValueError("agentProfileSnapshot.document.harness is unsupported")
+
+        authored = self._json_mapping(value, path=path)
+
+        def discard_legacy_field(key: str, expected: str) -> None:
+            if key not in authored:
+                return
+            observed = authored.pop(key)
+            if not isinstance(observed, str) or observed.strip() != expected:
+                raise ValueError(f"{path}.{key} conflicts with agentProfileSnapshot")
+
+        discard_legacy_field(
+            "agentProfileRef",
+            f"{profile_id}@{profile_version}",
+        )
+        discard_legacy_field("executionProfileRef", target_ref)
+
+        raw_agent = authored.get("agent")
+        if isinstance(raw_agent, Mapping):
+            authored_agent = dict(raw_agent)
+            if "agentId" in authored_agent:
+                observed_agent_id = authored_agent.pop("agentId")
+                if (
+                    not isinstance(observed_agent_id, str)
+                    or observed_agent_id.strip() != agent_id
+                ):
+                    raise ValueError(
+                        f"{path}.agent.agentId conflicts with agentProfileSnapshot"
+                    )
+            if authored_agent:
+                authored["agent"] = authored_agent
+            else:
+                authored.pop("agent", None)
+
+        compiled = self._compile_authored_omnigent_selection(
+            authored,
+            path=path,
+        )
+
+        for key, expected in (
+            ("endpointRef", endpoint_ref),
+            ("executionTargetRef", target_ref),
+            ("launchPolicyRef", launch_policy_ref),
+        ):
+            observed = compiled.get(key)
+            if observed is not None and (
+                not isinstance(observed, str) or observed.strip() != expected
+            ):
+                raise ValueError(f"{path}.{key} conflicts with agentProfileSnapshot")
+            compiled[key] = expected
+
+        compiled_agent = (
+            dict(compiled.get("agent"))
+            if isinstance(compiled.get("agent"), Mapping)
+            else {}
+        )
+        authored_harness = compiled_agent.get("harnessOverride")
+        if authored_harness is not None and authored_harness != harness:
+            raise ValueError(
+                f"{path}.agent.harnessOverride conflicts with agentProfileSnapshot"
+            )
+        compiled_agent["harnessOverride"] = harness
+        compiled_agent["agentId"] = agent_id
+        compiled["agent"] = compiled_agent
+        return compiled
 
     def _json_value(self, value: Any, *, path: str) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):

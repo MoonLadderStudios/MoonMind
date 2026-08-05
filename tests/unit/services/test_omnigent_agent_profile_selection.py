@@ -15,6 +15,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from api_service.services.omnigent_agent_profile_selection import (
+    compile_agent_profile_snapshot_parameters,
     resolve_agent_profile_snapshot,
 )
 
@@ -71,6 +72,50 @@ class _Session:
 
     async def flush(self):
         return None
+
+
+def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() -> None:
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "team-codex",
+        "version": 2,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "oauth-team",
+        "executionProfileRef": "omnigent-codex@2",
+        "launchPolicyRef": "on-demand@1",
+        "agentId": "upstream-agent-2",
+        "document": {
+            "model": {"model": "gpt-5.4", "effort": "high"},
+            "rag": {"maxTokens": 2000},
+            "capture": {"retentionDays": 14},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    compiled = compile_agent_profile_snapshot_parameters(
+        {
+            "model": "stale-model",
+            "omnigent": {"launchPolicyRef": "stale-policy"},
+        },
+        snapshot=snapshot,
+    )
+
+    assert compiled["agentProfileSnapshot"] == snapshot
+    assert compiled["agentProfile"] == {
+        "profileId": "team-codex",
+        "version": 2,
+        "digest": "sha256:" + "a" * 64,
+    }
+    assert compiled["profileId"] == "oauth-team"
+    assert compiled["model"] == "gpt-5.4"
+    assert compiled["effort"] == "high"
+    assert compiled["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@2",
+        "launchPolicyRef": "on-demand@1",
+    }
+    assert compiled["rag"] == {"maxTokens": 2000}
+    assert compiled["capture"] == {"retentionDays": 14}
+    assert compiled["workspace"] == {"mutation": "allowed"}
 
 
 @pytest.mark.asyncio

@@ -123,6 +123,85 @@ async def test_create_definition_creates_temporal_schedule(
             }
 
 
+async def test_create_definition_compiles_agent_profile_snapshot_separately(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_agent_profile_snapshot",
+        resolver,
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definition = await service.create_definition(
+            name="Profile schedule",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+            policy=None,
+            agent_profile_selection={
+                "profileId": "omnigent-bootstrap-default",
+                "providerProfileRef": "codex-openai-oauth",
+            },
+            actor=SimpleNamespace(id=uuid4()),
+        )
+
+    initial_parameters = definition.target["initialParameters"]
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert "agentProfileRef" not in initial_parameters["omnigent"]
+    assert "executionProfileRef" not in initial_parameters["omnigent"]
+    scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
+        "workflow_input"
+    ]["initial_parameters"]
+    assert scheduled_parameters["agentProfileSnapshot"] == snapshot
+    assert scheduled_parameters["omnigent"] == initial_parameters["omnigent"]
+
+
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
     session = AsyncMock(spec=AsyncSession)
     session.execute.return_value = SimpleNamespace(all=lambda: [])
