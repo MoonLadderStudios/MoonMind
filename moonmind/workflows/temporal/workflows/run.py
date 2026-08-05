@@ -651,6 +651,9 @@ RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
 RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
     "run-managed-checkpoint-locator-guard-v1"
 )
+RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH = (
+    "run-omnigent-prematerialization-checkpoint-guard-v1"
+)
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
@@ -5775,6 +5778,8 @@ class MoonMindRunWorkflow:
         self,
         logical_step_id: str,
         outputs: Mapping[str, Any],
+        *,
+        initialize_omnigent_capture: bool = False,
     ) -> None:
         raw_agent_kind = outputs.get("agentKind") or outputs.get("agent_kind")
         raw_agent_id = outputs.get("agentId") or outputs.get("agent_id")
@@ -5867,9 +5872,15 @@ class MoonMindRunWorkflow:
                         "relativePath": ".",
                     }
                 elif capabilities.runtime_id == "omnigent":
-                    capture_input["omnigentCheckpointCapture"] = {
-                        "captureBoundaryState": "session_not_started"
-                    }
+                    if initialize_omnigent_capture:
+                        # This marker and its authority bit are authored only by
+                        # the workflow call site that resolved the effective
+                        # agent runtime. Candidate plan/result mappings cannot
+                        # opt another sandbox step out of checkpoint capture.
+                        capture_input["omnigentCheckpointCapture"] = {
+                            "captureBoundaryState": "session_not_started"
+                        }
+                        capture_input["omnigentPrematerializationOwned"] = True
                     try:
                         wf_info = workflow.info()
                         identity = StepExecutionIdentityModel(
@@ -5904,7 +5915,14 @@ class MoonMindRunWorkflow:
                 "omnigent_checkpoint_capture"
             )
             if isinstance(omnigent_capture, Mapping):
-                capture_input["omnigentCheckpointCapture"] = dict(omnigent_capture)
+                candidate_capture = dict(omnigent_capture)
+                if (
+                    candidate_capture.get("captureBoundaryState")
+                    == "session_not_started"
+                ):
+                    candidate_capture.pop("captureBoundaryState")
+                if candidate_capture:
+                    capture_input["omnigentCheckpointCapture"] = candidate_capture
             omnigent_checkpoint = candidate.get("omnigentCheckpoint") or candidate.get(
                 "omnigent_checkpoint"
             )
@@ -6095,6 +6113,40 @@ class MoonMindRunWorkflow:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "deferred",
                 "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        omnigent_checkpoint_capture = capture_input.get(
+            "omnigentCheckpointCapture"
+        )
+        omnigent_capture_boundary_state = (
+            str(
+                omnigent_checkpoint_capture.get("captureBoundaryState") or ""
+            ).strip()
+            if isinstance(omnigent_checkpoint_capture, Mapping)
+            else ""
+        )
+        if (
+            resolved_policy.capture_activity == "workspace.capture_checkpoint"
+            and workflow.patched(
+                RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH
+            )
+            and boundary in {"after_prepare", "before_execution"}
+            and capture_input.get("omnigentPrematerializationOwned") is True
+            and omnigent_capture_boundary_state == "session_not_started"
+        ):
+            # The deterministic sandbox locator is known before AgentRun starts,
+            # but profile-bound Omnigent owns repository materialization inside
+            # its coordinator activity.  Defer the initial after-prepare and
+            # before-execution captures instead of asking the sandbox worker to
+            # archive a workspace that cannot exist yet.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
                 "captureActivity": resolved_policy.capture_activity,
@@ -11135,6 +11187,16 @@ class MoonMindRunWorkflow:
                 self._record_step_workspace_capture_input(
                     node_id,
                     capture_input_source,
+                    initialize_omnigent_capture=(
+                        tool_type == "agent_runtime"
+                        and _normalize_agent_runtime_id(
+                            self._agent_id_from_runtime_inputs(
+                                node_inputs=node_inputs,
+                                fallback_name=tool_name,
+                            )
+                        )
+                        == "omnigent"
+                    ),
                 )
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
