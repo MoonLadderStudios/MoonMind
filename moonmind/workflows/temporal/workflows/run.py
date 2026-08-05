@@ -651,6 +651,9 @@ RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
 RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
     "run-managed-checkpoint-locator-guard-v1"
 )
+RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH = (
+    "run-omnigent-prematerialization-checkpoint-guard-v1"
+)
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
@@ -6095,6 +6098,38 @@ class MoonMindRunWorkflow:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "deferred",
                 "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        omnigent_checkpoint_capture = capture_input.get(
+            "omnigentCheckpointCapture"
+        )
+        omnigent_capture_boundary_state = (
+            str(
+                omnigent_checkpoint_capture.get("captureBoundaryState") or ""
+            ).strip()
+            if isinstance(omnigent_checkpoint_capture, Mapping)
+            else ""
+        )
+        if (
+            resolved_policy.capture_activity == "workspace.capture_checkpoint"
+            and workflow.patched(
+                RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH
+            )
+            and omnigent_capture_boundary_state == "session_not_started"
+        ):
+            # The deterministic sandbox locator is known before AgentRun starts,
+            # but profile-bound Omnigent owns repository materialization inside
+            # its coordinator activity.  Defer the initial after-prepare and
+            # before-execution captures instead of asking the sandbox worker to
+            # archive a workspace that cannot exist yet.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
                 "captureActivity": resolved_policy.capture_activity,

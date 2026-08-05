@@ -3726,6 +3726,109 @@ async def test_managed_checkpoint_locator_guard_replays_previous_activity_shape(
     assert "workspaceLocator" not in captured[0]["payload"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["after_prepare", "before_execution"])
+async def test_omnigent_checkpoint_defers_until_sandbox_workspace_is_materialized(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 6, 30, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Implement"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("node-1", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("capture must wait for Omnigent workspace materialization")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "node-1",
+        boundary=boundary,
+        updated_at=now,
+    )
+
+    assert checkpoint_ref is None
+    assert workflow._step_checkpoint_capture_outcomes["node-1"] == {
+        "status": "deferred",
+        "failureCode": "CHECKPOINT_WORKSPACE_MATERIALIZATION_PENDING",
+        "boundary": boundary,
+        "captureAuthority": "moonmind_sandbox",
+        "captureActivity": "workspace.capture_checkpoint",
+        "capabilityCriticality": "required",
+    }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_checkpoint_guard_replays_previous_activity_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        != run_module.RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def previous_capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity_type, "payload": payload})
+        return {
+            "status": "captured",
+            "workspace": {"kind": "worktree_archive"},
+            "diagnosticRefs": [],
+        }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        previous_capture_activity,
+    )
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert [call["activity"] for call in captured] == [
+        "workspace.capture_checkpoint"
+    ]
+    assert captured[0]["payload"]["workspaceLocator"]["kind"] == "sandbox"
+
+
 def test_run_derives_managed_authority_from_agent_id() -> None:
     workflow = MoonMindRunWorkflow()
 

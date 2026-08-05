@@ -940,6 +940,65 @@ async def test_managed_checkpoint_waits_for_authoritative_locator(
     ]
 
 
+async def test_omnigent_checkpoint_waits_for_workspace_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:06cb96c8 before the Omnigent coordinator materializes its repo."""
+    replay_id = "omnigent-checkpoint-before-workspace"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["runId"],
+        task_queue="mm.workflow.merge_automation",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    activity_calls: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        _payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        raise AssertionError("sandbox capture ran before Omnigent materialized the repo")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        capture_activity,
+    )
+    now = datetime(2026, 8, 5, 6, 30, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Implement"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    parent._mark_step_running("node-1", updated_at=now, summary="Implementing")
+    parent._record_step_workspace_capture_input("node-1", manifest["stepInputs"])
+
+    capture_input = parent._step_workspace_capture_inputs["node-1"]
+    assert capture_input["workspaceLocator"] == manifest["escapedActivityPayload"][
+        "workspaceLocator"
+    ]
+    checkpoint_ref = await parent._record_canonical_step_checkpoint(
+        "node-1",
+        boundary=manifest["boundary"],
+        updated_at=now,
+    )
+
+    assert checkpoint_ref is None
+    assert activity_calls == expected["activityCalls"]
+    assert parent._step_checkpoint_capture_outcomes["node-1"] == expected[
+        "captureOutcome"
+    ]
+
+
 async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
     tmp_path: Path,
 ) -> None:

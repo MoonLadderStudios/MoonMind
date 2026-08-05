@@ -1,0 +1,21 @@
+{
+  "incidentWorkflowId": "mm:06cb96c8-e22f-41ce-8392-476b55f83bd7",
+  "runId": "019fd09d-b880-7e41-add8-d9f8536536cb",
+  "failureShape": "sandbox checkpoint capture was scheduled before the Omnigent coordinator materialized its repository workspace",
+  "boundary": "after_prepare",
+  "stepInputs": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "runtime": {
+      "mode": "omnigent"
+    }
+  },
+  "escapedActivityPayload": {
+    "kind": "worktree_archive",
+    "workspaceLocator": {
+      "kind": "sandbox",
+      "workspaceId": "14a2cb0f5fc11332ae612db5",
+      "relativePath": "repo"
+    }
+  }
+}
