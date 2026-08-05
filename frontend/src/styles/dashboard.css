@@ -6855,6 +6855,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   animation: queue-submit-primary-check-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit {
+  background-color: rgb(var(--mm-action-primary) / 0.12);
+  background-image: none;
+  border-color: rgb(var(--mm-action-primary));
+}
+
 .queue-submit-primary--icon:hover {
   border-color: rgb(var(--mm-action-primary));
   box-shadow:
