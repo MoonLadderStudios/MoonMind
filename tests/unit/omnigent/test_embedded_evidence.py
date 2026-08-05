@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -12,11 +14,31 @@ from moonmind.omnigent.embedded_evidence import (
     EmbeddedEvidenceError,
     validate_embedded_evidence,
 )
-from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
+from moonmind.omnigent.host_auth_adapter import (
+    PINNED_OMNIGENT_COMMIT,
+    assert_pinned_omnigent_auth_contract,
+)
 
 
 NOW = datetime(2026, 7, 21, tzinfo=timezone.utc)
 SHA = "a" * 64
+
+
+def test_pinned_source_commit_matches_initialized_submodule() -> None:
+    submodule = Path(__file__).parents[3] / "omnigent"
+    if not (submodule / "omnigent").is_dir():
+        pytest.skip("Omnigent submodule is not initialized")
+
+    actual_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=submodule,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert actual_commit == PINNED_OMNIGENT_COMMIT
+    assert_pinned_omnigent_auth_contract()
 
 
 def _claim(**overrides):
