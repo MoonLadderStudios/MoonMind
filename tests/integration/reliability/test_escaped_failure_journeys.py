@@ -980,7 +980,11 @@ async def test_omnigent_checkpoint_waits_for_workspace_materialization(
         updated_at=now,
     )
     parent._mark_step_running("node-1", updated_at=now, summary="Implementing")
-    parent._record_step_workspace_capture_input("node-1", manifest["stepInputs"])
+    parent._record_step_workspace_capture_input(
+        "node-1",
+        manifest["stepInputs"],
+        initialize_omnigent_capture=True,
+    )
 
     capture_input = parent._step_workspace_capture_inputs["node-1"]
     assert capture_input["workspaceLocator"] == manifest["escapedActivityPayload"][

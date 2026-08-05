@@ -3749,6 +3749,7 @@ async def test_omnigent_checkpoint_defers_until_sandbox_workspace_is_materialize
             "agentId": "omnigent",
             "runtime": {"mode": "omnigent"},
         },
+        initialize_omnigent_capture=True,
     )
 
     async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
@@ -3792,6 +3793,7 @@ async def test_omnigent_checkpoint_guard_replays_previous_activity_shape(
             "agentId": "omnigent",
             "runtime": {"mode": "omnigent"},
         },
+        initialize_omnigent_capture=True,
     )
     captured: list[dict[str, Any]] = []
 
@@ -3827,6 +3829,98 @@ async def test_omnigent_checkpoint_guard_replays_previous_activity_shape(
         "workspace.capture_checkpoint"
     ]
     assert captured[0]["payload"]["workspaceLocator"]["kind"] == "sandbox"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["after_execution", "before_publication"])
+async def test_omnigent_checkpoint_guard_does_not_defer_terminal_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "runtime": {"mode": "omnigent"},
+        },
+        initialize_omnigent_capture=True,
+    )
+    captured: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append(activity_type)
+        return _managed_checkpoint_capture_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary=boundary
+    )
+
+    assert captured == ["workspace.capture_checkpoint"]
+
+
+@pytest.mark.asyncio
+async def test_non_omnigent_input_cannot_inject_prematerialization_defer_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "omnigentCheckpointCapture": {
+                "captureBoundaryState": "session_not_started"
+            },
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "sandbox-workspace",
+                "relativePath": "repo",
+            },
+            "checkpointKind": "worktree_archive",
+        },
+    )
+    capture_input = workflow._step_workspace_capture_inputs["node-1"]
+    assert "omnigentCheckpointCapture" not in capture_input
+    assert "omnigentPrematerializationOwned" not in capture_input
+    captured: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append(activity_type)
+        return _managed_checkpoint_capture_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert captured == ["workspace.capture_checkpoint"]
 
 
 def test_run_derives_managed_authority_from_agent_id() -> None:
@@ -4276,7 +4370,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
         tool_name="external",
         step_execution=1,
     )
-    workflow._record_step_workspace_capture_input("implement", node_inputs)
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        node_inputs,
+        initialize_omnigent_capture=True,
+    )
 
     async def fake_execute_activity(
         activity: str,
