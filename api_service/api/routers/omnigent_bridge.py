@@ -98,6 +98,9 @@ from moonmind.omnigent.settings import (
     resolved_server_url,
 )
 from moonmind.utils.build_info import resolve_moonmind_build_id
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
+)
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -782,9 +785,9 @@ async def _resolve_bridge_binding(
     )
 
 
-async def _get_launch_default_agent_name(
+async def _get_launch_default_agent_selection(
     session: AsyncSession = Depends(get_async_session),
-) -> str | None:
+) -> OmnigentAgentSelection | None:
     """Resolve the durable default Omnigent agent for a proxy-mode launch.
 
     MoonLadderStudios/MoonMind#3517 §8: an active default agent profile is the
@@ -802,7 +805,11 @@ async def _get_launch_default_agent_name(
         resolution = await resolve_default_agent_selection(session)
     except BootstrapDefaultConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return resolution.default_agent_name or None
+    if resolution.agent_id:
+        return OmnigentAgentSelection(agent_id=resolution.agent_id)
+    if resolution.agent_name:
+        return OmnigentAgentSelection(agent_name=resolution.agent_name)
+    return None
 
 
 @router.post(
@@ -821,7 +828,9 @@ async def create_omnigent_session(
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
     ),
-    launch_default_agent_name: str | None = Depends(_get_launch_default_agent_name),
+    launch_default_agent: OmnigentAgentSelection | None = Depends(
+        _get_launch_default_agent_selection
+    ),
 ) -> dict[str, Any]:
     """Create or reuse an Omnigent-shaped session in the configured bridge mode."""
 
@@ -856,7 +865,7 @@ async def create_omnigent_session(
         return await proxy.create_session(
             request=payload,
             binding=binding,
-            default_agent_name_override=launch_default_agent_name,
+            default_agent_override=launch_default_agent,
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc

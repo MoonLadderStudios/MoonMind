@@ -111,7 +111,13 @@ class OmnigentExecutionSelection:
 @dataclass(frozen=True, slots=True)
 class OmnigentResolvedTarget:
     agent_id: str
-    source: Literal["agent_id", "agent_name", "bundle_ref", "default_agent_name"]
+    source: Literal[
+        "agent_id",
+        "agent_name",
+        "bundle_ref",
+        "default_agent_id",
+        "default_agent_name",
+    ]
     agent_name: str | None = None
 
 
@@ -181,7 +187,7 @@ async def resolve_omnigent_target(
     *,
     list_agents: Callable[[], Awaitable[list[Mapping[str, Any]]]],
     upload_agent_bundle: Callable[[str], Awaitable[Mapping[str, Any]]],
-    default_agent_name: str | None,
+    default_agent: OmnigentAgentSelection | None,
 ) -> OmnigentResolvedTarget:
     """Resolve target agent in the MM-990 canonical order."""
 
@@ -210,7 +216,13 @@ async def resolve_omnigent_target(
             failure_class="integration_error",
         )
 
-    default_name = _clean(default_agent_name)
+    if default_agent and default_agent.agent_id:
+        return OmnigentResolvedTarget(
+            agent_id=default_agent.agent_id,
+            source="default_agent_id",
+        )
+
+    default_name = _clean(default_agent.agent_name if default_agent else None)
     if default_name:
         resolved = await _resolve_agent_name(default_name, list_agents=list_agents)
         return OmnigentResolvedTarget(

@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
     OmnigentAdapterError,
     OmnigentExternalAdapter,
     OmnigentResolvedTarget,
@@ -218,7 +219,7 @@ async def test_target_resolution_order() -> None:
         direct,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).source == "agent_id"
     assert calls == []
 
@@ -236,7 +237,7 @@ async def test_target_resolution_order() -> None:
         named,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).agent_id == "ag_named"
 
     bundle = build_omnigent_selection(
@@ -253,7 +254,7 @@ async def test_target_resolution_order() -> None:
         bundle,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name=None,
+        default_agent=None,
     )).source == "bundle_ref"
 
     default = build_omnigent_selection(_request())
@@ -261,15 +262,26 @@ async def test_target_resolution_order() -> None:
         default,
         list_agents=list_agents,
         upload_agent_bundle=upload,
-        default_agent_name="codex-native-ui",
+        default_agent=OmnigentAgentSelection(agent_name="codex-native-ui"),
     )).source == "default_agent_name"
+
+    calls.clear()
+    resolved_default_id = await resolve_omnigent_target(
+        default,
+        list_agents=list_agents,
+        upload_agent_bundle=upload,
+        default_agent=OmnigentAgentSelection(agent_id="ag_durable"),
+    )
+    assert resolved_default_id.agent_id == "ag_durable"
+    assert resolved_default_id.source == "default_agent_id"
+    assert calls == []
 
     with pytest.raises(OmnigentAdapterError) as exc:
         await resolve_omnigent_target(
             default,
             list_agents=list_agents,
             upload_agent_bundle=upload,
-            default_agent_name=None,
+            default_agent=None,
         )
     assert exc.value.failure_class == "integration_error"
 

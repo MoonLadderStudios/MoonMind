@@ -85,6 +85,43 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_omnigent_client_follows_agent_catalog_cursor() -> None:
+    requested_after: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        after = request.url.params.get("after")
+        requested_after.append(after)
+        if after is None:
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"id": "ag_1", "name": "first"}],
+                    "last_id": "ag_1",
+                    "has_more": True,
+                },
+            )
+        assert after == "ag_1"
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"id": "ag_2", "name": "codex-native-ui"}],
+                "last_id": "ag_2",
+                "has_more": False,
+            },
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert [agent["id"] for agent in await client.list_agents()] == ["ag_1", "ag_2"]
+    assert requested_after == [None, "ag_1"]
+
+
+@pytest.mark.asyncio
 async def test_omnigent_client_structures_and_redacts_non_2xx_diagnostics() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer secret-token"

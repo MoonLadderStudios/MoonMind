@@ -60,8 +60,9 @@ async def test_launch_prefers_durable_active_default(session_maker, monkeypatch)
     monkeypatch.delenv("OMNIGENT_DEFAULT_AGENT_NAME", raising=False)
     await _add_default(session_maker, state="active", active_version=1)
     async with session_maker() as session:
-        resolved = await bridge._get_launch_default_agent_name(session)
-    assert resolved == "codex-prod"
+        resolved = await bridge._get_launch_default_agent_selection(session)
+    assert resolved.agent_id == "codex-prod"
+    assert resolved.agent_name is None
 
 
 async def test_launch_uses_env_fallback_when_no_durable_default(
@@ -69,8 +70,9 @@ async def test_launch_uses_env_fallback_when_no_durable_default(
 ):
     monkeypatch.setenv("OMNIGENT_DEFAULT_AGENT_NAME", "codex-env")
     async with session_maker() as session:
-        resolved = await bridge._get_launch_default_agent_name(session)
-    assert resolved == "codex-env"
+        resolved = await bridge._get_launch_default_agent_selection(session)
+    assert resolved.agent_id is None
+    assert resolved.agent_name == "codex-env"
 
 
 async def test_launch_fails_closed_on_conflicting_default(session_maker, monkeypatch):
@@ -78,5 +80,5 @@ async def test_launch_fails_closed_on_conflicting_default(session_maker, monkeyp
     await _add_default(session_maker, state="draft", active_version=None)
     async with session_maker() as session:
         with pytest.raises(HTTPException) as exc_info:
-            await bridge._get_launch_default_agent_name(session)
+            await bridge._get_launch_default_agent_selection(session)
     assert exc_info.value.status_code == 409
