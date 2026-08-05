@@ -1,0 +1,39 @@
+{
+  "incidentWorkflowId": "mm:ec891001-114a-4a59-92a2-7fce41a5ebf6",
+  "runId": "019fd2d8-8fe3-7aa5-a440-a5dfb09e366f",
+  "sourceWorkflowId": "mm:06cb96c8-e22f-41ce-8392-476b55f83bd7",
+  "failureShape": "an exact full rerun copied trusted agent-profile resolution into the authored Omnigent selection after the compiler patch became active",
+  "boundary": "MoonMind.UserWorkflow plan node to AgentExecutionRequest",
+  "escapedFailure": "unsupported authored fields: agentProfileRef, executionProfileRef",
+  "nodeInputs": {
+    "runtime": {
+      "mode": "omnigent",
+      "executionProfileRef": "codex_openai_oauth"
+    }
+  },
+  "workflowParameters": {
+    "omnigent": {
+      "executionTargetRef": "omnigent-codex@1",
+      "launchPolicyRef": "codex-on-demand@1",
+      "agentProfileRef": "omnigent-bootstrap-default@1",
+      "executionProfileRef": "omnigent-codex@1",
+      "agent": {
+        "agentId": "16a06503889b0c3034496821afd41b9e"
+      }
+    },
+    "agentProfileSnapshot": {
+      "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+      "profileId": "omnigent-bootstrap-default",
+      "version": 1,
+      "digest": "sha256:2f95702919229bde2540932f94d2389f464d2555b212cee860692a2e22ea16c1",
+      "providerProfileRef": "codex_openai_oauth",
+      "executionProfileRef": "omnigent-codex@1",
+      "launchPolicyRef": "codex-on-demand@1",
+      "agentId": "16a06503889b0c3034496821afd41b9e",
+      "document": {
+        "endpointRef": "default",
+        "harness": "codex-native"
+      }
+    }
+  }
+}

@@ -1003,6 +1003,44 @@ async def test_omnigent_checkpoint_waits_for_workspace_materialization(
     ]
 
 
+async def test_omnigent_agent_profile_rerun_compiles_trusted_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:ec891001 at the workflow-to-AgentRun request boundary."""
+
+    replay_id = "omnigent-agent-profile-rerun-compiler"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["runId"],
+        task_queue="mm.workflow.merge_automation",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    with pytest.raises(ValueError, match=manifest["escapedFailure"]):
+        parent._compile_authored_omnigent_selection(
+            manifest["workflowParameters"]["omnigent"],
+            path="node[node-1].omnigent",
+        )
+
+    request = parent._build_agent_execution_request(
+        node_inputs=manifest["nodeInputs"],
+        node_id="node-1",
+        tool_name="omnigent",
+        workflow_parameters=manifest["workflowParameters"],
+    )
+
+    assert request.agent_kind == "external"
+    assert request.agent_id == "omnigent"
+    assert request.execution_profile_ref == expected["executionProfileRef"]
+    assert request.parameters["omnigent"] == expected["omnigent"]
+
+
 async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
     tmp_path: Path,
 ) -> None:

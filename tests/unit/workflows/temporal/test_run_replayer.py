@@ -27,6 +27,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
+    RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
@@ -427,6 +428,57 @@ class _CurrentOmnigentCompilerReplayFixture:
             return authored
         return MoonMindRunWorkflow()._compile_authored_omnigent_selection(
             authored,
+            path="workflow.omnigent",
+        )
+
+
+def _agent_profile_snapshot_replay_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
+    return (
+        {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agentProfileRef": "omnigent-bootstrap-default@1",
+            "executionProfileRef": "omnigent-codex@1",
+            "agent": {"agentId": "upstream-codex-agent"},
+        },
+        {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-bootstrap-default",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+            "providerProfileRef": "codex-openai-oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agentId": "upstream-codex-agent",
+            "document": {
+                "endpointRef": "default",
+                "harness": "codex-native",
+            },
+        },
+    )
+
+
+@workflow.defn(name="OmnigentAgentProfileSnapshotCompilerReplayFixture")
+class _LegacyOmnigentAgentProfileSnapshotCompilerReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        authored, _snapshot = _agent_profile_snapshot_replay_inputs()
+        return authored
+
+
+@workflow.defn(name="OmnigentAgentProfileSnapshotCompilerReplayFixture")
+class _CurrentOmnigentAgentProfileSnapshotCompilerReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        authored, snapshot = _agent_profile_snapshot_replay_inputs()
+        if not workflow.patched(
+            RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH
+        ):
+            return authored
+        return MoonMindRunWorkflow()._compile_agent_profile_snapshot_omnigent_selection(
+            authored,
+            snapshot=snapshot,
+            execution_profile_ref="codex-openai-oauth",
             path="workflow.omnigent",
         )
 
@@ -1066,6 +1118,55 @@ async def test_github_3453_pre_change_omnigent_history_replays() -> None:
 
     replayer = Replayer(
         workflows=[_CurrentOmnigentCompilerReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_snapshot_compiler_histories_replay() -> None:
+    authored, _snapshot = _agent_profile_snapshot_replay_inputs()
+    compiled = {
+        "endpointRef": "default",
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agent": {
+            "harnessOverride": "codex-native",
+            "agentId": "upstream-codex-agent",
+        },
+    }
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-agent-profile-snapshot-legacy-replay",
+            workflows=[_LegacyOmnigentAgentProfileSnapshotCompilerReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyOmnigentAgentProfileSnapshotCompilerReplayFixture.run,
+                id="test-agent-profile-snapshot-legacy-history",
+                task_queue="test-agent-profile-snapshot-legacy-replay",
+            )
+            assert await legacy.result() == authored
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-agent-profile-snapshot-current-replay",
+            workflows=[_CurrentOmnigentAgentProfileSnapshotCompilerReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentOmnigentAgentProfileSnapshotCompilerReplayFixture.run,
+                id="test-agent-profile-snapshot-current-history",
+                task_queue="test-agent-profile-snapshot-current-replay",
+            )
+            assert await current.result() == compiled
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentOmnigentAgentProfileSnapshotCompilerReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

@@ -30,6 +30,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
@@ -1981,6 +1982,133 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "_moonmindProfileAuthorization",
             request.parameters["omnigent"],
         )
+
+    def test_agent_profile_snapshot_compiles_legacy_rerun_selection(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "codex-openai-oauth": {
+                "profile_id": "codex-openai-oauth",
+                "runtime_id": "codex_cli",
+            }
+        }
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "mm:agent-profile-rerun"
+            run_id = "rerun-1"
+
+        snapshot = {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-bootstrap-default",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+            "providerProfileRef": "codex-openai-oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agentId": "upstream-codex-agent",
+            "document": {
+                "endpointRef": "default",
+                "harness": "codex-native",
+            },
+        }
+        legacy_selection = {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agentProfileRef": "omnigent-bootstrap-default@1",
+            "executionProfileRef": "omnigent-codex@1",
+            "agent": {"agentId": "upstream-codex-agent"},
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id
+            in {
+                RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+                RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
+            },
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-openai-oauth",
+                    },
+                },
+                workflow_parameters={
+                    "omnigent": legacy_selection,
+                    "agentProfileSnapshot": snapshot,
+                },
+                node_id="node-1",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(
+            request.parameters["omnigent"],
+            {
+                "endpointRef": "default",
+                "executionTargetRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-on-demand@1",
+                "agent": {
+                    "harnessOverride": "codex-native",
+                    "agentId": "upstream-codex-agent",
+                    "agentName": "codex",
+                },
+            },
+        )
+        self.assertEqual(request.execution_profile_ref, "codex-openai-oauth")
+
+    def test_agent_profile_snapshot_rejects_conflicting_legacy_authority(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "mm:agent-profile-rerun"
+            run_id = "rerun-1"
+
+        snapshot = {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-bootstrap-default",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+            "providerProfileRef": "codex-openai-oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agentId": "upstream-codex-agent",
+            "document": {
+                "endpointRef": "default",
+                "harness": "codex-native",
+            },
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ), pytest.raises(
+            ValueError,
+            match="agentProfileRef conflicts with agentProfileSnapshot",
+        ):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-openai-oauth",
+                    },
+                },
+                workflow_parameters={
+                    "omnigent": {
+                        "agentProfileRef": "forged-profile@9",
+                    },
+                    "agentProfileSnapshot": snapshot,
+                },
+                node_id="node-1",
+                tool_name="omnigent",
+            )
 
     def test_github_3453_compiler_rejects_authored_authority_without_fallback(
         self,

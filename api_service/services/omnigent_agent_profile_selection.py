@@ -68,6 +68,78 @@ def _enforce_override_ceilings(
         )
 
 
+def compile_agent_profile_snapshot_parameters(
+    parameters: Mapping[str, Any],
+    *,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compile one trusted agent-profile snapshot into workflow parameters.
+
+    ``parameters.omnigent`` remains the authored product-intent surface.  The
+    immutable snapshot carries the selected upstream agent and profile
+    authority separately so the Temporal workflow can validate and merge it at
+    the runtime-request boundary.
+    """
+
+    document = snapshot.get("document")
+    if not isinstance(document, Mapping):
+        raise TypeError("agent profile snapshot document must be an object")
+
+    required_snapshot_fields = (
+        "profileId",
+        "version",
+        "digest",
+        "providerProfileRef",
+        "executionProfileRef",
+        "launchPolicyRef",
+        "agentId",
+    )
+    missing = [
+        field
+        for field in required_snapshot_fields
+        if snapshot.get(field) is None or str(snapshot.get(field)).strip() == ""
+    ]
+    if missing:
+        raise ValueError(
+            "agent profile snapshot is missing required fields: "
+            + ", ".join(missing)
+        )
+
+    compiled = copy.deepcopy(dict(parameters))
+    compiled["agentProfileSnapshot"] = copy.deepcopy(dict(snapshot))
+    compiled["agentProfile"] = {
+        "profileId": snapshot["profileId"],
+        "version": snapshot["version"],
+        "digest": snapshot["digest"],
+    }
+    compiled["profileId"] = snapshot["providerProfileRef"]
+
+    effective_model = document.get("model")
+    if isinstance(effective_model, Mapping):
+        if effective_model.get("model") is not None:
+            compiled["model"] = effective_model["model"]
+        if effective_model.get("effort") is not None:
+            compiled["effort"] = effective_model["effort"]
+
+    # Host realization uses the canonical authored names.  Profile identity,
+    # Provider Profile identity, and upstream agent identity stay exclusively
+    # in the trusted snapshot instead of leaking into this authored block.
+    authored_omnigent = compiled.get("omnigent")
+    omnigent = (
+        copy.deepcopy(dict(authored_omnigent))
+        if isinstance(authored_omnigent, Mapping)
+        else {}
+    )
+    omnigent["executionTargetRef"] = snapshot["executionProfileRef"]
+    omnigent["launchPolicyRef"] = snapshot["launchPolicyRef"]
+    compiled["omnigent"] = omnigent
+
+    compiled["rag"] = copy.deepcopy(document.get("rag") or {})
+    compiled["capture"] = copy.deepcopy(document.get("capture") or {})
+    compiled["workspace"] = copy.deepcopy(document.get("workspace") or {})
+    return compiled
+
+
 async def resolve_agent_profile_snapshot(
     session: AsyncSession,
     *,
@@ -238,4 +310,7 @@ async def resolve_agent_profile_snapshot(
     return snapshot
 
 
-__all__ = ["resolve_agent_profile_snapshot"]
+__all__ = [
+    "compile_agent_profile_snapshot_parameters",
+    "resolve_agent_profile_snapshot",
+]
