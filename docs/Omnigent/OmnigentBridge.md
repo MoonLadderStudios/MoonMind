@@ -200,7 +200,7 @@ the stock server does not provide them.
 
 | Operation | Facade route | Stock-server operation | Policy |
 |---|---|---|---|
-| Agent discovery/selection | `GET /api/agents` | `GET /api/agents` | Authenticated catalog; session creation resolves the selected/default agent. |
+| Agent discovery/selection | `GET /api/agents` | `GET /v1/agents` | Authenticated built-in catalog; session creation resolves the selected/default agent. |
 | Host readiness | `GET /api/hosts` | `GET /api/hosts` | Bounded readiness metadata only; no caller-selected host is accepted for managed profile routing. |
 | Create/reuse | `POST /v1/sessions` | `POST /v1/sessions` | Workflow-owned idempotency binding and first-message reconciliation. |
 | Snapshot | `GET /v1/sessions/{id}` | Same | Owned provider sessions only. |

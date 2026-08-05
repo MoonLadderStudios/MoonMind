@@ -209,7 +209,7 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
     assert await reconcile_bootstrap_agent_profile(
         session,
         env={},
-        inventory=_inventory("codex"),
+        inventory=_inventory("codex-native-ui"),
     ) is True
     count = await session.scalar(
         select(func.count()).select_from(OmnigentAgentProfile)
@@ -223,7 +223,7 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
             OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
         )
     )
-    assert version.document["source"]["upstreamId"] == "codex"
+    assert version.document["source"]["upstreamId"] == "codex-native-ui"
     assert version.rollout_metadata["origin"] == "builtin_default"
 
 
@@ -236,7 +236,7 @@ async def test_reconcile_uses_stable_upstream_id_when_selector_matches_name(sess
     assert await reconcile_bootstrap_agent_profile(
         session,
         env={},
-        inventory=_inventory("agent-1", name="codex"),
+        inventory=_inventory("agent-1", name="codex-native-ui"),
     ) is True
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
@@ -244,3 +244,24 @@ async def test_reconcile_uses_stable_upstream_id_when_selector_matches_name(sess
         )
     )
     assert version.document["source"]["upstreamId"] == "agent-1"
+
+
+async def test_reconcile_preserves_numeric_stock_agent_version(session):
+    inventory = _inventory("agent-1", name="codex-native-ui")
+    inventory[0]["version"] = 2
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=inventory,
+    ) is True
+
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
+        )
+    )
+    assert version.document["source"] == {
+        "upstreamId": "agent-1",
+        "upstreamVersion": "2",
+    }

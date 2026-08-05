@@ -23,6 +23,9 @@ from moonmind.omnigent.bridge_proxy import (
     _safe_resource_identifier,
     validate_bridge_host_fields,
 )
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
 pytestmark = [pytest.mark.asyncio]
@@ -875,7 +878,7 @@ async def test_stop_session_preserves_stock_control_event_type() -> None:
     assert client.posted_events == [("sess-9", {"type": "stop_session"})]
 
 
-async def test_default_agent_name_override_takes_precedence() -> None:
+async def test_durable_default_agent_id_override_takes_precedence() -> None:
     # MoonLadderStudios/MoonMind#3517 §8: the launch boundary supplies the
     # durable default agent selection, which must win over the env-derived
     # baked-in fallback when the request carries no explicit agent.
@@ -889,11 +892,13 @@ async def test_default_agent_name_override_takes_precedence() -> None:
     )
 
     response = await proxy.create_session(
-        request=req, binding=_binding(), default_agent_name_override="codex"
+        request=req,
+        binding=_binding(),
+        default_agent_override=OmnigentAgentSelection(agent_id="agent-durable"),
     )
 
     assert response["id"] == "sess-9"
-    assert client.created_payloads[0]["agent_id"] == "agent-1"
+    assert client.created_payloads[0]["agent_id"] == "agent-durable"
 
 
 async def test_baked_in_default_used_when_override_absent() -> None:
@@ -905,7 +910,7 @@ async def test_baked_in_default_used_when_override_absent() -> None:
     )
 
     response = await proxy.create_session(
-        request=req, binding=_binding(), default_agent_name_override=None
+        request=req, binding=_binding(), default_agent_override=None
     )
 
     assert client.created_payloads[0]["agent_id"] == "agent-1"

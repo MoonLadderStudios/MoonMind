@@ -15,10 +15,22 @@ from moonmind.workflows.adapters.omnigent_client import (
 @pytest.mark.asyncio
 async def test_omnigent_client_exposes_confirmed_operations() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "GET" and request.url.path == "/api/agents":
+        if request.method == "GET" and request.url.path == "/v1/agents":
+            assert request.url.params["limit"] == "1000"
             return httpx.Response(
                 200,
-                json={"agents": [{"id": "ag_1", "name": "codex"}]},
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "ag_1",
+                            "name": "codex-native-ui",
+                            "harness": "codex-native",
+                            "builtin": True,
+                        }
+                    ],
+                    "has_more": False,
+                },
             )
         if request.method == "GET" and request.url.path.endswith("/diff/src/app.py"):
             return httpx.Response(200, content=b"diff --git a/src/app.py b/src/app.py\n")
@@ -37,7 +49,15 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    assert await client.list_agents() == [{"id": "ag_1", "name": "codex"}]
+    assert await client.list_agents() == [
+        {
+            "id": "ag_1",
+            "name": "codex-native-ui",
+            "harness": "codex-native",
+            "builtin": True,
+            "capabilities": ["session.start"],
+        }
+    ]
     assert await client.get_agent("ag_1") == {"ok": True}
     assert await client.create_agent_bundle(
         filename="bundle.tgz",
@@ -62,6 +82,43 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
     assert await client.interrupt("sess_1") == {"ok": True}
     assert await client.stop_session("sess_1") == {"ok": True}
     assert await client.delete_session("sess_1") == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_omnigent_client_follows_agent_catalog_cursor() -> None:
+    requested_after: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        after = request.url.params.get("after")
+        requested_after.append(after)
+        if after is None:
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"id": "ag_1", "name": "first"}],
+                    "last_id": "ag_1",
+                    "has_more": True,
+                },
+            )
+        assert after == "ag_1"
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"id": "ag_2", "name": "codex-native-ui"}],
+                "last_id": "ag_2",
+                "has_more": False,
+            },
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert [agent["id"] for agent in await client.list_agents()] == ["ag_1", "ag_2"]
+    assert requested_after == [None, "ag_1"]
 
 
 @pytest.mark.asyncio

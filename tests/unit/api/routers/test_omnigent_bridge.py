@@ -23,7 +23,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
     _get_create_embedded_facade,
     _get_execution_service,
-    _get_launch_default_agent_name,
+    _get_launch_default_agent_selection,
     _require_bridge_enabled,
     embedded_host_auth_preflight,
     router,
@@ -257,7 +257,7 @@ class _FakeProxy:
         )
 
     async def create_session(
-        self, *, request, binding, default_agent_name_override=None
+        self, *, request, binding, default_agent_override=None
     ):
         if self.create_error is not None:
             raise self.create_error
@@ -265,7 +265,7 @@ class _FakeProxy:
             {
                 "binding": binding,
                 "request": request,
-                "default_agent_name_override": default_agent_name_override,
+                "default_agent_override": default_agent_override,
             }
         )
         return {"id": "sess-1", "status": "running", "moonmind": {"reused": False}}
@@ -508,7 +508,7 @@ def _build(
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
-    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
     if registry is not None:
         app.dependency_overrides[get_capability_registry] = lambda: registry
     if config is not None:
@@ -1547,7 +1547,7 @@ def test_superuser_owns_any_workflow() -> None:
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = _FakeStore
-    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
@@ -1577,7 +1577,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
     app.dependency_overrides[_get_bridge_store] = _FakeStore
-    app.dependency_overrides[_get_launch_default_agent_name] = lambda: None
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
     client = TestClient(app)
 
     resp = client.post(

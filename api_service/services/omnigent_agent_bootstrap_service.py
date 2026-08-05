@@ -1,9 +1,10 @@
 """Durable bootstrap default for Omnigent agent selection (MoonLadderStudios/MoonMind#3517).
 
-The normal local deployment has one portable Codex agent identity, ``codex``.
-MoonMind materializes that identity as an explicit, durable, active bootstrap
-profile. ``OMNIGENT_DEFAULT_AGENT_NAME`` remains an optional first-start
-override; durable state wins after materialization and conflicts fail closed.
+The normal local deployment has one stock portable Codex agent identity,
+``codex-native-ui``. MoonMind materializes its stable upstream ID and version as
+an explicit, durable, active bootstrap profile. ``OMNIGENT_DEFAULT_AGENT_NAME``
+remains an optional first-start override; durable state wins after
+materialization and conflicts fail closed.
 
 This module owns two side-effect-free-by-default primitives:
 
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
-_BUILTIN_DEFAULT_AGENT_NAME = "codex"
+_BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
 
 # Canonical Codex-via-Omnigent defaults for the materialized bootstrap version.
 # These mirror the built-in ``omnigent-codex@1`` execution path and carry no
@@ -361,6 +362,8 @@ def _inventory_text(item: Mapping[str, Any], *keys: str) -> str:
         value = item.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
     return ""
 
 

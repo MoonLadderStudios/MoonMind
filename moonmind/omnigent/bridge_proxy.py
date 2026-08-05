@@ -39,6 +39,7 @@ from moonmind.omnigent.bridge_store import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
     OmnigentAdapterError,
     OmnigentExecutionSelection,
     _is_git_url_with_optional_branch,
@@ -257,7 +258,12 @@ class OmnigentBridgeSessionProxy:
         self._run_store = run_store
         self._client = client
         self._config = config or OmnigentBridgeConfig()
-        self._default_agent_name = (default_agent_name or "").strip()
+        default_name = (default_agent_name or "").strip()
+        self._default_agent = (
+            OmnigentAgentSelection(agent_name=default_name)
+            if default_name
+            else None
+        )
 
     @property
     def config(self) -> OmnigentBridgeConfig:
@@ -268,14 +274,14 @@ class OmnigentBridgeSessionProxy:
         *,
         request: BridgeSessionCreateRequest,
         binding: BridgePrincipalBinding,
-        default_agent_name_override: str | None = None,
+        default_agent_override: OmnigentAgentSelection | None = None,
     ) -> dict[str, Any]:
         """Create or reuse a proxy-mode Omnigent session (OB-§8.2).
 
-        ``default_agent_name_override`` lets the launch boundary supply the
-        durable default agent selection resolved from an active default agent
-        profile (MoonLadderStudios/MoonMind#3517 §8); when unset the
-        configured environment fallback is used.
+        ``default_agent_override`` lets the launch boundary supply the typed,
+        durable default agent ID resolved from an active default agent profile
+        (MoonLadderStudios/MoonMind#3517 §8); when unset the configured
+        name-based environment fallback is used.
         """
 
         self._require_proxy_mode()
@@ -312,15 +318,13 @@ class OmnigentBridgeSessionProxy:
         async def _list_agents() -> list[dict[str, Any]]:
             return await self._list_agents_raw()
 
-        effective_default_agent_name = (
-            (default_agent_name_override or "").strip() or self._default_agent_name
-        )
+        effective_default_agent = default_agent_override or self._default_agent
         try:
             target = await resolve_omnigent_target(
                 selection,
                 list_agents=_list_agents,
                 upload_agent_bundle=_unsupported_bundle_upload,
-                default_agent_name=effective_default_agent_name,
+                default_agent=effective_default_agent,
             )
         except OmnigentAdapterError as exc:
             raise OmnigentBridgeError(
@@ -410,7 +414,7 @@ class OmnigentBridgeSessionProxy:
 
         Skips target resolution and the upstream create entirely (OB-§8.2): a
         default-agent request must not fail an otherwise-safe idempotent retry
-        just because ``/api/agents`` is momentarily down or the default agent
+        just because ``/v1/agents`` is momentarily down or the default agent
         renamed. ``session.created`` is still re-emitted idempotently so a prior
         partial failure (attach landed, journal write did not) recovers.
         """
@@ -950,7 +954,7 @@ class OmnigentBridgeSessionProxy:
         }
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        """Proxy ``GET /api/agents`` to the stock Omnigent Server (OB-§4.1)."""
+        """Serve the bridge catalog from stock ``GET /v1/agents`` (OB-§4.1)."""
 
         self._require_proxy_mode()
         return await self._list_agents_raw()

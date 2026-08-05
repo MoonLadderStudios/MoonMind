@@ -10,11 +10,11 @@ This document defines the target contract. The repository currently implements t
 persistent profile/version/audit/usage records, lifecycle API, bounded upstream
 projection, metadata and archive-content validation, an explicit snapshot-resolution
 API, an operator-triggered bounded smoke-validation endpoint with lease cleanup and
-secret-scanned diagnostics, and durable bootstrap materialization: the
-environment-derived default is seeded as an explicit draft bootstrap profile at
-startup and the durable active default profile is the launch-boundary authority,
-with the `OMNIGENT_DEFAULT_AGENT_NAME` fallback retained only when durable active
-state is absent (its use recorded, conflicts fail closed).
+secret-scanned diagnostics, and durable bootstrap materialization: the observed stock
+`codex-native-ui` identity is seeded as an explicit active default bootstrap profile
+after it passes structural readiness. `OMNIGENT_DEFAULT_AGENT_NAME` remains an optional
+first-start override when durable state is absent; its use is recorded and durable
+conflicts fail closed.
 
 Dashboard profile management, readiness-aware workflow and schedule selectors,
 transactional immutable snapshots, bounded bundle import, smoke validation, and
@@ -38,7 +38,7 @@ Profiles never contain credentials, OAuth homes, registration secrets, Dockerfil
 
 ## Discovery and launch safety
 
-MoonMind synchronizes `/api/agents` through its authenticated bridge boundary into a bounded last-known projection keyed by endpoint plus stable upstream id and version. It records harness, capabilities, health, provenance, compatibility, successful-sync time, attempt time, and redacted error state. An outage retains the prior snapshot but marks it stale. Missing or incompatible agents block new launches; historical snapshots remain readable.
+MoonMind synchronizes the stock `/v1/agents` built-in catalog through its authenticated bridge boundary into a bounded last-known projection keyed by endpoint plus stable upstream id and version. The stock catalog's session bindability is projected as the canonical `session.start` capability. MoonMind records harness, capabilities, health, provenance, compatibility, successful-sync time, attempt time, and redacted error state. An outage retains the prior snapshot but marks it stale. Missing or incompatible agents block new launches; historical snapshots remain readable.
 
 The selector shown by workflow, schedule, checkpoint-branch, and remediation authoring lists active versions and fresh readiness diagnostics. Submission persists the profile id/version/digest, upstream snapshot, Provider Profile id, execution and policy refs, and effective model/workspace/capture/RAG values. Overrides are accepted only after policy validation.
 
@@ -50,4 +50,4 @@ Smoke validation is an operator-triggered bounded preflight. It checks endpoint,
 
 ## Bootstrap
 
-The environment-derived default is materialized as an explicit bootstrap profile version. `OMNIGENT_DEFAULT_AGENT_NAME` is allowed only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.
+The synchronized stock `codex-native-ui` identity is materialized as an explicit active bootstrap profile version after structural readiness passes. `OMNIGENT_DEFAULT_AGENT_NAME` may override that first-start selector only when durable profile state is absent in bootstrap/local development; its use is recorded. Durable state wins, and conflicts fail closed.

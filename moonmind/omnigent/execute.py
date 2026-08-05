@@ -59,6 +59,7 @@ from moonmind.omnigent.settings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAgentSelection,
     OmnigentAdapterError,
     build_omnigent_selection,
     build_omnigent_session_create_payload,
@@ -809,7 +810,9 @@ async def run_omnigent_execution(
                 selection,
                 list_agents=list_agents,
                 upload_agent_bundle=_unsupported_bundle_upload,
-                default_agent_name=resolved_default_agent_name(),
+                default_agent=OmnigentAgentSelection(
+                    agent_name=resolved_default_agent_name()
+                ),
             )
             target_agent_id = target.agent_id
             session_payload = build_omnigent_session_create_payload(

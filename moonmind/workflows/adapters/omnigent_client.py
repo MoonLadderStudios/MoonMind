@@ -17,6 +17,9 @@ from moonmind.utils.logging import (
     redact_sensitive_text,
 )
 
+_AGENT_CATALOG_PAGE_SIZE = 1000
+_MAX_AGENT_CATALOG_PAGES = 100
+
 
 class OmnigentClientError(RuntimeError):
     """Structured client error for non-2xx Omnigent responses or transport failures."""
@@ -92,12 +95,56 @@ class OmnigentHttpClient:
         return headers
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/api/agents")
-        if isinstance(data, list):
-            return [dict(item) for item in data if isinstance(item, Mapping)]
-        if isinstance(data, Mapping) and isinstance(data.get("agents"), list):
-            return [dict(item) for item in data["agents"] if isinstance(item, Mapping)]
-        return []
+        """Return the current stock Omnigent built-in-agent catalog.
+
+        ``GET /v1/agents`` is a paginated, read-only list of agents that may be
+        bound by ``POST /v1/sessions``.  MoonMind's profile projection models
+        that bindability as the portable ``session.start`` capability, which
+        the stock response does not repeat on every agent object.
+        """
+
+        agents: list[dict[str, Any]] = []
+        after: str | None = None
+        seen_cursors: set[str] = set()
+        for _page_number in range(_MAX_AGENT_CATALOG_PAGES):
+            path = f"/v1/agents?limit={_AGENT_CATALOG_PAGE_SIZE}"
+            if after:
+                path += f"&after={quote(after, safe='')}"
+            data = await self._request("GET", path)
+            if not isinstance(data, Mapping) or not isinstance(data.get("data"), list):
+                if not agents:
+                    return []
+                raise OmnigentClientError(
+                    "Omnigent agent catalog pagination returned an unsupported "
+                    "response shape",
+                    response_body=data,
+                    failure_class="integration_error",
+                )
+
+            for item in data["data"]:
+                if not isinstance(item, Mapping):
+                    continue
+                agent = dict(item)
+                if "capabilities" not in agent:
+                    agent["capabilities"] = ["session.start"]
+                agents.append(agent)
+
+            if data.get("has_more") is not True:
+                return agents
+            next_cursor = str(data.get("last_id") or "").strip()
+            if not next_cursor or next_cursor in seen_cursors:
+                raise OmnigentClientError(
+                    "Omnigent agent catalog pagination did not advance its cursor",
+                    response_body=data,
+                    failure_class="integration_error",
+                )
+            seen_cursors.add(next_cursor)
+            after = next_cursor
+
+        raise OmnigentClientError(
+            "Omnigent agent catalog exceeded the bounded pagination limit",
+            failure_class="integration_error",
+        )
 
     async def get_agent(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")
