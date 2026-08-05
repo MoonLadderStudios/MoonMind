@@ -92,12 +92,27 @@ class OmnigentHttpClient:
         return headers
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/api/agents")
-        if isinstance(data, list):
-            return [dict(item) for item in data if isinstance(item, Mapping)]
-        if isinstance(data, Mapping) and isinstance(data.get("agents"), list):
-            return [dict(item) for item in data["agents"] if isinstance(item, Mapping)]
-        return []
+        """Return the current stock Omnigent built-in-agent catalog.
+
+        ``GET /v1/agents`` is a paginated, read-only list of agents that may be
+        bound by ``POST /v1/sessions``.  MoonMind's profile projection models
+        that bindability as the portable ``session.start`` capability, which
+        the stock response does not repeat on every agent object.
+        """
+
+        data = await self._request("GET", "/v1/agents?limit=1000")
+        if not isinstance(data, Mapping) or not isinstance(data.get("data"), list):
+            return []
+
+        agents: list[dict[str, Any]] = []
+        for item in data["data"]:
+            if not isinstance(item, Mapping):
+                continue
+            agent = dict(item)
+            if "capabilities" not in agent:
+                agent["capabilities"] = ["session.start"]
+            agents.append(agent)
+        return agents
 
     async def get_agent(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")

@@ -123,7 +123,13 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
 
     # Agent catalog proxied.
     agents = await proxy.list_agents()
-    assert agents == [{"id": "agent-1", "name": "codex"}]
+    assert agents == [
+        {
+            "id": "agent-1",
+            "name": "codex-native-ui",
+            "capabilities": ["session.start"],
+        }
+    ]
 
     # Retry under the same idempotency key reuses the session (no second create).
     reused = await proxy.create_session(request=request, binding=binding)

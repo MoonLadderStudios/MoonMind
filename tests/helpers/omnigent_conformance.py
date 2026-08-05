@@ -128,7 +128,7 @@ class FakeOmnigentServer:
 
     def app(self) -> web.Application:
         app = web.Application()
-        app.router.add_get("/api/agents", self.list_agents)
+        app.router.add_get("/v1/agents", self.list_agents)
         app.router.add_get("/api/hosts", self.list_hosts)
         app.router.add_post("/v1/sessions", self.create_session)
         app.router.add_get("/v1/sessions/{session_id}", self.get_session)
@@ -170,7 +170,13 @@ class FakeOmnigentServer:
     async def list_agents(self, request: web.Request) -> web.Response:
         if (fault := await self._fault(request, "agents")) is not None:
             return fault
-        return web.json_response({"agents": [{"id": "agent-1", "name": "codex"}]})
+        return web.json_response(
+            {
+                "object": "list",
+                "data": [{"id": "agent-1", "name": "codex-native-ui"}],
+                "has_more": False,
+            }
+        )
 
     async def list_hosts(self, request: web.Request) -> web.Response:
         if (fault := await self._fault(request, "hosts")) is not None:

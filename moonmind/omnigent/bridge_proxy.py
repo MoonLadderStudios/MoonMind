@@ -410,7 +410,7 @@ class OmnigentBridgeSessionProxy:
 
         Skips target resolution and the upstream create entirely (OB-§8.2): a
         default-agent request must not fail an otherwise-safe idempotent retry
-        just because ``/api/agents`` is momentarily down or the default agent
+        just because ``/v1/agents`` is momentarily down or the default agent
         renamed. ``session.created`` is still re-emitted idempotently so a prior
         partial failure (attach landed, journal write did not) recovers.
         """
@@ -950,7 +950,7 @@ class OmnigentBridgeSessionProxy:
         }
 
     async def list_agents(self) -> list[dict[str, Any]]:
-        """Proxy ``GET /api/agents`` to the stock Omnigent Server (OB-§4.1)."""
+        """Serve the bridge catalog from stock ``GET /v1/agents`` (OB-§4.1)."""
 
         self._require_proxy_mode()
         return await self._list_agents_raw()

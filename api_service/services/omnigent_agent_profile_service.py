@@ -95,6 +95,8 @@ def _text(row: Mapping[str, Any], *keys: str) -> str:
         value = row.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
     return ""
 
 
