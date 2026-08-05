@@ -38,6 +38,7 @@ from moonmind.auth.env_shaping import (
 )
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
+    ManagedProfileLaunchContext,
     ProfileResolutionError,
     _derive_pr_resolver_failure,
     _derive_pr_resolver_metadata,
@@ -350,6 +351,52 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
         context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"]
         == "codex_cli"
     )
+
+
+async def test_launch_context_preserves_profile_workload_mode_and_owner() -> None:
+    context = build_managed_profile_launch_context(
+        profile={
+            "profile_id": "codex-no-docker",
+            "credential_source": "oauth_volume",
+            "owner_user_id": "user-123",
+            "runtime_profile": {
+                "workloadMode": "no-docker",
+                "workspace": {
+                    "volume": "agent_workspaces",
+                    "mountPath": "/work/agent_jobs",
+                    "lifecycle": "session",
+                },
+                "agent": {
+                    "workspace": {"mountPath": "/work/agent_jobs"},
+                    "dockerClient": {
+                        "enabled": False,
+                        "composePlugin": False,
+                        "daemonInAgent": False,
+                    },
+                },
+                "labels": {"moonmind.workload_mode": "no-docker"},
+            },
+        },
+        runtime_for_profile="codex_cli",
+        workflow_id="wf-agent-run-1",
+        default_credential_source="oauth_volume",
+    )
+
+    assert context.workload_mode == "no-docker"
+    assert context.owner_user_id == "user-123"
+
+
+async def test_pre_cutover_launch_context_defaults_to_container_jobs() -> None:
+    context = ManagedProfileLaunchContext(
+        profile_id="legacy-profile",
+        credential_source="oauth_volume",
+        delta_env_overrides={},
+        passthrough_env_keys=[],
+        env_keys_count=0,
+    )
+
+    assert context.workload_mode == "container-jobs"
+    assert context.owner_user_id is None
 
 async def test_launch_context_rejects_non_mapping_runtime_profile() -> None:
     with pytest.raises(

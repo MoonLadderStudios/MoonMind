@@ -31,6 +31,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
 )
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -710,6 +711,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             request=request,
             workspace_path=workspace_path,
             environment=session_environment,
+            workload_mode=launch_context.workload_mode,
+            container_job_owner=(
+                OwnerIdentity(
+                    principalId=launch_context.owner_user_id,
+                    principalType="user",
+                )
+                if launch_context.owner_user_id
+                else OwnerIdentity(
+                    principalId=run_id,
+                    principalType="service",
+                )
+            ),
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
                 profile=profile,
@@ -1778,6 +1791,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         request: AgentExecutionRequest,
         workspace_path: str,
         environment: dict[str, str],
+        workload_mode: str,
+        container_job_owner: OwnerIdentity,
         profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
@@ -1874,6 +1889,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
+            workloadMode=workload_mode,
+            containerJobOwner=container_job_owner,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=launch_environment,
             metadata=extract_durable_retrieval_metadata(request.parameters),

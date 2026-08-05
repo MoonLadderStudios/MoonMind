@@ -20,7 +20,10 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
-from moonmind.schemas.container_job_models import ContainerJobActivityRequest
+from moonmind.schemas.container_job_models import (
+    AuxiliaryOutcome,
+    ContainerJobActivityRequest,
+)
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
     LABEL_CORRELATION,
@@ -231,6 +234,211 @@ async def test_bridge_launch_fails_before_create_when_network_is_not_internal(
     assert not any(command[0] == "create" for command in commands)
 
 
+def _sole_network_inspect(address: str = "172.31.0.7") -> bytes:
+    return json.dumps({EGRESS_NETWORK_REF: {"IPAddress": address}}).encode()
+
+
+@pytest.mark.asyncio
+async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None:
+    async def runner(args):
+        if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
+            return 0, _sole_network_inspect(), b""
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+            return 0, (
+                b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+                b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
+            ), b""
+        raise AssertionError(args)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    evidence = await backend._runtime_egress_evidence(request)
+
+    assert evidence is not None
+    assert evidence["attachmentIdentity"] == "owned-workload"
+    assert evidence["attachmentAddressDigest"].startswith("sha256:")
+    assert evidence["deniedConnectionCount"] == 1
+    assert evidence["denialDiagnostics"] == [
+        "denied 169.254.169.254:443 TCP_DENIED/403"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_egress_evidence_rejects_secondary_network(tmp_path) -> None:
+    async def runner(args):
+        if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
+            payload = {
+                EGRESS_NETWORK_REF: {"IPAddress": "172.31.0.7"},
+                "attacker-bridge": {"IPAddress": "10.9.9.9"},
+            }
+            return 0, json.dumps(payload).encode(), b""
+        raise AssertionError(args)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    with pytest.raises(RuntimeError, match="sole approved network"):
+        await backend._runtime_egress_evidence(request)
+
+
+@pytest.mark.asyncio
+async def test_runtime_egress_evidence_scopes_and_counts_beyond_cap(tmp_path) -> None:
+    from datetime import UTC, datetime
+
+    # Two denials predate the container start (a prior IP holder) and must be
+    # excluded; the in-lifetime denials exceed the 20-entry diagnostic cap so the
+    # count must continue past it while the sample stays bounded.
+    start = datetime(2026, 8, 4, 0, 0, 30, tzinfo=UTC)
+    finish = datetime(2026, 8, 4, 0, 5, 0, tzinfo=UTC)
+    prior = start.timestamp() - 120
+    in_window = start.timestamp() + 5
+    prior_lines = [
+        f"{prior} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT prior.invalid:443/ "
+        "- HIER_NONE/- text/html"
+        for _ in range(2)
+    ]
+    window_lines = [
+        f"{in_window} 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+        f"blocked{index}.invalid:443/ - HIER_NONE/- text/html"
+        for index in range(25)
+    ]
+    access_log = ("\n".join(prior_lines + window_lines) + "\n").encode()
+
+    async def runner(args):
+        if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
+            return 0, _sole_network_inspect(), b""
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+            return 0, access_log, b""
+        raise AssertionError(args)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+    request.started_at = start
+    request.finished_at = finish
+
+    evidence = await backend._runtime_egress_evidence(request)
+
+    assert evidence is not None
+    # Prior-holder denials excluded; all 25 in-lifetime denials counted; sample
+    # capped at 20.
+    assert evidence["deniedConnectionCount"] == 25
+    assert len(evidence["denialDiagnostics"]) == 20
+    assert all("prior.invalid" not in item for item in evidence["denialDiagnostics"])
+
+
+@pytest.mark.asyncio
+async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> None:
+    published: list[tuple[str, dict]] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"", b""
+        raise AssertionError(args)
+
+    async def publish(_request, name, data):
+        published.append((name, json.loads(data)))
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+    request.publication = AuxiliaryOutcome(
+        state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
+    )
+    request.egress_attestation_ref = "artifact:launch-attestation"
+
+    result = await backend.cleanup(request)
+
+    assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
+    assert result.cleanup_succeeded is True
+    assert published == [
+        (
+            f"{JOB_ID}-egress-lifecycle.json",
+            {
+                "cleanupResult": "succeeded",
+                "launchAttestationRef": "artifact:launch-attestation",
+                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+                "reconciliationResult": "succeeded",
+                "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
+                "schemaVersion": 1,
+                "workloadAttachmentIdentity": "owned-workload",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_durably_publishes_failed_reconciliation(tmp_path) -> None:
+    published: list[tuple[str, dict]] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"still-attached\n", b""
+        raise AssertionError(args)
+
+    async def publish(_request, name, data):
+        published.append((name, json.loads(data)))
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+    request.publication = AuxiliaryOutcome(
+        state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
+    )
+
+    result = await backend.cleanup(request)
+
+    assert result.cleanup_succeeded is False
+    assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
+    assert published[0][1]["cleanupResult"] == "failed"
+    assert published[0][1]["reconciliationResult"] == "failed"
+    assert published[0][1]["failureCode"] == "attachment_still_present"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_publishes_partial_setup_outcome_without_container_ref(
+    tmp_path,
+) -> None:
+    published: list[dict] = []
+
+    async def runner(args):
+        assert args[:2] == ("ps", "-aq")
+        return 0, b"", b""
+
+    async def publish(_request, _name, data):
+        published.append(json.loads(data))
+        return "artifact:partial-setup-lifecycle"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+
+    result = await backend.cleanup(request)
+
+    assert result.cleanup_succeeded is True
+    assert result.diagnostics_ref == "artifact:partial-setup-lifecycle"
+    assert published[0]["workloadAttachmentIdentity"].startswith(
+        "moonmind-container-job-"
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_mounts_authorized_workspace_volume_subpath(tmp_path) -> None:
     workspace = tmp_path / "temporal_sandbox" / "run-1" / "repo"
@@ -379,7 +587,7 @@ async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_cache_refs_without_authority_resolution(tmp_path) -> None:
+async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
     (tmp_path / "art_workspace").mkdir()
     commands: list[tuple[str, ...]] = []
     backend = DockerContainerJobBackend(
@@ -387,10 +595,131 @@ async def test_create_rejects_cache_refs_without_authority_resolution(tmp_path) 
     )
     request = _request(
         tmp_path,
-        caches=[{"cacheRef": "pip-cache", "target": "/root/.cache/pip", "readOnly": True}],
+        caches=[
+            {
+                "cacheRef": "unreal-ccache",
+                "target": "/home/ue4/.ccache",
+                "readOnly": False,
+            },
+            {
+                "cacheRef": "unreal-ubt",
+                "target": "/home/ue4/.config/Epic/UnrealBuildTool",
+                "readOnly": False,
+            },
+        ],
     )
-    with pytest.raises(RuntimeError, match="cacheRef is unsupported"):
-        await backend.create_container(request)
+    result = await backend.create_container(request)
+
+    create = next(command for command in commands if command[0] == "create")
+    cache_mounts = [
+        item for item in create if item.startswith("type=volume,src=unreal_")
+    ]
+    assert len(cache_mounts) == 2
+    assert any(
+        item.startswith("type=volume,src=unreal_ccache_volume-")
+        and item.endswith(",dst=/home/ue4/.ccache")
+        for item in cache_mounts
+    )
+    assert any(
+        item.startswith("type=volume,src=unreal_ubt_volume-")
+        and item.endswith("dst=/home/ue4/.config/Epic/UnrealBuildTool")
+        for item in cache_mounts
+    )
+    cache_volume_commands = [
+        command for command in commands if command[:2] == ("volume", "create")
+    ]
+    assert len(cache_volume_commands) == 2
+    assert all(
+        "moonmind.kind=container-job-cache" in command
+        for command in cache_volume_commands
+    )
+    assert all(
+        any(item.startswith("moonmind.cache_owner=") for item in command)
+        for command in cache_volume_commands
+    )
+    assert result.resolved_cache_refs == ("unreal-ccache", "unreal-ubt")
+
+
+@pytest.mark.asyncio
+async def test_cache_volume_is_scoped_to_the_authorized_owner(tmp_path) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    first_commands: list[tuple[str, ...]] = []
+    second_commands: list[tuple[str, ...]] = []
+    cache = [
+        {
+            "cacheRef": "unreal-ccache",
+            "target": "/home/ue4/.ccache",
+            "readOnly": False,
+        }
+    ]
+    first_request = _request(tmp_path, caches=cache)
+    second_request = first_request.model_copy(
+        update={
+            "owner": first_request.owner.model_copy(
+                update={"principal_id": "different-owner"}
+            )
+        }
+    )
+
+    await DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(first_commands),
+    ).create_container(first_request)
+    await DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(second_commands),
+    ).create_container(second_request)
+
+    first_mount = next(
+        item
+        for command in first_commands
+        for item in command
+        if item.startswith("type=volume,src=unreal_ccache_volume-")
+    )
+    second_mount = next(
+        item
+        for command in second_commands
+        for item in command
+        if item.startswith("type=volume,src=unreal_ccache_volume-")
+    )
+    assert first_mount != second_mount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache,match",
+    [
+        (
+            {"cacheRef": "unknown", "target": "/cache", "readOnly": False},
+            "not deployment-authorized",
+        ),
+        (
+            {
+                "cacheRef": "unreal-ccache",
+                "target": "/different",
+                "readOnly": False,
+            },
+            "requires target",
+        ),
+        (
+            {
+                "cacheRef": "unreal-ccache",
+                "target": "/home/ue4/.ccache",
+                "readOnly": True,
+            },
+            "requires read-write",
+        ),
+    ],
+)
+async def test_create_rejects_cache_authority_mismatch(
+    tmp_path, cache: dict[str, object], match: str
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner([])
+    )
+    with pytest.raises(RuntimeError, match=match):
+        await backend.create_container(_request(tmp_path, caches=[cache]))
 
 
 @pytest.mark.asyncio
@@ -465,6 +794,11 @@ async def test_secret_ref_without_resolver_fails_fast(tmp_path) -> None:
         ["create", "--ipc=host"],
         ["create", "--userns=host"],
         ["create", "--device", "/dev/kmsg"],
+        ["create", "--add-host", "metadata.internal:169.254.169.254"],
+        ["create", "--dns", "8.8.8.8"],
+        ["create", "--dns-search=internal"],
+        ["create", "--sysctl", "net.ipv4.ip_forward=1"],
+        ["create", "--cap-add", "NET_ADMIN"],
         ["create", "--mount", "type=bind,src=/var/run/docker.sock,dst=/x"],
         ["create", "--mount", "type=bind,src=/var/lib/docker,dst=/x"],
     ],
@@ -488,8 +822,27 @@ def test_final_launch_boundary_allows_hardened_baseline() -> None:
             "none",
             "--mount",
             "type=bind,src=/work/agent_jobs/ws,dst=/workspace",
-        ]
+        ],
+        expected_network="none",
     )
+
+
+@pytest.mark.parametrize(
+    "network_args",
+    [
+        [],
+        ["--network", "host"],
+        ["--network=bridge"],
+        ["--network", "none", "--network", "attacker-network"],
+    ],
+)
+def test_final_launch_boundary_rejects_missing_or_caller_selected_networks(
+    network_args,
+) -> None:
+    with pytest.raises(RuntimeError, match="unapproved network"):
+        DockerContainerJobBackend._reject_forbidden_launch_args(
+            ["create", *network_args], expected_network="none"
+        )
 
 
 @pytest.mark.asyncio
@@ -555,3 +908,168 @@ async def test_create_failure_does_not_expose_resolved_workspace(tmp_path) -> No
     with pytest.raises(RuntimeError) as excinfo:
         await backend.create_container(_request(tmp_path))
     assert str(workspace) not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_retries_transient_credential_removal(tmp_path, monkeypatch):
+    published: list[dict] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"", b""
+        raise AssertionError(args)
+
+    async def publish(_request, _name, data):
+        published.append(json.loads(data))
+        return "artifact:lifecycle"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    attempts = {"count": 0}
+    real_remove = backend._remove_auth_dir
+
+    def flaky_remove(auth_dir, *, best_effort):
+        attempts["count"] += 1
+        if attempts["count"] < 3 and not best_effort:
+            raise OSError("transient")
+        return real_remove(auth_dir, best_effort=best_effort)
+
+    monkeypatch.setattr(backend, "_remove_auth_dir", flaky_remove)
+
+    result = await backend.cleanup(request)
+
+    # The bounded in-Activity retry recovers the transient failure so credentials
+    # do not remain on disk and the terminal result reports success.
+    assert attempts["count"] == 3
+    assert result.cleanup_succeeded is True
+    assert published[0]["cleanupResult"] == "succeeded"
+    assert "failureCode" not in published[0]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reports_failure_after_exhausting_credential_retries(
+    tmp_path, monkeypatch
+):
+    published: list[dict] = []
+
+    async def runner(args):
+        if args[:2] == ("ps", "-aq"):
+            return 0, b"", b""
+        raise AssertionError(args)
+
+    async def publish(_request, _name, data):
+        published.append(json.loads(data))
+        return "artifact:lifecycle"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    def always_fail(_auth_dir, *, best_effort):
+        if not best_effort:
+            raise OSError("persistent")
+
+    monkeypatch.setattr(backend, "_remove_auth_dir", always_fail)
+
+    result = await backend.cleanup(request)
+
+    # A persistent failure still publishes durable lifecycle evidence rather than
+    # discarding it, and surfaces the credential-cleanup failure code.
+    assert result.cleanup_succeeded is False
+    assert published[0]["cleanupResult"] == "failed"
+    assert published[0]["failureCode"] == "credential_cleanup_failed"
+
+
+@pytest.mark.asyncio
+async def test_publish_diagnostics_preserves_refs_when_egress_evidence_fails(tmp_path):
+    published: dict[str, bytes] = {}
+
+    async def runner(args):
+        # The attachment inspection fails, which previously propagated and
+        # discarded the already-uploaded logs and outputs.
+        if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
+            return 1, b"", b"no such container"
+        raise AssertionError(args)
+
+    async def publish(_request, name, data):
+        published[name] = data
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    request = _request(tmp_path, networkMode="bridge")
+    request.container_ref = "owned-workload"
+
+    diagnostics_ref = await backend._publish_runtime_diagnostics(
+        request,
+        logs_ref="artifact:logs",
+        stdout_ref="artifact:stdout",
+        stderr_ref="artifact:stderr",
+        manifest=[],
+    )
+
+    assert diagnostics_ref == f"artifact:{JOB_ID}-diagnostics.json"
+    body = json.loads(published[f"{JOB_ID}-diagnostics.json"])
+    assert body["logsRef"] == "artifact:logs"
+    assert body["egressEvidence"]["state"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
+    published: list[tuple[str, dict]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 0, json.dumps({LABEL_OWNERSHIP: f"{JOB_ID}:v1"}).encode(), b""
+        if args[:3] == ("inspect", "--format", "{{.State.Running}}"):
+            return 0, b"true", b""
+        if args[:2] == ("network", "inspect"):
+            return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                    "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {},
+                    "moonmind_sandbox-egress-network": {},
+                    OMNIGENT_EGRESS_NETWORK_REF: {},
+                    "local-network": {},
+                },
+                "image": "sha256:gateway-image",
+                "health": "healthy",
+            }
+            return 0, json.dumps(payload).encode(), b""
+        if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
+            return 0, (
+                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
+                + "  /etc/squid/squid.conf\n"
+            ).encode(), b""
+        return 0, b"", b""
+
+    async def publish(_request, name, data):
+        published.append((name, json.loads(data)))
+        return f"artifact:{name}"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    result = await backend.reconcile_container(
+        _request(tmp_path, networkMode="bridge")
+    )
+
+    # A reconciled bridge container republishes launch attestation evidence so its
+    # durable reference is not lost when the create step is skipped.
+    assert result.container_ref is not None
+    assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-attestation.json"
+    assert published[0][1]["reconciliationResult"] == "recovered"

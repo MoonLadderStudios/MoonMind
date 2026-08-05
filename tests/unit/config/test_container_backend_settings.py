@@ -7,6 +7,9 @@ import pytest
 from moonmind.config.container_backend_settings import (
     PYTHON_TEST_FINGERPRINT_INPUTS,
     PYTHON_TEST_IMAGE_SOURCE_REF,
+    TACTICS_UNREAL_IMAGE_SOURCE_REF,
+    UNREAL_CCACHE_CACHE_REF,
+    UNREAL_UBT_CACHE_REF,
     LocalImageRecipe,
     RegistryImageSource,
     SUPPORTED_CONTAINER_BACKEND_KINDS,
@@ -30,6 +33,15 @@ def test_defaults_are_deployment_safe() -> None:
     assert source.image == "moonmind-python-tests:local"
     assert source.target == "test-runtime"
     assert source.fingerprint_inputs == PYTHON_TEST_FINGERPRINT_INPUTS
+    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).volume_name == (
+        "unreal_ccache_volume"
+    )
+    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).target == (
+        "/home/ue4/.ccache"
+    )
+    assert settings.cache_source(UNREAL_UBT_CACHE_REF).target == (
+        "/home/ue4/.config/Epic/UnrealBuildTool"
+    )
     for pattern in source.fingerprint_inputs:
         assert any(path.is_file() for path in source.context_root.glob(pattern))
 
@@ -97,6 +109,45 @@ def test_prebuilt_python_test_image_replaces_local_recipe() -> None:
     assert isinstance(source, RegistryImageSource)
     assert source.image == "registry.example/tests:v2"
     assert source.pull_policy == "if-missing"
+
+
+def test_tactics_image_reuses_operator_provisioned_host_image() -> None:
+    settings = resolve_container_backend_settings(
+        {
+            "MOONMIND_UNREAL_ENGINE_IMAGE": (
+                "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+            ),
+            "MOONMIND_UNREAL_CCACHE_VOLUME_NAME": "shared-ccache",
+            "MOONMIND_UNREAL_UBT_VOLUME_NAME": "shared-ubt",
+        }
+    )
+
+    source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
+    assert isinstance(source, RegistryImageSource)
+    assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+    assert source.pull_policy == "never"
+    assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).volume_name == (
+        "shared-ccache"
+    )
+    assert settings.cache_source(UNREAL_UBT_CACHE_REF).volume_name == "shared-ubt"
+
+
+def test_default_tactics_source_and_invalid_cache_volume_fail_closed() -> None:
+    settings = resolve_container_backend_settings({})
+    source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
+    assert isinstance(source, RegistryImageSource)
+    assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+    assert source.pull_policy == "never"
+
+    with pytest.raises(ContainerBackendConfigError, match="named volume"):
+        resolve_container_backend_settings(
+            {"MOONMIND_UNREAL_CCACHE_VOLUME_NAME": "/host/cache"}
+        )
+
+    with pytest.raises(ContainerBackendConfigError, match="pull policy"):
+        resolve_container_backend_settings(
+            {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "sometimes"}
+        )
 
 
 def test_python_test_recipe_uses_deployment_root_and_optional_max_age(

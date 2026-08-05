@@ -80,6 +80,8 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    bounded_denial_diagnostics,
+    denied_connection_count,
     attest_docker_egress,
     restricted_proxy_env,
 )
@@ -133,14 +135,19 @@ _EXPIRY_GRACE_SECONDS = 300
 # explicit, safe ``--privileged=false``. Every other flag here must never appear.
 _FORBIDDEN_LAUNCH_FLAGS = frozenset(
     {
+        "--add-host",
         "--device",
         "--device-cgroup-rule",
+        "--dns",
+        "--dns-option",
+        "--dns-search",
         "--pid",
         "--ipc",
         "--uts",
         "--userns",
         "--cgroupns",
         "--cap-add",
+        "--sysctl",
     }
 )
 _TRUTHY_PRIVILEGED = frozenset({"--privileged", "--privileged=true", "--privileged=1"})
@@ -245,6 +252,10 @@ class _LocalImageObservation:
 _MAX_LIVE_LOG_EVENTS = 5000
 _LIVE_LOG_ENTRY_MAX_CHARS = 8192
 _LIVE_EVENTS_JOURNAL_NAME = "observability.events.jsonl"
+# Bounded in-Activity retry for transient credential-directory removal failures.
+# The removal is idempotent, so retrying a transient OSError cannot leak state.
+_CREDENTIAL_CLEANUP_ATTEMPTS = 3
+_CREDENTIAL_CLEANUP_BACKOFF_SECONDS = 0.1
 # ``docker logs --timestamps`` prefixes every line with an RFC3339Nano instant.
 _DOCKER_TS_LINE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))(?:\s(?P<text>.*))?$"
@@ -419,6 +430,45 @@ class DockerContainerJobBackend:
         suffix = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
         return f"moonmind-container-job-{suffix}"
 
+    @staticmethod
+    def _owner_scoped_cache_volume_name(
+        request: ContainerJobActivityRequest,
+        base_volume_name: str,
+    ) -> tuple[str, str]:
+        owner_identity = (
+            f"{request.owner.principal_type}:{request.owner.principal_id}"
+        )
+        owner_digest = hashlib.sha256(owner_identity.encode("utf-8")).hexdigest()[:20]
+        prefix = base_volume_name[: 255 - len(owner_digest) - 1]
+        return f"{prefix}-{owner_digest}", owner_digest
+
+    async def _ensure_owner_scoped_cache_volume(
+        self,
+        request: ContainerJobActivityRequest,
+        *,
+        base_volume_name: str,
+        cache_ref: str,
+    ) -> str:
+        volume_name, owner_digest = self._owner_scoped_cache_volume_name(
+            request, base_volume_name
+        )
+        code, _stdout, _stderr = await self._runner(
+            (
+                "volume",
+                "create",
+                "--label",
+                "moonmind.kind=container-job-cache",
+                "--label",
+                f"moonmind.cache_ref={cache_ref}",
+                "--label",
+                f"moonmind.cache_owner={owner_digest}",
+                volume_name,
+            )
+        )
+        if code:
+            raise RuntimeError("container cache volume could not be materialized")
+        return volume_name
+
     async def _owned_ownership_label(self, name: str) -> str | None:
         """Return the ownership label of an existing container, or ``None``.
 
@@ -486,7 +536,21 @@ class DockerContainerJobBackend:
                 )
 
     @staticmethod
-    def _reject_forbidden_launch_args(args: Sequence[str]) -> None:
+    def _reject_forbidden_launch_args(
+        args: Sequence[str], *, expected_network: str | None = None
+    ) -> None:
+        network_values: list[str] = []
+        for index, token in enumerate(args):
+            if token == "--network":
+                if index + 1 >= len(args):
+                    raise RuntimeError("refusing to launch without a network value")
+                network_values.append(args[index + 1])
+            elif token.startswith("--network="):
+                network_values.append(token.split("=", 1)[1])
+        if expected_network is not None and network_values != [expected_network]:
+            raise RuntimeError(
+                "refusing to launch owned container with an unapproved network"
+            )
         for token in args:
             flag = token.split("=", 1)[0]
             if flag in _FORBIDDEN_LAUNCH_FLAGS:
@@ -1364,8 +1428,45 @@ class DockerContainerJobBackend:
         )
         if code:
             return ContainerJobActivityResult()
+        # A reconciled container skips the authoritative create step, so its
+        # durable launch-attestation reference would otherwise be lost and both
+        # the runtime diagnostics and post-cleanup lifecycle artifacts would
+        # publish launchAttestationRef=null. Re-attest the live restricted-egress
+        # state and republish the attestation evidence so the recovery path can
+        # correlate the running workload with its enforced launch policy.
+        diagnostics_ref = await self._recover_launch_attestation(request, name)
         return ContainerJobActivityResult(
-            containerRef=name, running=stdout.strip() == b"true"
+            containerRef=name,
+            running=stdout.strip() == b"true",
+            diagnosticsRef=diagnostics_ref,
+        )
+
+    async def _recover_launch_attestation(
+        self, request: ContainerJobActivityRequest, name: str
+    ) -> str | None:
+        """Re-attest and republish launch evidence for a reconciled bridge job."""
+
+        if request.request.spec.network_mode != "bridge" or self._publish is None:
+            return None
+        egress_attestation = await attest_docker_egress(
+            runner=self._runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref=self._backend_ref,
+        )
+        evidence = {
+            "schemaVersion": 1,
+            "kind": "restricted-egress-launch-attestation",
+            "attachmentIdentity": name,
+            "attestation": egress_attestation.model_dump(by_alias=True, mode="json"),
+            "deniedConnectionCount": 0,
+            "denialDiagnostics": [],
+            "cleanupResult": "pending",
+            "reconciliationResult": "recovered",
+        }
+        return await self._publish(
+            request,
+            f"{request.job_id}-egress-attestation.json",
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
         )
 
     async def _materialized_env(
@@ -1487,11 +1588,38 @@ class DockerContainerJobBackend:
             "--mount",
             workspace_mount,
         ]
-        if spec.caches:
-            raise RuntimeError(
-                "cacheRef is unsupported until container-job authority can "
-                "resolve it to an approved volume"
+        resolved_cache_refs: list[str] = []
+        for requested_cache in spec.caches:
+            try:
+                cache = self._settings.cache_source(requested_cache.cache_ref)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"container cache source {requested_cache.cache_ref!r} is not "
+                    "deployment-authorized"
+                ) from exc
+            if requested_cache.target != cache.target:
+                raise RuntimeError(
+                    f"container cache source {cache.cache_ref!r} requires target "
+                    f"{cache.target!r}"
+                )
+            if requested_cache.read_only != cache.read_only:
+                access = "read-only" if cache.read_only else "read-write"
+                raise RuntimeError(
+                    f"container cache source {cache.cache_ref!r} requires "
+                    f"{access} access"
+                )
+            volume_name = await self._ensure_owner_scoped_cache_volume(
+                request,
+                base_volume_name=cache.volume_name,
+                cache_ref=cache.cache_ref,
             )
+            mount = (
+                f"type=volume,src={volume_name},dst={cache.target}"
+            )
+            if cache.read_only:
+                mount += ",readonly"
+            args.extend(("--mount", mount))
+            resolved_cache_refs.append(cache.cache_ref)
         args.extend(await self._materialized_env(request))
         if egress_attestation is not None:
             args.extend(
@@ -1510,7 +1638,7 @@ class DockerContainerJobBackend:
                 args.extend(("--env", proxy_env))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
-        self._reject_forbidden_launch_args(args)
+        self._reject_forbidden_launch_args(args, expected_network=network_mode)
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
@@ -1549,7 +1677,9 @@ class DockerContainerJobBackend:
                     "restricted-egress launch evidence could not be persisted"
                 ) from exc
         return ContainerJobActivityResult(
-            containerRef=name, diagnosticsRef=egress_evidence_ref
+            containerRef=name,
+            diagnosticsRef=egress_evidence_ref,
+            resolvedCacheRefs=tuple(resolved_cache_refs),
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -1995,6 +2125,18 @@ class DockerContainerJobBackend:
     ) -> str | None:
         if self._publish is None:
             return None
+        # Egress evidence is auxiliary diagnostic collection performed after the
+        # logs and output artifacts have already been uploaded. If the gateway,
+        # its access log, or the workload attachment cannot be inspected, isolate
+        # that failure into the diagnostics body rather than letting it propagate
+        # and discard the already-published primary terminal evidence.
+        egress_evidence: dict | None
+        egress_error: str | None = None
+        try:
+            egress_evidence = await self._runtime_egress_evidence(request)
+        except Exception as exc:
+            egress_evidence = None
+            egress_error = str(exc)[:512] or type(exc).__name__
         diagnostics = {
             "jobId": request.job_id,
             "contractVersion": "v1",
@@ -2013,6 +2155,16 @@ class DockerContainerJobBackend:
             if request.finished_at
             else None,
             "durationMs": request.duration_ms,
+            "backendRef": self._backend_ref,
+            "imageSourceRef": request.request.spec.image_source_ref,
+            "image": (
+                request.image_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+                if request.image_observation is not None
+                else None
+            ),
+            "resolvedCacheRefs": list(request.resolved_cache_refs),
             "logsRef": logs_ref,
             "stdoutRef": stdout_ref,
             "stderrRef": stderr_ref,
@@ -2021,12 +2173,106 @@ class DockerContainerJobBackend:
                 for item in manifest
             ],
         }
+        if egress_evidence is not None:
+            egress_evidence["launchAttestationRef"] = (
+                request.egress_attestation_ref
+            )
+            diagnostics["egressEvidence"] = egress_evidence
+        elif egress_error is not None:
+            # Record the auxiliary failure without discarding the primary refs.
+            diagnostics["egressEvidence"] = {
+                "state": "unavailable",
+                "error": egress_error,
+                "launchAttestationRef": request.egress_attestation_ref,
+            }
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
         ).encode("utf-8")
         return await self._publish(
             request, f"{request.job_id}-diagnostics.json", data
         )
+
+    async def _runtime_egress_evidence(
+        self, request: ContainerJobActivityRequest
+    ) -> dict | None:
+        """Observe bounded denial and attachment evidence before cleanup."""
+
+        if request.request.spec.network_mode != "bridge":
+            return None
+        ref = request.container_ref or self._name(request)
+        # Inspect the complete network map, not just the approved network. If
+        # daemon state drifted or another trusted client attached a second
+        # network, indexing only the approved network would still return a valid
+        # IP and let terminal evidence claim restricted egress while the workload
+        # holds a direct bypass route. Require the approved network to be the sole
+        # attachment before emitting passing evidence.
+        code, stdout, _ = await self._runner(
+            (
+                "inspect",
+                "--format",
+                "{{json .NetworkSettings.Networks}}",
+                ref,
+            )
+        )
+        if code or not stdout.strip():
+            raise RuntimeError("restricted-egress attachment evidence is unavailable")
+        try:
+            networks = json.loads(stdout.decode(errors="replace"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                "restricted-egress attachment evidence is malformed"
+            ) from exc
+        if not isinstance(networks, dict) or set(networks) != {
+            DEFAULT_EGRESS_PROFILE.network_ref
+        }:
+            raise RuntimeError(
+                "restricted-egress attachment is not the sole approved network"
+            )
+        client_address = str(
+            (networks[DEFAULT_EGRESS_PROFILE.network_ref] or {}).get("IPAddress") or ""
+        ).strip()
+        if not client_address:
+            raise RuntimeError("restricted-egress attachment evidence is unavailable")
+        code, access_log, _ = await self._runner(
+            (
+                "exec",
+                DEFAULT_EGRESS_PROFILE.gateway_ref,
+                "tail",
+                "-n",
+                "500",
+                "/var/log/squid/access.log",
+            )
+        )
+        if code:
+            raise RuntimeError("restricted-egress denial evidence is unavailable")
+        # Scope denials to this launch by client address and, when known, the
+        # container start/finish interval so a reused bridge IP cannot attribute
+        # a prior holder's denials from the gateway's line tail to this job.
+        denial_diagnostics = bounded_denial_diagnostics(
+            access_log,
+            client_address=client_address,
+            started_at=request.started_at,
+            finished_at=request.finished_at,
+        )
+        # The retained diagnostic sample is capped; count denials independently so
+        # terminal evidence does not underreport traffic above the cap.
+        denied_count = denied_connection_count(
+            access_log,
+            client_address=client_address,
+            started_at=request.started_at,
+            finished_at=request.finished_at,
+        )
+        return {
+            "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+            "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+            "networkRef": DEFAULT_EGRESS_PROFILE.network_ref,
+            "gatewayRef": DEFAULT_EGRESS_PROFILE.gateway_ref,
+            "attachmentIdentity": ref,
+            "attachmentAddressDigest": "sha256:"
+            + hashlib.sha256(client_address.encode()).hexdigest(),
+            "deniedConnectionCount": denied_count,
+            "denialDiagnostics": list(denial_diagnostics),
+        }
 
     async def _persist_live_events_journal(
         self, request: ContainerJobActivityRequest
@@ -2073,11 +2319,75 @@ class DockerContainerJobBackend:
         # cleanup failure is reported through the workflow's separate cleanup
         # auxiliary outcome and never rewrites the primary workload result.
         auth_dir = self._auth_dir(request)
-        try:
-            self._remove_auth_dir(auth_dir, best_effort=False)
-        except OSError as exc:
-            raise ContainerJobBackendError(
-                ContainerJobFailureClass.CREDENTIAL_CLEANUP_FAILED,
-                "ephemeral registry credential directory could not be removed",
-            ) from exc
-        return ContainerJobActivityResult()
+        cleanup_succeeded = True
+        failure_code: str | None = None
+        # Retry the credential removal in-Activity for transient OSErrors before
+        # surrendering. Reporting cleanupSucceeded=false returns the Activity
+        # normally (to still publish durable lifecycle evidence), which suppresses
+        # the workflow's configured cleanup retries; a bounded inner retry keeps a
+        # transient filesystem error from leaving registry credentials on disk.
+        for attempt in range(_CREDENTIAL_CLEANUP_ATTEMPTS):
+            try:
+                self._remove_auth_dir(auth_dir, best_effort=False)
+                cleanup_succeeded = True
+                failure_code = None
+                break
+            except OSError:
+                cleanup_succeeded = False
+                failure_code = "credential_cleanup_failed"
+                if attempt + 1 < _CREDENTIAL_CLEANUP_ATTEMPTS:
+                    await asyncio.sleep(_CREDENTIAL_CLEANUP_BACKOFF_SECONDS)
+
+        diagnostics_ref = None
+        if request.request.spec.network_mode == "bridge":
+            # remove_container runs immediately before cleanup. Observe that no
+            # job-owned attachment remains rather than turning an attempted
+            # delete into terminal evidence. Filters are ownership scoped, so
+            # this check neither discovers nor mutates another job's resource.
+            code, stdout, _ = await self._runner(
+                (
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    f"label={LABEL_CONTAINER_JOB}={request.job_id}",
+                    "--filter",
+                    f"label={LABEL_OWNERSHIP}={request.ownership_token}",
+                )
+            )
+            if code or stdout.strip():
+                cleanup_succeeded = False
+                failure_code = failure_code or "attachment_still_present"
+            if self._publish is None:
+                raise RuntimeError(
+                    "restricted-egress lifecycle evidence publisher is unavailable"
+                )
+            lifecycle = {
+                "schemaVersion": 1,
+                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+                "workloadAttachmentIdentity": request.container_ref
+                or self._name(request),
+                "runtimeDiagnosticsRef": (
+                    request.publication.diagnostics_ref
+                    if request.publication is not None
+                    else None
+                ),
+                "launchAttestationRef": request.egress_attestation_ref,
+                "reconciliationResult": (
+                    "succeeded" if not (code or stdout.strip()) else "failed"
+                ),
+                "cleanupResult": "succeeded" if cleanup_succeeded else "failed",
+            }
+            if failure_code is not None:
+                lifecycle["failureCode"] = failure_code
+            diagnostics_ref = await self._publish(
+                request,
+                f"{request.job_id}-egress-lifecycle.json",
+                json.dumps(
+                    lifecycle, sort_keys=True, separators=(",", ":")
+                ).encode(),
+            )
+        return ContainerJobActivityResult(
+            diagnosticsRef=diagnostics_ref,
+            cleanupSucceeded=cleanup_succeeded,
+        )

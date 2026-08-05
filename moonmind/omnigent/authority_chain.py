@@ -161,6 +161,7 @@ def build_omnigent_authority_chain_evidence(
     repository_mutation_required: bool = False,
     github_mutation_required: bool = False,
     profile_authorization: Mapping[str, Any] | None = None,
+    egress_attestation: Mapping[str, Any] | None = None,
     result_output_refs: Sequence[str] = (),
     result_metadata: Mapping[str, Any] | None = None,
     terminal_status: str = "completed",
@@ -188,6 +189,7 @@ def build_omnigent_authority_chain_evidence(
         profile_authorization if isinstance(profile_authorization, Mapping) else {}
     )
     metadata = result_metadata if isinstance(result_metadata, Mapping) else {}
+    egress = egress_attestation if isinstance(egress_attestation, Mapping) else {}
     materialization = (
         workspace.get("materialization")
         if isinstance(workspace.get("materialization"), Mapping)
@@ -253,6 +255,22 @@ def build_omnigent_authority_chain_evidence(
         "mountClasses": _class_list(launch.get("mountClasses")),
         "capabilityClasses": _class_list(required_capabilities),
         "controlCapabilities": _class_list(launch.get("controlCapabilities")),
+        "egress": {
+            "profileRef": _text(egress.get("profileRef")),
+            "profileDigest": _text(egress.get("profileDigest")),
+            "backendRef": _text(egress.get("backendRef")),
+            "enforcerImplementation": _text(
+                egress.get("enforcerImplementation")
+            ),
+            "networkRef": _text(egress.get("networkRef")),
+            "gatewayRef": _text(egress.get("gatewayRef")),
+            "appliedRuleDigest": _text(egress.get("appliedRuleDigest")),
+            "attachmentRef": _text(egress.get("attachmentRef")),
+            "validationState": _text(
+                egress.get("validationState") or egress.get("validationResult")
+            ),
+            "validatedAt": _text(egress.get("validatedAt")),
+        },
     }
 
     publication_refs: dict[str, Any] = {}

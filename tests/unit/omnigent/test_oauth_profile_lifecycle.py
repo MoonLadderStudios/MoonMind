@@ -43,6 +43,7 @@ from moonmind.omnigent.execution_profiles import (
     validate_effective_launch_snapshot,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
@@ -2138,7 +2139,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
 
 
-async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[dict]]:
+async def _drive_authority_chain_coordinator(
+    execute,
+) -> tuple[list[str], list[dict], dict]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
     Returns the ordered lifecycle event-type stream and every emitted
@@ -2222,6 +2225,18 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             return {
                 "hostId": "host-1",
                 "workspacePath": "/workspaces/run",
+                "egressAttestation": {
+                    "profileRef": "omnigent-egress@1",
+                    "profileDigest": "sha256:" + "1" * 64,
+                    "backendRef": "omnigent-host-runtime",
+                    "enforcerImplementation": "squid@1",
+                    "networkRef": "moonmind_sandbox-egress-network",
+                    "gatewayRef": "omnigent-egress-proxy",
+                    "appliedRuleDigest": "sha256:" + "2" * 64,
+                    "attachmentRef": "container:host-1",
+                    "validationState": "attested",
+                    "validatedAt": "2026-08-03T00:00:00Z",
+                },
                 # Bounded, credential-free resolution evidence as produced by the
                 # real runtime; the coordinator folds this into the authority chain.
                 "workspaceResolution": {
@@ -2280,7 +2295,7 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             command_behavior={},
         )
     )
-    await coordinator.execute(
+    coordinator_result = await coordinator.execute(
         AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
@@ -2305,7 +2320,7 @@ async def _drive_authority_chain_coordinator(execute) -> tuple[list[str], list[d
             },
         )
     )
-    return ordered, authority_metadata
+    return ordered, authority_metadata, dict(coordinator_result.metadata or {})
 
 
 @pytest.mark.asyncio
@@ -2324,7 +2339,9 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
             metadata={"pushRef": "artifact://push-1"},
         )
 
-    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
+    ordered, authority_metadata, result_metadata = (
+        await _drive_authority_chain_coordinator(execute)
+    )
 
     assert "authority_chain" in ordered
     assert ordered.index("authority_chain") < ordered.index("terminal")
@@ -2343,6 +2360,14 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
     assert chain["terminal"]["releaseOrdering"][-1] == "terminal"
     assert chain["terminal"]["cleanupCompleted"] is True
     assert chain["runtime"]["hostMode"] == "on_demand_docker"
+    assert chain["runtime"]["egress"]["validationState"] == "attested"
+    assert chain["runtime"]["egress"]["attachmentRef"] == "container:host-1"
+    checkpoint_egress = result_metadata["omnigentCheckpointCapture"][
+        "egressAttestation"
+    ]
+    assert checkpoint_egress["profileRef"] == "omnigent-egress@1"
+    assert checkpoint_egress["appliedRuleDigest"] == "sha256:" + "2" * 64
+    assert checkpoint_egress["attachmentRef"] == "container:host-1"
     assert chain["terminal"]["cleanupMode"] == "on_demand_remove"
     # No credential material or raw daemon path anywhere in the projection.
     flat = repr(chain)
@@ -2368,7 +2393,9 @@ async def test_coordinator_records_returned_runner_failure_in_authority_chain() 
             retryRecommendation="retry_after_provider_cooldown",
         )
 
-    ordered, authority_metadata = await _drive_authority_chain_coordinator(execute)
+    ordered, authority_metadata, _result_metadata = (
+        await _drive_authority_chain_coordinator(execute)
+    )
 
     assert len(authority_metadata) == 1
     chain = authority_metadata[0]
@@ -2975,6 +3002,9 @@ async def _run_coordinator_failure_case(
     # exercises coordinator failure/cleanup evidence, so treat enforcement as
     # already attested and let the intended failure stages surface.
     runtime._attest_egress = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
+    runtime._attest_workload_attachment = AsyncMock(  # type: ignore[method-assign]
+        return_value="container-1"
+    )
     runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
     runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
     runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
@@ -4081,3 +4111,56 @@ async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
 
     assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
     resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attest_workload_attachment_records_actual_on_demand_container(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    networks = {OMNIGENT_EGRESS_PROFILE.network_ref: {"IPAddress": "172.31.5.5"}}
+    runtime._run = AsyncMock(return_value=(0, json.dumps(networks), ""))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+
+    identity = await runtime._attest_workload_attachment(
+        binding=binding,
+        host_lease=_host_lease(),
+        container_name="mm-host-lease-1",
+    )
+
+    # The attachment records the real Docker container, verified against the
+    # attested egress network, not the logical registered host id.
+    assert identity == "mm-host-lease-1"
+    inspect = runtime._run.await_args_list[-1].args
+    assert inspect[:3] == ("docker", "inspect", "--format")
+    assert inspect[-1] == "mm-host-lease-1"
+
+
+@pytest.mark.asyncio
+async def test_attest_workload_attachment_fails_when_network_absent(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    # The container is attached to some other network, not the attested one.
+    runtime._run = AsyncMock(
+        return_value=(0, json.dumps({"local-network": {"IPAddress": "10.0.0.2"}}), "")
+    )
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        await runtime._attest_workload_attachment(
+            binding=binding,
+            host_lease=_host_lease(),
+            container_name="mm-host-lease-1",
+        )
+    assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"

@@ -300,6 +300,38 @@ def _result_for(name: str) -> ContainerJobActivityResult:
 
 
 @pytest.mark.asyncio
+async def test_reconciled_container_recovers_launch_attestation_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    cleanup_request: ContainerJobActivityRequest | None = None
+
+    async def activity(name, request):
+        nonlocal cleanup_request
+        if name == "container_job.create_container":
+            raise AssertionError("create must be skipped for a reconciled container")
+        if name == "container_job.cleanup":
+            cleanup_request = request.model_copy(deep=True)
+        if name.endswith("reconcile_container"):
+            # A reconciled container carries its republished attestation ref.
+            return ContainerJobActivityResult(
+                containerRef="owned:reconciled",
+                running=True,
+                diagnosticsRef="artifact:recovered-attestation",
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    assert cleanup_request is not None
+    assert (
+        cleanup_request.egress_attestation_ref == "artifact:recovered-attestation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_workspace_volume_mount_survives_activity_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,6 +351,35 @@ async def test_workspace_volume_mount_survives_activity_boundaries(
     assert create_request is not None
     assert create_request.resolved_workspace_volume_name == "agent_workspaces"
     assert create_request.resolved_workspace_volume_subpath == "run-1/repo"
+
+
+@pytest.mark.asyncio
+async def test_resolved_cache_refs_survive_activity_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    publish_request: ContainerJobActivityRequest | None = None
+
+    async def activity(name, request):
+        nonlocal publish_request
+        if name == "container_job.create_container":
+            return ContainerJobActivityResult(
+                containerRef="owned:3277",
+                resolvedCacheRefs=("unreal-ccache", "unreal-ubt"),
+            )
+        if name == "container_job.publish_evidence":
+            publish_request = request.model_copy(deep=True)
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    assert publish_request is not None
+    assert publish_request.resolved_cache_refs == (
+        "unreal-ccache",
+        "unreal-ubt",
+    )
 
 
 @pytest.mark.asyncio
@@ -577,6 +638,79 @@ async def test_terminal_projection_carries_timing_and_events(
     assert terminal.finished_at is not None
     assert terminal.events_ref == "art:events"
     assert terminal.publication.diagnostics_ref == "art:diagnostics"
+
+
+@pytest.mark.asyncio
+async def test_terminal_projection_carries_post_cleanup_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.publish_evidence":
+            assert request.egress_attestation_ref == "art:launch-attestation"
+            return ContainerJobActivityResult(diagnosticsRef="art:runtime")
+        if name == "container_job.create_container":
+            return ContainerJobActivityResult(
+                containerRef="owned:3277",
+                diagnosticsRef="art:launch-attestation",
+            )
+        if name == "container_job.cleanup":
+            assert request.publication.diagnostics_ref == "art:runtime"
+            return ContainerJobActivityResult(diagnosticsRef="art:lifecycle")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["cleanup"] == {
+        "state": "succeeded",
+        "diagnosticsRef": "art:lifecycle",
+    }
+    assert projections[-1].cleanup_outcome.diagnostics_ref == "art:lifecycle"
+    assert projections[-1].egress_attestation_ref == "art:launch-attestation"
+
+
+@pytest.mark.asyncio
+async def test_terminal_projection_preserves_failed_cleanup_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.cleanup":
+            return ContainerJobActivityResult(
+                diagnosticsRef="art:failed-lifecycle", cleanupSucceeded=False
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["cleanup"] == {
+        "state": "failed",
+        "diagnosticsRef": "art:failed-lifecycle",
+    }
+    assert projections[-1].cleanup_outcome.diagnostics_ref == "art:failed-lifecycle"
+
+
+def test_pre_egress_lifecycle_activity_payload_remains_compatible() -> None:
+    legacy = ContainerJobActivityResult.model_validate(
+        {"contractVersion": "v1", "diagnosticsRef": "art:legacy-cleanup"}
+    )
+
+    assert legacy.cleanup_succeeded is None
+    assert legacy.model_dump(by_alias=True, exclude_none=True) == {
+        "contractVersion": "v1",
+        "resolvedCacheRefs": (),
+        "diagnosticsRef": "art:legacy-cleanup",
+    }
 
 
 @pytest.mark.asyncio

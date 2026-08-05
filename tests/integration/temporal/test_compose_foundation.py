@@ -855,6 +855,18 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert worker_env["MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"] == (
         "${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}"
     )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}"
+    )
+    assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"] == (
+        "${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-never}"
+    )
+    assert worker_env["MOONMIND_UNREAL_CCACHE_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert worker_env["MOONMIND_UNREAL_UBT_VOLUME_NAME"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
+    )
     assert worker_env["DOCKER_BUILDKIT"] == "1"
     assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
         "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
@@ -864,6 +876,12 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     )
     assert compose["volumes"]["agent_workspaces"]["name"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+    assert compose["volumes"]["unreal_ccache_volume"]["name"] == (
+        "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"
+    )
+    assert compose["volumes"]["unreal_ubt_volume"]["name"] == (
+        "${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}"
     )
     assert services["docker-proxy"]["environment"]["BUILD"] == 1
     assert services["docker-proxy"]["environment"]["SESSION"] == 1

@@ -67,6 +67,18 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
             "credentialGeneration": 3,
             "bridgeSessionId": "bridge-1",
         },
+        egress_attestation={
+            "profileRef": "omnigent-egress@1",
+            "profileDigest": "sha256:" + "1" * 64,
+            "backendRef": "omnigent-host-runtime",
+            "enforcerImplementation": "squid@1",
+            "networkRef": "moonmind_sandbox-egress-network",
+            "gatewayRef": "omnigent-egress-proxy",
+            "appliedRuleDigest": "sha256:" + "2" * 64,
+            "attachmentRef": "container:host-1",
+            "validationState": "attested",
+            "validatedAt": "2026-08-03T00:00:00Z",
+        },
         result_output_refs=["artifact://out-1", "artifact://out-2"],
         result_metadata={
             "pushRef": "artifact://push-1",
@@ -105,6 +117,18 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
     assert rt["bridgeSessionId"] == "bridge-1"
     assert rt["mountClasses"] == ["workspace", "oauth_home", "skills_tools"]
     assert rt["capabilityClasses"] == ["gh", "git"]
+    assert rt["egress"] == {
+        "profileRef": "omnigent-egress@1",
+        "profileDigest": "sha256:" + "1" * 64,
+        "backendRef": "omnigent-host-runtime",
+        "enforcerImplementation": "squid@1",
+        "networkRef": "moonmind_sandbox-egress-network",
+        "gatewayRef": "omnigent-egress-proxy",
+        "appliedRuleDigest": "sha256:" + "2" * 64,
+        "attachmentRef": "container:host-1",
+        "validationState": "attested",
+        "validatedAt": "2026-08-03T00:00:00Z",
+    }
     # Publication policy + declared outputs + downstream evidence refs.
     pub = evidence["publication"]
     assert pub["publishMode"] == "branch"

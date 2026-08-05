@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.temporal_payload_policy import (
     MAX_TEMPORAL_METADATA_REF_CHARS,
     MAX_TEMPORAL_METADATA_STRING_CHARS,
@@ -77,6 +78,11 @@ ManagedSessionRuntimeFamily = Literal["codex"]
 ManagedSessionRuntimeId = Literal["codex_cli"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
+ManagedSessionWorkloadMode = Literal[
+    "container-jobs",
+    "no-docker",
+    "kubernetes-job",
+]
 ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
 ManagedSessionHandleStatus = Literal[
     "launching",
@@ -1096,14 +1102,10 @@ class ManagedGitHubCredentialDescriptor(BaseModel):
             )
         return self
 
+
 ManagedSessionDockerCapabilityMode = Literal[
     "sidecar-dind",
     "sidecar-dind-rootless",
-]
-ManagedSessionDockerActivation = Literal[
-    "denied",
-    "on_demand",
-    "on_launch",
 ]
 ManagedSessionDockerState = Literal[
     "not_allowed",
@@ -1113,64 +1115,9 @@ ManagedSessionDockerState = Literal[
     "failed",
 ]
 
-class ManagedSessionDockerCapabilityRequest(BaseModel):
-    """Requested Docker authorization/materialization contract for launch."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    allowed: bool = Field(True, alias="allowed")
-    mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
-    activation: ManagedSessionDockerActivation = Field("on_demand", alias="activation")
-    state: ManagedSessionDockerState = Field("not_started", alias="state")
-    docker_host: str | None = Field(
-        "unix:///var/run/moonmind-docker/docker.sock",
-        alias="dockerHost",
-    )
-    compose_support: bool = Field(True, alias="composeSupport")
-    manifest_image_ref: str | None = Field(None, alias="manifestImageRef")
-    timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
-    interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_required_payload(cls, value: object) -> object:
-        if not isinstance(value, dict) or "required" not in value:
-            return value
-        migrated = dict(value)
-        required = bool(migrated.pop("required"))
-        migrated.setdefault("allowed", True)
-        migrated.setdefault("activation", "on_launch" if required else "on_demand")
-        migrated.setdefault("state", "not_started")
-        return migrated
-
-    @model_validator(mode="after")
-    def _normalize(self) -> "ManagedSessionDockerCapabilityRequest":
-        if not self.allowed:
-            self.activation = "denied"
-            self.state = "not_allowed"
-            self.docker_host = None
-        elif self.activation == "denied":
-            raise ValueError(
-                "dockerCapability.activation=denied requires allowed=false"
-            )
-        elif self.state == "not_allowed":
-            raise ValueError(
-                "dockerCapability.state=not_allowed requires allowed=false"
-            )
-        if self.docker_host is not None:
-            self.docker_host = require_non_blank(
-                self.docker_host,
-                field_name="dockerCapability.dockerHost",
-            )
-        if self.manifest_image_ref is not None:
-            self.manifest_image_ref = require_non_blank(
-                self.manifest_image_ref,
-                field_name="dockerCapability.manifestImageRef",
-            )
-        return self
 
 class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
-    """Explicit request to materialize a managed session's Docker sidecar."""
+    """Replay-compatible request retained for pre-cutover workflow histories."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1181,16 +1128,18 @@ class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
     reason: NonBlankStr | None = Field(None, alias="reason")
     compose_required: bool = Field(False, alias="composeRequired")
 
+
 class ManagedSessionDockerDaemonStatus(BaseModel):
-    """Observed daemon readiness for a managed session Docker sidecar."""
+    """Observed readiness for a replay-compatible Docker sidecar."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     ready: bool = Field(False, alias="ready")
     version: str = Field("", alias="version")
 
+
 class ManagedSessionEnsureDockerSidecarResponse(BaseModel):
-    """Result of idempotent managed-session Docker sidecar activation."""
+    """Replay-compatible result for already-scheduled sidecar Activities."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1220,6 +1169,12 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
+    workload_mode: ManagedSessionWorkloadMode = Field(
+        "container-jobs", alias="workloadMode"
+    )
+    container_job_owner: OwnerIdentity | None = Field(
+        None, alias="containerJobOwner"
+    )
     turn_completion_timeout_seconds: int = Field(
         3600,
         alias="turnCompletionTimeoutSeconds",
@@ -1227,10 +1182,6 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-    docker_capability: ManagedSessionDockerCapabilityRequest | None = Field(
-        None,
-        alias="dockerCapability",
-    )
     github_credential: ManagedGitHubCredentialDescriptor | None = Field(
         None,
         alias="githubCredential",
@@ -4897,14 +4848,13 @@ __all__ = [
     "ManagedSessionRuntimeId",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
-    "ManagedSessionDockerActivation",
     "ManagedSessionDockerCapabilityMode",
-    "ManagedSessionDockerCapabilityRequest",
     "ManagedSessionDockerDaemonStatus",
     "ManagedSessionDockerState",
     "ManagedSessionEnsureDockerSidecarRequest",
     "ManagedSessionEnsureDockerSidecarResponse",
     "ManagedSessionContainerBackend",
+    "ManagedSessionWorkloadMode",
     "MANAGED_SESSION_CONTROL_ACTIONS",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",

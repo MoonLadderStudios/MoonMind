@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,16 @@ from moonmind.mcp.container_job_tool_registry import (
     classify_container_job_error,
 )
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
-from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.schemas.container_job_models import (
+    ContainerJobSubmitRequest,
+    OwnerIdentity,
+)
+from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator
+from moonmind.security.container_job_capabilities import (
+    ContainerJobCapabilityError,
+    ContainerJobSessionCapability,
+    verify_container_job_session_capability,
+)
 from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
@@ -198,7 +207,7 @@ def _list_streamable_callable_tools() -> list[Any]:
 
 async def _dispatch_container_job_tool(
     payload: ToolCallRequest,
-    user: User,
+    owner: OwnerIdentity,
     session: AsyncSession,
 ) -> Any:
     if not container_jobs_ready():
@@ -213,7 +222,7 @@ async def _dispatch_container_job_tool(
         service=ContainerJobService(
             session, artifacts=get_temporal_artifact_service(session)
         ),
-        owner=OwnerIdentity(principalId=str(user.id), principalType="user"),
+        owner=owner,
         transport="mcp",
     )
     try:
@@ -244,7 +253,11 @@ async def _dispatch_tool_call(
                     "message": "The container-job service requires a database session.",
                 },
             )
-        return await _dispatch_container_job_tool(payload, user, session)
+        return await _dispatch_container_job_tool(
+            payload,
+            OwnerIdentity(principalId=str(user.id), principalType="user"),
+            session,
+        )
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -657,4 +670,98 @@ async def call_tool(
         raise _to_http_exception(exc) from None
     except Exception as exc:  # pragma: no cover - mapping layer
         raise _to_http_exception(exc) from exc
+    return ToolCallResponse(result=result)
+
+
+def _container_capability_token(authorization: str | None) -> str:
+    scheme, separator, token = str(authorization or "").strip().partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "container_capability_required",
+                "message": "A managed-session container capability is required.",
+            },
+        )
+    return token.strip()
+
+
+def _enforce_container_capability_scope(
+    payload: ToolCallRequest,
+    capability: ContainerJobSessionCapability,
+) -> None:
+    if payload.tool != "container.submit":
+        return
+    try:
+        submission = ContainerJobSubmitRequest.model_validate(payload.arguments)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_tool_arguments",
+                "message": "Container-job request validation failed.",
+            },
+        ) from exc
+    workspace = submission.spec.workspace_ref
+    if not isinstance(workspace, ManagedWorkspaceLocator) or (
+        workspace.agent_run_id != capability.agent_run_id
+        or workspace.runtime_id != capability.runtime_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "container_capability_scope_mismatch",
+                "message": (
+                    "Container workspace exceeds the managed-session capability."
+                ),
+            },
+        )
+    source = submission.source
+    if (
+        source.source != "managed_session"
+        or source.agent_run_id != capability.agent_run_id
+        or source.managed_session_id != capability.session_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "container_capability_scope_mismatch",
+                "message": (
+                    "Container correlation exceeds the managed-session capability."
+                ),
+            },
+        )
+
+
+@router.post("/container/tools/call", response_model=ToolCallResponse)
+async def call_managed_session_container_tool(
+    payload: ToolCallRequest,
+    authorization: str | None = Header(None, alias="Authorization"),
+    session: AsyncSession = Depends(get_async_session),
+) -> ToolCallResponse:
+    """Dispatch only container tools under a scoped managed-session capability."""
+
+    if not _container_job_registry.has_tool(payload.tool):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "tool_not_found",
+                "message": "The scoped endpoint exposes container tools only.",
+            },
+        )
+    try:
+        capability = verify_container_job_session_capability(
+            _container_capability_token(authorization),
+            secret=str(settings.security.JWT_SECRET_KEY or ""),
+        )
+    except ContainerJobCapabilityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "invalid_container_capability",
+                "message": str(exc),
+            },
+        ) from exc
+    _enforce_container_capability_scope(payload, capability)
+    result = await _dispatch_container_job_tool(payload, capability.owner, session)
     return ToolCallResponse(result=result)
