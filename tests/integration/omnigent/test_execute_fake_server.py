@@ -50,7 +50,7 @@ async def test_omnigent_execute_harvests_resources_with_fake_server(
             },
             parameters={
                 "omnigent": {
-                    "agent": {"agentName": "codex"},
+                    "agent": {"agentName": "codex-native-ui"},
                     "session": {"hostType": "managed"},
                     "prompt": {"text": "Implement MM-1059 fake-server scenario"},
                 }
@@ -105,7 +105,7 @@ async def test_omnigent_execute_required_artifact_persistence_failure_is_termina
             idempotencyKey="idem-required-artifact",
             parameters={
                 "omnigent": {
-                    "agent": {"agentName": "codex"},
+                    "agent": {"agentName": "codex-native-ui"},
                     "session": {"allowEmptyWorkspace": True},
                     "prompt": {"instructionRef": "artifact://omnigent/missing"},
                 }
@@ -138,7 +138,7 @@ async def test_omnigent_execute_terminal_capture_retry_is_idempotent(
         idempotencyKey="idem-retry",
         parameters={
             "omnigent": {
-                "agent": {"agentName": "codex"},
+                "agent": {"agentName": "codex-native-ui"},
                 "session": {"allowEmptyWorkspace": True},
                 "prompt": {"text": "retry terminal capture"},
             }
