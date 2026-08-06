@@ -21,7 +21,6 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
-from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,

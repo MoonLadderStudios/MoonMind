@@ -145,7 +145,7 @@ async def test_stream_queue_marks_pre_post_terminal_as_stale() -> None:
     message_posted.set()
     release_current_event.set()
     current_event, current_after_post = await queue.get()
-    await task
+    assert await task is None
 
     assert stale_event["type"] == "session.terminal"
     assert stale_after_post is False

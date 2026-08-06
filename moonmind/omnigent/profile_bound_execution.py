@@ -599,7 +599,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             # A lease heartbeat must run until provider execution completes.
             # Propagate its failure so the execution is canceled instead of
             # being silently interrupted later by the stale-lease janitor.
-            await heartbeat_task
+            heartbeat_task.result()
             raise RuntimeError("host lease heartbeat stopped unexpectedly")
         finally:
             for task in (execution_task, heartbeat_task):
