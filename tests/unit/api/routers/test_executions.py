@@ -4378,9 +4378,10 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         },
     }
 
+    profile_resolver = AsyncMock(return_value=snapshot)
     with patch(
         "api_service.api.routers.executions.resolve_agent_profile_snapshot",
-        new=AsyncMock(return_value=snapshot),
+        new=profile_resolver,
     ):
         response = test_client.post(
             "/api/executions",
@@ -4405,6 +4406,11 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         )
 
     assert response.status_code == 201, response.text
+    assert profile_resolver.await_args.kwargs["selection"] == {
+        "profileId": "omnigent-bootstrap-default",
+        "providerProfileRef": "codex-openai-oauth",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]

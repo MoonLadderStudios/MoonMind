@@ -506,8 +506,7 @@ async def get_omnigent_codex_catalog_readiness(
         select(OmnigentPolicy, OmnigentPolicyVersion)
         .join(
             OmnigentPolicyVersion,
-            (OmnigentPolicyVersion.policy_id == OmnigentPolicy.policy_id)
-            & (OmnigentPolicyVersion.version == OmnigentPolicy.default_version),
+            OmnigentPolicyVersion.policy_id == OmnigentPolicy.policy_id,
         )
         .where(OmnigentPolicyVersion.state == "active")
     )).all())
@@ -521,7 +520,8 @@ async def get_omnigent_codex_catalog_readiness(
         )
         default_policy = POLICIES.get(profile.default_policy_ref)
         default_policy_id = default_policy.policy_id if default_policy else None
-        launch_policies_by_id: dict[str, LaunchPolicyReadiness] = {}
+        launch_policies_by_ref: dict[str, LaunchPolicyReadiness] = {}
+        persisted_default_ref: str | None = None
         unavailable_policy_reasons: list[GateReason] = []
         for policy in POLICIES.values():
             if not policy.policy_id.startswith(provider_slug + "-"):
@@ -552,7 +552,7 @@ async def get_omnigent_codex_catalog_readiness(
                 if mode_readiness["conformanceState"] != "ready":
                     policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
-                launch_policies_by_id[policy.policy_id] = LaunchPolicyReadiness(
+                launch_policies_by_ref[policy.ref] = LaunchPolicyReadiness(
                     ref=policy.ref,
                     displayName=(
                         "On-demand Docker"
@@ -560,11 +560,16 @@ async def get_omnigent_codex_catalog_readiness(
                         else "Static Compose"
                     ),
                     hostMode=policy.host_mode,
-                    isDefault=policy.policy_id == default_policy_id,
+                    isDefault=False,
                 )
                 available_modes.append(policy.host_mode)
             unavailable_policy_reasons.extend(policy_reasons)
         for identity, version in persisted_policies:
+            if not (
+                identity.visibility == "deployment"
+                or identity.owner_user_id == getattr(current_user, "id", None)
+            ):
+                continue
             document = version.document_json
             if document.get("execution", {}).get("profileRef") != profile.ref:
                 continue
@@ -592,7 +597,7 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("static_host_not_ready"))
             if not policy_reasons:
                 persisted_ref = f"{identity.policy_id}@{version.version}"
-                launch_policies_by_id[identity.policy_id] = LaunchPolicyReadiness(
+                launch_policies_by_ref[persisted_ref] = LaunchPolicyReadiness(
                     ref=persisted_ref,
                     displayName=(
                         str(getattr(identity, "name", "") or "").strip()
@@ -603,12 +608,27 @@ async def get_omnigent_codex_catalog_readiness(
                         )
                     ),
                     hostMode=host_mode,
-                    isDefault=identity.policy_id == default_policy_id,
+                    isDefault=False,
                 )
+                if (
+                    identity.policy_id == default_policy_id
+                    and version.version == identity.default_version
+                ):
+                    persisted_default_ref = persisted_ref
                 available_modes.append(host_mode)
             unavailable_policy_reasons.extend(policy_reasons)
+        preferred_default_ref = (
+            persisted_default_ref
+            if persisted_default_ref in launch_policies_by_ref
+            else profile.default_policy_ref
+        )
         launch_policies = sorted(
-            launch_policies_by_id.values(),
+            (
+                policy.model_copy(
+                    update={"is_default": policy.ref == preferred_default_ref}
+                )
+                for policy in launch_policies_by_ref.values()
+            ),
             key=lambda item: (not item.is_default, item.display_name, item.ref),
         )
         if not launch_policies:

@@ -428,7 +428,11 @@ def test_resolved_persisted_policy_keeps_latest_from_being_a_launch_blocker(
     monkeypatch,
 ):
     identity = SimpleNamespace(
-        policy_id="codex-on-demand", name="On-demand Docker"
+        policy_id="codex-on-demand",
+        name="On-demand Docker",
+        default_version=2,
+        visibility="deployment",
+        owner_user_id=None,
     )
     version = SimpleNamespace(
         version=2,
@@ -476,6 +480,100 @@ def test_resolved_persisted_policy_keeps_latest_from_being_a_launch_blocker(
     assert "immutable_image_unavailable" not in {
         reason["code"] for reason in body["gateReasons"]
     }
+
+
+def test_catalog_retains_all_ready_active_policy_versions(monkeypatch):
+    identity = SimpleNamespace(
+        policy_id="codex-on-demand",
+        name="On-demand Docker",
+        default_version=2,
+        visibility="deployment",
+        owner_user_id=None,
+    )
+
+    def version(number):
+        return SimpleNamespace(
+            version=number,
+            state="active",
+            validation_json={"valid": True},
+            document_json={
+                "execution": {"profileRef": "omnigent-codex@1"},
+                "host": {
+                    "mode": "on_demand_docker",
+                    "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                    "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+                },
+                "network": {
+                    "attachmentRef": OMNIGENT_EGRESS_NETWORK_REF,
+                    "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+                },
+            },
+        )
+
+    body = TestClient(_app(
+        monkeypatch,
+        session=_Session(
+            [_profile()],
+            policies=[(identity, version(1)), (identity, version(2))],
+        ),
+    )).get("/api/omnigent/codex-catalog-readiness").json()
+
+    codex_profile = next(
+        profile
+        for profile in body["executionProfiles"]
+        if profile["ref"] == "omnigent-codex@1"
+    )
+    assert [
+        (policy["ref"], policy["isDefault"])
+        for policy in codex_profile["launchPolicies"]
+    ] == [
+        ("codex-on-demand@2", True),
+        ("codex-on-demand@1", False),
+    ]
+
+
+def test_catalog_filters_persisted_policies_not_visible_to_caller(monkeypatch):
+    hidden_name = "Private policy name must not escape"
+    identity = SimpleNamespace(
+        policy_id="codex-private",
+        name=hidden_name,
+        default_version=1,
+        visibility="private",
+        owner_user_id="other-user",
+    )
+    version = SimpleNamespace(
+        version=1,
+        state="active",
+        validation_json={"valid": True},
+        document_json={
+            "execution": {"profileRef": "omnigent-codex@1"},
+            "host": {
+                "mode": "on_demand_docker",
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            },
+            "network": {
+                "attachmentRef": OMNIGENT_EGRESS_NETWORK_REF,
+                "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+            },
+        },
+    )
+    app = _app(
+        monkeypatch,
+        session=_Session([_profile()], policies=[(identity, version)]),
+    )
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id="current-user", is_superuser=False
+    )
+    monkeypatch.setattr(
+        catalog, "_require_provider_profile_permission", lambda *_: None
+    )
+
+    response = TestClient(app).get("/api/omnigent/codex-catalog-readiness")
+
+    assert response.status_code == 200
+    assert "codex-private@1" not in response.text
+    assert hidden_name not in response.text
 
 
 def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):

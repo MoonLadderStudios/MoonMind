@@ -757,8 +757,23 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
     expect(request.payload).toMatchObject({
       targetRuntime: "omnigent",
+      agentProfile: {
+        profileId: "team-codex",
+        providerProfileRef: "oauth-1",
+        launchPolicyRef: "on-demand-v1",
+      },
       omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
-      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
+      task: {
+        runtime: {
+          mode: "omnigent",
+          profileId: "oauth-1",
+          agentProfile: {
+            profileId: "team-codex",
+            providerProfileRef: "oauth-1",
+            launchPolicyRef: "on-demand-v1",
+          },
+        },
+      },
     });
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
@@ -833,6 +848,174 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(request.payload.omnigent).toEqual({
       executionTargetRef: "omnigent-codex-default",
       launchPolicyRef: "on-demand-v2",
+    });
+    expect(request.payload.agentProfile.launchPolicyRef).toBe("on-demand-v2");
+    expect(request.payload.task.runtime.agentProfile.launchPolicyRef).toBe(
+      "on-demand-v2",
+    );
+  });
+
+  it("keeps a historical profile version compatible for an Omnigent rerun", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Aomnigent-history",
+    );
+    const versionedCatalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [{
+        ref: "omnigent-codex-default",
+        displayName: "Codex default",
+        available: true,
+        launchPolicies: [
+          {
+            ref: "on-demand-v2",
+            displayName: "On-demand Docker v2",
+            hostMode: "on_demand_docker",
+            isDefault: true,
+          },
+          {
+            ref: "on-demand-v1",
+            displayName: "On-demand Docker v1",
+            hostMode: "on_demand_docker",
+            isDefault: false,
+          },
+        ],
+        gateReasons: [],
+      }],
+    } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+    const versionedAgentProfiles = [{
+      profileId: "team-codex",
+      displayName: "Team Codex",
+      state: "active",
+      activeVersion: 2,
+      defaultForRuntime: true,
+      versions: [
+        {
+          version: 1,
+          digest: `sha256:${"a".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-codex-default",
+              allowedLaunchPolicyRefs: ["on-demand-v1"],
+            },
+            policyRef: "on-demand-v1",
+          },
+          validationResult: { ready: true },
+        },
+        {
+          version: 2,
+          digest: `sha256:${"b".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-codex-default",
+              allowedLaunchPolicyRefs: ["on-demand-v2"],
+            },
+            policyRef: "on-demand-v2",
+          },
+          validationResult: { ready: true },
+        },
+      ],
+    }];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => versionedCatalog } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => versionedAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{
+            profile_id: "oauth-1",
+            account_label: "Codex OAuth",
+            provider_id: "openai",
+          }],
+        } as Response);
+      }
+      if (url === "/api/executions/mm%3Aomnigent-history?source=temporal") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: "mm:omnigent-history",
+            workflowType: "MoonMind.UserWorkflow",
+            state: "completed",
+            targetRuntime: "omnigent",
+            profileId: "oauth-1",
+            repository: "MoonLadderStudios/MoonMind",
+            publishMode: "pr",
+            inputParameters: {
+              targetRuntime: "omnigent",
+              repository: "MoonLadderStudios/MoonMind",
+              profileId: "oauth-1",
+              publishMode: "pr",
+              reportOutput: { enabled: false },
+              agentProfile: { profileId: "team-codex", version: 1 },
+              omnigent: {
+                executionTargetRef: "omnigent-codex-default",
+                launchPolicyRef: "on-demand-v1",
+              },
+              workflow: {
+                instructions: "Rerun the historical Omnigent policy.",
+                runtime: { mode: "omnigent", profileId: "oauth-1" },
+                publish: { mode: "pr" },
+                reportOutput: { enabled: false },
+              },
+            },
+            actions: { canUpdateInputs: false, canRerun: true },
+          }),
+        } as Response);
+      }
+      if (
+        url === "/api/executions/mm%3Aomnigent-history/update" &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            accepted: true,
+            applied: "continue_as_new",
+            execution: { workflowId: "mm:omnigent-history-rerun" },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+
+    const hostPolicy = await screen.findByLabelText("Host policy");
+    await waitFor(() => {
+      expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v1");
+    });
+    expect(screen.queryByText(/Choose a compatible Omnigent host policy/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aomnigent-history/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/api/executions/mm%3Aomnigent-history/update",
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toMatchObject({
+      updateName: "RequestRerun",
+      parametersPatch: {
+        agentProfile: {
+          profileId: "team-codex",
+          version: 1,
+          providerProfileRef: "oauth-1",
+          launchPolicyRef: "on-demand-v1",
+        },
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v1",
+        },
+      },
     });
   });
 

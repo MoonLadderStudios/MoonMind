@@ -6514,9 +6514,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedOmnigentAgentProfile = readyAgentProfiles.find(
     (profile) => profile.profileId === agentProfile,
   );
+  const authoredOmnigentAgentProfileVersion =
+    remediationDraft?.agentProfile?.profileId === agentProfile
+      ? remediationDraft.agentProfile.version
+      : pageMode.mode !== "create" &&
+          temporalDraftQuery.data?.draft.agentProfile?.profileId === agentProfile
+        ? temporalDraftQuery.data.draft.agentProfile.version || undefined
+        : undefined;
   const selectedOmnigentAgentProfileVersion =
     selectedOmnigentAgentProfile?.versions.find(
-      (version) => version.version === selectedOmnigentAgentProfile.activeVersion,
+      (version) =>
+        version.version ===
+        (authoredOmnigentAgentProfileVersion ||
+          selectedOmnigentAgentProfile.activeVersion),
     );
   useEffect(() => {
     if (runtime !== "omnigent" || agentProfile) return;
@@ -6732,6 +6742,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
       setProviderProfile(draft.providerProfile);
+    }
+    if (draft.agentProfile?.profileId) {
+      setAgentProfile(draft.agentProfile.profileId);
     }
     if (draft.omnigentExecutionTargetRef) {
       setOmnigentExecutionTargetRef(draft.omnigentExecutionTargetRef);
@@ -11183,10 +11196,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
-                  ? { version: remediationDraft.agentProfile.version }
+                ...(authoredOmnigentAgentProfileVersion
+                  ? { version: authoredOmnigentAgentProfileVersion }
                   : {}),
                 providerProfileRef: providerProfile,
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
+                  : {}),
               },
             }
           : {}),
@@ -11248,10 +11264,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               agentProfile: {
                 profileId: agentProfile,
-                ...(remediationDraft?.agentProfile?.profileId === agentProfile && remediationDraft.agentProfile.version
-                  ? { version: remediationDraft.agentProfile.version }
+                ...(authoredOmnigentAgentProfileVersion
+                  ? { version: authoredOmnigentAgentProfileVersion }
                   : {}),
                 providerProfileRef: providerProfile,
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
+                  : {}),
               },
             }
           : {}),
