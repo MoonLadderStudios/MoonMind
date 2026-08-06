@@ -14947,6 +14947,9 @@ describe("Task Create submit arrow animation", () => {
     expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[^}]*animation:\s*queue-submit-primary-check-pop\s+260ms\s+cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)\s+both;/s,
     );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
+    );
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon[^{]*:active\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*queue-submit-primary-arrow-exit/s,
     );
