@@ -323,6 +323,79 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
+    old_digest = "sha256:" + "3" * 64
+    previous_version = SimpleNamespace(
+        digest=old_digest,
+        document={
+            "model": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+            "capture": {"retentionDays": 30},
+            "rag": {},
+            "publish": {},
+        },
+    )
+
+    class _RerunSession:
+        async def scalar(self, statement):
+            return previous_version
+
+    captured = {}
+
+    async def _resolve(session, *, selection, consumer_type, consumer_id, user):
+        captured["selection"] = selection
+        return {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-bootstrap-default",
+            "version": 2,
+            "digest": "sha256:" + "4" * 64,
+            "providerProfileRef": "codex_openai_oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@2",
+            "agentId": "codex-native-ui",
+            "document": {
+                "model": {},
+                "capture": {},
+                "rag": {},
+                "publish": {},
+                "workspace": {},
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_agent_profile_selection."
+        "resolve_agent_profile_snapshot",
+        _resolve,
+    )
+
+    await refresh_managed_bootstrap_snapshot_for_rerun(
+        _RerunSession(),
+        parameters={
+            "agentProfileSnapshot": {
+                "profileId": "omnigent-bootstrap-default",
+                "version": 1,
+                "digest": old_digest,
+                "providerProfileRef": "codex_openai_oauth",
+                # The effective snapshot was serialized with exclude_none=True,
+                # so these omitted baseline keys are authored null overrides.
+                "document": {
+                    "model": {},
+                    "capture": {},
+                    "rag": {},
+                    "publish": {},
+                },
+            }
+        },
+        consumer_id="mm:rerun-null-overrides",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert captured["selection"]["overrides"] == {
+        "model": {"effort": None, "model": None},
+        "capture": {"retentionDays": None},
+    }
+
+
+@pytest.mark.asyncio
 async def test_exact_rerun_preserves_operator_owned_profile_snapshot():
     parameters = {
         "agentProfileSnapshot": {"profileId": "operator-profile"},

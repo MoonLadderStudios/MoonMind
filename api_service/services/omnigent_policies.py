@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import (
     OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
@@ -27,6 +28,7 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
+from moonmind.omnigent.oauth_hosts import ACTIVE_HOST_STATES
 from moonmind.omnigent.policies import (
     PolicyDocument,
     PolicyState,
@@ -947,14 +949,43 @@ async def seed_bootstrap_policies(
                     and not bindings
                 ):
                     continue
-                candidate = await service.transition(
-                    policy_id=policy_id,
-                    version=candidate.version,
-                    state=PolicyState.ACTIVE,
-                    actor="bootstrap",
-                    make_default=True,
-                )
-                for binding in bindings:
+                if not (
+                    candidate.state == PolicyState.ACTIVE.value
+                    and policy.default_version == candidate.version
+                ):
+                    candidate = await service.transition(
+                        policy_id=policy_id,
+                        version=candidate.version,
+                        state=PolicyState.ACTIVE,
+                        actor="bootstrap",
+                        make_default=True,
+                    )
+                active_binding_refs: set[str] = set()
+                if bindings:
+                    active_binding_refs = set(
+                        (
+                            await session.execute(
+                                select(
+                                    OmnigentOAuthHostLeaseRecord.binding_ref
+                                ).where(
+                                    OmnigentOAuthHostLeaseRecord.binding_ref.in_(
+                                        [binding.binding_ref for binding in bindings]
+                                    ),
+                                    OmnigentOAuthHostLeaseRecord.status.in_(
+                                        ACTIVE_HOST_STATES
+                                    ),
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                cutover_bindings = [
+                    binding
+                    for binding in bindings
+                    if binding.binding_ref not in active_binding_refs
+                ]
+                for binding in cutover_bindings:
                     binding.launch_policy_ref = f"{policy_id}@{candidate.version}"
                     binding.effective_launch_snapshot_json = None
                 service._event(
@@ -966,7 +997,8 @@ async def seed_bootstrap_policies(
                         "agentIdentity": CODEX_STOCK_AGENT_NAME,
                         "previousRef": legacy_ref,
                         "policyRef": f"{policy_id}@{candidate.version}",
-                        "updatedBindingCount": len(bindings),
+                        "updatedBindingCount": len(cutover_bindings),
+                        "deferredBindingCount": len(active_binding_refs),
                     },
                 )
                 await session.commit()

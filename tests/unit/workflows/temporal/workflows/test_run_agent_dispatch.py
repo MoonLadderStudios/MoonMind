@@ -52,7 +52,10 @@ def test_agent_request_propagates_required_capabilities_with_replay_gate() -> No
         run_id="run-required-capabilities",
         parent=None,
     )
-    workflow_parameters = {"requiredCapabilities": ["git", "gh"]}
+    workflow_parameters = {
+        "requiredCapabilities": ["git", "gh"],
+        "workspaceSpec": {"repository": "MoonLadderStudios/MoonMind"},
+    }
 
     with (
         patch(
@@ -91,7 +94,10 @@ def test_agent_request_propagates_required_capabilities_with_replay_gate() -> No
         )
 
     assert current.parameters["requiredCapabilities"] == ["git", "gh"]
+    assert current.workspace_spec["repository"] == "MoonLadderStudios/MoonMind"
+    assert current.parameters["repository"] == "MoonLadderStudios/MoonMind"
     assert "requiredCapabilities" not in replaying.parameters
+    assert "repository" not in replaying.parameters
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:

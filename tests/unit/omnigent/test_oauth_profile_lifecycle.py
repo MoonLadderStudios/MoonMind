@@ -2785,11 +2785,19 @@ async def _drive_authority_chain_coordinator(
             }
 
     class Store:
+        def __init__(self):
+            self.bindings: dict[str, str] = {}
+
         async def get_or_create(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
 
-        async def bind_profile_authorization(self, **_kwargs):
-            return SimpleNamespace(bridge_session_id="bridge-1")
+        async def bind_profile_authorization(self, **kwargs):
+            idempotency_key = kwargs["request"].idempotency_key
+            bridge_session_id = self.bindings.setdefault(
+                idempotency_key,
+                f"bridge-{len(self.bindings) + 1}",
+            )
+            return SimpleNamespace(bridge_session_id=bridge_session_id)
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             ordered.append(event_type)
@@ -2999,6 +3007,11 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert "Continue the current task" in runner_calls[1][1]["first_message_text"]
     assert runner_calls[1][1]["defer_bridge_terminal"] is True
     assert "repository_continuation_1" in ordered
+    checkpoint = metadata["omnigentCheckpointCapture"]
+    assert checkpoint["bridgeSessionId"] == "bridge-2"
+    assert checkpoint["idempotencyKey"].endswith(
+        ":repository-continuation:1"
+    )
 
 
 @pytest.mark.asyncio

@@ -393,11 +393,16 @@ async def refresh_managed_bootstrap_snapshot_for_rerun(
             effective_section, Mapping
         ):
             continue
-        changed = {
-            key: copy.deepcopy(value)
-            for key, value in effective_section.items()
-            if baseline_section.get(key) != value
-        }
+        missing = object()
+        changed: dict[str, Any] = {}
+        for key in sorted(set(baseline_section) | set(effective_section)):
+            baseline_value = baseline_section.get(key, missing)
+            effective_value = effective_section.get(key, missing)
+            if effective_value is missing:
+                if baseline_value is not missing:
+                    changed[key] = None
+            elif baseline_value is missing or baseline_value != effective_value:
+                changed[key] = copy.deepcopy(effective_value)
         if changed:
             overrides[section] = changed
     if overrides:

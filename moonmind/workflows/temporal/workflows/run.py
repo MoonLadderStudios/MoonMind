@@ -18643,6 +18643,25 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if self._workflow_patch_enabled(
+            RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
+        ):
+            required_capabilities = parameters.get("requiredCapabilities")
+            nested_repository = workspace_spec.get("repository")
+            if (
+                isinstance(required_capabilities, list)
+                and any(
+                    str(capability).strip() == "gh"
+                    for capability in required_capabilities
+                )
+                and "repository" not in parameters
+                and nested_repository is not None
+            ):
+                # Mounted-tool authorization and workspace materialization must
+                # consume the same compiled repository identity. The Omnigent
+                # coordinator's gh preflight reads the compact parameters plane,
+                # while cloning remains owned by the workspace specification.
+                parameters["repository"] = nested_repository
         checkpoint_recovery = None
         if (
             self._recovery_failed_step_id == node_id

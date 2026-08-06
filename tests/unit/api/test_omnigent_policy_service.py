@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
@@ -53,6 +55,7 @@ async def policy_db(tmp_path):
                     OmnigentPolicyVersion.__table__,
                     OmnigentPolicyEvent.__table__,
                     OmnigentOAuthHostBindingRecord.__table__,
+                    OmnigentOAuthHostLeaseRecord.__table__,
                     OmnigentBridgeSession.__table__,
                 ],
             )
@@ -636,15 +639,55 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, mo
                 effective_launch_snapshot_json={"snapshotRef": "stale"},
             )
         )
+        now = datetime.now(UTC)
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__.insert().values(
+                lease_id="active-bootstrap-lease",
+                provider_profile_id="profile",
+                provider_lease_id="provider-lease",
+                binding_ref="bootstrap-binding",
+                credential_generation=1,
+                holder_workflow_id="workflow-active",
+                idempotency_key="workflow-active:step-1",
+                lease_purpose="execution",
+                status="assigned",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                host_capabilities_json={},
+                expires_at=now + timedelta(hours=1),
+            )
+        )
         await session.commit()
 
         seeded = await seed_bootstrap_policies(session, image_resolver=resolver)
+
+        binding = await session.get(
+            OmnigentOAuthHostBindingRecord,
+            "bootstrap-binding",
+        )
+        assert binding.launch_policy_ref == "codex-on-demand@1"
+        assert binding.effective_launch_snapshot_json == {"snapshotRef": "stale"}
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__
+            .update()
+            .where(
+                OmnigentOAuthHostLeaseRecord.lease_id
+                == "active-bootstrap-lease"
+            )
+            .values(status="stopped", stopped_at=datetime.now(UTC))
+        )
+        await session.commit()
+        seeded_after_drain = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+        )
 
         assert set(seeded) == {
             "omnigent-codex",
             "codex-static",
             "codex-on-demand",
         }
+        assert seeded_after_drain == ["codex-on-demand"]
         policies = list((await session.execute(select(OmnigentPolicy))).scalars())
         assert all(policy.default_version == 2 for policy in policies)
         migrated_versions = list(

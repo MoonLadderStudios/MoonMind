@@ -749,6 +749,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         authority_workspace_resolution: Mapping[str, Any] | None = None
         authority_result: AgentRunResult | None = None
         authority_bridge_session_id: str | None = None
+        authority_idempotency_key = request.idempotency_key
         authority_cleanup_mode: str | None = None
         preflight: Mapping[str, Any] = {}
         authority_reasons: list[dict[str, Any]] = []
@@ -1564,6 +1565,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     authority_bridge_session_id = str(
                         continuation_bridge.bridge_session_id
                     )
+                    authority_idempotency_key = continuation_request.idempotency_key
                     continuation_result = await self._execute_with_host_lease_heartbeat(
                         self._execute(
                             _bind_exact_host(
@@ -1632,7 +1634,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "hostLeaseRef": host_lease.lease_id,
                 "endpointRef": binding.endpoint_ref,
                 "omnigentHostId": host_id,
-                "bridgeSessionId": bridge.bridge_session_id,
+                "bridgeSessionId": (
+                    authority_bridge_session_id or bridge.bridge_session_id
+                ),
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
@@ -1653,7 +1657,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "terminalRef": next(iter(result.output_refs), None),
                 "diagnosticsRef": result.diagnostics_ref,
                 "omnigentSessionId": result_metadata.get("omnigentSessionId"),
-                "idempotencyKey": request.idempotency_key,
+                "idempotencyKey": authority_idempotency_key,
                 "sourceBranch": self._starting_branch(request) or "detached",
                 "outputBranch": self._target_branch(request),
                 "publicationState": str(
