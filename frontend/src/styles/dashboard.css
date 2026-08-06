@@ -6880,6 +6880,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit {
+  background-color: rgb(var(--mm-action-primary) / 0.12);
+  background-image: none;
+  border-color: rgb(var(--mm-action-primary));
+  color: rgb(var(--mm-action-primary));
+}
+
 @keyframes queue-submit-primary-arrow-cycle {
   0% {
     transform: translateX(0);

@@ -31,6 +31,18 @@ describe('dashboard page layout styles', () => {
   it('centers the create page title', () => {
     expect(cssRuleBlock('.workflow-start-heading')).toContain('text-align: center;');
   });
+
+  it('outlines the create workflow button after it is clicked while retaining its icon color', () => {
+    const clickedSubmit = cssRuleBlock(
+      '.queue-submit-primary--icon.queue-submit-primary--arrow-exit',
+    );
+    expect(clickedSubmit).toContain(
+      'background-color: rgb(var(--mm-action-primary) / 0.12);',
+    );
+    expect(clickedSubmit).toContain('background-image: none;');
+    expect(clickedSubmit).toContain('border-color: rgb(var(--mm-action-primary));');
+    expect(clickedSubmit).toContain('color: rgb(var(--mm-action-primary));');
+  });
 });
 
 describe('dashboard masthead brand styles', () => {
