@@ -6803,6 +6803,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     background 200ms ease-out;
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit {
+  background-color: rgb(var(--mm-action-primary) / 0.12);
+  background-image: none;
+  color: rgb(var(--mm-action-primary));
+  border-color: rgb(var(--mm-action-primary));
+}
+
 .queue-submit-primary--icon .queue-submit-primary-arrow {
   position: absolute;
   inset: 0;

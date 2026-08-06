@@ -14942,6 +14942,9 @@ describe("Task Create submit arrow animation", () => {
 
   it("morphs the create arrow into a check on click while preserving the shockwave", async () => {
     expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
+    );
+    expect(css).toMatch(
       /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="arrow"\]\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
     );
     expect(css).toMatch(
