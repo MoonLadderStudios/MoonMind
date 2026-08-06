@@ -606,8 +606,15 @@ interface OmnigentCatalogGateReason {
   remediationHref: string;
 }
 
+interface OmnigentLaunchPolicyOption {
+  ref: string;
+  displayName: string;
+  hostMode: "static_compose" | "on_demand_docker";
+  isDefault: boolean;
+}
+
 interface OmnigentCodexCatalogReadiness {
-  schemaVersion: "moonmind.omnigent-codex-readiness.v1";
+  schemaVersion: "moonmind.omnigent-codex-readiness.v2";
   runtimeId: "omnigent";
   displayName: string;
   available: boolean;
@@ -616,7 +623,7 @@ interface OmnigentCodexCatalogReadiness {
     ref: string;
     displayName: string;
     available: boolean;
-    policyRefs: string[];
+    launchPolicies: OmnigentLaunchPolicyOption[];
     gateReasons: OmnigentCatalogGateReason[];
   }>;
   eligibleProviderProfiles: Array<{
@@ -1029,14 +1036,51 @@ interface PentestScopeDraftState {
 
 type StepType = "tool" | "skill" | "preset";
 
+type OmnigentAgentProfileVersionOption = {
+  version: number;
+  digest: string;
+  document?: {
+    execution?: {
+      defaultExecutionProfileRef?: string;
+      allowedLaunchPolicyRefs?: string[];
+    };
+    policyRef?: string;
+  };
+  validationResult?: { ready?: boolean } | null;
+};
+
 type OmnigentAgentProfileOption = {
   profileId: string;
   displayName: string;
   state: string;
   defaultForRuntime?: boolean;
   activeVersion?: number | null;
-  versions: Array<{ version: number; digest: string; validationResult?: { ready?: boolean } | null }>;
+  versions: OmnigentAgentProfileVersionOption[];
 };
+
+function resolveOmnigentLaunchPolicyOptions(
+  launchPolicies: OmnigentLaunchPolicyOption[],
+  agentProfileVersion: OmnigentAgentProfileVersionOption | undefined,
+): {
+  selectable: OmnigentLaunchPolicyOption[];
+  preferred: OmnigentLaunchPolicyOption | undefined;
+} {
+  const allowedPolicyRefs =
+    agentProfileVersion?.document?.execution?.allowedLaunchPolicyRefs || [];
+  const selectable = launchPolicies.filter(
+    (policy) =>
+      allowedPolicyRefs.length === 0 || allowedPolicyRefs.includes(policy.ref),
+  );
+  const preferredPolicyRefs = [
+    agentProfileVersion?.document?.policyRef,
+    ...allowedPolicyRefs,
+    launchPolicies.find((policy) => policy.isDefault)?.ref,
+  ].filter((ref): ref is string => Boolean(ref));
+  const preferred = preferredPolicyRefs
+    .map((ref) => selectable.find((policy) => policy.ref === ref))
+    .find(Boolean);
+  return { selectable, preferred };
+}
 
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
   skill: "Skill asks an agent to perform work using reusable behavior.",
@@ -6042,6 +6086,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [omnigentLaunchPolicyRef, setOmnigentLaunchPolicyRef] = useState(
     String(omnigentProfiles[0]?.defaultPolicyRef || omnigentPolicies[0]?.ref || ""),
   );
+  const [omnigentLaunchPolicyAuthored, setOmnigentLaunchPolicyAuthored] =
+    useState(false);
   const [model, setModel] = useState(
     String(
       defaultTaskModelByRuntime[defaultRuntime] ||
@@ -6465,6 +6511,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const active = profile.versions.find((version) => version.version === profile.activeVersion);
     return profile.state === "active" && active?.validationResult?.ready === true;
   });
+  const selectedOmnigentAgentProfile = readyAgentProfiles.find(
+    (profile) => profile.profileId === agentProfile,
+  );
+  const selectedOmnigentAgentProfileVersion =
+    selectedOmnigentAgentProfile?.versions.find(
+      (version) => version.version === selectedOmnigentAgentProfile.activeVersion,
+    );
   useEffect(() => {
     if (runtime !== "omnigent" || agentProfile) return;
     const preferred = readyAgentProfiles.find((profile) => profile.defaultForRuntime) || readyAgentProfiles[0];
@@ -6511,6 +6564,41 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setOmnigentExecutionTargetRef(omnigentCatalogQuery.data.defaultExecutionProfileRef);
     }
   }, [runtime, omnigentCatalogQuery.data, omnigentExecutionTargetRef]);
+
+  useEffect(() => {
+    if (
+      runtime !== "omnigent" ||
+      pageMode.mode !== "create" ||
+      omnigentLaunchPolicyAuthored ||
+      !omnigentCatalogQuery.data
+    ) {
+      return;
+    }
+    const executionProfile = (
+      omnigentCatalogQuery.data.executionProfiles || []
+    ).find(
+      (profile) =>
+        profile.ref ===
+        (omnigentExecutionTargetRef ||
+          omnigentCatalogQuery.data.defaultExecutionProfileRef),
+    );
+    if (!executionProfile) return;
+    const { preferred: preferredPolicy } = resolveOmnigentLaunchPolicyOptions(
+      executionProfile.launchPolicies,
+      selectedOmnigentAgentProfileVersion,
+    );
+    if (preferredPolicy && preferredPolicy.ref !== omnigentLaunchPolicyRef) {
+      setOmnigentLaunchPolicyRef(preferredPolicy.ref);
+    }
+  }, [
+    omnigentCatalogQuery.data,
+    omnigentExecutionTargetRef,
+    omnigentLaunchPolicyAuthored,
+    omnigentLaunchPolicyRef,
+    pageMode.mode,
+    runtime,
+    selectedOmnigentAgentProfileVersion,
+  ]);
 
   useEffect(() => {
     const profiles = activeProviderProfiles;
@@ -6650,6 +6738,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.omnigentLaunchPolicyRef) {
       setOmnigentLaunchPolicyRef(draft.omnigentLaunchPolicyRef);
+      setOmnigentLaunchPolicyAuthored(true);
     }
     if (draft.model) {
       setModel(draft.model);
@@ -8065,9 +8154,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       (readiness) => readiness.ref === profile.ref && readiness.available,
     ),
   );
-  const selectableOmnigentPolicies = omnigentPolicies.filter((policy) =>
-    selectedOmnigentReadiness?.policyRefs.includes(String(policy.ref || "")),
-  );
+  const { selectable: selectableOmnigentPolicies } =
+    resolveOmnigentLaunchPolicyOptions(
+      selectedOmnigentReadiness?.launchPolicies || [],
+      selectedOmnigentAgentProfileVersion,
+    );
   const selectedEligibleOmnigentProfile = (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).find(
     (profile) =>
       profile.profileId === providerProfile &&
@@ -8079,6 +8170,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       profile.runtimeId === selectedOmnigentProviderRuntime,
   );
   const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
+    (policy) => policy.ref === omnigentLaunchPolicyRef,
+  );
+  const selectedOmnigentLaunchPolicy = selectableOmnigentPolicies.find(
     (policy) => policy.ref === omnigentLaunchPolicyRef,
   );
   const omnigentSelectionGateReason =
@@ -9991,6 +10085,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
+    let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
     const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
@@ -10033,7 +10128,29 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         clearSubmitBusy();
         return;
       }
-      if (!executionProfile.policyRefs.includes(omnigentLaunchPolicyRef)) {
+      const {
+        selectable: refreshedCompatiblePolicies,
+        preferred: refreshedPreferredPolicy,
+      } = resolveOmnigentLaunchPolicyOptions(
+        executionProfile.launchPolicies,
+        selectedOmnigentAgentProfileVersion,
+      );
+      if (
+        !refreshedCompatiblePolicies.some(
+          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+        ) &&
+        !omnigentLaunchPolicyAuthored
+      ) {
+        if (refreshedPreferredPolicy) {
+          submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
+          setOmnigentLaunchPolicyRef(refreshedPreferredPolicy.ref);
+        }
+      }
+      if (
+        !refreshedCompatiblePolicies.some(
+          (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
+        )
+      ) {
         setSubmitMessage(
           "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
         );
@@ -11142,8 +11259,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? {
               omnigent: {
                 executionTargetRef: omnigentExecutionTargetRef,
-                ...(omnigentLaunchPolicyRef
-                  ? { launchPolicyRef: omnigentLaunchPolicyRef }
+                ...(submittedOmnigentLaunchPolicyRef
+                  ? { launchPolicyRef: submittedOmnigentLaunchPolicyRef }
                   : {}),
               },
             }
@@ -13592,6 +13709,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 onChange={(event) => {
                   const ref = event.target.value;
                   setOmnigentExecutionTargetRef(ref);
+                  setOmnigentLaunchPolicyAuthored(false);
                   const profile = omnigentProfiles.find((item) => item.ref === ref);
                   if (profile?.defaultPolicyRef) {
                     setOmnigentLaunchPolicyRef(profile.defaultPolicyRef);
@@ -13615,7 +13733,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               <select
                 name="omnigentLaunchPolicyRef"
                 value={omnigentLaunchPolicyRef}
-                onChange={(event) => setOmnigentLaunchPolicyRef(event.target.value)}
+                onChange={(event) => {
+                  setOmnigentLaunchPolicyRef(event.target.value);
+                  setOmnigentLaunchPolicyAuthored(true);
+                }}
               >
                 {!selectableOmnigentPolicies.some((policy) => policy.ref === omnigentLaunchPolicyRef) && omnigentLaunchPolicyRef ? (
                   <option value={omnigentLaunchPolicyRef} disabled>
@@ -13624,7 +13745,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ) : null}
                 {selectableOmnigentPolicies.map((policy) => (
                   <option key={policy.ref} value={policy.ref}>
-                    {policy.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}
+                    {policy.displayName}
+                    {policy.isDefault ? " (Default)" : ""}
                   </option>
                 ))}
               </select>
@@ -13642,7 +13764,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <div className="notice small" aria-label="Effective Omnigent selection">
               <div>Runtime: Codex via Omnigent</div>
               <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
-              <div>Host mode: {omnigentPolicies.find((policy) => policy.ref === omnigentLaunchPolicyRef)?.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}</div>
+              <div>Host mode: {selectedOmnigentLaunchPolicy?.hostMode === "on_demand_docker" ? "On-demand Docker" : selectedOmnigentLaunchPolicy?.hostMode === "static_compose" ? "Static Compose" : "Not selected"}</div>
               <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
               <div>Repository: {repository.trim() || "Not selected"}</div>
             </div>

@@ -182,7 +182,7 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
     assert "acceptance_evidence_unavailable" in {
         reason["code"] for reason in body["supportGateReasons"]
     }
-    assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v1"
+    assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v2"
     assert body["available"] is True
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
@@ -427,9 +427,11 @@ def test_catalog_rejects_placeholder_image_digests(monkeypatch):
 def test_resolved_persisted_policy_keeps_latest_from_being_a_launch_blocker(
     monkeypatch,
 ):
-    identity = SimpleNamespace(policy_id="codex-on-demand")
+    identity = SimpleNamespace(
+        policy_id="codex-on-demand", name="On-demand Docker"
+    )
     version = SimpleNamespace(
-        version=1,
+        version=2,
         state="active",
         validation_json={"valid": True},
         document_json={
@@ -463,7 +465,14 @@ def test_resolved_persisted_policy_keeps_latest_from_being_a_launch_blocker(
         for profile in body["executionProfiles"]
         if profile["ref"] == "omnigent-codex@1"
     )
-    assert "codex-on-demand@1" in codex_profile["policyRefs"]
+    assert codex_profile["launchPolicies"] == [
+        {
+            "ref": "codex-on-demand@2",
+            "displayName": "On-demand Docker",
+            "hostMode": "on_demand_docker",
+            "isDefault": True,
+        }
+    ]
     assert "immutable_image_unavailable" not in {
         reason["code"] for reason in body["gateReasons"]
     }

@@ -65,7 +65,7 @@ from .omnigent_bridge import (
 
 router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
-_SCHEMA_VERSION = "moonmind.omnigent-codex-readiness.v1"
+_SCHEMA_VERSION = "moonmind.omnigent-codex-readiness.v2"
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _ACCEPTANCE_ROWS = (
     "static_profile_bound",
@@ -105,18 +105,28 @@ class IneligibleProviderProfile(BaseModel):
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
+class LaunchPolicyReadiness(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    ref: str
+    display_name: str = Field(alias="displayName")
+    host_mode: Literal["static_compose", "on_demand_docker"] = Field(
+        alias="hostMode"
+    )
+    is_default: bool = Field(False, alias="isDefault")
+
+
 class ExecutionProfileReadiness(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     ref: str
     display_name: str = Field(alias="displayName")
     available: bool
-    policy_refs: list[str] = Field(alias="policyRefs")
+    launch_policies: list[LaunchPolicyReadiness] = Field(alias="launchPolicies")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
 class OmnigentCodexCatalogReadiness(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    schema_version: Literal["moonmind.omnigent-codex-readiness.v1"] = Field(
+    schema_version: Literal["moonmind.omnigent-codex-readiness.v2"] = Field(
         _SCHEMA_VERSION, alias="schemaVersion"
     )
     runtime_id: Literal["omnigent"] = Field("omnigent", alias="runtimeId")
@@ -509,7 +519,9 @@ async def get_omnigent_codex_catalog_readiness(
         provider_slug = (
             "claude" if profile.provider_runtime == "claude_code" else "codex"
         )
-        policy_refs: list[str] = []
+        default_policy = POLICIES.get(profile.default_policy_ref)
+        default_policy_id = default_policy.policy_id if default_policy else None
+        launch_policies_by_id: dict[str, LaunchPolicyReadiness] = {}
         unavailable_policy_reasons: list[GateReason] = []
         for policy in POLICIES.values():
             if not policy.policy_id.startswith(provider_slug + "-"):
@@ -540,7 +552,16 @@ async def get_omnigent_codex_catalog_readiness(
                 if mode_readiness["conformanceState"] != "ready":
                     policy_reasons.append(_reason("bridge_conformance_gated"))
             if not policy_reasons:
-                policy_refs.append(policy.ref)
+                launch_policies_by_id[policy.policy_id] = LaunchPolicyReadiness(
+                    ref=policy.ref,
+                    displayName=(
+                        "On-demand Docker"
+                        if policy.host_mode == "on_demand_docker"
+                        else "Static Compose"
+                    ),
+                    hostMode=policy.host_mode,
+                    isDefault=policy.policy_id == default_policy_id,
+                )
                 available_modes.append(policy.host_mode)
             unavailable_policy_reasons.extend(policy_reasons)
         for identity, version in persisted_policies:
@@ -571,11 +592,26 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("static_host_not_ready"))
             if not policy_reasons:
                 persisted_ref = f"{identity.policy_id}@{version.version}"
-                if persisted_ref not in policy_refs:
-                    policy_refs.append(persisted_ref)
+                launch_policies_by_id[identity.policy_id] = LaunchPolicyReadiness(
+                    ref=persisted_ref,
+                    displayName=(
+                        str(getattr(identity, "name", "") or "").strip()
+                        or (
+                            "On-demand Docker"
+                            if host_mode == "on_demand_docker"
+                            else "Static Compose"
+                        )
+                    ),
+                    hostMode=host_mode,
+                    isDefault=identity.policy_id == default_policy_id,
+                )
                 available_modes.append(host_mode)
             unavailable_policy_reasons.extend(policy_reasons)
-        if not policy_refs:
+        launch_policies = sorted(
+            launch_policies_by_id.values(),
+            key=lambda item: (not item.is_default, item.display_name, item.ref),
+        )
+        if not launch_policies:
             for reason in unavailable_policy_reasons:
                 if reason.code not in {existing.code for existing in profile_reasons}:
                     profile_reasons.append(reason)
@@ -586,11 +622,11 @@ async def get_omnigent_codex_catalog_readiness(
             displayName=profile.display_name,
             available=(
                 profile.enabled
-                and bool(policy_refs)
+                and bool(launch_policies)
                 and bool(eligible_by_runtime.get(profile.provider_runtime))
                 and not deployment_reasons
             ),
-            policyRefs=policy_refs,
+            launchPolicies=launch_policies,
             gateReasons=profile_reasons,
         ))
 

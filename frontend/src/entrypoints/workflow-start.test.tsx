@@ -567,7 +567,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
             displayName: "Codex via Omnigent",
             available: false,
@@ -609,7 +609,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   }
 
   const readyOmnigentCatalog = {
-    schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+    schemaVersion: "moonmind.omnigent-codex-readiness.v2",
     runtimeId: "omnigent",
     displayName: "Codex via Omnigent",
     agentKind: "external",
@@ -617,7 +617,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     harness: "codex-native",
     available: true,
     defaultExecutionProfileRef: "omnigent-codex-default",
-    executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+    executionProfiles: [{
+      ref: "omnigent-codex-default",
+      displayName: "Codex default",
+      available: true,
+      launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
+      gateReasons: [],
+    }],
     eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: false, queueWhenBusy: true }],
     ineligibleProviderProfiles: [],
     hostModes: ["on_demand_docker"],
@@ -673,12 +679,18 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            schemaVersion: "moonmind.omnigent-codex-readiness.v2",
             runtimeId: "omnigent",
             displayName: "Codex via Omnigent",
             available: true,
             defaultExecutionProfileRef: "omnigent-codex-default",
-            executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+            executionProfiles: [{
+              ref: "omnigent-codex-default",
+              displayName: "Codex default",
+              available: true,
+              launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
+              gateReasons: [],
+            }],
             eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: true, queueWhenBusy: false }],
             ineligibleProviderProfiles: [],
             gateReasons: [],
@@ -751,6 +763,79 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
 
+  it("adopts the active default policy version without requiring a host-policy choice", async () => {
+    const activePolicyCatalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [{
+        ref: "omnigent-codex-default",
+        displayName: "Codex default",
+        available: true,
+        launchPolicies: [{
+          ref: "on-demand-v2",
+          displayName: "On-demand Docker",
+          hostMode: "on_demand_docker",
+          isDefault: true,
+        }],
+        gateReasons: [],
+      }],
+    } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+    const activePolicyAgentProfiles = [{
+      ...readyAgentProfiles[0],
+      versions: [{
+        version: 1,
+        digest: `sha256:${"a".repeat(64)}`,
+        document: {
+          execution: {
+            defaultExecutionProfileRef: "omnigent-codex-default",
+            allowedLaunchPolicyRefs: ["on-demand-v2"],
+          },
+          policyRef: "on-demand-v2",
+        },
+        validationResult: { ready: true },
+      }],
+    }];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => activePolicyCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => activePolicyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-active-policy" }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+
+    const hostPolicy = await screen.findByLabelText("Host policy");
+    await waitFor(() => expect((hostPolicy as HTMLSelectElement).value).toBe("on-demand-v2"));
+    expect(within(hostPolicy).getByRole("option", { name: "On-demand Docker (Default)" })).toBeTruthy();
+    expect(screen.queryByText(/Choose a compatible Omnigent host policy/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use the active default policy." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-active-policy?source=temporal"));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload.omnigent).toEqual({
+      executionTargetRef: "omnigent-codex-default",
+      launchPolicyRef: "on-demand-v2",
+    });
+  });
+
   it("filters mixed Provider Profiles by execution target and resets an incompatible selection", async () => {
     const payload = omnigentPayload();
     const initialData = payload.initialData as {
@@ -770,8 +855,8 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       ...readyOmnigentCatalog,
       defaultExecutionProfileRef: "omnigent-codex@1",
       executionProfiles: [
-        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", available: true, policyRefs: ["codex-static@1"], gateReasons: [] },
-        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", available: true, policyRefs: ["claude-static@1"], gateReasons: [] },
+        { ref: "omnigent-codex@1", displayName: "Omnigent Codex", available: true, launchPolicies: [{ ref: "codex-static@1", displayName: "Codex static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
+        { ref: "omnigent-claude@1", displayName: "Omnigent Claude", available: true, launchPolicies: [{ ref: "claude-static@1", displayName: "Claude static", hostMode: "static_compose", isDefault: true }], gateReasons: [] },
       ],
       eligibleProviderProfiles: [
         { profileId: "codex-oauth", label: "OpenAI subscription", providerId: "openai", runtimeId: "codex_cli", busy: false, queueWhenBusy: true },
