@@ -6856,6 +6856,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit {
+  color: rgb(var(--mm-action-primary));
   background-color: rgb(var(--mm-action-primary) / 0.12);
   background-image: none;
   border-color: rgb(var(--mm-action-primary));
