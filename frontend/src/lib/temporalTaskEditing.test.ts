@@ -11,6 +11,10 @@ describe("MoonLadderStudios/MoonMind#3452 Omnigent draft round-trip", () => {
       inputParameters: {
         targetRuntime: "omnigent",
         profileId: "codex-oauth-team",
+        agentProfile: {
+          profileId: "team-codex",
+          version: 3,
+        },
         omnigent: {
           executionTargetRef: "omnigent-codex-default",
           launchPolicyRef: "omnigent-codex-on-demand-v1",
@@ -25,8 +29,39 @@ describe("MoonLadderStudios/MoonMind#3452 Omnigent draft round-trip", () => {
     expect(draft).toMatchObject({
       runtime: "omnigent",
       providerProfile: "codex-oauth-team",
+      agentProfile: {
+        profileId: "team-codex",
+        version: 3,
+      },
       omnigentExecutionTargetRef: "omnigent-codex-default",
       omnigentLaunchPolicyRef: "omnigent-codex-on-demand-v1",
+    });
+  });
+
+  it("reconstructs immutable agent-profile identity from the trusted snapshot", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:omnigent-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "omnigent",
+      inputParameters: {
+        agentProfileSnapshot: {
+          profileId: "managed-bootstrap",
+          version: 4,
+        },
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v4",
+        },
+        workflow: {
+          instructions: "Rerun the historical selection.",
+          runtime: { mode: "omnigent" },
+        },
+      },
+    });
+
+    expect(draft.agentProfile).toEqual({
+      profileId: "managed-bootstrap",
+      version: 4,
     });
   });
 

@@ -8534,8 +8534,8 @@ export interface components {
             displayName: string;
             /** Available */
             available: boolean;
-            /** Policyrefs */
-            policyRefs: string[];
+            /** Launchpolicies */
+            launchPolicies: components["schemas"]["LaunchPolicyReadiness"][];
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
         };
@@ -9401,6 +9401,23 @@ export interface components {
             /** Id */
             id?: string | null;
         };
+        /** LaunchPolicyReadiness */
+        LaunchPolicyReadiness: {
+            /** Ref */
+            ref: string;
+            /** Displayname */
+            displayName: string;
+            /**
+             * Hostmode
+             * @enum {string}
+             */
+            hostMode: "static_compose" | "on_demand_docker";
+            /**
+             * Isdefault
+             * @default false
+             */
+            isDefault: boolean;
+        };
         /**
          * LinkArtifactRequest
          * @description Link an existing artifact to one execution reference.
@@ -9885,10 +9902,10 @@ export interface components {
         OmnigentCodexCatalogReadiness: {
             /**
              * Schemaversion
-             * @default moonmind.omnigent-codex-readiness.v1
+             * @default moonmind.omnigent-codex-readiness.v2
              * @constant
              */
-            schemaVersion: "moonmind.omnigent-codex-readiness.v1";
+            schemaVersion: "moonmind.omnigent-codex-readiness.v2";
             /**
              * Runtimeid
              * @default omnigent

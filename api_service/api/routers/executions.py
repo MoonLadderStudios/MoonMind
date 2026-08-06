@@ -10719,6 +10719,28 @@ async def _create_execution_from_workflow_request(
             )
         if not isinstance(agent_profile_selection, Mapping):
             raise _invalid_workflow_request("agentProfile must be an object.")
+        agent_profile_selection = dict(agent_profile_selection)
+        authored_omnigent = payload.get("omnigent")
+        authored_launch_policy_ref = (
+            str(authored_omnigent.get("launchPolicyRef") or "").strip()
+            if isinstance(authored_omnigent, Mapping)
+            else ""
+        )
+        selected_launch_policy_ref = str(
+            agent_profile_selection.get("launchPolicyRef") or ""
+        ).strip()
+        if (
+            authored_launch_policy_ref
+            and selected_launch_policy_ref
+            and authored_launch_policy_ref != selected_launch_policy_ref
+        ):
+            raise _invalid_workflow_request(
+                "agentProfile.launchPolicyRef must match omnigent.launchPolicyRef."
+            )
+        if authored_launch_policy_ref:
+            agent_profile_selection["launchPolicyRef"] = (
+                authored_launch_policy_ref
+            )
         profile_snapshot = await resolve_agent_profile_snapshot(
             session,
             selection=agent_profile_selection,
