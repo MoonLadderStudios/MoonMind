@@ -150,7 +150,7 @@ class OmnigentHttpClient:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")
 
     async def list_hosts(self) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/api/hosts")
+        data = await self._request("GET", "/v1/hosts")
         if isinstance(data, list):
             return [dict(item) for item in data if isinstance(item, Mapping)]
         if isinstance(data, Mapping) and isinstance(data.get("hosts"), list):
@@ -196,6 +196,7 @@ class OmnigentHttpClient:
                     "GET",
                     f"{self._base}{path}",
                     headers=self._headers(accept="text/event-stream"),
+                    timeout=self._stream_timeout,
                 ) as response:
                     async for event in self._iter_stream_response(response):
                         yield event
@@ -321,6 +322,7 @@ class OmnigentHttpClient:
                     method,
                     f"{self._base}{path}",
                     headers=self._headers(),
+                    timeout=self._timeout,
                     **kwargs,
                 )
             except httpx.HTTPError as exc:
@@ -368,6 +370,7 @@ class OmnigentHttpClient:
                     method,
                     f"{self._base}{path}",
                     headers=self._headers(),
+                    timeout=self._timeout,
                 )
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(

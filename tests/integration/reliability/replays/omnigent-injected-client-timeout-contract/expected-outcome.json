@@ -1,0 +1,15 @@
+{
+  "invariant": "injected HTTP clients use MoonMind's bounded request timeout and unbounded SSE read timeout",
+  "requestTimeout": {
+    "connect": 60.0,
+    "read": 60.0,
+    "write": 60.0,
+    "pool": 60.0
+  },
+  "streamTimeout": {
+    "connect": 60.0,
+    "read": null,
+    "write": 60.0,
+    "pool": 60.0
+  }
+}

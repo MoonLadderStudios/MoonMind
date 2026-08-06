@@ -25,14 +25,17 @@ from moonmind.schemas.agent_skill_models import (
     SkillTerminalContract,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+    RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
@@ -40,6 +43,61 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+def test_agent_request_propagates_required_capabilities_with_replay_gate() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:required-capabilities",
+        run_id="run-required-capabilities",
+        parent=None,
+    )
+    workflow_parameters = {
+        "requiredCapabilities": ["git", "gh"],
+        "workspaceSpec": {"repository": "MoonLadderStudios/MoonMind"},
+    }
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
+            ),
+        ),
+    ):
+        current = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters=workflow_parameters,
+        )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ),
+    ):
+        replaying = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters=workflow_parameters,
+        )
+
+    assert current.parameters["requiredCapabilities"] == ["git", "gh"]
+    assert current.workspace_spec["repository"] == "MoonLadderStudios/MoonMind"
+    assert current.parameters["repository"] == "MoonLadderStudios/MoonMind"
+    assert "requiredCapabilities" not in replaying.parameters
+    assert "repository" not in replaying.parameters
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -246,6 +304,95 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         self.assertEqual(request.parameters, {})
 
 class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_agent_node_resolves_empty_snapshot_before_launch(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        wf._step_ledger_rows = [{"logicalStepId": "node-1", "attempt": 1}]
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-node-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/empty-node-1",
+            skills=[],
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:717ea339-77ab-4e72-bd46-969b009b5508",
+            run_id="019fd32f-cbfd-7846-bee9-79c87ebae5f8",
+            parent=None,
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ) as execute_activity,
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
+                ),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={
+                    "runtime": {"mode": "omnigent"},
+                    "selectedSkill": "auto",
+                },
+                node_id="node-1",
+                existing_skillset_ref=None,
+            )
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {"mode": "omnigent"},
+                    "selectedSkill": "auto",
+                },
+                node_id="node-1",
+                tool_name="omnigent",
+                resolved_skillset_ref=resolved_ref,
+            )
+
+        self.assertEqual(resolved_ref, "artifact://skillsets/empty-node-1")
+        selector = execute_activity.call_args.kwargs["args"][0]
+        self.assertEqual(
+            selector.model_dump(mode="json", exclude_none=True),
+            {"sets": [], "include": [], "exclude": []},
+        )
+        self.assertEqual(request.resolved_skillset_ref, resolved_ref)
+        self.assertIsNotNone(request.step_execution)
+        self.assertEqual(request.step_execution.resolved_skillset_ref, resolved_ref)
+
+    async def test_auto_agent_node_preserves_pre_patch_history(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(),
+            ) as execute_activity,
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id != RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
+                ),
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "auto"},
+                node_id="node-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertIsNone(resolved_ref)
+        execute_activity.assert_not_awaited()
+
     async def test_existing_resolved_skillset_supplies_owned_terminal_contract(
         self,
     ) -> None:
@@ -1945,9 +2092,11 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             return_value=MockInfo(),
         ), patch(
             "moonmind.workflows.temporal.workflows.run.workflow.patched",
-            side_effect=lambda patch_id: (
-                patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
-            ),
+            side_effect=lambda patch_id: patch_id
+            in {
+                RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+                RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
+            },
         ):
             request = wf._build_agent_execution_request(
                 node_inputs={
@@ -1972,7 +2121,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         expected_selection = dict(authored_selection)
         expected_selection["agent"] = {
             "harnessOverride": "codex-native",
-            "agentName": "codex",
+            "agentName": "codex-native-ui",
         }
         self.assertEqual(request.parameters["omnigent"], expected_selection)
         self.assertNotIn("hostId", request.parameters["omnigent"])

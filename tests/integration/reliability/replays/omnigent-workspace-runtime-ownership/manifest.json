@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:cbb14c76-4f9c-4dd5-8c38-d9b3d613f684",
+  "incidentRunId": "019fd394-6762-77d9-8385-8c0befe10f91",
+  "failedChildWorkflowId": "mm:cbb14c76-4f9c-4dd5-8c38-d9b3d613f684:agent:node-1",
+  "failedChildRunId": "019fd394-6dd7-76d9-a86f-da8d47ee689f",
+  "omnigentSessionId": "33bc7c8f3e824356b5cb1a65e211bdbc",
+  "failureShape": "the trusted worker materialized the repository as root, then mounted it into a UID 1000 host; Git rejected the repository as dubious and the native Codex TUI exited before creating a thread",
+  "boundary": "MoonMind sandbox materialization to isolated Omnigent host identity"
+}

@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
@@ -25,7 +27,7 @@ from api_service.services.omnigent_policies import (
     resolve_bootstrap_image_ref,
     seed_bootstrap_policies,
 )
-from moonmind.omnigent.policies import PolicyDocument, PolicyState
+from moonmind.omnigent.policies import PolicyDocument, PolicyState, document_digest
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from tests.unit.omnigent.test_policy_authority import policy_document
 
@@ -53,6 +55,7 @@ async def policy_db(tmp_path):
                     OmnigentPolicyVersion.__table__,
                     OmnigentPolicyEvent.__table__,
                     OmnigentOAuthHostBindingRecord.__table__,
+                    OmnigentOAuthHostLeaseRecord.__table__,
                     OmnigentBridgeSession.__table__,
                 ],
             )
@@ -579,8 +582,144 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             version.document_json["host"]["serverImageRef"] == server_digest
             for version in versions
         )
+        assert all(
+            version.document_json["execution"]["agentIdentities"]
+            == ["codex-native-ui"]
+            for version in versions
+        )
         assert await bootstrap_policies_ready(session) is True
         assert await seed_bootstrap_policies(
             session, env={}, image_resolver=resolver
         ) == []
         assert len(resolution_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(tmp_path, monkeypatch):
+    """Legacy bootstrap identity advances through an immutable version cutover."""
+
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    host_digest = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+
+    async def resolver(image_ref: str) -> str:
+        return host_digest if "host" in image_ref else server_digest
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(session, image_resolver=resolver)
+        versions = list(
+            (await session.execute(select(OmnigentPolicyVersion))).scalars().all()
+        )
+        for version in versions:
+            legacy = deepcopy(version.document_json)
+            legacy["execution"]["agentIdentities"] = ["codex"]
+            version.document_json = legacy
+            version.digest = document_digest(legacy)
+        session.add(
+            OmnigentOAuthHostBindingRecord(
+                binding_ref="bootstrap-binding",
+                provider_profile_id="profile",
+                endpoint_ref="default",
+                harness="codex-native",
+                credential_mount_template_json={
+                    "authVolumeRef": {
+                        "providerProfileId": "profile",
+                        "runtimeId": "codex_cli",
+                        "providerId": "openai",
+                        "volumeRef": "codex_auth_volume",
+                        "credentialGeneration": 1,
+                        "ownerUserId": "user-1",
+                    },
+                    "targetPath": "/home/app/.codex",
+                    "accessMode": "read_write",
+                    "runtimeUid": 1000,
+                    "runtimeGid": 1000,
+                },
+                launch_policy_ref="codex-on-demand@1",
+                effective_launch_snapshot_json={"snapshotRef": "stale"},
+            )
+        )
+        now = datetime.now(UTC)
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__.insert().values(
+                lease_id="active-bootstrap-lease",
+                provider_profile_id="profile",
+                provider_lease_id="provider-lease",
+                binding_ref="bootstrap-binding",
+                credential_generation=1,
+                holder_workflow_id="workflow-active",
+                idempotency_key="workflow-active:step-1",
+                lease_purpose="execution",
+                status="assigned",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                host_capabilities_json={},
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        await session.commit()
+
+        seeded = await seed_bootstrap_policies(session, image_resolver=resolver)
+
+        binding = await session.get(
+            OmnigentOAuthHostBindingRecord,
+            "bootstrap-binding",
+        )
+        assert binding.launch_policy_ref == "codex-on-demand@1"
+        assert binding.effective_launch_snapshot_json == {"snapshotRef": "stale"}
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__
+            .update()
+            .where(
+                OmnigentOAuthHostLeaseRecord.lease_id
+                == "active-bootstrap-lease"
+            )
+            .values(status="stopped", stopped_at=datetime.now(UTC))
+        )
+        await session.commit()
+        seeded_after_drain = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+        )
+
+        assert set(seeded) == {
+            "omnigent-codex",
+            "codex-static",
+            "codex-on-demand",
+        }
+        assert seeded_after_drain == ["codex-on-demand"]
+        policies = list((await session.execute(select(OmnigentPolicy))).scalars())
+        assert all(policy.default_version == 2 for policy in policies)
+        migrated_versions = list(
+            (
+                await session.execute(
+                    select(OmnigentPolicyVersion).order_by(
+                        OmnigentPolicyVersion.policy_id,
+                        OmnigentPolicyVersion.version,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(migrated_versions) == 6
+        for version in migrated_versions:
+            expected_identity = (
+                ["codex"] if version.version == 1 else ["codex-native-ui"]
+            )
+            assert version.state == PolicyState.ACTIVE.value
+            assert version.document_json["execution"]["agentIdentities"] == (
+                expected_identity
+            )
+            if version.version == 2:
+                assert version.parent_ref == f"{version.policy_id}@1"
+        event_types = set(
+            (await session.execute(select(OmnigentPolicyEvent.event_type))).scalars()
+        )
+        assert "bootstrap_agent_identity_cutover" in event_types
+        binding = await session.get(
+            OmnigentOAuthHostBindingRecord,
+            "bootstrap-binding",
+        )
+        assert binding.launch_policy_ref == "codex-on-demand@2"
+        assert binding.effective_launch_snapshot_json is None

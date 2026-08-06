@@ -1,0 +1,16 @@
+{
+  "incidentWorkflowId": "mm:ea264977-a19a-4ec7-bfb7-f8305ef451f3",
+  "incidentRunId": "019fd3bf-202c-7382-b281-7ec29436e788",
+  "failedActivityType": "workspace.capture_checkpoint",
+  "failedActivityEventIds": [
+    171,
+    195
+  ],
+  "workspaceLocator": {
+    "kind": "sandbox",
+    "workspaceId": "81548066e560f4b50ee5df97",
+    "relativePath": "repo"
+  },
+  "failureShape": "the root sandbox worker invoked bare Git against the app-owned Omnigent repository and Git rejected the workspace as dubious ownership",
+  "boundary": "sandbox workspace checkpoint Git invocation"
+}

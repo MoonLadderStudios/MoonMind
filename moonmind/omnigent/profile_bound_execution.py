@@ -39,11 +39,19 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceOwner,
     SandboxRemediationWorkspaceOwner,
 )
-from moonmind.omnigent.execution_profiles import PROFILES, selection_from_request
+from moonmind.omnigent.execution_profiles import (
+    PROFILES,
+    selection_from_request,
+)
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
+    HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
+)
+from moonmind.omnigent.stock_agents import (
+    CLAUDE_STOCK_AGENT_NAME,
+    CODEX_STOCK_AGENT_NAME,
 )
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
@@ -64,7 +72,12 @@ from moonmind.provider_profiles.lease_client import (
     deterministic_lease_owner_id,
 )
 from moonmind.provider_profiles.oauth_policy import is_omnigent_oauth_profile
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    OmnigentHostLease,
+)
+from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
     resolve_runtime_execution_capabilities,
@@ -72,6 +85,22 @@ from moonmind.workflows.executions.runtime_capabilities import (
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
+HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
+# The deployment janitor reconciles abandoned OAuth hosts on a five-minute
+# cadence.  Cover one complete cadence plus scheduling slack so an exact rerun
+# submitted immediately after cancellation can wait for the same profile
+# instead of surfacing a transient uniqueness failure to the operator.
+HOST_PROFILE_BUSY_WAIT_SECONDS = 360.0
+HOST_PROFILE_BUSY_POLL_SECONDS = 5.0
+REPOSITORY_PUBLICATION_CONTINUATION_LIMIT = 8
+
+_REPOSITORY_PUBLICATION_CONTINUATION_PROMPT = """\
+Continue the current task from this same session. The previous turn ended before
+authoritative completion evidence was produced. Do not restart analysis that is
+already complete. Finish the implementation, run the relevant tests, and leave
+the repository changes ready for MoonMind's publisher. Only finish when the
+original task is complete.
+"""
 
 
 def _activity_attempt() -> int:
@@ -541,6 +570,92 @@ class OmnigentProfileBoundExecutionCoordinator:
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         )
 
+    async def _execute_with_host_lease_heartbeat(
+        self,
+        execution: Awaitable[AgentRunResult],
+        *,
+        host_lease_ref: str,
+        ttl_seconds: int,
+    ) -> AgentRunResult:
+        """Keep the durable host lease live for the full provider execution."""
+
+        async def heartbeat() -> None:
+            while True:
+                await self._hosts.heartbeat_host_lease(
+                    host_lease_ref,
+                    ttl_seconds=ttl_seconds,
+                )
+                await asyncio.sleep(HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS)
+
+        execution_task = asyncio.create_task(execution)
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            done, _pending = await asyncio.wait(
+                {execution_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if execution_task in done:
+                return await execution_task
+            # A lease heartbeat must run until provider execution completes.
+            # Propagate its failure so the execution is canceled instead of
+            # being silently interrupted later by the stale-lease janitor.
+            heartbeat_task.result()
+            raise RuntimeError("host lease heartbeat stopped unexpectedly")
+        finally:
+            for task in (execution_task, heartbeat_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                execution_task,
+                heartbeat_task,
+                return_exceptions=True,
+            )
+
+    async def _create_host_lease_after_profile_idle(
+        self,
+        *,
+        binding: Any,
+        provider_lease: CredentialLease,
+        workflow_id: str,
+        step_execution_id: str | None,
+        idempotency_key: str,
+        emit: Callable[..., Awaitable[None]],
+    ) -> OmnigentHostLease:
+        """Wait for canceled-run host reconciliation before claiming the profile."""
+
+        deadline = asyncio.get_running_loop().time() + HOST_PROFILE_BUSY_WAIT_SECONDS
+        wait_attempt = 0
+        while True:
+            try:
+                return await self._hosts.create_or_get_host_lease(
+                    binding=binding,
+                    provider_lease_id=provider_lease.lease_id,
+                    holder_workflow_id=workflow_id,
+                    agent_run_id=step_execution_id,
+                    idempotency_key=idempotency_key,
+                )
+            except OmnigentOAuthHostError as exc:
+                if exc.code != HOST_PROFILE_BUSY_ERROR_CODE:
+                    raise
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise
+                wait_attempt += 1
+                retry_after = min(HOST_PROFILE_BUSY_POLL_SECONDS, remaining)
+                await emit(
+                    "host_lease_created",
+                    "waiting",
+                    code=HOST_PROFILE_BUSY_ERROR_CODE,
+                    remediation_action="wait_for_host_cleanup",
+                    metadata={
+                        "providerProfileId": binding.provider_profile_id,
+                        "retryAfterSeconds": retry_after,
+                        "waitAttempt": wait_attempt,
+                    },
+                    ignore_errors=True,
+                )
+                await asyncio.sleep(retry_after)
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = _request_identity(request)
@@ -560,6 +675,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         current_stage = "request_validated"
         active_stages: set[str] = set()
         attempt_identity = f"{request.idempotency_key}:attempt:{_activity_attempt()}"
+        deferred_bridge_terminals: list[dict[str, Any]] = []
 
         async def emit(
             stage: str,
@@ -598,18 +714,42 @@ class OmnigentProfileBoundExecutionCoordinator:
             elif status in {"completed", "ready", "failed"}:
                 active_stages.discard(stage)
 
+        def collect_deferred_bridge_terminal(
+            provider_result: AgentRunResult,
+        ) -> AgentRunResult:
+            metadata = dict(provider_result.metadata or {})
+            deferred = metadata.pop("deferredBridgeTerminal", None)
+            if isinstance(deferred, Mapping):
+                idempotency_key = str(
+                    deferred.get("idempotencyKey") or ""
+                ).strip()
+                status = str(deferred.get("status") or "").strip()
+                terminal_refs = deferred.get("terminalRefs")
+                if idempotency_key and status and isinstance(terminal_refs, Mapping):
+                    deferred_bridge_terminals.append(
+                        {
+                            "idempotencyKey": idempotency_key,
+                            "status": status,
+                            "terminalRefs": dict(terminal_refs),
+                        }
+                    )
+            return provider_result.model_copy(update={"metadata": metadata})
+
         provider_lease: CredentialLease | None = None
         host_lease = None
         binding = None
         effective_launch: dict[str, Any] | None = None
         remediation_resolution: Mapping[str, Any] | None = None
+        workspace_locator_payload: Mapping[str, Any] | None = None
         terminal_status = "completed"
+        attempt_cancelled = False
         # Bounded, credential-free evidence accumulated across the run so the
         # unified authority chain (MoonLadderStudios/MoonMind#3561) can be emitted
         # once at terminal, covering both success and every failure path.
         authority_workspace_resolution: Mapping[str, Any] | None = None
         authority_result: AgentRunResult | None = None
         authority_bridge_session_id: str | None = None
+        authority_idempotency_key = request.idempotency_key
         authority_cleanup_mode: str | None = None
         preflight: Mapping[str, Any] = {}
         authority_reasons: list[dict[str, Any]] = []
@@ -960,12 +1100,13 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             current_stage = "host_lease_created"
             await emit(current_stage, "started")
-            host_lease = await self._hosts.create_or_get_host_lease(
+            host_lease = await self._create_host_lease_after_profile_idle(
                 binding=binding,
-                provider_lease_id=provider_lease.lease_id,
-                holder_workflow_id=workflow_id,
-                agent_run_id=step_execution_id,
+                provider_lease=provider_lease,
+                workflow_id=workflow_id,
+                step_execution_id=step_execution_id,
                 idempotency_key=request.idempotency_key,
+                emit=emit,
             )
             if host_lease.status in {"stopped", "failed"}:
                 host_lease = await self._hosts.restart_host_lease(host_lease.lease_id)
@@ -997,17 +1138,18 @@ class OmnigentProfileBoundExecutionCoordinator:
             github_token = await self._github_token(request)
             current_stage = "container_start"
             await emit(current_stage, "started")
+            workspace_locator_payload = (
+                remediation_resolution.get("workspaceLocator")
+                if remediation_resolution is not None
+                else workspace_intent.workspace_locator_payload()
+            )
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
                 workspace_key=(
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
-                workspace_locator=(
-                    remediation_resolution.get("workspaceLocator")
-                    if remediation_resolution is not None
-                    else workspace_intent.workspace_locator_payload()
-                ),
+                workspace_locator=workspace_locator_payload,
                 current_workflow_id=workflow_id,
                 current_step_execution_id=(
                     step_execution_id or request.idempotency_key
@@ -1170,28 +1312,311 @@ class OmnigentProfileBoundExecutionCoordinator:
             await emit("first_message_post", "started")
             await emit("session_running", "started")
             await emit("resource_harvest", "started")
-            result = await self._execute(
-                _bind_exact_host(
-                    request,
-                    host_id=host_id,
-                    workspace_path=str(preflight["workspacePath"]),
-                    profile_authorization={
-                        "providerProfileId": profile_id,
-                        "credentialGeneration": host_lease.credential_generation,
-                        "providerLeaseRef": provider_lease.lease_id,
-                        "hostBindingRef": binding.binding_ref,
-                        "hostLeaseRef": host_lease.lease_id,
-                        "endpointRef": binding.endpoint_ref,
-                        "omnigentHostId": host_id,
-                        "bridgeSessionId": bridge.bridge_session_id,
-                        "effectiveLaunchRef": effective_launch["snapshotRef"],
-                    },
-                    harness=str(effective_launch["harness"]),
-                    agent_name=str(effective_launch["agentName"]),
+            result = await self._execute_with_host_lease_heartbeat(
+                self._execute(
+                    _bind_exact_host(
+                        request,
+                        host_id=host_id,
+                        workspace_path=str(preflight["workspacePath"]),
+                        profile_authorization={
+                            "providerProfileId": profile_id,
+                            "credentialGeneration": host_lease.credential_generation,
+                            "providerLeaseRef": provider_lease.lease_id,
+                            "hostBindingRef": binding.binding_ref,
+                            "hostLeaseRef": host_lease.lease_id,
+                            "endpointRef": binding.endpoint_ref,
+                            "omnigentHostId": host_id,
+                            "bridgeSessionId": bridge.bridge_session_id,
+                            "effectiveLaunchRef": effective_launch["snapshotRef"],
+                        },
+                        harness=str(effective_launch["harness"]),
+                        agent_name=str(effective_launch["agentName"]),
+                    ),
+                    artifact_gateway=self._artifact_gateway,
+                    run_store=self._run_store,
+                    defer_bridge_terminal=True,
                 ),
-                artifact_gateway=self._artifact_gateway,
-                run_store=self._run_store,
+                host_lease_ref=host_lease.lease_id,
+                ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
             )
+            result = collect_deferred_bridge_terminal(result)
+            publish_mode = str(
+                (request.parameters or {}).get("publishMode") or "none"
+            ).strip().lower()
+            if result.failure_class is None and publish_mode in {"branch", "pr"}:
+                publication_stage = "repository_publication"
+                for continuation_index in range(
+                    REPOSITORY_PUBLICATION_CONTINUATION_LIMIT + 1
+                ):
+                    session_id = str(
+                        (result.metadata or {}).get("omnigentSessionId") or ""
+                    ).strip()
+                    try:
+                        completion = await self._runtime.inspect_session_completion(
+                            session_id
+                        )
+                    except Exception as exc:
+                        code = str(
+                            getattr(exc, "code", None)
+                            or "OMNIGENT_SESSION_COMPLETION_EVIDENCE_MISSING"
+                        )[:96]
+                        await emit(
+                            publication_stage,
+                            "failed",
+                            code=code,
+                            summary=(
+                                "Repository publication was blocked because "
+                                "terminal session evidence could not be verified."
+                            ),
+                            failure_class="integration_error",
+                            remediation_action="retry_agent_execution",
+                            ignore_errors=True,
+                        )
+                        result = result.model_copy(
+                            update={
+                                "failure_class": "integration_error",
+                                "provider_error_code": code,
+                                "retry_recommendation": "retry",
+                                "summary": (
+                                    "Omnigent terminal session evidence was "
+                                    "unavailable before repository publication."
+                                ),
+                            }
+                        )
+                        break
+
+                    publication: Mapping[str, Any] = {"push_status": "not_attempted"}
+                    if completion.get("terminalAssistantAfterWork") is True:
+                        await emit(
+                            publication_stage,
+                            "started",
+                            metadata={
+                                "continuationCount": continuation_index,
+                                "terminalAssistantAfterWork": True,
+                            },
+                        )
+                        try:
+                            publication = await self._runtime.publish_workspace(
+                                workspace_locator=workspace_locator_payload or {},
+                                current_workflow_id=workflow_id,
+                                current_step_execution_id=(
+                                    step_execution_id or request.idempotency_key
+                                ),
+                                publication_identity=request.idempotency_key,
+                                publish_mode=publish_mode,
+                                base_branch=self._starting_branch(request),
+                                repository=str(
+                                    (request.parameters or {}).get("repository") or ""
+                                ).strip(),
+                                github_token=github_token,
+                            )
+                        except Exception as exc:
+                            code = str(
+                                getattr(exc, "code", None)
+                                or "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"
+                            )[:96]
+                            await emit(
+                                publication_stage,
+                                "failed",
+                                code=code,
+                                summary=(
+                                    "Repository publication failed before host cleanup."
+                                ),
+                                failure_class="integration_error",
+                                remediation_action="retry_repository_publication",
+                                ignore_errors=True,
+                            )
+                            result = result.model_copy(
+                                update={
+                                    "failure_class": "integration_error",
+                                    "provider_error_code": code,
+                                    "retry_recommendation": "retry",
+                                    "summary": (
+                                        "Omnigent repository publication failed "
+                                        "before the remote branch was verified."
+                                    ),
+                                    "metadata": {
+                                        **dict(result.metadata or {}),
+                                        "push_status": "failed",
+                                    },
+                                }
+                            )
+                            break
+
+                    publication_metadata = dict(publication)
+                    if publication.get("push_status") == "pushed":
+                        evidence = AcceptedRepositoryEvidence(
+                            pushStatus="pushed",
+                            branch=publication.get("push_branch"),
+                            baseBranch=publication.get("push_base_branch"),
+                            headSha=publication.get("push_head_sha"),
+                            commitsAheadOfBase=publication.get("push_commit_count"),
+                            repositoryChanged=True,
+                            remoteVerified=True,
+                            authority="omnigent.profile_bound_execution",
+                        )
+                        publication_metadata["acceptedRepositoryEvidence"] = (
+                            evidence.model_dump(
+                                mode="json", by_alias=True, exclude_none=True
+                            )
+                        )
+                        result = result.model_copy(
+                            update={
+                                "metadata": {
+                                    **dict(result.metadata or {}),
+                                    **publication_metadata,
+                                    "repositoryContinuationCount": continuation_index,
+                                }
+                            }
+                        )
+                        await emit(
+                            publication_stage,
+                            "completed",
+                            metadata={
+                                "pushStatus": "pushed",
+                                "branch": publication.get("push_branch"),
+                                "baseBranch": publication.get("push_base_branch"),
+                                "headSha": publication.get("push_head_sha"),
+                                "commitsAheadOfBase": publication.get(
+                                    "push_commit_count"
+                                ),
+                                "remoteVerified": True,
+                                "continuationCount": continuation_index,
+                            },
+                        )
+                        break
+
+                    if continuation_index >= REPOSITORY_PUBLICATION_CONTINUATION_LIMIT:
+                        await emit(
+                            publication_stage,
+                            "failed",
+                            code="OMNIGENT_REPOSITORY_OUTPUT_MISSING",
+                            summary=(
+                                "Bounded same-session continuation completed "
+                                "without publishable repository output."
+                            ),
+                            failure_class="execution_error",
+                            remediation_action="retry_agent_execution",
+                        )
+                        result = result.model_copy(
+                            update={
+                                "failure_class": "execution_error",
+                                "provider_error_code": (
+                                    "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
+                                ),
+                                "retry_recommendation": "retry",
+                                "summary": (
+                                    "Agent execution completed without repository "
+                                    "changes required by publishMode."
+                                ),
+                                "metadata": {
+                                    **dict(result.metadata or {}),
+                                    **publication_metadata,
+                                    "repositoryContinuationCount": continuation_index,
+                                    "terminalAssistantAfterWork": bool(
+                                        completion.get(
+                                            "terminalAssistantAfterWork", False
+                                        )
+                                    ),
+                                },
+                            }
+                        )
+                        break
+
+                    continuation_number = continuation_index + 1
+                    continuation_stage = (
+                        f"repository_continuation_{continuation_number}"
+                    )
+                    await emit(
+                        continuation_stage,
+                        "started",
+                        metadata={
+                            "priorItemCount": int(completion.get("itemCount") or 0),
+                            "priorToolResultCount": int(
+                                completion.get("toolResultCount") or 0
+                            ),
+                            "terminalAssistantAfterWork": bool(
+                                completion.get("terminalAssistantAfterWork", False)
+                            ),
+                        },
+                    )
+                    continuation_request = request.model_copy(
+                        deep=True,
+                        update={
+                            "idempotency_key": (
+                                f"{request.idempotency_key}:repository-continuation:"
+                                f"{continuation_number}"
+                            )
+                        },
+                    )
+                    continuation_bridge = (
+                        await self._run_store.bind_profile_authorization(
+                            request=continuation_request,
+                            endpoint_ref=binding.endpoint_ref,
+                            provider_profile_id=profile_id,
+                            provider_lease_id=provider_lease.lease_id,
+                            credential_generation=host_lease.credential_generation,
+                            host_binding_ref=binding.binding_ref,
+                            host_lease_ref=host_lease.lease_id,
+                            omnigent_host_id=host_id,
+                            effective_launch_snapshot=effective_launch,
+                        )
+                    )
+                    authority_bridge_session_id = str(
+                        continuation_bridge.bridge_session_id
+                    )
+                    authority_idempotency_key = continuation_request.idempotency_key
+                    continuation_result = await self._execute_with_host_lease_heartbeat(
+                        self._execute(
+                            _bind_exact_host(
+                                continuation_request,
+                                host_id=host_id,
+                                workspace_path=str(preflight["workspacePath"]),
+                                profile_authorization={
+                                    "providerProfileId": profile_id,
+                                    "credentialGeneration": (
+                                        host_lease.credential_generation
+                                    ),
+                                    "providerLeaseRef": provider_lease.lease_id,
+                                    "hostBindingRef": binding.binding_ref,
+                                    "hostLeaseRef": host_lease.lease_id,
+                                    "endpointRef": binding.endpoint_ref,
+                                    "omnigentHostId": host_id,
+                                    "bridgeSessionId": (
+                                        continuation_bridge.bridge_session_id
+                                    ),
+                                    "effectiveLaunchRef": effective_launch["snapshotRef"],
+                                },
+                                harness=str(effective_launch["harness"]),
+                                agent_name=str(effective_launch["agentName"]),
+                            ),
+                            artifact_gateway=self._artifact_gateway,
+                            run_store=self._run_store,
+                            resume_session_id=session_id,
+                            first_message_text=(
+                                _REPOSITORY_PUBLICATION_CONTINUATION_PROMPT
+                            ),
+                            defer_bridge_terminal=True,
+                        ),
+                        host_lease_ref=host_lease.lease_id,
+                        ttl_seconds=int(
+                            effective_launch["limits"]["timeoutSeconds"]
+                        ),
+                    )
+                    result = collect_deferred_bridge_terminal(continuation_result)
+                    await emit(
+                        continuation_stage,
+                        "failed" if result.failure_class else "completed",
+                        code=result.provider_error_code,
+                        failure_class=(
+                            str(result.failure_class)
+                            if result.failure_class
+                            else None
+                        ),
+                        metadata={"continuationNumber": continuation_number},
+                    )
+                    if result.failure_class is not None:
+                        break
             # Publish the compact, reference-only session/host plane needed by
             # the canonical Step Execution checkpoint writer.  Workspace
             # evidence is deliberately added later by the workspace capture
@@ -1209,7 +1634,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "hostLeaseRef": host_lease.lease_id,
                 "endpointRef": binding.endpoint_ref,
                 "omnigentHostId": host_id,
-                "bridgeSessionId": bridge.bridge_session_id,
+                "bridgeSessionId": (
+                    authority_bridge_session_id or bridge.bridge_session_id
+                ),
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
@@ -1230,7 +1657,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "terminalRef": next(iter(result.output_refs), None),
                 "diagnosticsRef": result.diagnostics_ref,
                 "omnigentSessionId": result_metadata.get("omnigentSessionId"),
-                "idempotencyKey": request.idempotency_key,
+                "idempotencyKey": authority_idempotency_key,
                 "sourceBranch": self._starting_branch(request) or "detached",
                 "outputBranch": self._target_branch(request),
                 "publicationState": str(
@@ -1299,6 +1726,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             return result
         except (Exception, asyncio.CancelledError) as exc:
+            attempt_cancelled = isinstance(exc, asyncio.CancelledError)
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
@@ -1354,72 +1782,114 @@ class OmnigentProfileBoundExecutionCoordinator:
         finally:
             safe_to_release_provider = host_lease is None
             if host_lease is not None and binding is not None:
-                try:
-                    cleanup_mode = (
-                        "on_demand_remove"
-                        if binding.host_launch_profile_ref
-                        else "static_drain"
-                    )
-                    authority_cleanup_mode = cleanup_mode
-                    await emit(
-                        "host_cleanup",
-                        "started",
-                        metadata={
-                            "sessionInterrupted": host_lease.status == "assigned",
-                            "hostCleanupMode": cleanup_mode,
-                        },
-                        ignore_errors=True,
-                    )
-                    if host_lease.status == "assigned":
-                        host_lease = await self._hosts.transition_host_lease(
-                            host_lease.lease_id,
-                            expected_status="assigned",
-                            new_status="draining",
-                        )
-                    await self._runtime.stop_host(
-                        binding=binding, host_lease=host_lease
-                    )
-                    await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
-                    safe_to_release_provider = True
-                    await emit(
-                        "host_cleanup",
-                        "completed",
-                        metadata={
-                            "cleanupCompleted": True,
-                            "sessionInterrupted": True,
-                            "hostCleanupMode": cleanup_mode,
-                            "stateResourcesCleaned": True,
-                            "hostLeaseReleased": True,
-                        },
-                        ignore_errors=True,
-                    )
-                except Exception as cleanup_exc:
-                    try:
-                        await self._hosts.mark_host_lease_failed(
-                            host_lease.lease_id,
-                            code=type(cleanup_exc).__name__,
-                            summary=str(cleanup_exc),
-                        )
-                    except Exception:
-                        # Preserve the primary cleanup failure when best-effort
-                        # persistence of that failure also becomes unavailable.
-                        pass
+                if attempt_cancelled:
+                    # A Temporal timeout can schedule the retry before the
+                    # canceled coroutine finishes. Leave the deterministic host
+                    # and credential lease for that retry (or the janitor) so an
+                    # old attempt cannot stop/remove the new attempt's host.
+                    authority_cleanup_mode = "retry_or_janitor_reconciliation"
                     authority_reasons.append(
                         {
                             "stage": "host_cleanup",
-                            "code": type(cleanup_exc).__name__,
+                            "code": "activity_cancelled",
                             "failureClass": "system_error",
-                            "remediationAction": "inspect_cleanup_diagnostics",
+                            "remediationAction": "retry_or_reconcile_stale_host",
                         }
                     )
                     await emit(
                         "host_cleanup",
-                        "failed",
-                        code=type(cleanup_exc).__name__,
-                        summary=str(cleanup_exc),
-                        failure_class="system_error",
-                        remediation_action="inspect_cleanup_diagnostics",
-                        metadata={"cleanupCompleted": False, "janitorRequired": True},
+                        "waiting",
+                        code="activity_cancelled",
+                        remediation_action="retry_or_reconcile_stale_host",
+                        metadata={
+                            "cleanupCompleted": False,
+                            "janitorRequired": True,
+                        },
+                        ignore_errors=True,
+                    )
+                else:
+                    try:
+                        cleanup_mode = (
+                            "on_demand_remove"
+                            if binding.host_launch_profile_ref
+                            else "static_drain"
+                        )
+                        authority_cleanup_mode = cleanup_mode
+                        await emit(
+                            "host_cleanup",
+                            "started",
+                            metadata={
+                                "sessionInterrupted": host_lease.status == "assigned",
+                                "hostCleanupMode": cleanup_mode,
+                            },
+                            ignore_errors=True,
+                        )
+                        if host_lease.status == "assigned":
+                            host_lease = await self._hosts.transition_host_lease(
+                                host_lease.lease_id,
+                                expected_status="assigned",
+                                new_status="draining",
+                            )
+                        await self._runtime.stop_host(
+                            binding=binding, host_lease=host_lease
+                        )
+                        await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
+                        safe_to_release_provider = True
+                        await emit(
+                            "host_cleanup",
+                            "completed",
+                            metadata={
+                                "cleanupCompleted": True,
+                                "sessionInterrupted": True,
+                                "hostCleanupMode": cleanup_mode,
+                                "stateResourcesCleaned": True,
+                                "hostLeaseReleased": True,
+                            },
+                            ignore_errors=True,
+                        )
+                    except Exception as cleanup_exc:
+                        try:
+                            await self._hosts.mark_host_lease_failed(
+                                host_lease.lease_id,
+                                code=type(cleanup_exc).__name__,
+                                summary=str(cleanup_exc),
+                            )
+                        except Exception:
+                            # Preserve the primary cleanup failure when best-effort
+                            # persistence of that failure also becomes unavailable.
+                            pass
+                        authority_reasons.append(
+                            {
+                                "stage": "host_cleanup",
+                                "code": type(cleanup_exc).__name__,
+                                "failureClass": "system_error",
+                                "remediationAction": "inspect_cleanup_diagnostics",
+                            }
+                        )
+                        await emit(
+                            "host_cleanup",
+                            "failed",
+                            code=type(cleanup_exc).__name__,
+                            summary=str(cleanup_exc),
+                            failure_class="system_error",
+                            remediation_action="inspect_cleanup_diagnostics",
+                            metadata={"cleanupCompleted": False, "janitorRequired": True},
+                        )
+            for deferred_terminal in deferred_bridge_terminals:
+                try:
+                    await self._run_store.mark_terminal(
+                        deferred_terminal["idempotencyKey"],
+                        status=deferred_terminal["status"],
+                        terminal_refs=deferred_terminal["terminalRefs"],
+                    )
+                except Exception as terminal_exc:
+                    authority_reasons.append(
+                        {
+                            "stage": "terminal_evidence_commit",
+                            "code": type(terminal_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
                     )
             lease_released = provider_lease is None
             if provider_lease is not None:
@@ -1632,7 +2102,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                         by_alias=True, mode="json", exclude_none=True
                     ),
                     harness=harness,
-                    agent_name=("claude" if runtime_id == "claude_code" else "codex"),
+                    agent_name=(
+                        CLAUDE_STOCK_AGENT_NAME
+                        if runtime_id == "claude_code"
+                        else CODEX_STOCK_AGENT_NAME
+                    ),
                 ),
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,

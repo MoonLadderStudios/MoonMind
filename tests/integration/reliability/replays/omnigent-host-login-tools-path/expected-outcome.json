@@ -1,0 +1,5 @@
+{
+  "invariant": "on-demand and static OAuth hosts mount the same portable profile.d script so login shells retain the mounted tool path",
+  "sourceName": "moonmind-tools.sh",
+  "containerPath": "/etc/profile.d/moonmind-tools.sh"
+}

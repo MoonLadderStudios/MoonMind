@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-profile-bound-heartbeat-timeout",
+  "incidentWorkflowId": "mm:95bc330e-12da-4a7d-8319-98d81b76a877",
+  "failedChildWorkflowId": "resolver:pr:3614:head:8424bf1a3d78:h:0dfd6753e5df2f8b:1:agent:node-1",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "heartbeatTimeoutSeconds": 120,
+  "failureBoundary": "on-demand OAuth host preparation",
+  "retryRace": "the timed-out attempt stopped the deterministic host while attempt 2 was validating it"
+}

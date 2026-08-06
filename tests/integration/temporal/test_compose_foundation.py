@@ -202,6 +202,7 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     )
     assert initializer["user"] == "0:0"
     assert initializer["restart"] == "no"
+    assert "profiles" not in initializer
     assert initializer["environment"] == {
         "MOONMIND_GH_SOURCE": "/usr/local/bin/gh",
         "MOONMIND_GH_VERSION": "${OMNIGENT_GH_VERSION:-2.76.2}",
@@ -213,6 +214,9 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     assert compose["volumes"]["omnigent-tools"]["name"] == (
         "moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}"
     )
+    assert services["temporal-worker-agent-runtime"]["depends_on"][
+        "omnigent-tools-init"
+    ] == {"condition": "service_completed_successfully"}
 
     for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
         host = services[service_name]
@@ -460,6 +464,10 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     assert "squid -k parse" in proxy_service["healthcheck"]["test"][1]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
+    assert sandbox_env["WORKFLOW_WORKSPACE_ROOT"] == "/work/agent_jobs"
+    assert "agent_workspaces:/work/agent_jobs" in services[
+        "temporal-worker-sandbox"
+    ]["volumes"]
     assert sandbox_env["HTTPS_PROXY"] == (
         "${MOONMIND_SANDBOX_HTTPS_PROXY:-http://sandbox-egress-proxy:3128}"
     )
@@ -548,7 +556,10 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         server_service["depends_on"]["omnigent-db-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert _network_names(server_service) == {"local-network"}
+    assert _network_names(server_service) == {
+        "local-network",
+        "omnigent-egress-network",
+    }
 
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
@@ -604,8 +615,11 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
         "http_proxy": "http://omnigent-egress-proxy:3129",
         "https_proxy": "http://omnigent-egress-proxy:3129",
-        "NO_PROXY": "",
-        "no_proxy": "",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
+        ),
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
         "HOME": "/home/app",
@@ -681,13 +695,17 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert _env_map(host_service["environment"]) == {
         # Restricted-egress enforcement (MoonLadderStudios/MoonMind#3516): the
         # static Codex host is routed through the trusted proxy on the internal
-        # network. NO_PROXY is pinned empty so no destination bypasses it.
+        # network. Only same-container loopback bypasses the proxy so Codex's
+        # native TUI can connect to its local app-server WebSocket.
         "HTTP_PROXY": "http://omnigent-egress-proxy:3129",
         "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
         "http_proxy": "http://omnigent-egress-proxy:3129",
         "https_proxy": "http://omnigent-egress-proxy:3129",
-        "NO_PROXY": "",
-        "no_proxy": "",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
+        ),
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "HOME": "/home/app",
         "PATH": MOUNTED_TOOL_PATH,
@@ -849,6 +867,10 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert worker_env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     )
+    assert worker_env["WORKFLOW_WORKSPACE_DAEMON_ROOT"] == (
+        "${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/"
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}/_data}"
+    )
     assert worker_env["MOONMIND_PYTHON_TEST_IMAGE"] == (
         "${MOONMIND_PYTHON_TEST_IMAGE:-}"
     )
@@ -937,7 +959,10 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
         == "service_completed_successfully"
     )
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "local-network",
+        "omnigent-egress-network",
+    }
     assert "omnigent-data:/data" in omnigent_service["volumes"]
     assert "omnigent-data" in compose["volumes"]
 

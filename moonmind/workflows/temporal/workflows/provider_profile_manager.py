@@ -79,6 +79,9 @@ FRESH_START_DB_LEASE_RESTORE_PATCH = (
     "provider-profile-manager-fresh-start-db-lease-restore-v1"
 )
 DURABLE_LEASE_GRANT_PATCH = "provider-profile-manager-durable-lease-grant-v1"
+ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH = (
+    "provider-profile-manager-activity-owned-lease-verification-v1"
+)
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -657,6 +660,22 @@ class MoonMindProviderProfileManagerWorkflow:
 
     @workflow.update(name="AcquireSlot")
     async def acquire_slot(self, payload: SlotAcquirePayload) -> dict[str, Any]:
+        """Compatibility handler for Updates already present in workflow history."""
+
+        return await self._acquire_slot(payload, verify_activity_owner=False)
+
+    @workflow.update(name="AcquireSlotV2")
+    async def acquire_slot_v2(self, payload: SlotAcquirePayload) -> dict[str, Any]:
+        """Reserve capacity only while the Activity's parent workflow is live."""
+
+        return await self._acquire_slot(payload, verify_activity_owner=True)
+
+    async def _acquire_slot(
+        self,
+        payload: SlotAcquirePayload,
+        *,
+        verify_activity_owner: bool,
+    ) -> dict[str, Any]:
         """Reserve and return a slot without requiring a callback signal.
 
         Activity-owned workloads cannot receive ``slot_assigned``. This update
@@ -686,6 +705,8 @@ class MoonMindProviderProfileManagerWorkflow:
         lease_metadata = self._safe_lease_metadata(payload)
 
         while not self._shutdown_requested:
+            if verify_activity_owner:
+                await self._assert_activity_lease_owner_running(lease_metadata)
             existing_profile_id = self._profile_id_for_lease(requester_id)
             if existing_profile_id is not None:
                 return {
@@ -746,6 +767,36 @@ class MoonMindProviderProfileManagerWorkflow:
         raise exceptions.ApplicationError(
             "provider profile manager is shutting down", non_retryable=True
         )
+
+    async def _assert_activity_lease_owner_running(
+        self, lease_metadata: dict[str, Any]
+    ) -> None:
+        """Reject a late Activity-owned grant once its parent is terminal."""
+
+        if lease_metadata.get("ownerIsWorkflow") is not False:
+            return
+        owner_workflow_id = self._normalize_optional_string(
+            lease_metadata.get("workflowId")
+        )
+        if owner_workflow_id is None:
+            raise exceptions.ApplicationError(
+                "Activity-owned provider lease requires workflowId authority",
+                type="ProviderProfileLeaseOwnerMissing",
+                non_retryable=True,
+            )
+        statuses = await self._verify_workflow_statuses([owner_workflow_id])
+        if statuses is None:
+            raise exceptions.ApplicationError(
+                "Unable to verify provider lease owner workflow",
+                type="ProviderProfileLeaseOwnerVerificationFailed",
+            )
+        status = statuses.get(owner_workflow_id)
+        if status is not None and not status.get("running", True):
+            raise exceptions.ApplicationError(
+                "Provider lease owner workflow is terminal",
+                type="ProviderProfileLeaseOwnerTerminal",
+                non_retryable=True,
+            )
 
     @workflow.update(name="AcquireCredentialMaintenanceLease")
     async def acquire_credential_maintenance_lease(
@@ -983,10 +1034,14 @@ class MoonMindProviderProfileManagerWorkflow:
                 await self._sync_leases_to_db()
 
             verify_lease_holders = workflow.patched(VERIFY_LEASE_HOLDERS_PATCH)
+            verify_activity_owned_leases = workflow.patched(
+                ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH
+            )
             verify_pending_requesters = workflow.patched(VERIFY_PENDING_REQUESTS_PATCH)
             if verify_lease_holders or verify_pending_requesters:
                 await self._verify_active_workflows(
                     verify_lease_holders=verify_lease_holders,
+                    verify_activity_owned_leases=verify_activity_owned_leases,
                     verify_pending_requesters=verify_pending_requesters,
                 )
 
@@ -1768,15 +1823,21 @@ class MoonMindProviderProfileManagerWorkflow:
                 )
         return total_evicted
 
-    def _lease_holder_workflow_ids(self) -> list[str]:
+    def _lease_holder_workflow_ids(
+        self, *, include_activity_owned: bool = False
+    ) -> list[str]:
         """Return unique workflow IDs that currently hold profile leases."""
         all_wf_ids: list[str] = []
         for profile in self._profiles.values():
             for lease_id in profile.current_leases:
                 metadata = profile.lease_metadata.get(lease_id) or {}
-                if metadata.get("ownerIsWorkflow") is False:
+                owner_is_workflow = metadata.get("ownerIsWorkflow") is not False
+                owner_workflow_id = str(metadata.get("workflowId") or "").strip()
+                if not owner_is_workflow and not include_activity_owned:
                     continue
-                all_wf_ids.append(str(metadata.get("workflowId") or lease_id))
+                if not owner_is_workflow and not owner_workflow_id:
+                    continue
+                all_wf_ids.append(owner_workflow_id or lease_id)
         return list(dict.fromkeys(all_wf_ids))
 
     def _pending_requester_workflow_ids(self) -> list[str]:
@@ -1824,7 +1885,10 @@ class MoonMindProviderProfileManagerWorkflow:
         return statuses
 
     def _reclaim_terminal_leases(
-        self, workflow_statuses: dict[str, dict[str, Any]]
+        self,
+        workflow_statuses: dict[str, dict[str, Any]],
+        *,
+        include_activity_owned: bool = False,
     ) -> bool:
         """Remove leases held by workflows that are in a terminal state."""
         reclaimed = False
@@ -1832,9 +1896,13 @@ class MoonMindProviderProfileManagerWorkflow:
         for profile in list(self._profiles.values()):
             for wf_id in list(profile.current_leases):
                 metadata = profile.lease_metadata.get(wf_id) or {}
-                if metadata.get("ownerIsWorkflow") is False:
+                owner_is_workflow = metadata.get("ownerIsWorkflow") is not False
+                owner_workflow_id = str(metadata.get("workflowId") or "").strip()
+                if not owner_is_workflow and not include_activity_owned:
                     continue
-                owner_workflow_id = str(metadata.get("workflowId") or wf_id)
+                if not owner_is_workflow and not owner_workflow_id:
+                    continue
+                owner_workflow_id = owner_workflow_id or wf_id
                 status_info = workflow_statuses.get(owner_workflow_id, {})
                 if not status_info.get("running", True):
                     profile.release(wf_id)
@@ -1874,12 +1942,17 @@ class MoonMindProviderProfileManagerWorkflow:
         self,
         *,
         verify_lease_holders: bool,
+        verify_activity_owned_leases: bool = False,
         verify_pending_requesters: bool,
     ) -> None:
         """Verify lease holders and pending requesters with one status pass."""
         workflow_ids: list[str] = []
         if verify_lease_holders:
-            workflow_ids.extend(self._lease_holder_workflow_ids())
+            workflow_ids.extend(
+                self._lease_holder_workflow_ids(
+                    include_activity_owned=verify_activity_owned_leases
+                )
+            )
         if verify_pending_requesters:
             workflow_ids.extend(self._pending_requester_workflow_ids())
 
@@ -1889,7 +1962,10 @@ class MoonMindProviderProfileManagerWorkflow:
 
         reclaimed = False
         if verify_lease_holders:
-            reclaimed = self._reclaim_terminal_leases(workflow_statuses)
+            reclaimed = self._reclaim_terminal_leases(
+                workflow_statuses,
+                include_activity_owned=verify_activity_owned_leases,
+            )
         if verify_pending_requesters:
             self._prune_terminal_pending_requesters(workflow_statuses)
 

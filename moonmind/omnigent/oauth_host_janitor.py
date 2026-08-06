@@ -7,6 +7,11 @@ from typing import Any
 
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+from moonmind.provider_profiles.lease_client import (
+    CredentialLease,
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 
@@ -18,15 +23,47 @@ class OmnigentOAuthHostJanitor:
         runtime: OmnigentOAuthHostRuntime,
         client: OmnigentHttpClient,
         run_store: Any | None = None,
+        lease_client: ProviderProfileLeaseClient | None = None,
         heartbeat_timeout_seconds: int = 90,
     ) -> None:
         self._repository = repository
         self._runtime = runtime
         self._client = client
         self._run_store = run_store
+        self._lease_client = lease_client
         self._heartbeat_timeout = timedelta(
             seconds=max(30, heartbeat_timeout_seconds)
         )
+
+    async def _release_provider_lease(self, *, binding: Any, lease: Any) -> bool:
+        """Release capacity only after the credential-bearing host is stopped.
+
+        Omnigent host leases are created exclusively for ``execution_omnigent``
+        capacity. The ProviderProfileManager deliberately uses the deterministic
+        owner token as its lease ID, so the durable ``provider_lease_id`` is also
+        the release authority needed after an activity process disappears.
+        """
+
+        if self._lease_client is None:
+            return False
+        provider_lease_id = str(lease.provider_lease_id or "").strip()
+        runtime_id = str(
+            binding.credential_mount_ref.auth_volume_ref.runtime_id or ""
+        ).strip()
+        if not provider_lease_id or not runtime_id:
+            raise ValueError(
+                "host lease is missing Provider Profile release authority"
+            )
+        await self._lease_client.release_lease(
+            CredentialLease(
+                profile_id=lease.provider_profile_id,
+                runtime_id=runtime_id,
+                lease_id=provider_lease_id,
+                owner_id=provider_lease_id,
+                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+            )
+        )
+        return True
 
     async def run_action(
         self,
@@ -80,18 +117,21 @@ class OmnigentOAuthHostJanitor:
         elif action_kind == "host.stop":
             if before_state not in {"stopped", "failed"}:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
+                await self._release_provider_lease(binding=binding, lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "host.remove":
             removed = bool(lease.container_name)
             if lease.container_name:
                 await self._runtime.remove_container(lease.container_name)
             if before_state != "stopped":
+                await self._release_provider_lease(binding=binding, lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "provider_profile.evict_stale_lease":
             if not stale:
                 raise ValueError("Provider Profile host lease is not stale")
             if before_state not in {"stopped", "failed"}:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
+                await self._release_provider_lease(binding=binding, lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "host_lease.reconcile_stale":
             if not stale:
@@ -103,9 +143,11 @@ class OmnigentOAuthHostJanitor:
                 and not await self._runtime.container_exists(lease.container_name)
             )
             if missing:
+                await self._release_provider_lease(binding=binding, lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
             elif before_state not in {"stopped", "failed"}:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
+                await self._release_provider_lease(binding=binding, lease=lease)
                 lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
 
         result = self._action_result(
@@ -157,6 +199,20 @@ class OmnigentOAuthHostJanitor:
                     }
                 )
         leases = await self._repository.list_active_host_leases()
+        terminal_provider_leases = (
+            await self._repository.list_terminal_host_leases_with_active_provider_capacity()
+            if hasattr(
+                self._repository,
+                "list_terminal_host_leases_with_active_provider_capacity",
+            )
+            else []
+        )
+        terminal_provider_lease_refs = {
+            lease.lease_id for lease in terminal_provider_leases
+        }
+        leases = list(
+            {lease.lease_id: lease for lease in [*leases, *terminal_provider_leases]}.values()
+        )
         cleanup_required = (
             await self._run_store.cleanup_required_host_lease_refs()
             if self._run_store is not None
@@ -180,12 +236,23 @@ class OmnigentOAuthHostJanitor:
             expired = lease.expires_at <= now
             stale = lease.last_heartbeat_at <= now - self._heartbeat_timeout
             terminal_cleanup = lease.lease_id in cleanup_required
+            terminal_provider_cleanup = (
+                lease.lease_id in terminal_provider_lease_refs
+            )
             reconciliation_action = reconciliation_required.get(lease.lease_id)
             missing = bool(
                 lease.container_name
                 and not await self._runtime.container_exists(lease.container_name)
             )
-            if not force and not expired and not missing and not stale and not terminal_cleanup and not reconciliation_action:
+            if (
+                not force
+                and not expired
+                and not missing
+                and not stale
+                and not terminal_cleanup
+                and not terminal_provider_cleanup
+                and not reconciliation_action
+            ):
                 continue
             binding = await self._repository.validate_binding(lease.binding_ref)
             if lease.omnigent_session_id:
@@ -203,8 +270,16 @@ class OmnigentOAuthHostJanitor:
                         }
                     )
             try:
-                if not missing:
+                # Host leases persisted before lifecycle status projection was
+                # introduced remain valid janitor inputs. Treat an absent status
+                # as active so their owned container is still stopped before the
+                # Provider Profile lease is released.
+                lease_status = str(getattr(lease, "status", "assigned") or "")
+                if not missing and lease_status not in {"stopped", "failed"}:
                     await self._runtime.stop_host(binding=binding, host_lease=lease)
+                provider_released = await self._release_provider_lease(
+                    binding=binding, lease=lease
+                )
                 await self._repository.mark_host_lease_stopped(lease.lease_id)
             except Exception as exc:
                 if (
@@ -238,10 +313,16 @@ class OmnigentOAuthHostJanitor:
                         if stale
                         else (
                             "runner_exit_cleanup" if terminal_cleanup else (
-                                reconciliation_action or "missing_container_repair"
+                                "provider_lease_reconciliation"
+                                if terminal_provider_cleanup
+                                else (
+                                    reconciliation_action
+                                    or "missing_container_repair"
+                                )
                             )
                         )
                     ),
+                    "providerLeaseReleased": provider_released,
                 }
             )
         for container_name in await self._runtime.list_managed_containers():

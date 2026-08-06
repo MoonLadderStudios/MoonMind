@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import logging
-from datetime import UTC, datetime
 import os
 import platform
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import (
     OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
     OmnigentPolicy,
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
@@ -26,6 +28,7 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
+from moonmind.omnigent.oauth_hosts import ACTIVE_HOST_STATES
 from moonmind.omnigent.policies import (
     PolicyDocument,
     PolicyState,
@@ -33,6 +36,7 @@ from moonmind.omnigent.policies import (
     document_digest,
     normalize_document,
 )
+from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.workflows.temporal.container_image_acquisition import (
     normalize_image_reference,
@@ -753,7 +757,11 @@ def bootstrap_document(
     return PolicyDocument.model_validate({
         "schemaVersion": 1,
         "endpoint": {"ref": "default", "bridgeModes": ["embedded", "proxy"]},
-        "execution": {"profileRef": execution_profile_ref, "harness": "codex-native", "agentIdentities": ["codex"]},
+        "execution": {
+            "profileRef": execution_profile_ref,
+            "harness": "codex-native",
+            "agentIdentities": [CODEX_STOCK_AGENT_NAME],
+        },
         "host": {"mode": host_mode, "backendRef": "compose" if host_mode == "static_compose" else "container-backend",
                  "architectures": [architecture],
                  "serverImageRef": server_image_ref if _DIGEST_IMAGE.fullmatch(server_image_ref or "") else "image-ref:omnigent-server",
@@ -782,6 +790,34 @@ def bootstrap_document(
     })
 
 
+def _legacy_bootstrap_agent_identity(row: OmnigentPolicyVersion) -> bool:
+    """Match only MoonMind's pre-release built-in ``codex`` identity."""
+
+    if row.policy_id not in {
+        definition[0] for definition in _BOOTSTRAP_POLICY_DEFINITIONS
+    } or row.version != 1:
+        return False
+    document = row.document_json
+    execution = document.get("execution") if isinstance(document, Mapping) else None
+    return bool(
+        isinstance(execution, Mapping)
+        and execution.get("profileRef") == "omnigent-codex@1"
+        and execution.get("harness") == "codex-native"
+        and execution.get("agentIdentities") == ["codex"]
+    )
+
+
+def _canonical_bootstrap_agent_identity(row: OmnigentPolicyVersion) -> bool:
+    document = row.document_json
+    execution = document.get("execution") if isinstance(document, Mapping) else None
+    return bool(
+        isinstance(execution, Mapping)
+        and execution.get("profileRef") == "omnigent-codex@1"
+        and execution.get("harness") == "codex-native"
+        and execution.get("agentIdentities") == [CODEX_STOCK_AGENT_NAME]
+    )
+
+
 async def seed_bootstrap_policies(
     session: AsyncSession,
     *,
@@ -807,10 +843,30 @@ async def seed_bootstrap_policies(
                 default_row = None
             if (
                 default_row is not None
+                and _legacy_bootstrap_agent_identity(default_row)
+            ):
+                reconciliation_required = True
+                break
+            if (
+                default_row is not None
                 and default_row.state == PolicyState.ACTIVE.value
                 and default_row.validation_json.get("valid")
+                and not _legacy_bootstrap_agent_identity(default_row)
             ):
-                continue
+                legacy_binding = (
+                    await session.execute(
+                        select(OmnigentOAuthHostBindingRecord.binding_ref)
+                        .where(
+                            OmnigentOAuthHostBindingRecord.launch_policy_ref
+                            == f"{policy_id}@1"
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if legacy_binding is None:
+                    continue
+                reconciliation_required = True
+                break
         try:
             row = await service.get_version(policy_id, 1)
         except PolicyNotFound:
@@ -842,6 +898,112 @@ async def seed_bootstrap_policies(
                                        document=document, actor="bootstrap")
         else:
             row = await service.get_version(policy_id, 1)
+            if _legacy_bootstrap_agent_identity(row):
+                versions = await service.versions(policy_id)
+                candidate = versions[0]
+                legacy_ref = f"{policy_id}@{row.version}"
+                if candidate.version == row.version:
+                    migrated_payload = copy.deepcopy(row.document_json)
+                    migrated_payload["execution"]["agentIdentities"] = [
+                        CODEX_STOCK_AGENT_NAME
+                    ]
+                    migrated_document = PolicyDocument.model_validate(
+                        migrated_payload
+                    )
+                    candidate = await service.new_version(
+                        policy_id=policy_id,
+                        document=migrated_document,
+                        actor="bootstrap",
+                        expected_parent_ref=legacy_ref,
+                    )
+                elif not (
+                    candidate.created_by == "bootstrap"
+                    and candidate.parent_ref == legacy_ref
+                    and _canonical_bootstrap_agent_identity(candidate)
+                ):
+                    # A later operator-authored version owns policy evolution.
+                    # Do not rewrite or route around that authority.
+                    continue
+                if not candidate.validation_json.get("valid"):
+                    continue
+                if candidate.state not in {
+                    PolicyState.DRAFT.value,
+                    PolicyState.ACTIVE.value,
+                }:
+                    continue
+                bindings = list(
+                    (
+                        await session.execute(
+                            select(OmnigentOAuthHostBindingRecord).where(
+                                OmnigentOAuthHostBindingRecord.launch_policy_ref
+                                == legacy_ref
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if (
+                    candidate.state == PolicyState.ACTIVE.value
+                    and policy.default_version == candidate.version
+                    and not bindings
+                ):
+                    continue
+                if not (
+                    candidate.state == PolicyState.ACTIVE.value
+                    and policy.default_version == candidate.version
+                ):
+                    candidate = await service.transition(
+                        policy_id=policy_id,
+                        version=candidate.version,
+                        state=PolicyState.ACTIVE,
+                        actor="bootstrap",
+                        make_default=True,
+                    )
+                active_binding_refs: set[str] = set()
+                if bindings:
+                    active_binding_refs = set(
+                        (
+                            await session.execute(
+                                select(
+                                    OmnigentOAuthHostLeaseRecord.binding_ref
+                                ).where(
+                                    OmnigentOAuthHostLeaseRecord.binding_ref.in_(
+                                        [binding.binding_ref for binding in bindings]
+                                    ),
+                                    OmnigentOAuthHostLeaseRecord.status.in_(
+                                        ACTIVE_HOST_STATES
+                                    ),
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                cutover_bindings = [
+                    binding
+                    for binding in bindings
+                    if binding.binding_ref not in active_binding_refs
+                ]
+                for binding in cutover_bindings:
+                    binding.launch_policy_ref = f"{policy_id}@{candidate.version}"
+                    binding.effective_launch_snapshot_json = None
+                service._event(
+                    policy_id,
+                    candidate.version,
+                    "bootstrap_agent_identity_cutover",
+                    "bootstrap",
+                    {
+                        "agentIdentity": CODEX_STOCK_AGENT_NAME,
+                        "previousRef": legacy_ref,
+                        "policyRef": f"{policy_id}@{candidate.version}",
+                        "updatedBindingCount": len(cutover_bindings),
+                        "deferredBindingCount": len(active_binding_refs),
+                    },
+                )
+                await session.commit()
+                seeded.append(policy_id)
+                continue
             if row.state != PolicyState.DRAFT.value or row.validation_json.get("valid"):
                 continue
             normalized = normalize_document(document)

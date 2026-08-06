@@ -20,6 +20,7 @@ and enforced network before it advertises the runtime as available.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -36,6 +37,8 @@ from api_service.db.models import (
     OmnigentAgentProfile,
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileVersion,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
     OmnigentUpstreamAgentProjection,
 )
 from api_service.services.omnigent_agent_profile_service import (
@@ -116,7 +119,10 @@ def _digest(document: Mapping[str, Any]) -> str:
 
 
 def build_bootstrap_document(
-    agent_name: str, *, upstream_version: str | None = None
+    agent_name: str,
+    *,
+    upstream_version: str | None = None,
+    launch_policy_ref: str = _BOOTSTRAP_LAUNCH_POLICY_REF,
 ) -> dict[str, Any]:
     """Build the normalized bootstrap profile document for a stable agent ID.
 
@@ -134,12 +140,12 @@ def build_bootstrap_document(
         "continuations": {"branch": True, "checkpoint": True, "remediation": True},
         "endpointRef": _BOOTSTRAP_ENDPOINT_REF,
         "execution": {
-            "allowedLaunchPolicyRefs": [_BOOTSTRAP_LAUNCH_POLICY_REF],
+            "allowedLaunchPolicyRefs": [launch_policy_ref],
             "defaultExecutionProfileRef": _BOOTSTRAP_EXECUTION_PROFILE_REF,
         },
         "harness": _BOOTSTRAP_HARNESS,
         "model": {"settings": {}},
-        "policyRef": _BOOTSTRAP_LAUNCH_POLICY_REF,
+        "policyRef": launch_policy_ref,
         "providerRequirements": {
             "credentialSource": _BOOTSTRAP_PROVIDER_CREDENTIAL_SOURCE,
             "materializationMode": _BOOTSTRAP_PROVIDER_MATERIALIZATION_MODE,
@@ -247,6 +253,7 @@ async def seed_bootstrap_agent_profile(
     now: datetime | None = None,
     upstream_id: str | None = None,
     upstream_version: str | None = None,
+    launch_policy_ref: str = _BOOTSTRAP_LAUNCH_POLICY_REF,
 ) -> str | None:
     """Materialize an active profile only for a synchronized upstream identity.
 
@@ -288,6 +295,7 @@ async def seed_bootstrap_agent_profile(
     document = build_bootstrap_document(
         stable_upstream_id,
         upstream_version=upstream_version,
+        launch_policy_ref=launch_policy_ref,
     )
     profile = OmnigentAgentProfile(
         profile_id=BOOTSTRAP_PROFILE_ID,
@@ -417,6 +425,130 @@ async def default_agent_profile_ready(
     )
 
 
+async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
+    """Resolve the active built-in policy without embedding its version."""
+
+    policy = await session.get(OmnigentPolicy, "codex-on-demand")
+    if policy is None or policy.default_version is None:
+        return _BOOTSTRAP_LAUNCH_POLICY_REF
+    version = await session.scalar(
+        select(OmnigentPolicyVersion).where(
+            OmnigentPolicyVersion.policy_id == policy.policy_id,
+            OmnigentPolicyVersion.version == policy.default_version,
+        )
+    )
+    if (
+        version is None
+        or version.state != "active"
+        or not version.validation_json
+        or version.validation_json.get("valid") is not True
+    ):
+        return _BOOTSTRAP_LAUNCH_POLICY_REF
+    return f"{policy.policy_id}@{version.version}"
+
+
+async def _reconcile_bootstrap_profile_launch_policy(
+    session: AsyncSession,
+    *,
+    launch_policy_ref: str,
+    now: datetime,
+) -> bool:
+    """Advance the managed profile when its immutable policy authority moves."""
+
+    profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    if (
+        profile is None
+        or profile.state != "active"
+        or profile.active_version is None
+    ):
+        return False
+    active = await _load_active_version(session, profile)
+    if active is None or not isinstance(active.document, Mapping):
+        return False
+    rollout = active.rollout_metadata or {}
+    if rollout.get("origin") not in {
+        "builtin_default",
+        "env_bootstrap",
+        "bootstrap_policy_cutover",
+    }:
+        return False
+    execution = active.document.get("execution")
+    if not isinstance(execution, Mapping):
+        return False
+    if (
+        execution.get("allowedLaunchPolicyRefs") == [launch_policy_ref]
+        and active.document.get("policyRef") == launch_policy_ref
+    ):
+        return True
+
+    document = copy.deepcopy(active.document)
+    document["execution"]["allowedLaunchPolicyRefs"] = [launch_policy_ref]
+    document["policyRef"] = launch_policy_ref
+    digest = _digest(document)
+    candidate = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileVersion.digest == digest,
+        )
+    )
+    if candidate is None:
+        latest = int(
+            await session.scalar(
+                select(func.max(OmnigentAgentProfileVersion.version)).where(
+                    OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID
+                )
+            )
+            or 0
+        )
+        candidate = OmnigentAgentProfileVersion(
+            profile_id=BOOTSTRAP_PROFILE_ID,
+            version=latest + 1,
+            digest=digest,
+            document=document,
+            parent_version=active.version,
+            upstream_snapshot=copy.deepcopy(active.upstream_snapshot),
+            validation_result=copy.deepcopy(active.validation_result),
+            rollout_metadata={
+                "origin": "bootstrap_policy_cutover",
+                "previousOrigin": rollout.get("origin"),
+                "previousLaunchPolicyRef": active.document.get("policyRef"),
+                "launchPolicyRef": launch_policy_ref,
+                "materializedAt": now.isoformat(),
+            },
+            created_by=None,
+        )
+        session.add(candidate)
+    profile.active_version = candidate.version
+    session.add(
+        OmnigentAgentProfileAuditEvent(
+            profile_id=BOOTSTRAP_PROFILE_ID,
+            action="bootstrap_launch_policy_cutover",
+            version=candidate.version,
+            actor_id=None,
+            metadata_json={
+                "previousVersion": active.version,
+                "launchPolicyRef": launch_policy_ref,
+                "state": "active",
+            },
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        # A concurrent startup may have completed the same immutable cutover.
+        profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+        if profile is None:
+            return False
+        current = await _load_active_version(session, profile)
+        return bool(
+            current is not None
+            and current.digest == digest
+            and current.document.get("policyRef") == launch_policy_ref
+        )
+    return True
+
+
 async def reconcile_bootstrap_agent_profile(
     session: AsyncSession,
     *,
@@ -460,12 +592,19 @@ async def reconcile_bootstrap_agent_profile(
         _inventory_text(candidate, "version", "agentVersion", "agent_version")
         or None
     )
+    launch_policy_ref = await _active_bootstrap_launch_policy_ref(session)
     await seed_bootstrap_agent_profile(
         session,
         env=env,
         now=observed_at,
         upstream_id=upstream_id,
         upstream_version=upstream_version,
+        launch_policy_ref=launch_policy_ref,
+    )
+    await _reconcile_bootstrap_profile_launch_policy(
+        session,
+        launch_policy_ref=launch_policy_ref,
+        now=observed_at,
     )
     return await default_agent_profile_ready(session, now=observed_at)
 

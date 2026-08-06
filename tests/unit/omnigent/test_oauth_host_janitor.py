@@ -15,8 +15,15 @@ class _Repository:
     async def list_active_host_leases(self):
         return [self.lease]
 
+    async def list_terminal_host_leases_with_active_provider_capacity(self):
+        return []
+
     async def validate_binding(self, _binding_ref):
-        return SimpleNamespace()
+        return SimpleNamespace(
+            credential_mount_ref=SimpleNamespace(
+                auth_volume_ref=SimpleNamespace(runtime_id="codex_cli")
+            )
+        )
 
     async def get_host_lease(self, lease_id):
         return self.lease if lease_id == self.lease.lease_id else None
@@ -72,11 +79,22 @@ class _Client:
         return {}
 
 
+class _LeaseClient:
+    def __init__(self, order=None):
+        self.released = []
+        self.order = order if order is not None else []
+
+    async def release_lease(self, lease):
+        self.order.append("provider_released")
+        self.released.append(lease)
+
+
 def _lease(*, heartbeat_age: int = 0):
     now = datetime.now(UTC)
     return SimpleNamespace(
         lease_id="lease-1",
         provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
         binding_ref="binding-1",
         container_name="host-1",
         omnigent_session_id="session-1",
@@ -183,7 +201,8 @@ async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
 @pytest.mark.asyncio
 async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
     repository = _Repository(_lease())
-    runtime = _Runtime()
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
     run_store = SimpleNamespace(
         cleanup_required_host_lease_refs=lambda: None,
     )
@@ -197,10 +216,51 @@ async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
         runtime=runtime,
         client=_Client(),
         run_store=run_store,
+        lease_client=lease_client,
     ).run()
 
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["lease-1"]
+    assert lease_client.released[0].lease_id == "provider-lease-1"
+    assert lease_client.released[0].owner_id == "provider-lease-1"
+    assert lease_client.released[0].runtime_id == "codex_cli"
+    assert repository.order == [
+        "host_stopped",
+        "provider_released",
+        "lease_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_janitor_releases_capacity_left_on_already_stopped_host() -> None:
+    lease = _lease()
+    lease.status = "stopped"
+    repository = _Repository(lease)
+    repository.list_active_host_leases = lambda: None
+
+    async def no_active_leases():
+        return []
+
+    async def terminal_provider_leases():
+        return [lease]
+
+    repository.list_active_host_leases = no_active_leases
+    repository.list_terminal_host_leases_with_active_provider_capacity = (
+        terminal_provider_leases
+    )
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    ).run()
+
+    assert result["actions"][-1]["action"] == "provider_lease_reconciliation"
+    assert repository.order == ["provider_released", "lease_released"]
+    assert runtime.stopped == 0
 
 
 @pytest.mark.asyncio

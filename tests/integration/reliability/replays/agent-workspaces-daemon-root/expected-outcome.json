@@ -1,0 +1,5 @@
+{
+  "invariant": "the worker remote-daemon root and the Compose named volume derive from the same operator-configurable volume identity",
+  "volumeNameTemplate": "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}",
+  "daemonRootTemplate": "${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}/_data}"
+}

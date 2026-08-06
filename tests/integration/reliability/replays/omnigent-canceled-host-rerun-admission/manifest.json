@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:c702174c-8d5c-4ef0-98c1-cfeb39f5be6b",
+  "incidentRunId": "019fd51e-318d-7b61-8608-ec37cb27366e",
+  "priorCanceledWorkflowId": "mm:c87a87d4-e23f-4aa0-b854-5aba03c9e56e",
+  "providerProfileId": "codex_openai_oauth",
+  "failureConstraint": "ux_omnigent_oauth_host_lease_active_profile",
+  "failureShape": "an immediate rerun acquired Provider Profile capacity while the canceled run's host lease still awaited janitor cleanup, then surfaced the database uniqueness violation"
+}

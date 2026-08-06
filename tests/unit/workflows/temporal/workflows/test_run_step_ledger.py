@@ -141,6 +141,10 @@ def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
     }
 
 
+def _empty_skill_resolution() -> dict[str, str]:
+    return {"manifestRef": "art_empty_skill_snapshot"}
+
+
 @pytest.mark.asyncio
 async def test_omnigent_result_is_joined_into_canonical_checkpoint_at_workflow_boundary(
     monkeypatch: pytest.MonkeyPatch,
@@ -4112,6 +4116,53 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
 
 
 @pytest.mark.asyncio
+async def test_required_invalid_checkpoint_blocks_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 21, 8, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": "workspace-1",
+            "relativePath": "repo",
+        },
+        "criticality": "required",
+    }
+    workflow._step_checkpoint_capture_outcomes["implement"] = {
+        "status": "invalid",
+        "failureCode": "invalid_checkpoint",
+        "summary": "Git rejected the repository ownership boundary.",
+        "capabilityCriticality": "required",
+    }
+
+    async def missing_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        workflow, "_record_canonical_step_checkpoint", missing_checkpoint
+    )
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    outcome = workflow.get_step_ledger()["steps"][0]["finalizationOutcome"]
+    assert outcome["status"] == "failed"
+    assert outcome["failureCode"] == "invalid_checkpoint"
+    assert outcome["message"] == "Git rejected the repository ownership boundary."
+    assert workflow._publish_status == "failed"
+    assert workflow._publish_reason == (
+        "Execution succeeded, but its required after-execution workspace "
+        "checkpoint failed."
+    )
+
+
+@pytest.mark.asyncio
 async def test_after_execution_finalization_is_idempotent_and_does_not_execute_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4425,6 +4476,79 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
             }
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_omnigent_result_keeps_session_ref_separate_from_workspace_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 5, 20, 11, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "targetRuntime": "omnigent",
+        },
+        initialize_omnigent_capture=True,
+    )
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "workspace-replay",
+                "relativePath": "repo",
+            },
+            "externalStateRef": "artifact://omnigent/replay/external-state.json",
+            "checkpointKind": "external_state_ref",
+            "omnigentCheckpointCapture": {
+                "externalStateRef": "artifact://omnigent/replay/external-state.json"
+            },
+        },
+    )
+    capture_input = workflow._step_workspace_capture_inputs["implement"]
+
+    assert capture_input["externalStateRef"] == (
+        "artifact://omnigent/replay/external-state.json"
+    )
+    assert capture_input["workspaceLocator"]["kind"] == "sandbox"
+    assert "kind" not in capture_input
+
+    captured: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload})
+        if activity == "workspace.capture_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        return _checkpoint_create_result(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+
+    assert checkpoint_ref == "artifact://checkpoint/after_execution"
+    assert captured[0]["payload"]["kind"] == "worktree_archive"
+    assert captured[0]["payload"]["externalStateRef"] == (
+        "artifact://omnigent/replay/external-state.json"
+    )
+    assert captured[1]["activity"] == "step_checkpoint.create_v2"
+    assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
 
 
 def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:
@@ -5015,9 +5139,11 @@ async def test_run_execution_stage_propagates_agent_child_cancellation_under_con
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5121,9 +5247,11 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5318,9 +5446,11 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5499,9 +5629,11 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5677,9 +5809,11 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5830,9 +5964,11 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
@@ -5982,9 +6118,11 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: Any,
+        payload: Any = None,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "agent_skill.resolve":
+            return _empty_skill_resolution()
         if activity_type == "resilience.compile_policy":
             return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":

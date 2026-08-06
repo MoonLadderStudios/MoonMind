@@ -17,6 +17,8 @@ from api_service.db.models import (
     OmnigentAgentProfile,
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileVersion,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
 )
 from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
@@ -265,3 +267,71 @@ async def test_reconcile_preserves_numeric_stock_agent_version(session):
         "upstreamId": "agent-1",
         "upstreamVersion": "2",
     }
+
+
+async def test_reconcile_versions_managed_profile_after_policy_cutover(session):
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+
+    session.add_all(
+        [
+            OmnigentPolicy(
+                policy_id="codex-on-demand",
+                name="Codex on-demand host",
+                visibility="deployment",
+                default_version=2,
+            ),
+            OmnigentPolicyVersion(
+                policy_id="codex-on-demand",
+                version=2,
+                state="active",
+                document_json={},
+                digest="sha256:" + "2" * 64,
+                created_by="bootstrap",
+                validation_json={"valid": True},
+                compatibility_json={},
+                rollout_json={},
+            ),
+        ]
+    )
+    await session.commit()
+
+    assert await reconcile_bootstrap_agent_profile(
+        session,
+        env={},
+        inventory=_inventory("codex-native-ui"),
+    ) is True
+
+    profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
+    assert profile is not None
+    assert profile.active_version == 2
+    versions = list(
+        (
+            await session.execute(
+                select(OmnigentAgentProfileVersion)
+                .where(
+                    OmnigentAgentProfileVersion.profile_id
+                    == BOOTSTRAP_PROFILE_ID
+                )
+                .order_by(OmnigentAgentProfileVersion.version)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [version.document["policyRef"] for version in versions] == [
+        "codex-on-demand@1",
+        "codex-on-demand@2",
+    ]
+    assert versions[1].parent_version == 1
+    cutover = await session.scalar(
+        select(OmnigentAgentProfileAuditEvent).where(
+            OmnigentAgentProfileAuditEvent.action
+            == "bootstrap_launch_policy_cutover"
+        )
+    )
+    assert cutover is not None
+    assert cutover.version == 2

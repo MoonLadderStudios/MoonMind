@@ -1,0 +1,83 @@
+{
+  "incidentWorkflowId": "mm:63c53791-c6d7-4110-9f5a-d431241f73a6",
+  "latestIncidentWorkflowId": "mm:e2be58ae-676a-4fa0-86df-76a756560949",
+  "latestResolverWorkflowId": "resolver:pr:3616:head:90984f8268ba:h:ada0c82637af0ad2:1",
+  "sourceWorkflowId": "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678",
+  "failureShape": "the continuation stream replayed the previous turn terminal event before Codex processed the newly posted marked message, so MoonMind posted eight continuations into one still-running session",
+  "latestFailureShape": "seven marked continuation messages and all subsequent tools shared one native Codex response while stale idle/completed projections advanced the continuation loop; a later resolver also lost its required result artifact when a 60-second tool-output gap was treated as terminal",
+  "sharedNativeResponseId": "codex_replay_one_still_running_turn",
+  "currentTurnMarker": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2",
+  "staleTerminalSnapshot": {
+    "status": "completed",
+    "items": [
+      {"type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "working"}]}},
+      {"type": "function_call_output", "data": {}},
+      {"type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}}
+    ]
+  },
+  "progressedSnapshot": {
+    "status": "running",
+    "active_response_id": "response-still-active",
+    "items": [
+      {"type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "working"}]}},
+      {"type": "function_call_output", "data": {}},
+      {"type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+      {"type": "function_call", "data": {}}
+    ]
+  },
+  "terminalSnapshot": {
+    "status": "running",
+    "active_response_id": null,
+    "items": [
+      {"type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "working"}]}},
+      {"type": "function_call_output", "data": {}},
+      {"type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+      {"type": "function_call", "data": {}},
+      {"type": "function_call_output", "data": {}},
+      {"type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "done"}]}}
+    ]
+  },
+  "assistantPreambleSnapshot": {
+    "status": "idle",
+    "items": [
+      {"id": "marked-user", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+      {"id": "assistant-preamble", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "I will inspect the repository."}]}}
+    ]
+  },
+  "busyIdleSnapshots": [
+    {
+      "status": "idle",
+      "items": [
+        {"id": "marked-user", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+        {"id": "call-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-1"}}
+      ]
+    },
+    {
+      "status": "idle",
+      "items": [
+        {"id": "marked-user", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+        {"id": "call-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-1"}},
+        {"id": "output-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call_output", "status": "completed", "data": {"call_id": "call-1"}}
+      ]
+    },
+    {
+      "status": "idle",
+      "items": [
+        {"id": "marked-user", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+        {"id": "call-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-1"}},
+        {"id": "output-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call_output", "status": "completed", "data": {"call_id": "call-1"}},
+        {"id": "call-2", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-2"}}
+      ]
+    },
+    {
+      "status": "idle",
+      "items": [
+        {"id": "marked-user", "response_id": "codex_replay_one_still_running_turn", "type": "message", "status": "completed", "data": {"role": "user", "content": [{"type": "input_text", "text": "MoonMind-Omnigent-Run:\n  correlationId: mm:63c53791-c6d7-4110-9f5a-d431241f73a6\n  idempotencyKey: repository-continuation:2"}]}},
+        {"id": "call-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-1"}},
+        {"id": "output-1", "response_id": "codex_replay_one_still_running_turn", "type": "function_call_output", "status": "completed", "data": {"call_id": "call-1"}},
+        {"id": "call-2", "response_id": "codex_replay_one_still_running_turn", "type": "function_call", "status": "completed", "data": {"call_id": "call-2"}},
+        {"id": "output-2", "response_id": "codex_replay_one_still_running_turn", "type": "function_call_output", "status": "completed", "data": {"call_id": "call-2"}}
+      ]
+    }
+  ]
+}

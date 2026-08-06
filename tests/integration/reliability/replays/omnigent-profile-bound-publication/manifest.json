@@ -1,0 +1,7 @@
+{
+  "incidentWorkflowId": "mm:ea264977-a19a-4ec7-bfb7-f8305ef451f3",
+  "incidentRunId": "019fd3bf-202c-7382-b281-7ec29436e788",
+  "failedChildWorkflowId": "mm:ea264977-a19a-4ec7-bfb7-f8305ef451f3:agent:node-1",
+  "failureShape": "profile-bound Omnigent returned provider completion without publishing the authoritative sandbox branch, so the parent attempted PR creation against a branch with no remote commits",
+  "boundary": "profile-bound provider result to repository publication"
+}

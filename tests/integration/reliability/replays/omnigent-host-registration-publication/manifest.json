@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:963a26ba-ea91-4c82-b6b3-59ff423e9d6d",
+  "incidentRunId": "019fd35b-7abd-7a01-aef0-c10f5faa8c65",
+  "failedChildWorkflowId": "mm:963a26ba-ea91-4c82-b6b3-59ff423e9d6d:agent:node-1",
+  "failedChildRunId": "019fd35b-8783-7bb5-a15c-cf8aca358a33",
+  "failureShape": "the host process had started connecting under its deterministic hostname, but MoonMind read the catalog once before registration publication and tore the host down",
+  "boundary": "on-demand host process connection to stock host-catalog publication",
+  "catalogSequence": [[], [], ["host-stock-replay"]],
+  "containerName": "mm-omnigent-host-ohlb873403abd6789da8b8b5e5d92fdc087"
+}

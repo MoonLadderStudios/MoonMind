@@ -15,6 +15,10 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.stock_agents import (
+    CLAUDE_STOCK_AGENT_NAME,
+    CODEX_STOCK_AGENT_NAME,
+)
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
@@ -191,7 +195,7 @@ PROFILES = {
             version=1,
             displayName="Omnigent Codex",
             endpointRef="default",
-            agentName="codex",
+            agentName=CODEX_STOCK_AGENT_NAME,
             harness="codex-native",
             defaultPolicyRef="codex-on-demand@1",
             providerRuntime="codex_cli",
@@ -203,7 +207,7 @@ PROFILES = {
             version=1,
             displayName="Omnigent Claude",
             endpointRef="default",
-            agentName="claude",
+            agentName=CLAUDE_STOCK_AGENT_NAME,
             harness="claude-native",
             defaultPolicyRef="claude-static@1",
             providerRuntime="claude_code",

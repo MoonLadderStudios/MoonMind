@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:8a8955a6-df41-423d-be91-efdf41346707",
+  "incidentRunId": "019fd527-00fd-7b73-847b-3e1fc7eb28a1",
+  "providerProfileId": "codex_openai_oauth",
+  "agentName": "codex-native-ui",
+  "requiredCapabilities": ["git", "gh"],
+  "failureShape": "workflow-level requiredCapabilities were admitted but omitted from the AgentExecutionRequest parameters, so the Codex adapter could not preserve GitHub authentication in model-authored shell commands"
+}

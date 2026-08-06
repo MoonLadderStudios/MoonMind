@@ -1,0 +1,5 @@
+{
+  "invariant": "the execution owner renews its host lease until provider execution reaches terminal state",
+  "leaseTtlSeconds": 5400,
+  "terminalSummary": "completed"
+}

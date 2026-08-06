@@ -26,6 +26,7 @@ from uuid import UUID
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.policies import compile_policy_snapshot
@@ -48,6 +49,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from tests.unit.omnigent.test_policy_authority import policy_document
+from tests.integration.reliability.helpers import load_replay
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
@@ -136,6 +138,7 @@ async def _materialize_workspace(
     source: Path,
     starting_branch: str,
     target_branch: str,
+    configure_identity: bool = True,
 ) -> tuple[OmnigentOAuthHostRuntime, Path]:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
@@ -155,7 +158,8 @@ async def _materialize_workspace(
         starting_branch=starting_branch,
         target_branch=target_branch,
     )
-    _configure_identity(workspace)
+    if configure_identity:
+        _configure_identity(workspace)
     return runtime, workspace
 
 
@@ -235,6 +239,177 @@ async def test_materialized_workspace_publishes_branch_and_recovery_is_idempoten
     assert recovery.status == "skipped"
     assert recovery.reason_code == "no_commit"
     assert _git_out(remote, "rev-parse", publication_branch) == remote_head
+
+
+@pytest.mark.asyncio
+async def test_clean_omnigent_workspace_publishes_existing_agent_commit(
+    tmp_path, monkeypatch
+) -> None:
+    """Replay the false-success shape from workflow mm:ea264977.
+
+    The native agent may honor its own commit instruction, leaving a clean
+    worktree with commits over the authored base. Publication must qualify and
+    push those commits instead of treating clean status as "no work".
+    """
+
+    replay = load_replay("omnigent-profile-bound-publication", "manifest.json")
+    expected = load_replay(
+        "omnigent-profile-bound-publication", "expected-outcome.json"
+    )
+    monkeypatch.setattr(
+        "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
+    )
+    remote = _init_bare_remote_with_seed(tmp_path)
+    workflow_id = replay["incidentWorkflowId"]
+    step_execution_id = replay["failedChildWorkflowId"]
+    runtime, workspace = await _materialize_workspace(
+        tmp_path,
+        workflow_id=workflow_id,
+        step_execution_id=step_execution_id,
+        source=remote,
+        starting_branch="main",
+        target_branch="agent/live-replay",
+    )
+    (workspace / "feature.py").write_text("print('fixed')\n", encoding="utf-8")
+    _git(workspace, "add", "feature.py")
+    _git(workspace, "commit", "-m", "Fix escaped workflow failure")
+    assert _git_out(workspace, "status", "--porcelain") == ""
+
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    result = await runtime.publish_workspace(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_execution_id,
+        publication_identity="replay:omnigent-profile-bound-publication",
+        publish_mode="pr",
+        base_branch="main",
+        repository="",
+        github_token=None,
+    )
+
+    assert result["push_status"] == expected["pushStatus"]
+    assert result["push_commit_count"] == expected["commitsAheadOfBase"]
+    assert result["remote_verified"] is expected["remoteVerified"]
+    assert result["push_head_sha"] == _git_out(
+        remote, "rev-parse", result["push_branch"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_publication_reports_no_commits_over_base(
+    tmp_path, monkeypatch
+) -> None:
+    """Provider completion with an untouched workspace is not publish success."""
+
+    monkeypatch.setattr(
+        "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
+    )
+    remote = _init_bare_remote_with_seed(tmp_path)
+    workflow_id = "mm:no-commits-replay"
+    step_execution_id = "mm:no-commits-replay:agent:node-1"
+    runtime, _workspace = await _materialize_workspace(
+        tmp_path,
+        workflow_id=workflow_id,
+        step_execution_id=step_execution_id,
+        source=remote,
+        starting_branch="main",
+        target_branch="agent/no-commits",
+    )
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+
+    result = await runtime.publish_workspace(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_execution_id,
+        publication_identity="replay:omnigent-profile-bound-no-commits",
+        publish_mode="pr",
+        base_branch="main",
+        repository="",
+        github_token=None,
+    )
+
+    assert result["push_status"] == "no_commits"
+    assert result["push_commit_count"] == 0
+    assert result["remote_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_publication_supplies_missing_git_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """Replay mm:bfc017e9 staged output with no repository-local author."""
+
+    replay = load_replay(
+        "omnigent-publication-missing-git-identity", "manifest.json"
+    )
+    expected = load_replay(
+        "omnigent-publication-missing-git-identity", "expected-outcome.json"
+    )
+    monkeypatch.setattr(
+        "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
+    )
+    monkeypatch.setattr(settings.workflow, "git_user_name", replay["gitUserName"])
+    monkeypatch.setattr(settings.workflow, "git_user_email", replay["gitUserEmail"])
+    remote = _init_bare_remote_with_seed(tmp_path)
+    runtime, workspace = await _materialize_workspace(
+        tmp_path,
+        workflow_id=replay["incidentWorkflowId"],
+        step_execution_id=replay["stepExecutionId"],
+        source=remote,
+        starting_branch="main",
+        target_branch="agent/missing-identity",
+        configure_identity=False,
+    )
+    (workspace / "feature.py").write_text("print('fixed')\n", encoding="utf-8")
+    _git(workspace, "add", "feature.py")
+    subprocess.run(
+        ["git", "config", "--unset-all", "user.name"],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "--unset-all", "user.email"],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+    )
+
+    workspace_id = hashlib.sha256(
+        f"{replay['incidentWorkflowId']}:{replay['stepExecutionId']}".encode()
+    ).hexdigest()[:24]
+    result = await runtime.publish_workspace(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=replay["incidentWorkflowId"],
+        current_step_execution_id=replay["stepExecutionId"],
+        publication_identity="replay:omnigent-publication-missing-git-identity",
+        publish_mode="pr",
+        base_branch="main",
+        repository="",
+        github_token=None,
+    )
+
+    assert result["push_status"] == expected["pushStatus"]
+    assert result["push_commit_count"] == expected["commitsAheadOfBase"]
+    assert result["remote_verified"] is expected["remoteVerified"]
+    assert _git_out(workspace, "log", "-1", "--format=%an") == replay["gitUserName"]
+    assert _git_out(workspace, "log", "-1", "--format=%ae") == replay["gitUserEmail"]
 
 
 # --- Journey 2: pull-request publication through canonical contract ---------
@@ -572,6 +747,27 @@ async def _drive_coordinator_materialization_to_cleanup(
         async def stop_host(self, **_kwargs):
             ordered.append({"type": "host_cleanup", "status": "completed"})
 
+        async def inspect_session_completion(self, session_id):
+            assert session_id == "session-1"
+            return {
+                "sessionStatus": "completed",
+                "itemCount": 4,
+                "assistantMessageCount": 1,
+                "toolResultCount": 1,
+                "terminalAssistantAfterWork": True,
+            }
+
+        async def publish_workspace(self, **_kwargs):
+            return {
+                "push_status": "pushed",
+                "push_branch": "agent/implement",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 1,
+                "remote_verified": True,
+                "pushRef": "artifact://push-1",
+            }
+
     class Store:
         async def get_or_create(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
@@ -588,8 +784,15 @@ async def _drive_coordinator_materialization_to_cleanup(
                 }
             )
 
+        async def mark_terminal(self, *_args, **_kwargs):
+            return None
+
     async def execute(request, **_kwargs):
-        return AgentRunResult(summary="done", outputRefs=["artifact://out-1"])
+        return AgentRunResult(
+            summary="done",
+            outputRefs=["artifact://out-1"],
+            metadata={"omnigentSessionId": "session-1"},
+        )
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -669,9 +872,7 @@ async def test_coordinator_materialization_to_cleanup_on_demand_mutation(
     assert second["workspace"]["materializationAction"] == "reused_pre_materialized"
     assert first["runtime"]["hostMode"] == "on_demand_docker"
     assert first["publication"]["publishMode"] == "branch"
-    assert (
-        first["publication"]["publicationState"] == "authorized_pending_publication"
-    )
+    assert first["publication"]["publicationState"] == "published"
     assert first["workspace"]["candidateHead"] == "agent/implement"
     assert first["terminal"]["releaseOrdering"][-1] == "terminal"
     # Bounded + credential-free: the internal daemon/sandbox workspace paths

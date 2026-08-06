@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -155,9 +156,25 @@ def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -
 
 @pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_omnigent_execute_activity_delegates(mock_run):
+async def test_omnigent_execute_activity_delegates(
+    mock_run, monkeypatch: pytest.MonkeyPatch
+):
     expected_result = AgentRunResult(summary="done", output_refs=[])
-    mock_run.return_value = expected_result
+    heartbeats: list[tuple[object, ...]] = []
+
+    async def delayed_run(*_args, **_kwargs):
+        omnigent_execute_module._safe_heartbeat(  # type: ignore[attr-defined]
+            {"omnigentSessionId": "session-1", "eventsCaptured": 1}
+        )
+        await asyncio.sleep(0.035)
+        return expected_result
+
+    mock_run.side_effect = delayed_run
+    monkeypatch.setattr(
+        omnigent_execute_module,
+        "_ACTIVITY_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
 
     req = AgentExecutionRequest(
         agentKind="external",
@@ -167,6 +184,7 @@ async def test_omnigent_execute_activity_delegates(mock_run):
     )
 
     env = ActivityEnvironment()
+    env.on_heartbeat = lambda *details: heartbeats.append(details)
     result = await env.run(omnigent_execute_activity, req)
 
     assert result == expected_result
@@ -175,6 +193,20 @@ async def test_omnigent_execute_activity_delegates(mock_run):
     assert called_req == req
     assert isinstance(mock_run.call_args.kwargs["artifact_gateway"], LocalOmnigentArtifactGateway)
     assert isinstance(mock_run.call_args.kwargs["run_store"], OmnigentBridgeSessionStore)
+    assert len(heartbeats) >= 2
+    heartbeat_payloads = [
+        detail
+        for callback_args in heartbeats
+        for detail in callback_args
+        if isinstance(detail, dict)
+    ]
+    assert any(payload.get("activityAlive") is True for payload in heartbeat_payloads)
+    assert all(
+        payload.get("omnigentSessionId") == "session-1"
+        for payload in heartbeat_payloads
+        if payload.get("activityAlive") is True
+        and payload.get("eventsCaptured") == 1
+    )
 
 
 def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:

@@ -56,6 +56,10 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
 )
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     ManagedSessionReapResult,
 )
@@ -6322,6 +6326,163 @@ async def test_terminal_evidence_activity_fails_completed_prose_without_artifact
     assert result.failure_class == "execution_error"
     assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
     assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_resolves_authoritative_sandbox_locator(
+    tmp_path: Path,
+) -> None:
+    workflow_id = "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c"
+    step_execution_id = (
+        f"{workflow_id}:019fd504-5cb2-7927-9e03-f3c34efce2c5:"
+        "node-1:execution:2"
+    )
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pr-resolver-result.v1",
+                "executionRef": step_execution_id,
+                "mergeAutomationDisposition": "already_merged",
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish_path = workspace / "artifacts" / "publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text('{"status":"already_merged"}', encoding="utf-8")
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id=workflow_id,
+            step_execution_id=step_execution_id,
+            relative_path="repo",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(workspace_root=tmp_path)
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            # Reproduce the escaped boundary: this alias exists only in the
+            # on-demand host and must not win over the canonical locator.
+            "workspacePath": "/workspaces/run",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "workspaceOwnerWorkflowId": workflow_id,
+            "workspaceOwnerStepExecutionId": step_execution_id,
+            "terminalContract": {
+                "contractId": "pr_resolver_terminal.v1",
+                "relativePath": "var/pr_resolver/result.json",
+                "expectedSchemaVersion": "pr-resolver-result.v1",
+                "executionRef": step_execution_id,
+            },
+            "result": {"summary": "PR was already merged."},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractSatisfied"] is True
+    assert result.metadata["terminalContractOutcome"] == "terminal_success"
+    assert result.metadata["terminalContractEvidencePath"] == (
+        "var/pr_resolver/result.json"
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    execution_ref = "workflow:run:node-1:execution:1"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "executionRef": execution_ref,
+                "mergeAutomationDisposition": "already_merged",
+                "status": "merged",
+            }
+        ),
+        encoding="utf-8",
+    )
+    publish_payload = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "pr-resolver",
+        "status": "verified",
+        "action": "merge",
+        "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature",
+        "localHead": "abc1234",
+        "remoteBranchHead": None,
+        "remoteVerified": True,
+        "pushed": False,
+        "merged": True,
+        "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1",
+        "blockedReason": None,
+        "verificationCommands": ["gh pr view 1"],
+    }
+    publish_path = workspace / "artifacts" / "publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text(json.dumps(publish_payload), encoding="utf-8")
+    artifact_service = MagicMock()
+    artifact_service.create = AsyncMock(
+        side_effect=[
+            (SimpleNamespace(artifact_id="art-terminal-evidence"), None),
+            (SimpleNamespace(artifact_id="art-publish-evidence"), None),
+        ]
+    )
+    artifact_service.write_complete = AsyncMock(
+        side_effect=[
+            SimpleNamespace(artifact_id="art-terminal-evidence"),
+            SimpleNamespace(artifact_id="art-publish-evidence"),
+        ]
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": {
+                "contractId": "pr_resolver_terminal.v1",
+                "relativePath": "var/pr_resolver/result.json",
+                "expectedSchemaVersion": "pr-resolver-result.v1",
+                "executionRef": execution_ref,
+            },
+            "result": {"summary": "PR was already merged."},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractEvidenceRef"] == (
+        "art-terminal-evidence"
+    )
+    assert result.metadata["publishEvidence"] == "art-publish-evidence"
+    create_calls = artifact_service.create.await_args_list
+    assert create_calls[0].kwargs["metadata_json"]["path"] == (
+        "var/pr_resolver/result.json"
+    )
+    assert create_calls[1].kwargs["metadata_json"]["path"] == (
+        "artifacts/publish_result.json"
+    )
+    published = json.loads(
+        artifact_service.write_complete.await_args_list[1]
+        .kwargs["payload"]
+        .decode("utf-8")
+    )
+    assert published == publish_payload
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,6 @@
+{
+  "invariant": "lifecycle persistence keeps one event per full logical identity, deduplicates exact retries, and never aliases identities that differ after the database key limit",
+  "eventCount": 2,
+  "distinctDeduplicationKeyCount": 2,
+  "maximumDeduplicationKeyLength": 128
+}

@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:706d05e2-3fec-4462-82c0-b0cbc5e0e687",
+  "incidentRunId": "019fd336-dc81-79c4-a3d0-0c7ef12daca2",
+  "failedChildWorkflowId": "mm:706d05e2-3fec-4462-82c0-b0cbc5e0e687:agent:node-1",
+  "failedChildRunId": "019fd336-e4b3-7f16-8c20-b83ad7e2423f",
+  "failureShape": "OAuth host egress attestation passed a Docker subcommand directly to the process runner, which attempted to execute a nonexistent binary named network",
+  "boundary": "OmnigentOAuthHostRuntime to trusted Docker command runner",
+  "networkRef": "moonmind_omnigent-egress-network",
+  "backendRef": "omnigent-host-runtime",
+  "attestationSubcommand": [
+    "network",
+    "inspect",
+    "--format",
+    "{{json .}}",
+    "moonmind_omnigent-egress-network"
+  ]
+}

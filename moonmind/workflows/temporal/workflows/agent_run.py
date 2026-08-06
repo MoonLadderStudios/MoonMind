@@ -2010,6 +2010,17 @@ class MoonMindAgentRun:
             or (request.workspace_spec or {}).get("workspacePath")
             or ""
         ).strip()
+        workspace_locator = (request.workspace_spec or {}).get("workspaceLocator")
+        workspace_owner_workflow_id = (
+            request.step_execution.workflow_id
+            if request.step_execution is not None
+            else request.correlation_id
+        )
+        workspace_owner_step_execution_id = (
+            request.step_execution.step_execution_id
+            if request.step_execution is not None
+            else request.idempotency_key
+        )
         async def _evaluate(candidate: AgentRunResult) -> AgentRunResult:
             payload = await self._execute_routed_activity(
                 "agent_runtime.evaluate_terminal_evidence",
@@ -2020,6 +2031,15 @@ class MoonMindAgentRun:
                         else str(self.run_id or "")
                     ),
                     "workspacePath": workspace_path,
+                    "workspaceLocator": (
+                        dict(workspace_locator)
+                        if isinstance(workspace_locator, Mapping)
+                        else None
+                    ),
+                    "workspaceOwnerWorkflowId": workspace_owner_workflow_id,
+                    "workspaceOwnerStepExecutionId": (
+                        workspace_owner_step_execution_id
+                    ),
                     "artifactSpoolPath": (
                         os.path.join(
                             _MANAGED_RUNTIME_STORE_ROOT,

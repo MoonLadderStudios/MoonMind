@@ -21,6 +21,7 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
+    ProviderProfileSlotLease,
 )
 from moonmind.provider_profiles.oauth_policy import (
     is_claude_oauth_profile,
@@ -39,6 +40,7 @@ ACTIVE_HOST_STATES = frozenset(
     {"allocating", "starting", "ready", "assigned", "draining"}
 )
 TERMINAL_HOST_STATES = frozenset({"stopped", "failed"})
+HOST_PROFILE_BUSY_ERROR_CODE = "OMNIGENT_OAUTH_HOST_PROFILE_BUSY"
 
 
 class OmnigentOAuthHostError(RuntimeError):
@@ -368,7 +370,24 @@ class OmnigentOAuthHostRepository:
                     )
                 ).scalar_one_or_none()
                 if winner is None:
-                    raise
+                    active_profile_lease = (
+                        await session.execute(
+                            select(OmnigentOAuthHostLeaseRecord).where(
+                                OmnigentOAuthHostLeaseRecord.provider_profile_id
+                                == binding.provider_profile_id,
+                                OmnigentOAuthHostLeaseRecord.status.in_(
+                                    ACTIVE_HOST_STATES
+                                ),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if active_profile_lease is None:
+                        raise
+                    raise OmnigentOAuthHostError(
+                        "another OAuth host lease is still active for the "
+                        "selected Provider Profile",
+                        code=HOST_PROFILE_BUSY_ERROR_CODE,
+                    ) from None
                 record = winner
             await session.refresh(record)
             return self._lease_model(record)
@@ -555,6 +574,29 @@ class OmnigentOAuthHostRepository:
             ).scalars()
             return [self._lease_model(row) for row in rows]
 
+    async def list_terminal_host_leases_with_active_provider_capacity(
+        self,
+    ) -> list[OmnigentHostLease]:
+        """Find hosts already stopped while their manager slot is still leased."""
+
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord)
+                    .join(
+                        ProviderProfileSlotLease,
+                        ProviderProfileSlotLease.lease_id
+                        == OmnigentOAuthHostLeaseRecord.provider_lease_id,
+                    )
+                    .where(
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            TERMINAL_HOST_STATES
+                        )
+                    )
+                )
+            ).scalars()
+            return [self._lease_model(row) for row in rows]
+
     async def mark_generation_stale(
         self, *, profile_id: str, credential_generation: int
     ) -> list[str]:
@@ -634,6 +676,7 @@ def validate_preflight_result(
 
 __all__ = [
     "ACTIVE_HOST_STATES",
+    "HOST_PROFILE_BUSY_ERROR_CODE",
     "HostPreflightFailure",
     "OmnigentOAuthHostError",
     "OmnigentOAuthHostRepository",

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH,
     BILLING_AWARE_PROFILE_SELECTION_PATCH,
     CLAUDE_OAUTH_EXCLUSIVE_CAPACITY_PATCH,
     CODEX_OAUTH_LEGACY_RESTORE_PATCH,
@@ -2174,6 +2175,81 @@ class TestProviderProfileManagerHelpers:
         assert [req.requester_workflow_id for req in wf._pending_requests] == [
             "wf-shared"
         ]
+
+    @pytest.mark.asyncio
+    async def test_verify_activity_owned_lease_reclaims_terminal_parent(self):
+        wf = self._make_workflow()
+        lease_id = "profile-lease:execution_omnigent:abandoned"
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=[lease_id],
+            lease_metadata={
+                lease_id: {
+                    "ownerIsWorkflow": False,
+                    "workflowId": "mm:terminal-parent",
+                }
+            },
+        )
+
+        async def fake_execute_activity(_name: str, payload: dict, **_kwargs):
+            assert payload == {"workflow_ids": ["mm:terminal-parent"]}
+            return {
+                "mm:terminal-parent": {"running": False, "status": "FAILED"}
+            }
+
+        wf._sync_leases_to_db = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            mock_wf.patched.return_value = True
+            await wf._verify_active_workflows(
+                verify_lease_holders=True,
+                verify_activity_owned_leases=True,
+                verify_pending_requesters=False,
+            )
+
+        assert wf._profiles["p1"].current_leases == []
+        wf._sync_leases_to_db.assert_awaited_once()
+        assert ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH.endswith("-v1")
+
+    @pytest.mark.asyncio
+    async def test_acquire_slot_v2_rejects_late_grant_for_terminal_parent(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._verify_workflow_statuses = AsyncMock(  # type: ignore[method-assign]
+            return_value={
+                "mm:terminal-parent": {"running": False, "status": "FAILED"}
+            }
+        )
+
+        with pytest.raises(Exception, match="owner workflow is terminal"):
+            await wf.acquire_slot_v2(
+                {
+                    "requester_workflow_id": "profile-lease:late-grant",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "p1",
+                    "purpose": "execution_omnigent",
+                    "metadata": {
+                        "ownerIsWorkflow": False,
+                        "workflowId": "mm:terminal-parent",
+                    },
+                }
+            )
+
+        assert wf._profiles["p1"].current_leases == []
 
     def test_run_drains_queue_before_best_effort_pending_verification(self):
         import inspect

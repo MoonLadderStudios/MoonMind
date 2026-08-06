@@ -324,6 +324,64 @@ def test_session_create_payload_host_id_rules() -> None:
     assert payload["host_id"] == "host_1"
 
 
+def test_codex_gh_session_keeps_authored_terminal_arguments() -> None:
+    req = _request(
+        parameters={
+            "requiredCapabilities": ["git", "gh"],
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {
+                    "hostType": "external",
+                    "hostId": "host_1",
+                    "workspace": "/workspaces/run",
+                    "terminalLaunchArgs": ["--no-alt-screen"],
+                },
+            },
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    payload = build_omnigent_session_create_payload(
+        request=req,
+        selection=selection,
+        target=OmnigentResolvedTarget(
+            agent_id="ag_codex",
+            source="agent_id",
+        ),
+    )
+
+    assert payload["terminal_launch_args"] == ["--no-alt-screen"]
+
+
+def test_codex_session_without_gh_keeps_authored_shell_policy() -> None:
+    req = _request(
+        parameters={
+            "requiredCapabilities": ["git"],
+            "omnigent": {
+                "session": {
+                    "hostType": "external",
+                    "hostId": "host_1",
+                    "workspace": "/workspaces/run",
+                    "terminalLaunchArgs": ["--no-alt-screen"],
+                }
+            },
+        }
+    )
+    selection = build_omnigent_selection(req)
+
+    payload = build_omnigent_session_create_payload(
+        request=req,
+        selection=selection,
+        target=OmnigentResolvedTarget(
+            agent_id="ag_codex",
+            source="agent_name",
+            agent_name="codex-native-ui",
+        ),
+    )
+
+    assert payload["terminal_launch_args"] == ["--no-alt-screen"]
+
+
 def test_session_create_payload_keeps_id_only_labels() -> None:
     req = _request(
         parameters={

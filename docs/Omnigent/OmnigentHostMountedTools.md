@@ -76,7 +76,7 @@ The target design is governed by these decisions:
 3. **The bundle is read-only to hosts and runners.** A trusted initializer prepares it before the host starts. Agent processes never update the bundle.
 4. **Tool versions are explicit.** The initializer uses pinned versions and verifies the expected bytes before publishing a bundle as ready. `latest` is not a durable tool identity.
 5. **Both ordinary and login-shell paths are supported.** The host receives a `PATH` value at launch and a small `/etc/profile.d` snippet so `bash -lc` sessions retain `/opt/moonmind-tools/bin`.
-6. **Required capabilities determine readiness.** A mounted executable may be present on every compatible host, but a run receives readiness guarantees and any required credentials only when its normalized `requiredCapabilities` demand them.
+6. **Required capabilities determine readiness.** A mounted executable may be present on every compatible host, but a run receives readiness guarantees and any required credentials only when its normalized `requiredCapabilities` demand them. The Run workflow carries that authored list into the canonical `AgentExecutionRequest`; host preflight and the provider adapter consume the same list rather than re-deriving it.
 7. **Tool availability does not grant authorization.** Credentials are resolved separately through MoonMind's existing settings and secret-reference boundaries.
 8. **Portable Skills receive the real CLI they declare.** MoonMind does not replace `gh` with an incomplete host-native emulator when the resolved Skill implementation calls `gh` directly.
 9. **Missing required tools fail before session creation or mutation.** MoonMind must not start an Omnigent runner and let the Skill discover the missing executable after reasoning has begun.
@@ -137,7 +137,7 @@ The manifest is readiness evidence and diagnostics metadata. It contains no cred
 
 ### 4.3 Storage
 
-For the local Compose path, the preferred storage is one versioned Docker named volume populated by an initializer service.
+For the local Compose path, the preferred storage is one versioned Docker named volume populated by an initializer service. The initializer is a default one-shot dependency of the agent-runtime worker, so on-demand hosts are operational without enabling a static-host Compose profile and no tool container remains running at steady state.
 
 For on-demand host launches, MoonMind mounts the same named volume into each compatible host. A daemon-visible read-only bind source is also valid when a deployment already manages immutable tool directories outside Docker volumes.
 
@@ -161,6 +161,13 @@ For each declared tool, the initializer must:
 The initializer is idempotent. A completed bundle whose manifest does not match the expected manifest fails rather than being modified in place. Incomplete staging state without a completed manifest is not a bundle: the initializer may safely remove that private staging state and retry. Staging paths are unique to an initializer attempt, so a failed attempt cannot poison the versioned published volume or expose partial files to hosts.
 
 Tool downloads do not occur inside an ordinary Omnigent workflow session. An agent cannot add arbitrary executables to the shared bundle.
+
+Before an on-demand host is created, the trusted runtime adapter probes the
+completed named volume through the system Docker boundary and verifies the
+pinned tool version. It never invokes deployment Compose from the worker: the
+worker's project path is not Docker-daemon path authority. A missing or stale
+bundle fails with `tool_bundle_unavailable` and deployment-initialization
+evidence before session creation.
 
 ---
 
@@ -250,31 +257,51 @@ The current `pr-resolver` Skill declares both `git` and `gh` because it must mod
 
 ### 7.2 Baseline credential mapping
 
-The simple baseline uses the stock host's Git credential convention and GitHub CLI's standard environment authentication on an on-demand host or a host dedicated to exactly one run:
+The simple baseline uses GitHub CLI's standard configuration on an on-demand host or a host dedicated to exactly one run:
 
 ```text
-GIT_TOKEN=<MoonMind-resolved GitHub credential>
-GIT_USERNAME=x-access-token
-GH_TOKEN=<MoonMind-resolved GitHub credential>
-GH_CONFIG_DIR=<run-private-workspace>/.config/gh
+XDG_CONFIG_HOME=<lease-owned-cache>/moonmind-xdg
 GH_PROMPT_DISABLED=1
 GH_NO_UPDATE_NOTIFIER=1
 GH_NO_EXTENSION_UPDATE_NOTIFIER=1
 ```
 
-The same narrowly scoped credential may back `GIT_TOKEN` and `GH_TOKEN` for that run. `GH_CONFIG_DIR` is created with owner-only permissions inside the run-private workspace and is never shared between sessions. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide runner environment would expose `GIT_TOKEN` and passthrough values to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host; per-run environment injection may make reusable hosts eligible only when that isolation boundary is implemented and verified.
+The trusted host entrypoint receives the narrowly scoped credential only long enough to write `gh/hosts.yml` with owner-only permissions under the lease-owned cache volume. It removes the raw credential before Omnigent starts, while the non-secret `XDG_CONFIG_HOME` selector reaches the runner and native Codex app-server. The cache volume is outside the repository workspace and is removed with the host lease, so it is neither shared between sessions nor eligible for workspace capture. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide configuration could expose credentials to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host.
 
 The tool bundle never contains token values. MoonMind resolves the credential at the trusted launch boundary and must keep it out of workflow payloads, Temporal history, logs, artifacts, and durable host metadata.
 
 ### 7.3 Runner environment
 
-On an on-demand or run-dedicated host, the stock Omnigent host intentionally forwards `GIT_TOKEN` and `GIT_USERNAME` for Git transport. GitHub CLI settings that are not part of the stock credential allowlist must be explicitly forwarded to that run's spawned runner:
+On an on-demand or run-dedicated host, GitHub CLI settings that are not part of the stock runner allowlist must be explicitly forwarded to that run's spawned runner:
 
 ```text
-OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER
+OMNIGENT_RUNNER_ENV_PASSTHROUGH=MOONMIND_STEP_EXECUTION_ID,XDG_CONFIG_HOME,GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER
 ```
 
 A deployment may append other non-secret runtime selectors to the same comma-separated setting when another canonical MoonMind contract requires them.
+
+For the stock Codex native wrapper, no token-bearing environment variable or
+terminal argument is required. Native Codex preserves `XDG_CONFIG_HOME`, and
+model-authored `gh` commands therefore use the same lease-private standard
+configuration that both preflight boundaries prove before session creation.
+
+Terminal-evidence Skills also receive the exact, non-secret
+`MOONMIND_STEP_EXECUTION_ID` for the current attempt. The on-demand host forwards
+that identity to its runner and mounts a run-private
+`/etc/profile.d/moonmind-execution.sh` so a native Codex login shell restores it
+after Codex applies its own subprocess environment filter. The generated profile
+is outside the repository workspace, is bound to the same execution-specific
+runtime-script snapshot as the host lease, and is removed with that run-owned
+materialization. This lets the portable Skill stamp its normal `executionRef`;
+MoonMind does not synthesize or rewrite the Skill's terminal evidence.
+
+For a terminal `merged` or `already_merged` resolver disposition, AgentRun
+validates both the Skill's execution-bound `var/pr_resolver/result.json` and its
+canonical `artifacts/publish_result.json` companion. It publishes each exact
+file as a durable artifact and passes the publish-evidence ref to the parent
+workflow. Auto-publication finalization reads and validates that artifact; it
+does not require a second publisher, infer success from the disposition alone,
+or copy merge semantics into the Omnigent integration.
 
 ### 7.4 Private workspace preparation
 

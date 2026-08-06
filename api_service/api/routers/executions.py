@@ -61,6 +61,7 @@ from api_service.db.models import (
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
+    refresh_managed_bootstrap_snapshot_for_rerun,
     resolve_agent_profile_snapshot,
 )
 from api_service.services.control_stop_continuation import (
@@ -15238,6 +15239,13 @@ async def rerun_execution(
     # Use canonical parameters with rerun-specific sanitization to avoid carrying
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    reserved_workflow_id = f"mm:{_uuid4()}"
+    initial_params = await refresh_managed_bootstrap_snapshot_for_rerun(
+        session,
+        parameters=initial_params,
+        consumer_id=reserved_workflow_id,
+        user=user,
+    )
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
@@ -15256,6 +15264,7 @@ async def rerun_execution(
             idempotency_key=new_idempotency_key,
             repository=None,
             integration=None,
+            _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

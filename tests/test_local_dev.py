@@ -294,7 +294,7 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert codex_host["security_opt"] == ["no-new-privileges:true"]
     codex_env = _env_map(codex_host["environment"])
     assert codex_env["HTTPS_PROXY"] == "http://omnigent-egress-proxy:3129"
-    assert codex_env["NO_PROXY"] == ""
+    assert codex_env["NO_PROXY"] == "localhost,127.0.0.1"
 
 
 def test_api_service_runs_with_container_init():

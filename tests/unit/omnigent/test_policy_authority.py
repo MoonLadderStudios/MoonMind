@@ -20,7 +20,7 @@ def policy_document() -> dict:
     return {
         "schemaVersion": 1,
         "endpoint": {"ref": "default", "bridgeModes": ["embedded"]},
-        "execution": {"profileRef": "omnigent-codex@1", "harness": "codex-native", "agentIdentities": ["codex"]},
+        "execution": {"profileRef": "omnigent-codex@1", "harness": "codex-native", "agentIdentities": ["codex-native-ui"]},
         "host": {"mode": "static_compose", "backendRef": "compose", "architectures": ["amd64"],
                  "serverImageRef": "images/omnigent@sha256:" + "1" * 64,
                  "hostImageRef": "images/host@sha256:" + "2" * 64},

@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:e2be58ae-676a-4fa0-86df-76a756560949",
+  "incidentChildWorkflowId": "mm:e2be58ae-676a-4fa0-86df-76a756560949:agent:node-1",
+  "runtimeId": "codex_cli",
+  "providerProfileId": "codex_openai_oauth",
+  "ownerId": "profile-lease:execution_omnigent:replay",
+  "updateName": "AcquireSlotV2",
+  "failureType": "AcceptedUpdateCompletedWorkflow",
+  "failureShape": "the canonical ProviderProfileManager completed after ensure-manager observed it running but before the accepted lease Update completed"
+}

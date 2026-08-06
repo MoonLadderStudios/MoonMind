@@ -16,6 +16,7 @@ from moonmind.schemas.checkpoint_restore_models import (
     ManagedWorkspaceRestoreRequest,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
 from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
@@ -90,6 +91,64 @@ def _request(
         "capabilityDigest": "sha256:capability",
         "idempotencyKey": key,
     }
+
+
+@pytest.mark.asyncio
+async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, base = _repo(tmp_path / "temporal_sandbox" / "source")
+    resolved_source = str(source.resolve())
+    expected_prefix = [
+        "git",
+        "-c",
+        f"safe.directory={resolved_source}",
+        "-C",
+        resolved_source,
+    ]
+    commands: list[list[str]] = []
+
+    async def enforce_safe_directory(command, **_kwargs):
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[: len(expected_prefix)] != expected_prefix:
+            raise RuntimeError(
+                f"fatal: detected dubious ownership in repository at '{resolved_source}'"
+            )
+        operation = normalized[len(expected_prefix) :]
+        if operation[:2] == ["rev-parse", "HEAD"]:
+            return activity_runtime_module.CmdRes(f"{base}\n".encode())
+        if operation[0] == "status":
+            return activity_runtime_module.CmdRes(b"")
+        raise AssertionError(f"unexpected git command: {operation}")
+
+    monkeypatch.setattr(activity_runtime_module, "_run_command", enforce_safe_directory)
+    sandbox = TemporalSandboxActivities(
+        workspace_root=tmp_path,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": {
+                "workflowId": "source",
+                "runId": "source-run",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "after_execution",
+            "kind": "worktree_archive",
+            "workspacePath": resolved_source,
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "capture-safe-directory",
+            "baseCommit": base,
+        }
+    )
+
+    assert capture["status"] == "captured"
+    assert len(commands) == 2
+    assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
 
 
 @pytest.mark.asyncio

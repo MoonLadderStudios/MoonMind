@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:38c72f91-360d-4f59-aae2-84318768eb15",
+  "incidentRunId": "019fd349-1ad7-797a-89b8-3feedf2afc3b",
+  "failedChildWorkflowId": "mm:38c72f91-360d-4f59-aae2-84318768eb15:agent:node-1",
+  "failedChildRunId": "019fd349-2aa8-7993-9d06-c11f5497e0b4",
+  "failureShape": "the on-demand host mounted gh under /opt but omitted the profile.d script, so login shells reset PATH and returned 127 for gh",
+  "boundary": "mounted tool bundle to login-shell PATH",
+  "hostImageRef": "registry.example/omnigent-host@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+}

@@ -499,13 +499,18 @@ def restricted_proxy_env() -> tuple[str, ...]:
 
 
 def omnigent_proxy_env() -> tuple[str, ...]:
-    """Proxy environment for the isolated Omnigent control-plane ingress."""
+    """Proxy environment for isolated Omnigent hosts and their runners.
+
+    Codex's native bridge connects the TUI to its app server over a same-host
+    loopback WebSocket.  Loopback cannot reach an external destination from the
+    container, so exempt it while continuing to proxy every non-local address.
+    """
 
     return (
         f"HTTP_PROXY={OMNIGENT_PROXY_URL}",
         f"HTTPS_PROXY={OMNIGENT_PROXY_URL}",
         f"http_proxy={OMNIGENT_PROXY_URL}",
         f"https_proxy={OMNIGENT_PROXY_URL}",
-        "NO_PROXY=",
-        "no_proxy=",
+        "NO_PROXY=localhost,127.0.0.1",
+        "no_proxy=localhost,127.0.0.1",
     )

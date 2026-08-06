@@ -1,0 +1,5 @@
+{
+  "invariant": "required capability authority reaches runtime preflight and the provider adapter without being re-derived",
+  "terminalLaunchArgs": [],
+  "replayGate": "run-agent-required-capabilities-propagation-v1"
+}

@@ -13,6 +13,10 @@ from moonmind.omnigent.execution_profiles import (
 )
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.stock_agents import (
+    CLAUDE_STOCK_AGENT_NAME,
+    CODEX_STOCK_AGENT_NAME,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +40,7 @@ def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
     assert first == second
     assert first["hostMode"] == "on_demand_docker"
     assert first["harness"] == "codex-native"
+    assert first["agentName"] == CODEX_STOCK_AGENT_NAME
     assert first["snapshotRef"].startswith("omnigent-launch:sha256:")
     assert "credential" not in str(first).lower()
     assert "docker.sock" not in str(first)
@@ -161,6 +166,7 @@ def test_claude_profile_compiles_exact_provider_native_snapshot() -> None:
     )
     assert launch["providerRuntime"] == "claude_code"
     assert launch["harness"] == "claude-native"
+    assert launch["agentName"] == CLAUDE_STOCK_AGENT_NAME
     assert launch["hostMode"] == "on_demand_docker"
     validate_effective_launch_snapshot(launch)
 

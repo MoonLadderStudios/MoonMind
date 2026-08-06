@@ -17,6 +17,7 @@ stream is preserved per event on ``omnigent_bridge_session_events``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
+from moonmind.omnigent.bridge_events import bounded_deduplication_key
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
@@ -609,6 +611,70 @@ class OmnigentBridgeSessionStore:
                 await session.commit()
             else:
                 changed = False
+                if (
+                    row.status in _TERMINAL_STATUSES
+                    and row.first_message_posted_at is None
+                ):
+                    # A profile-bound Activity can fail during host preflight,
+                    # before Omnigent receives the first message, and then be
+                    # retried by Temporal with the same idempotency key.  The
+                    # failed coordinator attempt still terminalizes its bridge
+                    # row.  Treating that terminal marker as proof that the
+                    # prompt was posted makes the retry create a fresh session
+                    # and then skip its only message forever.
+                    #
+                    # No provider-side message exists in this state, so it is
+                    # safe to reopen the same idempotent journal.  Preserve the
+                    # failed generation's compact refs in metadata, then clear
+                    # only generation-scoped routing/capture fields.  Existing
+                    # lifecycle events remain immutable evidence and the next
+                    # attempt appends its own attempt-qualified transitions.
+                    prior_attempts = list(
+                        (row.metadata_ or {}).get("unpostedAttemptHistory") or []
+                    )
+                    prior_attempts.append(
+                        {
+                            "status": row.status,
+                            "terminalRefs": dict(row.terminal_refs or {}),
+                            "rawEventsRef": row.raw_events_ref,
+                            "normalizedEventsRef": row.normalized_events_ref,
+                            "initialSnapshotRef": row.initial_snapshot_ref,
+                            "finalSnapshotRef": row.final_snapshot_ref,
+                            "captureManifestRef": row.capture_manifest_ref,
+                            "diagnosticsRef": row.diagnostics_ref,
+                            "externalStateRef": row.external_state_ref,
+                            "recordedAt": datetime.now(tz=UTC).isoformat(),
+                        }
+                    )
+                    reset_metadata = dict(row.metadata_ or {})
+                    reset_metadata["unpostedAttemptHistory"] = prior_attempts[-10:]
+                    reset_metadata.pop("initialRetrieval", None)
+                    row.metadata_ = reset_metadata
+                    row.status = STATUS_DECLARED
+                    row.first_message_state = FIRST_MESSAGE_NOT_PREPARED
+                    row.first_message_digest = None
+                    row.first_message_marker = None
+                    row.first_message_post_attempted_at = None
+                    row.first_message_pending_id = None
+                    row.first_message_item_id = None
+                    row.omnigent_session_id = None
+                    row.omnigent_host_id = None
+                    row.omnigent_runner_id = None
+                    row.provider_profile_id = None
+                    row.provider_lease_id = None
+                    row.credential_generation = None
+                    row.host_binding_ref = None
+                    row.host_lease_ref = None
+                    row.effective_launch_snapshot_json = None
+                    row.raw_events_ref = None
+                    row.normalized_events_ref = None
+                    row.initial_snapshot_ref = None
+                    row.final_snapshot_ref = None
+                    row.capture_manifest_ref = None
+                    row.diagnostics_ref = None
+                    row.external_state_ref = None
+                    row.terminal_refs = {}
+                    changed = True
                 if row.omnigent_agent_id is None and agent_id is not None:
                     row.omnigent_agent_id = agent_id
                     changed = True
@@ -1265,7 +1331,9 @@ class OmnigentBridgeSessionStore:
                     event_id=stable_event_id,
                     bridge_session_id=row.bridge_session_id,
                     sequence=sequence,
-                    deduplication_key=f"lifecycle:{event_identity}"[:128],
+                    deduplication_key=bounded_deduplication_key(
+                        f"lifecycle:{event_identity}"
+                    ),
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
                     event_type=(
@@ -2072,21 +2140,20 @@ def _build_event_rows(
 
 def _event_deduplication_key(event: dict[str, Any]) -> str:
     """Prefer explicit/provider identity, otherwise bind content to its cursor."""
-    import hashlib
     import json
 
     explicit = _string_or_none(event.get("deduplicationKey"))
     if explicit:
-        return explicit[:128]
+        return bounded_deduplication_key(explicit)
     metadata = event.get("metadata") or {}
     reconciliation = metadata.get("reconciliation") or {}
     provider_id = _string_or_none(reconciliation.get("providerEventId"))
     if provider_id:
-        return f"provider:{provider_id}"[:128]
+        return bounded_deduplication_key(f"provider:{provider_id}")
     cursor = reconciliation.get("streamCursor") or event.get("sequence") or 0
     canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode()).hexdigest()
-    return f"cursor:{cursor}:{digest}"[:128]
+    return bounded_deduplication_key(f"cursor:{cursor}:{digest}")
 
 
 def _workflow_id(request: AgentExecutionRequest) -> str:

@@ -1,0 +1,16 @@
+{
+  "incidentWorkflowId": "mm:fbbf6deb-4149-4146-a7ff-5dd29eb749db",
+  "incidentRunId": "019fd3ad-dea5-7377-9785-a02441110cf1",
+  "failedActivityType": "workspace.capture_checkpoint",
+  "failedActivityEventIds": [
+    171,
+    196
+  ],
+  "workspaceLocator": {
+    "kind": "sandbox",
+    "workspaceId": "ceba96934c56005ab8f161b9",
+    "relativePath": "repo"
+  },
+  "failureShape": "the agent-runtime worker materialized the sandbox under the shared agent_workspaces volume, but the sandbox worker resolved the same locator beneath its default /work root",
+  "boundary": "agent-runtime workspace materialization to sandbox checkpoint capture"
+}

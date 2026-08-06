@@ -1,0 +1,6 @@
+{
+  "invariant": "the immutable host image terminates Docker option parsing before /usr/bin/env receives any -u arguments",
+  "entrypoint": "/usr/bin/env",
+  "firstUnsetVariable": "OPENAI_API_KEY",
+  "startScript": "/opt/moonmind/start-codex-oauth-host.sh"
+}

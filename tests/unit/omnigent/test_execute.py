@@ -22,10 +22,14 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
+    _await_marked_turn_terminal,
     _first_message_text,
+    _enqueue_stream_events,
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
+    _snapshot_confirms_current_turn_terminal,
+    _snapshot_contains_current_turn_progress,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
@@ -42,6 +46,420 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+def test_current_turn_progress_ignores_prior_terminal_work() -> None:
+    marker = """MoonMind-Omnigent-Run:
+  correlationId: workflow-1
+  idempotencyKey: continuation-2"""
+    prior_only = {
+        "items": [
+            {"type": "message", "data": {"role": "assistant", "content": []}},
+            {"type": "function_call_output", "data": {}},
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+        ]
+    }
+    current_progress = {
+        "items": [*prior_only["items"], {"type": "function_call", "data": {}}]
+    }
+
+    assert not _snapshot_contains_current_turn_progress(prior_only, marker=marker)
+    assert _snapshot_contains_current_turn_progress(current_progress, marker=marker)
+
+
+def test_marked_tool_progress_requires_terminal_assistant_evidence() -> None:
+    marker = """MoonMind-Omnigent-Run:
+  correlationId: workflow-1
+  idempotencyKey: continuation-2"""
+    items = [
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": marker}],
+            },
+        },
+        {"type": "function_call_output", "data": {}},
+    ]
+
+    assert not _snapshot_confirms_current_turn_terminal(
+        {
+            "status": "running",
+            "active_response_id": "response-1",
+            "items": items,
+        },
+        marker=marker,
+    )
+    assert not _snapshot_confirms_current_turn_terminal(
+        {"status": "idle", "active_response_id": None, "items": items},
+        marker=marker,
+    )
+    completed_items = [
+        *items,
+        {
+            "type": "message",
+            "data": {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done"}],
+            },
+        },
+    ]
+    assert _snapshot_confirms_current_turn_terminal(
+        {"status": "running", "active_response_id": None, "items": completed_items},
+        marker=marker,
+    )
+    assert not _snapshot_confirms_current_turn_terminal(
+        {"status": "running", "items": items},
+        marker=marker,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_queue_marks_pre_post_terminal_as_stale() -> None:
+    release_current_event = asyncio.Event()
+
+    class Client:
+        async def stream_events(self, _session_id):
+            yield {"type": "session.terminal", "status": "completed"}
+            await release_current_event.wait()
+            yield {"type": "session.terminal", "status": "completed"}
+
+    queue = asyncio.Queue()
+    message_posted = asyncio.Event()
+    task = asyncio.create_task(
+        _enqueue_stream_events(
+            client=Client(),
+            session_id="session-1",
+            queue=queue,
+            message_posted=message_posted,
+        )
+    )
+
+    stale_event, stale_after_post = await queue.get()
+    message_posted.set()
+    release_current_event.set()
+    current_event, current_after_post = await queue.get()
+    assert await task is None
+
+    assert stale_event["type"] == "session.terminal"
+    assert stale_after_post is False
+    assert current_event["type"] == "session.terminal"
+    assert current_after_post is True
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_waits_for_marked_turn_running_transition() -> None:
+    marker = "MoonMind-Omnigent-Run: continuation-2"
+    prior_terminal = {"status": "completed", "items": []}
+    current_items = [
+        {
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": marker}],
+            },
+        },
+        {"type": "function_call_output", "data": {}},
+    ]
+
+    class Client:
+        def __init__(self) -> None:
+            self.snapshots = [
+                prior_terminal,
+                {"status": "running", "items": current_items},
+                {
+                    "status": "running",
+                    "active_response_id": None,
+                    "items": current_items,
+                },
+            ]
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            index = min(self.calls, len(self.snapshots) - 1)
+            self.calls += 1
+            return self.snapshots[index]
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+    )
+
+    assert status == "completed"
+    assert snapshot["items"] == current_items
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_accepts_marked_progress_while_session_is_idle() -> None:
+    marker = "MoonMind-Omnigent-Run: continuation-2"
+    terminal = {
+        "status": "idle",
+        "items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+            {
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return terminal
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+    )
+
+    assert status == "completed"
+    assert snapshot is terminal
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_preserves_marked_provider_failure() -> None:
+    marker = "MoonMind-Omnigent-Run: failed-turn"
+    failed = {
+        "status": "failed",
+        "items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+            {"type": "function_call_output", "data": {}},
+        ],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return failed
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=2,
+        terminal_status="completed",
+        interval_seconds=0.001,
+    )
+
+    assert status == "failed"
+    assert snapshot is failed
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_waits_for_quiet_after_stale_idle_tool_output() -> None:
+    marker = "MoonMind-Omnigent-Run: continuation-2"
+    marked_user = {
+        "id": "item-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": marker}],
+        },
+    }
+    snapshots = [
+        {
+            "status": "idle",
+            "items": [
+                marked_user,
+                {
+                    "id": "assistant-preamble",
+                    "type": "message",
+                    "status": "completed",
+                    "data": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I will inspect it."}
+                        ],
+                    },
+                },
+            ],
+        },
+        {
+            "status": "idle",
+            "items": [
+                marked_user,
+                {
+                    "id": "assistant-preamble",
+                    "type": "message",
+                    "status": "completed",
+                    "data": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I will inspect it."}
+                        ],
+                    },
+                },
+                {
+                    "id": "call-1",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+            ],
+        },
+        {
+            "status": "idle",
+            "items": [
+                marked_user,
+                {
+                    "id": "assistant-preamble",
+                    "type": "message",
+                    "status": "completed",
+                    "data": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I will inspect it."}
+                        ],
+                    },
+                },
+                {
+                    "id": "call-1",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+                {
+                    "id": "output-1",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+            ],
+        },
+        {
+            "status": "idle",
+            "items": [
+                marked_user,
+                {
+                    "id": "assistant-preamble",
+                    "type": "message",
+                    "status": "completed",
+                    "data": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I will inspect it."}
+                        ],
+                    },
+                },
+                {
+                    "id": "call-1",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+                {
+                    "id": "output-1",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-2"},
+                },
+            ],
+        },
+        {
+            "status": "idle",
+            "items": [
+                marked_user,
+                {
+                    "id": "assistant-preamble",
+                    "type": "message",
+                    "status": "completed",
+                    "data": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I will inspect it."}
+                        ],
+                    },
+                },
+                {
+                    "id": "call-1",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+                {
+                    "id": "output-1",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "data": {"call_id": "call-1"},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function_call",
+                    "status": "completed",
+                    "data": {"call_id": "call-2"},
+                },
+                {
+                    "id": "output-2",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "data": {"call_id": "call-2"},
+                },
+            ],
+        },
+    ]
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            index = min(self.calls, len(snapshots) - 1)
+            self.calls += 1
+            return snapshots[index]
+
+    client = Client()
+    status, snapshot = await _await_marked_turn_terminal(
+        client=client,
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.02,
+        tool_only_quiet_period_seconds=0.02,
+    )
+
+    assert status == "completed"
+    assert snapshot["items"][-1]["id"] == "output-2"
+    assert client.calls >= 6
 
 
 @pytest.mark.asyncio
@@ -1422,6 +1840,76 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_continues_existing_session_with_new_message(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.stream_started = False
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("same-session continuation must not create a session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            assert self.stream_started is True
+            text = str(payload["data"]["content"][0]["text"])
+            calls.append((session_id, text))
+            return {"pending_id": "pending-continuation-1"}
+
+        async def stream_events(self, session_id: str):
+            assert session_id == "existing-session"
+            self.stream_started = True
+            yield {"type": "turn.started"}
+            yield {"type": "turn.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "existing-session"
+            return {"status": "completed", "summary": "continuation complete"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-continuation-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        resume_session_id="existing-session",
+        first_message_text="Continue the current task.",
+        defer_bridge_terminal=True,
+    )
+
+    assert calls and calls[0][0] == "existing-session"
+    assert calls[0][1].startswith("Continue the current task.")
+    assert "idem-continuation-1" in calls[0][1]
+    assert result.summary == "continuation complete"
+    assert result.metadata["deferredBridgeTerminal"]["status"] == "completed"
+    assert result.metadata["deferredBridgeTerminal"]["idempotencyKey"] == (
+        "idem-continuation-1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     monkeypatch,
     tmp_path,
@@ -2660,7 +3148,15 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
         "workflowChatVisible": False,
         "source": "omnigent_stream",
     }
-    assert normalized_events[-1]["type"] == "response.completed"
+    assert any(
+        event["type"] == "response.completed"
+        and event["normalizedStatus"] == "completed"
+        for event in normalized_events
+    )
+    # This fake emits completion before post_event returns, so the queue marks
+    # it as pre-post replay. The corroborating terminal snapshot is therefore
+    # appended as the authoritative terminal index entry.
+    assert normalized_events[-1]["type"] == "session.final_snapshot"
     assert normalized_events[-1]["normalizedStatus"] == "completed"
 
     # Scan the actual durable artifact bodies emitted by the execution, rather

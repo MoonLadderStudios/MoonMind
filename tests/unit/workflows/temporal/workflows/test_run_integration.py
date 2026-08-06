@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
     RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
+    RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
@@ -70,6 +71,12 @@ _LOOP_RUNTIME = {
     "effort": "high",
     "executionProfileRef": "codex_openai_oauth",
 }
+
+
+def _all_patches_except_empty_skillset(patch_id: str) -> bool:
+    """Keep generic execution fixtures focused on their asserted boundary."""
+
+    return patch_id != RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
 
 
 def _loop_controller_node(loop: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +248,7 @@ async def _finalize_and_capture_summary(
         noop_terminate_sessions,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_activity",
@@ -1054,7 +1061,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "org/repo", "publishMode": "none"},
@@ -6937,7 +6944,7 @@ def test_native_pr_branch_resolution_prefers_publish_context_branch(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     mock_run_workflow._publish_context["branch"] = "804-workflow-detail-tabs"
     mock_run_workflow._publish_context["baseRef"] = "origin/main"
 
@@ -6962,7 +6969,7 @@ def test_native_pr_branch_resolution_normalizes_base_ref_candidates(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     _, base_branch = mock_run_workflow._resolve_native_pr_branches(
         parameters={},

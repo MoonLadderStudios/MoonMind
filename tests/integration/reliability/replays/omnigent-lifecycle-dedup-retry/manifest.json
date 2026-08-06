@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678",
+  "runId": "019fd325-7bba-79b5-a0b7-ed9c17c708f9",
+  "failureShape": "activity retries emitted distinct lifecycle identities whose distinguishing attempt and transition suffixes were discarded by 128-character prefix truncation",
+  "boundary": "integration.omnigent.profile_bound_execute lifecycle journal persistence",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "executionProfileRef": "codex_openai_oauth",
+    "correlationId": "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678",
+    "idempotencyKey": "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678:019fd325-7bba-79b5-a0b7-ed9c17c708f9:node-1:execution:1:agent_execute"
+  },
+  "lifecycleEventIdentities": [
+    "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678:019fd325-7bba-79b5-a0b7-ed9c17c708f9:node-1:execution:1:agent_execute:attempt:1:request_validated:started",
+    "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678:019fd325-7bba-79b5-a0b7-ed9c17c708f9:node-1:execution:1:agent_execute:attempt:2:request_validated:started"
+  ]
+}

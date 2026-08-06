@@ -344,7 +344,22 @@ GEMINI_API_KEY
 GOOGLE_API_KEY
 ```
 
-Required mounted tools and resolved Skill snapshots are validated before the corresponding execution capability is claimed. GitHub credentials, when required, are resolved independently at a trusted boundary and injected only into an isolated on-demand run-dedicated host and its authoritative runner environment. A reusable static OAuth host does not receive per-run GitHub mutation credentials.
+Required mounted tools and resolved Skill snapshots are validated before the corresponding execution capability is claimed. GitHub credentials, when required, are resolved independently at a trusted boundary and materialized as owner-only standard `gh` configuration in the isolated on-demand host's lease-owned cache. The raw credential is removed before Omnigent starts; only the non-secret config selector reaches its authoritative runner. A reusable static OAuth host does not receive per-run GitHub mutation credentials.
+
+An on-demand host also receives the exact non-secret step execution identity for
+its current lease. MoonMind forwards `MOONMIND_STEP_EXECUTION_ID` to the runner
+and mounts a generated, execution-owned login profile at
+`/etc/profile.d/moonmind-execution.sh`. Native Codex deliberately filters
+unknown variables from the app-server process, so the login profile restores
+the identity for model-authored shell commands without embedding it in terminal
+arguments or mutable repository files. The profile is validated against the
+run-owned runtime-script snapshot and must fail closed on a missing, unsafe, or
+mismatched identity. Terminal-evidence Skills remain responsible for writing
+their own evidence with this execution ref. When a resolver reaches a terminal
+merge disposition, AgentRun durably publishes both the validated resolver result
+and the Skill-authored `artifacts/publish_result.json` companion. The parent
+consumes that companion by artifact ref as auto-publication evidence, preserving
+the Skill as semantic authority while keeping the authority handoff durable.
 
 ---
 
@@ -448,6 +463,13 @@ Terminal cleanup occurs after available session evidence is harvested:
 9. release the Provider Profile lease last.
 
 If host cleanup fails, the Provider Profile lease remains held or explicitly marked for janitor reconciliation. MoonMind does not report successful release while a credential consumer may still be active.
+
+Cancellation can close the owning workflow before janitor reconciliation has made
+the old host lease terminal. An immediate rerun that reaches host admission during
+that interval waits behind the active lease with
+`OMNIGENT_OAUTH_HOST_PROFILE_BUSY` evidence and retries the same selected profile.
+It does not expose the database uniqueness constraint, reuse the canceled run's
+authority, or select a different profile.
 
 The janitor reconciles expired leases, missing containers, orphan labeled containers, stale credential generations, and force-drain requests. It uses durable bindings and labels and never removes unrelated containers, unrelated state volumes, the canonical OAuth volume, or application data.
 

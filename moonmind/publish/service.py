@@ -46,6 +46,10 @@ class PublishResult:
     branch_pushed: bool = False
     pr_url: str | None = None
     branch_name: str | None = None
+    base_branch: str | None = None
+    head_sha: str | None = None
+    commits_ahead_of_base: int | None = None
+    remote_verified: bool = False
 
     def summary_text(self) -> str | None:
         if self.status == "skipped":
@@ -155,6 +159,10 @@ class PublishService:
         repo_dir: Path,
         run_command: CommandRunner,
         repo: str | None = None,
+        github_token: str | None = None,
+        publish_existing_commits: bool = False,
+        publication_branch_name: str | None = None,
+        verify_remote: bool = False,
     ) -> PublishResult | None:
         """Publish the changes to a branch or a pull request.
 
@@ -175,7 +183,8 @@ class PublishService:
             cwd=repo_dir,
             check=False,
         )
-        if not status.stdout.strip():
+        worktree_changed = bool(status.stdout.strip())
+        if not worktree_changed and not publish_existing_commits:
             return PublishResult(
                 mode=publish_mode,
                 status="skipped",
@@ -183,54 +192,150 @@ class PublishService:
                 reason="No repository changes were available to commit or publish.",
             )
 
-        branch_name = f"moonmind-job-{str(job_id)[:8]}"
+        branch_name = str(publication_branch_name or "").strip() or (
+            f"moonmind-job-{str(job_id)[:8]}"
+        )
         await run_command(
             [self._git_binary, "checkout", "-B", branch_name],
             cwd=repo_dir,
         )
-        await run_command(
-            [self._git_binary, "add", "-A"],
-            cwd=repo_dir,
-        )
-        commit_message = self._derive_default_publish_subject(
-            instruction=instruction,
-            max_chars=72,
-        )
-        await run_command(
-            [
-                self._git_binary,
-                "commit",
-                "-m",
-                commit_message,
-            ],
-            cwd=repo_dir,
-            redaction_values=(commit_message,),
-        )
-        commit_created = True
+        commit_created = False
+        if worktree_changed:
+            await run_command(
+                [self._git_binary, "add", "-A"],
+                cwd=repo_dir,
+            )
+            commit_message = self._derive_default_publish_subject(
+                instruction=instruction,
+                max_chars=72,
+            )
+            await run_command(
+                [
+                    self._git_binary,
+                    "commit",
+                    "-m",
+                    commit_message,
+                ],
+                cwd=repo_dir,
+                redaction_values=(commit_message,),
+            )
+            commit_created = True
+        base_branch = publish_base_branch or "main"
+        base_ref = f"origin/{base_branch}"
+        commit_count: int | None = None
+        if publish_existing_commits or verify_remote:
+            count_result = await run_command(
+                [
+                    self._git_binary,
+                    "rev-list",
+                    "--count",
+                    f"{base_ref}..{branch_name}",
+                ],
+                cwd=repo_dir,
+                check=False,
+            )
+            try:
+                commit_count = int(str(count_result.stdout or "").strip())
+            except (TypeError, ValueError):
+                commit_count = None
+            if publish_existing_commits and not worktree_changed and commit_count == 0:
+                return PublishResult(
+                    mode=publish_mode,
+                    status="skipped",
+                    reason_code="no_commit",
+                    reason=(
+                        "No repository commits were available over the authored "
+                        "publish base."
+                    ),
+                    branch_name=branch_name,
+                    base_branch=base_branch,
+                    commits_ahead_of_base=0,
+                )
+            if publish_existing_commits and commit_count is None:
+                raise RuntimeError(
+                    "could not measure repository commits over the authored "
+                    "publish base"
+                )
         await self._scan_git_push_before_publish(
             repo_dir=repo_dir,
             branch_name=branch_name,
-            base_ref=f"origin/{publish_base_branch or 'main'}",
+            base_ref=base_ref,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
-        token = ""
+        token = str(github_token or "").strip()
         push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         resolved_github_credential = None
-        if repo:
+        if repo and not token:
             from moonmind.auth.github_credentials import resolve_github_credential
 
             resolved_github_credential = await resolve_github_credential(repo=repo)
             token = resolved_github_credential.token or ""
-            if token:
-                push_env["GITHUB_TOKEN"] = token
-                push_env["GH_TOKEN"] = token
+        if token:
+            push_env["GITHUB_TOKEN"] = token
+            push_env["GH_TOKEN"] = token
+        remote_sha = ""
+        if verify_remote:
+            remote_result = await run_command(
+                [
+                    self._git_binary,
+                    "ls-remote",
+                    "--heads",
+                    "origin",
+                    f"refs/heads/{branch_name}",
+                ],
+                cwd=repo_dir,
+                check=False,
+                env=push_env,
+                redaction_values=(token,) if token else (),
+            )
+            remote_line = str(remote_result.stdout or "").strip().splitlines()
+            if remote_line:
+                remote_sha = remote_line[0].split(maxsplit=1)[0].strip()
+        push_command = [self._git_binary, "push", "-u"]
+        if verify_remote:
+            push_command.append(
+                f"--force-with-lease=refs/heads/{branch_name}:{remote_sha}"
+            )
+        push_command.extend(("origin", branch_name))
         await run_command(
-            [self._git_binary, "push", "-u", "origin", branch_name],
+            push_command,
             cwd=repo_dir,
             env=push_env,
             redaction_values=(token,) if token else (),
         )
         branch_pushed = True
+        head_sha: str | None = None
+        remote_verified = False
+        if verify_remote:
+            head_result = await run_command(
+                [self._git_binary, "rev-parse", "HEAD"],
+                cwd=repo_dir,
+            )
+            head_sha = str(head_result.stdout or "").strip() or None
+            verify_result = await run_command(
+                [
+                    self._git_binary,
+                    "ls-remote",
+                    "--heads",
+                    "origin",
+                    f"refs/heads/{branch_name}",
+                ],
+                cwd=repo_dir,
+                check=False,
+                env=push_env,
+                redaction_values=(token,) if token else (),
+            )
+            remote_lines = str(verify_result.stdout or "").strip().splitlines()
+            verified_sha = (
+                remote_lines[0].split(maxsplit=1)[0].strip()
+                if remote_lines
+                else ""
+            )
+            remote_verified = bool(head_sha and verified_sha == head_sha)
+            if not remote_verified:
+                raise RuntimeError(
+                    "published branch failed exact remote-head verification"
+                )
 
         if publish_mode == "branch":
             return PublishResult(
@@ -240,9 +345,12 @@ class PublishService:
                 commit_created=commit_created,
                 branch_pushed=branch_pushed,
                 branch_name=branch_name,
+                base_branch=base_branch,
+                head_sha=head_sha,
+                commits_ahead_of_base=commit_count,
+                remote_verified=remote_verified,
             )
 
-        base_branch = publish_base_branch or "main"
         pr_title = self._derive_default_publish_subject(
             instruction=instruction,
             max_chars=90,
@@ -282,6 +390,10 @@ class PublishService:
                 branch_pushed=branch_pushed,
                 pr_url=str(url) if url else None,
                 branch_name=branch_name,
+                base_branch=base_branch,
+                head_sha=head_sha,
+                commits_ahead_of_base=commit_count,
+                remote_verified=remote_verified,
             )
 
         if resolved_github_credential is None:
@@ -329,6 +441,10 @@ class PublishService:
             commit_created=commit_created,
             branch_pushed=branch_pushed,
             branch_name=branch_name,
+            base_branch=base_branch,
+            head_sha=head_sha,
+            commits_ahead_of_base=commit_count,
+            remote_verified=remote_verified,
         )
 
     async def _scan_git_push_before_publish(
@@ -433,6 +549,8 @@ class PublishService:
     ) -> str:
         proc = await asyncio.create_subprocess_exec(
             self._git_binary,
+            "-c",
+            f"safe.directory={repo_dir.resolve()}",
             "-C",
             str(repo_dir),
             *args,

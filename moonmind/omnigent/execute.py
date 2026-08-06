@@ -7,8 +7,9 @@ import hashlib
 import inspect
 import json
 import logging
-from collections.abc import AsyncIterator
-from contextlib import suppress
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,14 @@ _NON_TERMINAL_STATUSES = {
     "idle",
 }
 _logger = logging.getLogger(__name__)
+
+_ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
+_MARKED_TURN_QUIET_PERIOD_SECONDS = 60.0
+_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
+_ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
+    "omnigent_activity_heartbeat_state",
+    default=None,
+)
 
 
 class OmnigentSessionStillRunningError(OmnigentClientError):
@@ -471,6 +480,220 @@ def _snapshot_contains_first_message_marker(
     return False
 
 
+def _nested_value_contains_text(value: Any, *, needle: str) -> bool:
+    stack: list[Any] = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, Mapping):
+            stack.extend(current.values())
+        elif isinstance(current, list):
+            stack.extend(current)
+        elif isinstance(current, str) and needle in current:
+            return True
+    return False
+
+
+def _snapshot_contains_current_turn_progress(
+    snapshot: Mapping[str, Any],
+    *,
+    marker: str,
+) -> bool:
+    """Prove provider work occurred after this invocation's marked message.
+
+    Omnigent can replay the previous turn's terminal SSE event when a stream is
+    opened before posting the next message. The per-message marker is durable in
+    the user item, so item ordering—not a stale session status—authoritatively
+    distinguishes current-turn progress from the preceding turn.
+    """
+
+    raw_items = snapshot.get("items")
+    if not isinstance(raw_items, list):
+        return False
+    marked_message_index = -1
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, Mapping):
+            continue
+        if str(raw_item.get("type") or "").strip() != "message":
+            continue
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        if str(item_data.get("role") or "").strip().lower() != "user":
+            continue
+        if _nested_value_contains_text(raw_item, needle=marker):
+            marked_message_index = index
+    if marked_message_index < 0:
+        return False
+    for raw_item in raw_items[marked_message_index + 1 :]:
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_type = str(raw_item.get("type") or "").strip()
+        if item_type in {"function_call", "function_call_output"}:
+            return True
+        if item_type != "message":
+            continue
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        if str(item_data.get("role") or "").strip().lower() == "assistant":
+            return True
+    return False
+
+
+def _marked_turn_item_state(
+    snapshot: Mapping[str, Any],
+    *,
+    marker: str,
+) -> dict[str, Any]:
+    """Summarize ordered completion evidence after one marked user item.
+
+    Native Codex can accept a new message as a steer while the preceding turn
+    is still producing tools. Those items share the same session response id,
+    so the completion boundary must come from item ordering: a textual
+    assistant after the last tool is terminal, while an unmatched tool call is
+    still active regardless of the stock server's stale ``idle`` projection.
+    """
+
+    raw_items = snapshot.get("items")
+    if not isinstance(raw_items, list):
+        return {
+            "markerIndex": -1,
+            "progress": False,
+            "terminalAssistantAfterWork": False,
+            "unfinishedToolCall": False,
+            "signature": None,
+        }
+
+    marked_message_index = -1
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, Mapping):
+            continue
+        if str(raw_item.get("type") or "").strip() != "message":
+            continue
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        if str(item_data.get("role") or "").strip().lower() != "user":
+            continue
+        if _nested_value_contains_text(raw_item, needle=marker):
+            marked_message_index = index
+
+    if marked_message_index < 0:
+        return {
+            "markerIndex": -1,
+            "progress": False,
+            "terminalAssistantAfterWork": False,
+            "unfinishedToolCall": False,
+            "signature": None,
+        }
+
+    last_tool_index = -1
+    last_text_assistant_index = -1
+    progress = False
+    pending_call_ids: set[str] = set()
+    anonymous_pending_calls = 0
+    for index, raw_item in enumerate(
+        raw_items[marked_message_index + 1 :],
+        start=marked_message_index + 1,
+    ):
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_type = str(raw_item.get("type") or "").strip()
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        if item_type == "function_call":
+            progress = True
+            last_tool_index = index
+            call_id = str(item_data.get("call_id") or "").strip()
+            if call_id:
+                pending_call_ids.add(call_id)
+            else:
+                anonymous_pending_calls += 1
+        elif item_type == "function_call_output":
+            progress = True
+            last_tool_index = index
+            call_id = str(item_data.get("call_id") or "").strip()
+            if call_id:
+                pending_call_ids.discard(call_id)
+            elif anonymous_pending_calls:
+                anonymous_pending_calls -= 1
+        elif item_type == "message":
+            role = str(item_data.get("role") or "").strip().lower()
+            if role != "assistant":
+                continue
+            progress = True
+            content = item_data.get("content")
+            if isinstance(content, list) and any(
+                isinstance(block, Mapping)
+                and str(block.get("text") or "").strip()
+                for block in content
+            ):
+                last_text_assistant_index = index
+
+    last_item = next(
+        (item for item in reversed(raw_items) if isinstance(item, Mapping)),
+        {},
+    )
+    last_data = last_item.get("data")
+    last_item_data = last_data if isinstance(last_data, Mapping) else {}
+    signature = (
+        len(raw_items),
+        str(last_item.get("id") or ""),
+        str(last_item.get("type") or ""),
+        str(last_item.get("status") or ""),
+        str(last_item_data.get("role") or ""),
+        str(last_item_data.get("call_id") or ""),
+    )
+    return {
+        "markerIndex": marked_message_index,
+        "progress": progress,
+        "terminalAssistantAfterWork": (
+            last_text_assistant_index > max(marked_message_index, last_tool_index)
+        ),
+        "unfinishedToolCall": bool(pending_call_ids or anonymous_pending_calls),
+        "signature": signature,
+    }
+
+
+def _snapshot_projects_inactive_turn(snapshot: Mapping[str, Any]) -> bool:
+    normalized = normalize_omnigent_observation(dict(snapshot))
+    if normalized in {"completed", "failed", "canceled", "timed_out", "idle"}:
+        return True
+    active_response_is_projected = (
+        "active_response_id" in snapshot or "activeResponseId" in snapshot
+    )
+    active_response_id = str(
+        snapshot.get("active_response_id")
+        or snapshot.get("activeResponseId")
+        or ""
+    ).strip()
+    return (
+        normalized in _NON_TERMINAL_STATUSES
+        and active_response_is_projected
+        and not active_response_id
+    )
+
+
+def _snapshot_confirms_current_turn_terminal(
+    snapshot: Mapping[str, Any],
+    *,
+    marker: str,
+) -> bool:
+    """Identify a structurally terminal assistant candidate for a marked turn.
+
+    Stock Omnigent can emit ``response.completed`` for an intermediate response
+    while the Codex turn remains active. A stale inactive projection is therefore
+    corroborative only. Even this structural candidate must pass the bounded
+    transcript-quiescence gate before it owns a terminal decision because an
+    assistant preamble can be followed by a tool that has not appeared yet.
+    """
+
+    state = _marked_turn_item_state(snapshot, marker=marker)
+    return bool(
+        state["progress"]
+        and state["terminalAssistantAfterWork"]
+        and not state["unfinishedToolCall"]
+        and _snapshot_projects_inactive_turn(snapshot)
+    )
+
+
 async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
     raise OmnigentContractError(
         f"Omnigent bundleRef cannot be resolved by this activity: {bundle_ref}"
@@ -484,10 +707,49 @@ async def _maybe_await(value: Any) -> Any:
 
 
 def _safe_heartbeat(details: dict[str, Any]) -> None:
+    state = _ACTIVITY_HEARTBEAT_STATE.get()
+    payload = dict(details)
+    if state is not None:
+        # All lifecycle and streaming tasks spawned by one Activity share this
+        # mutable accumulator. A substrate-level liveness heartbeat therefore
+        # preserves the latest session/cursor evidence instead of replacing it.
+        state.update(details)
+        payload = dict(state)
     try:
-        activity.heartbeat(details)
+        activity.heartbeat(payload)
     except RuntimeError as exc:
         _logger.debug("Skipping Omnigent heartbeat outside activity context: %s", exc)
+
+
+@asynccontextmanager
+async def omnigent_activity_heartbeat(
+    *, interval_seconds: float | None = None
+) -> AsyncIterator[None]:
+    """Heartbeat the complete Activity, including host/workspace preparation."""
+
+    state: dict[str, Any] = {}
+    token = _ACTIVITY_HEARTBEAT_STATE.set(state)
+    interval = max(
+        0.01,
+        float(
+            _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS
+            if interval_seconds is None
+            else interval_seconds
+        ),
+    )
+
+    async def heartbeat() -> None:
+        while True:
+            _safe_heartbeat({"activityAlive": True})
+            await asyncio.sleep(interval)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        yield
+    finally:
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
 
 
 def _heartbeat_details() -> tuple[Any, ...]:
@@ -539,15 +801,145 @@ async def _periodic_stream_heartbeat(
         )
 
 
+async def _await_marked_turn_terminal(
+    *,
+    client: OmnigentHttpClient,
+    session_id: str,
+    marker: str,
+    event_count: int,
+    terminal_status: str,
+    timeout_seconds: float = 1800.0,
+    interval_seconds: float = 2.0,
+    quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
+    tool_only_quiet_period_seconds: float = (
+        _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS
+    ),
+) -> tuple[str, dict[str, Any]]:
+    """Wait until a terminal event is stably projected into the marked turn.
+
+    Omnigent sessions are interactive and return to ``idle`` after a Codex
+    turn, so the session snapshot itself does not become terminal. Stock native
+    sessions can replay the prior SSE terminal frame and can briefly project an
+    assistant preamble as their last item before its next tool appears. Marked
+    item ordering plus a bounded stable period therefore owns the terminal
+    decision; neither a terminal frame nor a transient last assistant does.
+    """
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(1.0, timeout_seconds)
+    quiet_signature: tuple[Any, ...] | None = None
+    quiet_since: float | None = None
+    while loop.time() < deadline:
+        snapshot = await client.get_session(session_id)
+        normalized = normalize_omnigent_observation(snapshot)
+        turn_state = _marked_turn_item_state(snapshot, marker=marker)
+        progress = bool(turn_state["progress"])
+        if not isinstance(snapshot.get("items"), list) and normalized in {
+            "completed",
+            "failed",
+            "canceled",
+            "timed_out",
+        }:
+            # Older/alternate Omnigent adapters do not project ordered items.
+            # For those adapters, a terminal snapshot corroborates the live
+            # post-dispatch terminal event without inventing item evidence.
+            return (
+                normalized
+                if normalized in {"failed", "canceled", "timed_out"}
+                else terminal_status
+            ), snapshot
+        if (
+            normalized in {"failed", "canceled", "timed_out"}
+            and turn_state["markerIndex"] >= 0
+            and progress
+        ):
+            # A marked provider failure is stronger than a replayed successful
+            # SSE frame. Preserve the provider's current terminal authority so
+            # cleanup or downstream terminal-contract checks cannot be the
+            # first place that discovers the failed turn.
+            return normalized, snapshot
+        inactive = _snapshot_projects_inactive_turn(snapshot)
+        stable_candidate = bool(
+            progress and inactive and not turn_state["unfinishedToolCall"]
+        )
+        signature = turn_state["signature"]
+        if stable_candidate and isinstance(signature, tuple):
+            if quiet_signature != signature:
+                quiet_signature = signature
+                quiet_since = loop.time()
+            required_quiet_seconds = max(
+                0.0,
+                (
+                    quiet_period_seconds
+                    if turn_state["terminalAssistantAfterWork"]
+                    else tool_only_quiet_period_seconds
+                ),
+            )
+            if quiet_since is not None and (
+                loop.time() - quiet_since >= required_quiet_seconds
+            ):
+                # A preamble assistant can launch another tool after the stale
+                # idle/completed projection, and some turns end immediately
+                # after a tool result without a final assistant. Accept either
+                # shape only after the ordered transcript is inactive and
+                # unchanged for a bounded quiet period.
+                return (
+                    normalized
+                    if normalized in {"failed", "canceled", "timed_out"}
+                    else terminal_status
+                ), snapshot
+        else:
+            quiet_signature = None
+            quiet_since = None
+        _safe_heartbeat(
+            {
+                "omnigentSessionId": session_id,
+                "normalizedStatus": (
+                    normalized if normalized in _NON_TERMINAL_STATUSES else "running"
+                ),
+                "eventsCaptured": event_count,
+                "firstMessagePosted": True,
+                "terminalSnapshotPolling": True,
+                "currentTurnProgress": progress,
+                "terminalAssistantAfterWork": bool(
+                    turn_state["terminalAssistantAfterWork"]
+                ),
+                "unfinishedToolCall": bool(turn_state["unfinishedToolCall"]),
+                "turnQuietSeconds": (
+                    round(loop.time() - quiet_since, 3)
+                    if quiet_since is not None
+                    else 0.0
+                ),
+                "turnQuietTargetSeconds": (
+                    max(
+                        0.0,
+                        (
+                            quiet_period_seconds
+                            if turn_state["terminalAssistantAfterWork"]
+                            else tool_only_quiet_period_seconds
+                        ),
+                    )
+                    if stable_candidate
+                    else None
+                ),
+            }
+        )
+        await asyncio.sleep(max(0.1, interval_seconds))
+    raise OmnigentSessionStillRunningError(
+        "Omnigent current marked turn did not reach terminal state before timeout"
+    )
+
+
 async def _enqueue_stream_events(
     *,
     client: OmnigentHttpClient,
     session_id: str,
-    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+    queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
+    message_posted: asyncio.Event,
 ) -> None:
     try:
         async for event in client.stream_events(session_id):
-            await queue.put(event)
+            await queue.put((event, message_posted.is_set()))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -558,9 +950,9 @@ async def _enqueue_stream_events(
 
 async def _queued_stream_events(
     *,
-    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+    queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     stream_task: asyncio.Task[None],
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[tuple[dict[str, Any], bool]]:
     while True:
         event = await queue.get()
         if event is None:
@@ -742,6 +1134,9 @@ async def run_omnigent_execution(
     *,
     artifact_gateway: OmnigentArtifactGateway | None = None,
     run_store: OmnigentBridgeSessionStore | None = None,
+    resume_session_id: str | None = None,
+    first_message_text: str | None = None,
+    defer_bridge_terminal: bool = False,
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
@@ -867,7 +1262,25 @@ async def run_omnigent_execution(
                 getattr(durable_row, "omnigent_session_id", None) or ""
             ).strip()
             heartbeat_session_id = _heartbeat_session_id(retry_state)
-            session_id = durable_session_id or heartbeat_session_id
+            requested_resume_session_id = str(resume_session_id or "").strip()
+            resolved_existing_session_ids = {
+                value
+                for value in (
+                    durable_session_id,
+                    heartbeat_session_id,
+                    requested_resume_session_id,
+                )
+                if value
+            }
+            if len(resolved_existing_session_ids) > 1:
+                raise OmnigentContractError(
+                    "Omnigent continuation session conflicts with durable retry state"
+                )
+            session_id = (
+                durable_session_id
+                or heartbeat_session_id
+                or requested_resume_session_id
+            )
             first_message_posted = bool(retry_state.get("firstMessagePosted"))
             first_message_reconcile_required = False
             if durable_row is not None:
@@ -875,8 +1288,14 @@ async def run_omnigent_execution(
                     durable_row.first_message_state == FIRST_MESSAGE_POSTING
                 )
                 first_message_posted = (
-                    durable_row.first_message_state
-                    in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}
+                    durable_row.first_message_state == FIRST_MESSAGE_POSTED
+                    or (
+                        durable_row.first_message_state == FIRST_MESSAGE_TERMINAL
+                        and getattr(
+                            durable_row, "first_message_posted_at", None
+                        )
+                        is not None
+                    )
                 )
                 first_message_response_identifiers = _first_message_response_identifiers(
                     pending_id=getattr(durable_row, "first_message_pending_id", None),
@@ -897,7 +1316,11 @@ async def run_omnigent_execution(
                         "attachSource": (
                             "bridge_session_store"
                             if durable_session_id
-                            else "activity_heartbeat"
+                            else (
+                                "coordinator_continuation"
+                                if requested_resume_session_id
+                                else "activity_heartbeat"
+                            )
                         ),
                     }
                 )
@@ -924,25 +1347,72 @@ async def run_omnigent_execution(
                         "firstMessagePosted": False,
                     }
                 )
+            elif (
+                run_store is not None
+                and requested_resume_session_id
+                and not durable_session_id
+            ):
+                await run_store.attach_session(
+                    request.idempotency_key,
+                    requested_resume_session_id,
+                )
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
 
-            first_message = await _build_omnigent_first_message(
-                request=request,
-                prompt=selection.prompt,
-                artifact_gateway=artifact_gateway,
-            )
-            first_message, retrieval_evidence = await _resolve_initial_context_message(
-                request=request,
-                first_message=first_message,
-                artifact_gateway=artifact_gateway,
-                run_store=run_store,
-                durable_row=durable_row,
-                workspace=selection.session.workspace,
-                include_idempotency_marker=selection.prompt.get(
-                    "includeIdempotencyMarker", True
-                ),
-            )
+            if first_message_text is not None:
+                first_message = {
+                    "type": "message",
+                    "data": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": str(first_message_text).strip(),
+                            }
+                        ],
+                    },
+                }
+                first_message["data"]["content"][0]["text"] = (
+                    f"{_first_message_text(first_message)}\n\n"
+                    f"{_first_message_marker(request=request)}"
+                ).strip()
+                prepared_digest = hashlib.sha256(
+                    json.dumps(
+                        first_message,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                retrieval_evidence = {
+                    "state": "disabled",
+                    "mode": "session_continuation",
+                    "reason": "repository_publication_terminal_contract",
+                    "preparedMessageDigest": prepared_digest,
+                    "preparedMessageRef": await artifact_gateway.write_json(
+                        request=request,
+                        name="input.omnigent.first_message.prepared.json",
+                        payload=first_message,
+                        link_type="input.omnigent.first_message.prepared",
+                    ),
+                    "firstMessageConsumedContextRef": False,
+                }
+            else:
+                first_message = await _build_omnigent_first_message(
+                    request=request,
+                    prompt=selection.prompt,
+                    artifact_gateway=artifact_gateway,
+                )
+                first_message, retrieval_evidence = await _resolve_initial_context_message(
+                    request=request,
+                    first_message=first_message,
+                    artifact_gateway=artifact_gateway,
+                    run_store=run_store,
+                    durable_row=durable_row,
+                    workspace=selection.session.workspace,
+                    include_idempotency_marker=selection.prompt.get(
+                        "includeIdempotencyMarker", True
+                    ),
+                )
             digest = str(retrieval_evidence["preparedMessageDigest"])
             marker = _first_message_marker(request=request)
             external_state["firstMessage"].update(
@@ -1023,7 +1493,10 @@ async def run_omnigent_execution(
                             OmnigentFailureReason.FIRST_MESSAGE_DIGEST_MISMATCH
                         ),
                     )
-            stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
+            stream_queue: asyncio.Queue[
+                tuple[dict[str, Any], bool] | BaseException | None
+            ] | None = None
+            message_posted_gate = asyncio.Event()
             if first_message_reconcile_required:
                 reconciliation_snapshot = await client.get_session(session_id)
                 if not _snapshot_contains_first_message_marker(
@@ -1098,11 +1571,17 @@ async def run_omnigent_execution(
                         client=client,
                         session_id=session_id,
                         queue=stream_queue,
+                        message_posted=message_posted_gate,
                     )
                 )
                 await asyncio.sleep(0)
                 if run_store is not None:
                     await run_store.mark_posting(request.idempotency_key)
+                # The server may emit current-turn SSE events before the POST
+                # response is returned. Open the current-turn gate immediately
+                # before dispatch; anything already queued remains pre-post
+                # replay, while events emitted during request handling are live.
+                message_posted_gate.set()
                 first_message_response = await client.post_event(session_id, first_message)
                 first_message_posted = True
                 first_message_response_identifiers = _first_message_response_identifiers(
@@ -1194,6 +1673,7 @@ async def run_omnigent_execution(
                 )
             )
             terminal_status: str | None = None
+            terminal_snapshot_override: dict[str, Any] | None = None
             try:
                 stream_events = (
                     _queued_stream_events(
@@ -1203,7 +1683,12 @@ async def run_omnigent_execution(
                     if stream_queue is not None and stream_task is not None
                     else client.stream_events(session_id)
                 )
-                async for event in stream_events:
+                async for stream_item in stream_events:
+                    if isinstance(stream_item, tuple):
+                        event, arrived_after_message_post = stream_item
+                    else:
+                        event = stream_item
+                        arrived_after_message_post = True
                     event_count["value"] += 1
                     raw_events.append(dict(event))
                     normalized_bridge_event = build_omnigent_bridge_event(
@@ -1259,8 +1744,50 @@ async def run_omnigent_execution(
                         )
                         continue
                     if normalized in {"completed", "failed", "canceled", "timed_out"}:
-                        terminal_status = normalized
-                        heartbeat_status["value"] = normalized
+                        terminal_snapshot = await client.get_session(session_id)
+                        current_turn_progress = (
+                            _snapshot_confirms_current_turn_terminal(
+                                terminal_snapshot,
+                                marker=marker,
+                            )
+                        )
+                        if arrived_after_message_post and not current_turn_progress:
+                            marker_visible = _snapshot_contains_first_message_marker(
+                                terminal_snapshot,
+                                digest=digest,
+                                marker=marker,
+                            )
+                            if marker_visible:
+                                for _ in range(20):
+                                    await asyncio.sleep(0.25)
+                                    terminal_snapshot = await client.get_session(
+                                        session_id
+                                    )
+                                    current_turn_progress = (
+                                        _snapshot_confirms_current_turn_terminal(
+                                            terminal_snapshot,
+                                            marker=marker,
+                                        )
+                                    )
+                                    if current_turn_progress:
+                                        break
+                        if not current_turn_progress and not arrived_after_message_post:
+                            # A terminal frame queued before the message was
+                            # posted belongs to the preceding turn. Keep the
+                            # stream open for the current turn's terminal event
+                            # instead of accepting stale completion.
+                            continue
+                        (
+                            terminal_status,
+                            terminal_snapshot_override,
+                        ) = await _await_marked_turn_terminal(
+                            client=client,
+                            session_id=session_id,
+                            marker=marker,
+                            event_count=event_count["value"],
+                            terminal_status=normalized,
+                        )
+                        heartbeat_status["value"] = terminal_status
                         break
                     if event_count["value"] % 8 == 0:
                         _safe_heartbeat(
@@ -1275,7 +1802,9 @@ async def run_omnigent_execution(
                 await _cancel_task(heartbeat_task)
                 await _cancel_task(stream_task)
 
-            final_snapshot = await client.get_session(session_id)
+            final_snapshot = terminal_snapshot_override or await client.get_session(
+                session_id
+            )
             if terminal_status is None:
                 normalized_snapshot = normalize_omnigent_observation(final_snapshot)
                 if normalized_snapshot in {
@@ -1284,6 +1813,16 @@ async def run_omnigent_execution(
                     "canceled",
                     "timed_out",
                 }:
+                    if isinstance(final_snapshot.get("items"), list) and not (
+                        _snapshot_contains_current_turn_progress(
+                            final_snapshot,
+                            marker=marker,
+                        )
+                    ):
+                        raise OmnigentSessionStillRunningError(
+                            "Omnigent stream ended before the current marked turn "
+                            "produced provider work"
+                        )
                     terminal_status = normalized_snapshot
                     # The stream ended without emitting a terminal event but the
                     # final snapshot is terminal. Append an indexed terminal event
@@ -1349,15 +1888,16 @@ async def run_omnigent_execution(
                 external_state=external_state,
                 capture_policy=capture_policy,
             )
-            if run_store is not None:
+            terminal_refs = build_omnigent_terminal_refs(
+                bundle,
+                terminal_status=terminal_status,
+                final_snapshot=final_snapshot,
+            )
+            if run_store is not None and not defer_bridge_terminal:
                 await run_store.mark_terminal(
                     request.idempotency_key,
                     status=terminal_status,
-                    terminal_refs=build_omnigent_terminal_refs(
-                        bundle,
-                        terminal_status=terminal_status,
-                        final_snapshot=final_snapshot,
-                    ),
+                    terminal_refs=terminal_refs,
                     # Persist the full, non-lossy normalized status stream into
                     # the durable event index (OmnigentBridge §7.2).
                     events=normalized_events,
@@ -1373,7 +1913,7 @@ async def run_omnigent_execution(
                 harvest_failure_reason = (
                     OmnigentFailureReason.OPTIONAL_RESOURCE_HARVEST_FAILED
                 )
-            return build_omnigent_result(
+            result = build_omnigent_result(
                 request=request,
                 terminal_status=terminal_status,
                 session_id=session_id,
@@ -1395,6 +1935,15 @@ async def run_omnigent_execution(
                     else None
                 ),
             )
+            if defer_bridge_terminal:
+                result_metadata = dict(result.metadata or {})
+                result_metadata["deferredBridgeTerminal"] = {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": terminal_status,
+                    "terminalRefs": terminal_refs,
+                }
+                result = result.model_copy(update={"metadata": result_metadata})
+            return result
     except asyncio.CancelledError:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)

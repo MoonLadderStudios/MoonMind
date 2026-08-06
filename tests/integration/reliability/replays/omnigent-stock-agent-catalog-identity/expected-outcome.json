@@ -1,0 +1,16 @@
+{
+  "invariant": "a profile-bound Codex child without an explicit agent id compiles the exact bindable stock catalog identity before Omnigent session creation",
+  "resolvedAgentId": "16a06503889b0c3034496821afd41b9e",
+  "resolvedAgentName": "codex-native-ui",
+  "bootstrapPolicyAgentIdentity": "codex-native-ui",
+  "managedProfileLaunchPolicyRef": "codex-on-demand@2",
+  "exactRerunLaunchPolicyRef": "codex-on-demand@2",
+  "legacyTrustedIdentityRemovedFromAuthoredParameters": true,
+  "catalogAgent": {
+    "id": "16a06503889b0c3034496821afd41b9e",
+    "name": "codex-native-ui",
+    "capabilities": [
+      "session.start"
+    ]
+  }
+}
