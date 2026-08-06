@@ -135,6 +135,11 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
         stepExecutionId="wf-task-1:run-1:batch-workflows:execution:2",
         runtimeContextPolicy="reuse_session_same_epoch",
     )
+    request.workspace_spec["workspaceLocator"] = {
+        "kind": "sandbox",
+        "workspaceId": "sandbox-workspace-1",
+        "relativePath": "repo",
+    }
     calls: list[tuple[str, Any]] = []
     evaluations = 0
 
@@ -173,6 +178,15 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
     assert result.metadata["terminalContractContinuationCount"] == 1
     assert calls[0][1]["runId"] == "wf-task-1"
+    assert calls[0][1]["workspaceLocator"] == {
+        "kind": "sandbox",
+        "workspaceId": "sandbox-workspace-1",
+        "relativePath": "repo",
+    }
+    assert calls[0][1]["workspaceOwnerWorkflowId"] == "wf-task-1"
+    assert calls[0][1]["workspaceOwnerStepExecutionId"] == (
+        "wf-task-1:run-1:batch-workflows:execution:2"
+    )
     assert [name for name, _ in calls] == [
         "agent_runtime.evaluate_terminal_evidence",
         "agent_runtime.load_session_snapshot",

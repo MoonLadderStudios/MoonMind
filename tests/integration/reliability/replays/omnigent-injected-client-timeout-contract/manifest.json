@@ -1,0 +1,11 @@
+{
+  "incidentWorkflowId": "mm:64c19951-29b7-4bf9-8962-ccaf5a8494df",
+  "incidentRunId": "019fd364-107a-7bde-a929-30f5d20c87db",
+  "failedChildWorkflowId": "mm:64c19951-29b7-4bf9-8962-ccaf5a8494df:agent:node-1",
+  "failedChildRunId": "019fd364-1978-785e-9d05-e09750b22630",
+  "omnigentSessionId": "6bbdd1e661c649ebbd59c20582283581",
+  "sessionId": "session-replay",
+  "requestTimeoutSeconds": 60.0,
+  "failureShape": "an injected default httpx client replaced MoonMind's request and SSE timeout contract, timed out during native terminal bootstrap, and cleanup disconnected the live host and runner",
+  "boundary": "MoonMind Omnigent adapter to injected HTTP transport"
+}

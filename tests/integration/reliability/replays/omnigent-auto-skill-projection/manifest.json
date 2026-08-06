@@ -1,0 +1,28 @@
+{
+  "incidentWorkflowId": "mm:717ea339-77ab-4e72-bd46-969b009b5508",
+  "incidentRunId": "019fd32f-cbfd-7846-bee9-79c87ebae5f8",
+  "failedChildWorkflowId": "mm:717ea339-77ab-4e72-bd46-969b009b5508:agent:node-1",
+  "failedChildRunId": "019fd32f-cf81-7df9-952b-8bd89d8de08a",
+  "failureShape": "an auto-selected agent step launched Omnigent without a resolvedSkillsetRef and failed host preparation before mutation",
+  "boundary": "MoonMind.UserWorkflow parent request compilation to MoonMind.AgentRun",
+  "ownerId": "owner-replay",
+  "logicalStepId": "node-1",
+  "nodeInputs": {
+    "runtime": {
+      "mode": "omnigent",
+      "executionProfileRef": "codex_openai_oauth"
+    },
+    "selectedSkill": "auto"
+  },
+  "resolvedSkillSet": {
+    "snapshotId": "skillset_mm-717ea339_node-1",
+    "resolvedAt": "2026-08-05T12:00:00Z",
+    "manifestRef": "artifact://skillsets/mm-717ea339-node-1-empty",
+    "skills": [],
+    "resolutionInputs": {
+      "sets": [],
+      "include": [],
+      "exclude": []
+    }
+  }
+}

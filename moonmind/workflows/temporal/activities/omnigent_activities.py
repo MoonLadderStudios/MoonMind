@@ -287,6 +287,15 @@ async def _resolve_live_recovery_authority(
 async def omnigent_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
+    from moonmind.omnigent.execute import omnigent_activity_heartbeat
+
+    async with omnigent_activity_heartbeat():
+        return await _omnigent_execute_activity(request)
+
+
+async def _omnigent_execute_activity(
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
     """Run one Omnigent streaming execution."""
 
     from api_service.db.base import async_session_maker
@@ -305,10 +314,10 @@ async def omnigent_execute_activity(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
-    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.repositories.lore_runtime import (
         build_lore_repository_adapter_from_environment,
     )
+    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.artifacts import (
@@ -510,7 +519,9 @@ async def omnigent_oauth_host_janitor_activity(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
+    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     async with httpx.AsyncClient() as http_client:
         client = OmnigentHttpClient(
@@ -524,6 +535,7 @@ async def omnigent_oauth_host_janitor_activity(
             runtime=OmnigentOAuthHostRuntime(client=client),
             client=client,
             run_store=OmnigentBridgeSessionStore(async_session_maker),
+            lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
         )
         payload = dict(request or {})
         action_kind = str(payload.get("actionKind") or "").strip()

@@ -16,6 +16,7 @@ from api_service.db.models import (
 )
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
+    refresh_managed_bootstrap_snapshot_for_rerun,
     resolve_agent_profile_snapshot,
 )
 
@@ -95,7 +96,15 @@ def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() 
     compiled = compile_agent_profile_snapshot_parameters(
         {
             "model": "stale-model",
-            "omnigent": {"launchPolicyRef": "stale-policy"},
+            "omnigent": {
+                "agentProfileRef": "team-codex@1",
+                "executionProfileRef": "omnigent-codex@1",
+                "launchPolicyRef": "stale-policy",
+                "agent": {
+                    "agentId": "stale-agent-id",
+                    "agentName": "portable-agent-name",
+                },
+            },
         },
         snapshot=snapshot,
     )
@@ -110,6 +119,7 @@ def test_snapshot_parameter_compiler_keeps_authority_out_of_authored_omnigent() 
     assert compiled["model"] == "gpt-5.4"
     assert compiled["effort"] == "high"
     assert compiled["omnigent"] == {
+        "agent": {"agentName": "portable-agent-name"},
         "executionTargetRef": "omnigent-codex@2",
         "launchPolicyRef": "on-demand@1",
     }
@@ -218,3 +228,109 @@ async def test_resolver_rejects_overrides_above_versioned_ceilings(overrides):
             selection={"profileId": "team-codex", "providerProfileRef": "oauth-team", "overrides": overrides},
             consumer_type="workflow", consumer_id="workflow-1", user=SimpleNamespace(id=uuid4()),
         )
+
+
+@pytest.mark.asyncio
+async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
+    old_digest = "sha256:" + "1" * 64
+    previous_version = SimpleNamespace(
+        digest=old_digest,
+        document={
+            "model": {"model": "gpt-5.6-sol"},
+            "capture": {},
+            "rag": {},
+            "publish": {},
+        },
+    )
+
+    class _RerunSession:
+        async def scalar(self, statement):
+            return previous_version
+
+    captured = {}
+
+    async def _resolve(session, *, selection, consumer_type, consumer_id, user):
+        captured.update(
+            selection=selection,
+            consumer_type=consumer_type,
+            consumer_id=consumer_id,
+        )
+        return {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-bootstrap-default",
+            "version": 2,
+            "digest": "sha256:" + "2" * 64,
+            "providerProfileRef": "codex_openai_oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@2",
+            "agentId": "codex-native-ui",
+            "document": {
+                "model": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                "capture": {},
+                "rag": {},
+                "publish": {},
+                "workspace": {},
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_agent_profile_selection."
+        "resolve_agent_profile_snapshot",
+        _resolve,
+    )
+    refreshed = await refresh_managed_bootstrap_snapshot_for_rerun(
+        _RerunSession(),
+        parameters={
+            "instructions": "keep the same task",
+            "agentProfileSnapshot": {
+                "profileId": "omnigent-bootstrap-default",
+                "version": 1,
+                "digest": old_digest,
+                "providerProfileRef": "codex_openai_oauth",
+                "document": {
+                    "model": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                    "capture": {},
+                    "rag": {},
+                    "publish": {},
+                },
+            },
+            "omnigent": {
+                "agentProfileRef": "omnigent-bootstrap-default@1",
+                "executionProfileRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-on-demand@1",
+                "agent": {"agentId": "stale-agent-id"},
+            },
+        },
+        consumer_id="mm:rerun",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert refreshed["instructions"] == "keep the same task"
+    assert refreshed["agentProfile"]["version"] == 2
+    assert refreshed["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@2",
+    }
+    assert captured == {
+        "selection": {
+            "profileId": "omnigent-bootstrap-default",
+            "providerProfileRef": "codex_openai_oauth",
+            "overrides": {"model": {"effort": "xhigh"}},
+        },
+        "consumer_type": "workflow",
+        "consumer_id": "mm:rerun",
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_rerun_preserves_operator_owned_profile_snapshot():
+    parameters = {
+        "agentProfileSnapshot": {"profileId": "operator-profile"},
+        "omnigent": {"launchPolicyRef": "operator-policy@7"},
+    }
+    assert await refresh_managed_bootstrap_snapshot_for_rerun(
+        SimpleNamespace(),
+        parameters=parameters,
+        consumer_id="mm:rerun",
+        user=SimpleNamespace(id=uuid4()),
+    ) == parameters

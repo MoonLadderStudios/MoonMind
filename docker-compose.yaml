@@ -494,6 +494,7 @@ services:
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
       - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
+      - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -622,7 +623,7 @@ services:
       - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
       - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
       - WORKFLOW_DOCKER_DAEMON_MODE=remote
-      - WORKFLOW_WORKSPACE_DAEMON_ROOT=${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/${COMPOSE_PROJECT_NAME:-moonmind}_agent_workspaces/_data}
+      - WORKFLOW_WORKSPACE_DAEMON_ROOT=${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}/_data}
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
@@ -688,6 +689,8 @@ services:
       codex-auth-init:
         condition: service_completed_successfully
       claude-auth-init:
+        condition: service_completed_successfully
+      omnigent-tools-init:
         condition: service_completed_successfully
       docker-proxy:
         condition: service_started
@@ -836,7 +839,6 @@ services:
       - local-network
 
   omnigent-tools-init:
-    profiles: ["omnigent-host", "omnigent-host-claude", "omnigent-host-codex"]
     image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
     user: "0:0"
     entrypoint: ["/opt/moonmind/init-mounted-tools.sh"]
@@ -905,8 +907,9 @@ services:
       HTTPS_PROXY: http://omnigent-egress-proxy:3129
       http_proxy: http://omnigent-egress-proxy:3129
       https_proxy: http://omnigent-egress-proxy:3129
-      NO_PROXY: ""
-      no_proxy: ""
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
@@ -1021,8 +1024,9 @@ services:
       HTTPS_PROXY: http://omnigent-egress-proxy:3129
       http_proxy: http://omnigent-egress-proxy:3129
       https_proxy: http://omnigent-egress-proxy:3129
-      NO_PROXY: ""
-      no_proxy: ""
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       HOME: /home/app
@@ -1184,6 +1188,7 @@ services:
         condition: service_completed_successfully
     networks:
       - local-network
+      - omnigent-egress-network
     restart: unless-stopped
 
   agent-workspaces-init:

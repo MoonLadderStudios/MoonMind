@@ -1,0 +1,7 @@
+{
+  "releaseOrder": [
+    "provider_released",
+    "host_lease_stopped"
+  ],
+  "providerLeaseReleased": true
+}

@@ -67,7 +67,9 @@ from moonmind.integrations.pentest.models import (
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecordStore,
     resolve_managed_workspace_locator,
+    resolve_sandbox_workspace_locator,
 )
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.managed_checkpoint_models import (
@@ -298,6 +300,20 @@ async def _run_command(cmd, **kwargs):
     if check and proc.returncode != 0:
         raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
     return CmdRes(stdout)
+
+
+def _sandbox_workspace_git_command(workspace: Path, *args: str) -> list[str]:
+    """Build a Git command that trusts one resolved sandbox workspace only."""
+
+    resolved_workspace = str(workspace.resolve())
+    return [
+        "git",
+        "-c",
+        f"safe.directory={resolved_workspace}",
+        "-C",
+        resolved_workspace,
+        *args,
+    ]
 
 logger = getLogger(__name__)
 
@@ -3590,8 +3606,9 @@ class TemporalSandboxActivities:
                     "git_patch checkpoint kind does not support including untracked or ignored files"
                 )
             diff_result = await _run_command(
-                ["git", "diff", "--binary", model.base_commit, "--"],
-                cwd=str(workspace),
+                _sandbox_workspace_git_command(
+                    workspace, "diff", "--binary", model.base_commit, "--"
+                ),
             )
             patch_payload = diff_result.stdout.encode("utf-8")
             patch_ref = await self._put_checkpoint_bytes(
@@ -3623,7 +3640,9 @@ class TemporalSandboxActivities:
             )
         if model.kind == "git_commit":
             head = (
-                await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+                await _run_command(
+                    _sandbox_workspace_git_command(workspace, "rev-parse", "HEAD")
+                )
             ).stdout.strip()
             return WorkspaceCheckpointEvidenceModel(
                 kind="git_commit",
@@ -3655,7 +3674,11 @@ class TemporalSandboxActivities:
             head = model.base_commit
             if (workspace / ".git").exists():
                 head = (
-                    await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+                    await _run_command(
+                        _sandbox_workspace_git_command(
+                            workspace, "rev-parse", "HEAD"
+                        )
+                    )
                 ).stdout.strip()
             archive_payload, entries = self._build_worktree_archive(workspace)
             workspace_digest = _workspace_content_digest(entries)
@@ -3680,8 +3703,13 @@ class TemporalSandboxActivities:
             # the optional digest (restore already treats it as optional).
             if (workspace / ".git").exists():
                 status = await _run_command(
-                    ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                    cwd=str(workspace),
+                    _sandbox_workspace_git_command(
+                        workspace,
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--untracked-files=all",
+                    ),
                 )
                 manifest_body["gitStatusDigest"] = (
                     "sha256:"
@@ -7233,6 +7261,7 @@ class TemporalAgentRuntimeActivities:
         raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
+        workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
@@ -7245,6 +7274,9 @@ class TemporalAgentRuntimeActivities:
         self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
         self._raw_docker_cli_enabled = bool(raw_docker_cli_enabled)
+        self._workspace_root = Path(
+            workspace_root or settings.workflow.workspace_root
+        ).resolve()
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -12821,6 +12853,46 @@ class TemporalAgentRuntimeActivities:
         workspace_path = str(request.get("workspacePath") or "").strip()
         if not workspace_path:
             workspace_path = str((result.metadata or {}).get("workspacePath") or "").strip()
+        raw_workspace_locator = request.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_workspace_locator)
+            if not isinstance(locator, SandboxWorkspaceLocator):
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_LOCATOR_UNSUPPORTED,
+                    "terminal evidence requires a sandbox workspace locator",
+                )
+            owner_workflow_id = str(
+                request.get("workspaceOwnerWorkflowId") or ""
+            ).strip()
+            owner_step_execution_id = str(
+                request.get("workspaceOwnerStepExecutionId") or ""
+            ).strip()
+            if not owner_workflow_id or not owner_step_execution_id:
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "terminal evidence sandbox authority is incomplete",
+                )
+            expected_workspace_id = hashlib.sha256(
+                f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            owner_record = SandboxWorkspaceRecordStore(self._workspace_root).load(
+                expected_workspace_id
+            )
+            if owner_record is None:
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "terminal evidence sandbox owner record was not found",
+                )
+            workspace_path = str(
+                resolve_sandbox_workspace_locator(
+                    locator,
+                    workspace_root=self._workspace_root,
+                    expected_workspace_id=expected_workspace_id,
+                    owner_record=owner_record,
+                    expected_workflow_id=owner_workflow_id,
+                    expected_step_execution_id=owner_step_execution_id,
+                )
+            )
         run_id = str(request.get("runId") or "").strip()
         if not workspace_path and run_id and self._run_store is not None:
             record = self._run_store.load(run_id)
@@ -12840,6 +12912,57 @@ class TemporalAgentRuntimeActivities:
         if evaluation.failure_code:
             metadata["failureCode"] = evaluation.failure_code
 
+        async def _persist_terminal_evidence_source(
+            source: Any,
+            *,
+            link_type: str,
+            labels: list[str],
+        ) -> str | None:
+            if source.path is None:
+                return None
+            if self._artifact_service is None:
+                logger.warning(
+                    "Terminal evidence artifact service is unavailable; evidence "
+                    "remains run-scoped at %s",
+                    source.relative_path,
+                )
+                return None
+            payload = source.path.read_bytes()
+            try:
+                info = temporal_activity.info()
+            except RuntimeError:
+                info = None
+            execution_ref = (
+                ExecutionRef(
+                    namespace=info.namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type=link_type,
+                )
+                if info is not None
+                else None
+            )
+            artifact, _upload = await self._artifact_service.create(
+                principal="system:agent_runtime",
+                content_type="application/json",
+                size_bytes=len(payload),
+                link=execution_ref,
+                metadata_json={
+                    "name": source.path.name,
+                    "path": source.relative_path,
+                    "producer": "activity:agent_runtime.evaluate_terminal_evidence",
+                    "labels": labels,
+                    "terminalContractId": metadata["terminalContractId"],
+                },
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:agent_runtime",
+                payload=payload,
+                content_type="application/json",
+            )
+            return completed.artifact_id
+
         # Terminal evidence is the authoritative full result for fan-out and
         # merge automation. Publish the validated run-scoped file here, before
         # the workflow projects large child records out of its result metadata.
@@ -12849,50 +12972,36 @@ class TemporalAgentRuntimeActivities:
                 workspace_path=workspace_path,
                 artifact_spool_path=artifact_spool_path,
             )
-            if source.path is not None and self._artifact_service is not None:
-                payload = source.path.read_bytes()
-                try:
-                    info = temporal_activity.info()
-                except RuntimeError:
-                    info = None
-                execution_ref = (
-                    ExecutionRef(
-                        namespace=info.namespace,
-                        workflow_id=info.workflow_id,
-                        run_id=info.workflow_run_id,
-                        link_type="output.terminal_evidence",
-                    )
-                    if info is not None
-                    else None
-                )
-                artifact, _upload = await self._artifact_service.create(
-                    principal="system:agent_runtime",
-                    content_type="application/json",
-                    size_bytes=len(payload),
-                    link=execution_ref,
-                    metadata_json={
-                        "name": source.path.name,
-                        "path": source.relative_path,
-                        "producer": (
-                            "activity:agent_runtime.evaluate_terminal_evidence"
-                        ),
-                        "labels": ["agent_runtime", "output.terminal_evidence"],
-                        "terminalContractId": metadata["terminalContractId"],
-                    },
-                )
-                completed = await self._artifact_service.write_complete(
-                    artifact_id=artifact.artifact_id,
-                    principal="system:agent_runtime",
-                    payload=payload,
-                    content_type="application/json",
-                )
-                metadata["terminalContractEvidenceRef"] = completed.artifact_id
-            elif source.path is not None:
-                logger.warning(
-                    "Terminal evidence artifact service is unavailable; evidence "
-                    "remains run-scoped at %s",
-                    source.relative_path,
-                )
+            terminal_evidence_ref = await _persist_terminal_evidence_source(
+                source,
+                link_type="output.terminal_evidence",
+                labels=["agent_runtime", "output.terminal_evidence"],
+            )
+            if terminal_evidence_ref:
+                metadata["terminalContractEvidenceRef"] = terminal_evidence_ref
+
+        # A successful pr-resolver contract already requires the portable Skill
+        # to write its canonical publish_result.json companion. Preserve that
+        # exact file as the parent workflow's auto-publish evidence instead of
+        # forcing a second publisher to infer the merge from assistant prose.
+        if (
+            evaluation.satisfied
+            and metadata["terminalContractId"] == "pr_resolver_terminal.v1"
+            and metadata.get("mergeAutomationDisposition")
+            in {"merged", "already_merged"}
+        ):
+            publish_source = resolve_terminal_evidence_source(
+                {"relativePath": "artifacts/publish_result.json"},
+                workspace_path=workspace_path,
+                artifact_spool_path=artifact_spool_path,
+            )
+            publish_evidence_ref = await _persist_terminal_evidence_source(
+                publish_source,
+                link_type="output.publish_evidence",
+                labels=["agent_runtime", "output.publish_evidence"],
+            )
+            if publish_evidence_ref:
+                metadata["publishEvidence"] = publish_evidence_ref
 
         def _validated_result(update: Mapping[str, Any]) -> AgentRunResult:
             updated = result.model_copy(update=dict(update))

@@ -1,0 +1,7 @@
+{
+  "invariant": "a gh-capable Codex resolver receives run-private standard gh authentication without token-bearing terminal arguments, its login shell restores the exact step execution identity, and AgentRun validates matching terminal evidence through the authoritative sandbox locator",
+  "terminalLaunchArgs": [],
+  "stepExecutionIdentitySource": "/etc/profile.d/moonmind-execution.sh",
+  "terminalContractOutcome": "terminal_success",
+  "terminalContractEvidencePath": "var/pr_resolver/result.json"
+}

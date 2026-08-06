@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:b99b4a69-18fa-4c6a-abdf-96cf987466a2",
+  "incidentRunId": "019fd39e-193b-71db-a61a-5d11b904ca74",
+  "failedChildWorkflowId": "mm:b99b4a69-18fa-4c6a-abdf-96cf987466a2:agent:node-1",
+  "omnigentSessionId": "db98700ed632447092d9216e12ece95f",
+  "failureShape": "the stock Codex app server was listening on loopback, but the native TUI sent its local WebSocket through the restricted-egress proxy and exited before creating bridge state",
+  "boundary": "isolated Omnigent runner Codex TUI to same-container app server",
+  "codexRemoteUrl": "ws://127.0.0.1:39001",
+  "omnigentServerHost": "omnigent"
+}

@@ -1,0 +1,7 @@
+{
+  "invariant": "deployment initializes the versioned named volume once and on-demand runtime probes that volume without invoking Compose",
+  "toolVolume": "moonmind-omnigent-tools-gh-2.76.2",
+  "probeImage": "omnigent-host:test",
+  "failureCode": "tool_bundle_unavailable",
+  "composeInvokedByRuntime": false
+}

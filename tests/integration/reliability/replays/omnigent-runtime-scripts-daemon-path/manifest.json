@@ -1,0 +1,15 @@
+{
+  "incidentWorkflowId": "mm:b2f61d86-cd1e-4668-bd33-3f0b335033b7",
+  "incidentRunId": "019fd339-b2d4-793a-9d7c-7256e5762e08",
+  "failedChildWorkflowId": "mm:b2f61d86-cd1e-4668-bd33-3f0b335033b7:agent:node-1",
+  "failedChildRunId": "019fd339-c341-7efc-87d3-cf2bf4c9bb6c",
+  "failureShape": "on-demand OAuth host launch passed the worker-only /app/services/omnigent/scripts path to a remote Docker daemon bind mount",
+  "boundary": "agent-runtime worker filesystem to remote Docker daemon filesystem",
+  "workspaceKey": "mm:b2f61d86-cd1e-4668-bd33-3f0b335033b7:019fd339-b2d4-793a-9d7c-7256e5762e08:node-1:execution:1:agent_execute",
+  "requiredScripts": [
+    "init-oauth-host.sh",
+    "moonmind-tools.sh",
+    "start-codex-oauth-host.sh",
+    "start-claude-oauth-host.sh"
+  ]
+}

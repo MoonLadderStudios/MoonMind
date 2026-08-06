@@ -14,7 +14,10 @@ from moonmind.workflows.adapters.omnigent_client import (
 
 @pytest.mark.asyncio
 async def test_omnigent_client_exposes_confirmed_operations() -> None:
+    requested_paths: list[str] = []
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
         if request.method == "GET" and request.url.path == "/v1/agents":
             assert request.url.params["limit"] == "1000"
             return httpx.Response(
@@ -30,6 +33,20 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
                         }
                     ],
                     "has_more": False,
+                },
+            )
+        if request.method == "GET" and request.url.path == "/v1/hosts":
+            return httpx.Response(
+                200,
+                json={
+                    "hosts": [
+                        {
+                            "host_id": "host-1",
+                            "name": "mm-host-1",
+                            "status": "online",
+                            "configured_harnesses": {"codex-native": True},
+                        }
+                    ]
                 },
             )
         if request.method == "GET" and request.url.path.endswith("/diff/src/app.py"):
@@ -58,6 +75,15 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
             "capabilities": ["session.start"],
         }
     ]
+    assert await client.list_hosts() == [
+        {
+            "host_id": "host-1",
+            "name": "mm-host-1",
+            "status": "online",
+            "configured_harnesses": {"codex-native": True},
+        }
+    ]
+    assert "/v1/hosts" in requested_paths
     assert await client.get_agent("ag_1") == {"ok": True}
     assert await client.create_agent_bundle(
         filename="bundle.tgz",
@@ -82,6 +108,53 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
     assert await client.interrupt("sess_1") == {"ok": True}
     assert await client.stop_session("sess_1") == {"ok": True}
     assert await client.delete_session("sess_1") == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_injected_http_client_preserves_omnigent_timeout_contract() -> None:
+    """An injected client must not replace Omnigent's transport timeouts."""
+
+    observed_timeouts: dict[str, dict[str, float | None]] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed_timeouts[request.url.path] = dict(request.extensions["timeout"])
+        if request.url.path.endswith("/stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"data: [DONE]\n\n",
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as injected_client:
+        client = OmnigentHttpClient(
+            base_url="https://omnigent.test",
+            timeout_seconds=47.0,
+            stream_timeout_seconds=None,
+            client=injected_client,
+        )
+
+        assert await client.post_event("sess_1", {"type": "message"}) == {
+            "ok": True
+        }
+        assert [event async for event in client.stream_events("sess_1")] == []
+
+    request_timeout = observed_timeouts["/v1/sessions/sess_1/events"]
+    assert request_timeout == {
+        "connect": 47.0,
+        "read": 47.0,
+        "write": 47.0,
+        "pool": 47.0,
+    }
+    stream_timeout = observed_timeouts["/v1/sessions/sess_1/stream"]
+    assert stream_timeout == {
+        "connect": 47.0,
+        "read": None,
+        "write": 47.0,
+        "pool": 47.0,
+    }
 
 
 @pytest.mark.asyncio

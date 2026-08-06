@@ -7,6 +7,7 @@ import pytest
 from moonmind.omnigent.bridge_artifacts import OmnigentContractError
 from moonmind.omnigent.bridge_events import (
     BRIDGE_EVENT_SCHEMA_VERSION,
+    bounded_deduplication_key,
     build_omnigent_bridge_event,
     normalize_omnigent_observation,
 )
@@ -21,6 +22,17 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+def test_bounded_deduplication_key_hashes_the_full_identity() -> None:
+    shared_prefix = "provider:" + "event-segment:" * 20
+    first = bounded_deduplication_key(f"{shared_prefix}attempt:1")
+    second = bounded_deduplication_key(f"{shared_prefix}attempt:2")
+
+    assert len(first) == 128
+    assert len(second) == 128
+    assert first != second
+    assert bounded_deduplication_key("provider:short") == "provider:short"
 
 
 def test_build_omnigent_bridge_event_emits_v1_shape() -> None:
@@ -68,6 +80,22 @@ def test_execution_critical_drift_fails_closed() -> None:
 
 def test_session_created_normalizes_without_explicit_status() -> None:
     assert normalize_omnigent_observation({"type": "session.created"}) == "created"
+
+
+def test_stock_session_heartbeat_normalizes_as_running_liveness() -> None:
+    result = build_omnigent_bridge_event(
+        payload={
+            "type": "session.heartbeat",
+            "server_time": "2026-08-05T19:37:00Z",
+        },
+        sequence=1,
+        request=_request(),
+        omnigent_session_id="sess-1",
+    )
+
+    assert result.event["eventType"] == "session.heartbeat"
+    assert result.event["normalizedStatus"] == "running"
+    assert result.diagnostic is None
 
 
 def test_resume_gap_is_a_durable_non_terminal_diagnostic() -> None:

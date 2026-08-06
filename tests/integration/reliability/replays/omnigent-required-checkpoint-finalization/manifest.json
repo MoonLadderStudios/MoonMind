@@ -1,0 +1,6 @@
+{
+  "incidentWorkflowId": "mm:ea264977-a19a-4ec7-bfb7-f8305ef451f3",
+  "incidentRunId": "019fd3bf-202c-7382-b281-7ec29436e788",
+  "failureShape": "the required after-execution checkpoint returned invalid, but finalization classified it as unsupported and allowed native pull-request creation to continue",
+  "boundary": "required workspace checkpoint result to publication finalization gate"
+}

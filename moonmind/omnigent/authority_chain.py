@@ -125,10 +125,10 @@ def _publication_state(
 ) -> str:
     """Classify the publication disposition MoonMind owns for this run.
 
-    The coordinator does not itself push; the actual commit/push/PR side effects
-    are performed by the shared publication path after the run result returns.
-    Until that owner produces terminal evidence, the projection records the
-    disposition the Omnigent execution boundary *authorized*
+    The coordinator invokes the shared runtime publication boundary before host
+    cleanup so publication failures remain retryable lifecycle evidence. Until
+    that owner produces terminal evidence, the projection records the disposition
+    the Omnigent execution boundary *authorized*
     (``authorized_pending_publication``). Once realized commit/push/PR evidence is
     present in the result metadata, the state is reconciled to ``published`` so the
     chain reflects the publication owner's terminal outcome rather than a stale

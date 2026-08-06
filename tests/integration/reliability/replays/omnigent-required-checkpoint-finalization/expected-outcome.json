@@ -1,0 +1,6 @@
+{
+  "invariant": "an invalid required after-execution checkpoint fails finalization and blocks publication",
+  "finalizationStatus": "failed",
+  "publishStatus": "failed",
+  "failureCode": "invalid_checkpoint"
+}

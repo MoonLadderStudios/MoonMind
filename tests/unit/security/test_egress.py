@@ -341,7 +341,7 @@ async def test_attestation_rejects_unobserved_rules_or_unhealthy_gateway(
         )
 
 
-def test_proxy_environment_clears_bypass_variables():
+def test_proxy_environment_limits_bypass_variables_to_safe_boundaries():
     values = restricted_proxy_env()
     assert "NO_PROXY=" in values
     assert "no_proxy=" in values
@@ -349,7 +349,8 @@ def test_proxy_environment_clears_bypass_variables():
 
     omnigent_values = omnigent_proxy_env()
     assert "HTTP_PROXY=http://omnigent-egress-proxy:3129" in omnigent_values
-    assert "NO_PROXY=" in omnigent_values
+    assert "NO_PROXY=localhost,127.0.0.1" in omnigent_values
+    assert "no_proxy=localhost,127.0.0.1" in omnigent_values
 
 
 @pytest.mark.asyncio

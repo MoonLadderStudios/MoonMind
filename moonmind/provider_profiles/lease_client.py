@@ -117,19 +117,18 @@ class ProviderProfileLeaseClient:
         metadata: Mapping[str, Any] | None,
         owner_is_workflow: bool,
     ) -> CredentialLease:
-        workflow_id = await self._ensure_manager(runtime_id)
         safe_metadata = dict(metadata or {})
         # Most callers use an activity idempotency identity. A workflow may
         # delegate an acknowledged Update through an Activity when the
         # workflow-context ExternalWorkflowHandle cannot execute Updates; in
         # that case the stable owner really is the delegating workflow ID.
         safe_metadata["ownerIsWorkflow"] = owner_is_workflow
-        result = await self._adapter.update_workflow(
-            workflow_id,
+        result = await self._update_manager(
+            runtime_id,
             (
                 "AcquireCredentialMaintenanceLease"
                 if purpose.is_maintenance
-                else "AcquireSlot"
+                else "AcquireSlotV2"
             ),
             {
                 "requester_workflow_id": owner_id,
@@ -148,6 +147,43 @@ class ProviderProfileLeaseClient:
             purpose=purpose,
             already_held=bool(result.get("already_held")),
         )
+
+    async def _update_manager(
+        self,
+        runtime_id: str,
+        update_name: str,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Retry an Update that races the manager's clean completion.
+
+        Ensuring and updating are two distinct Temporal RPCs. The manager can
+        complete after ``start_workflow`` reports it running but before the
+        accepted Update resolves. Re-ensuring the canonical workflow ID and
+        resubmitting the same idempotent owner request closes that race without
+        consuming the caller Activity retry.
+        """
+
+        from temporalio.client import WorkflowUpdateFailedError
+        from temporalio.exceptions import ApplicationError
+
+        for attempt in range(2):
+            workflow_id = await self._ensure_manager(runtime_id)
+            try:
+                return await self._adapter.update_workflow(
+                    workflow_id,
+                    update_name,
+                    dict(payload),
+                )
+            except WorkflowUpdateFailedError as exc:
+                cause = exc.cause
+                completed_race = bool(
+                    isinstance(cause, ApplicationError)
+                    and cause.type == "AcceptedUpdateCompletedWorkflow"
+                )
+                if attempt == 0 and completed_race:
+                    continue
+                raise
+        raise AssertionError("bounded manager update retry did not terminate")
 
     async def acquire_execution_lease(
         self,
@@ -226,10 +262,12 @@ class ProviderProfileLeaseClient:
         )
 
     async def inspect_lease(self, lease: CredentialLease) -> dict[str, Any]:
-        return await self._adapter.update_workflow(
-            await self._ensure_manager(lease.runtime_id),
-            "InspectCredentialLease",
-            {"lease_id": lease.lease_id, "owner_id": lease.owner_id},
+        return dict(
+            await self._update_manager(
+                lease.runtime_id,
+                "InspectCredentialLease",
+                {"lease_id": lease.lease_id, "owner_id": lease.owner_id},
+            )
         )
 
 

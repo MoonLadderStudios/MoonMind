@@ -1,0 +1,49 @@
+{
+  "incidentWorkflowId": "mm:e444e9c1-0d72-40d1-b9d9-64e1565b70f1",
+  "incidentRunId": "019fd454-8223-7831-a629-331ab9eb0cf8",
+  "failedChildWorkflowId": "resolver:pr:3613:head:53c348bb1677:h:cd6e0ef8d8da2188:1",
+  "failedChildRunId": "019fd45d-8f28-719e-9827-e82fa2f54e9c",
+  "secondIncidentWorkflowId": "mm:d71f6681-31c1-47de-9e77-33c49a160814",
+  "secondFailedChildWorkflowId": "resolver:pr:3615:head:7dc357851f0e:h:e089811d67092eb1:1",
+  "thirdIncidentWorkflowId": "mm:e164bffa-eefa-4870-8a74-0345463bfb7a",
+  "thirdFailedChildWorkflowId": "mm:e164bffa-eefa-4870-8a74-0345463bfb7a:agent:node-1",
+  "fourthIncidentWorkflowId": "mm:bf2675e6-14d8-40c2-be6b-fbe298350705",
+  "failureShape": "the PR resolver first compiled the removed codex alias from a missing profile identity, then a persisted bootstrap policy overwrote the corrected request with the same removed identity, the immutable policy cutover left the managed agent profile and exact-rerun snapshot bound to policy version 1 while the durable host binding selected version 2, and refreshing the snapshot initially retained a duplicate legacy agentProfileRef that contradicted the new immutable version",
+  "persistedPolicyExecution": {
+    "profileRef": "omnigent-codex@1",
+    "harness": "codex-native",
+    "agentIdentities": ["codex"]
+  },
+  "profileSnapshots": {
+    "codex_openai_oauth": {
+      "profile_id": "codex_openai_oauth",
+      "runtime_id": "codex_cli"
+    }
+  },
+  "nodeInputs": {
+    "runtime": {
+      "mode": "omnigent",
+      "executionProfileRef": "codex_openai_oauth"
+    },
+    "workspaceSpec": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "startingBranch": "main",
+      "targetBranch": "moonmind-job-393ade54"
+    }
+  },
+  "workflowParameters": {
+    "omnigent": {
+      "executionTargetRef": "omnigent-codex@1",
+      "launchPolicyRef": "codex-on-demand@1",
+      "agent": {
+        "harnessOverride": "codex-native"
+      }
+    }
+  },
+  "cutoverAuthority": {
+    "durableHostLaunchPolicyRef": "codex-on-demand@2",
+    "staleManagedProfileLaunchPolicyRef": "codex-on-demand@1",
+    "staleExactRerunLaunchPolicyRef": "codex-on-demand@1",
+    "staleExactRerunAgentProfileRef": "omnigent-bootstrap-default@1"
+  }
+}

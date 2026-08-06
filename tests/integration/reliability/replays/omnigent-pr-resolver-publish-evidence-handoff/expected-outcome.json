@@ -1,0 +1,7 @@
+{
+  "invariant": "a validated merged or already-merged pr-resolver terminal contract publishes the Skill-authored publish_result.json companion by artifact ref before the parent evaluates auto publication",
+  "terminalContractSatisfied": true,
+  "publishEvidenceRef": "art_pr_publish_evidence",
+  "publishStatus": "published",
+  "publishReason": "auto publish verified merge"
+}

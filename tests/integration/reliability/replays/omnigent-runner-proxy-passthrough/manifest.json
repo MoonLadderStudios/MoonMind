@@ -1,0 +1,11 @@
+{
+  "incidentWorkflowId": "mm:933a5f44-acdf-4432-84bf-6361de74daee",
+  "incidentRunId": "019fd372-7abe-795d-9d9a-cad14181db77",
+  "failedChildWorkflowId": "mm:933a5f44-acdf-4432-84bf-6361de74daee:agent:node-1",
+  "failedChildRunId": "019fd372-8d8e-789a-93fc-96d461d5efeb",
+  "omnigentSessionId": "1509e4275cdd4e1eae69cb3148576e06",
+  "containerName": "mm-omnigent-host-replay",
+  "hostImageRef": "registry.example/omnigent-host@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "failureShape": "the isolated host had proxy variables, but Omnigent filtered them out of the spawned runner; Codex could not refresh ChatGPT authentication and timed out before starting a thread",
+  "boundary": "MoonMind on-demand host launch to Omnigent runner environment"
+}

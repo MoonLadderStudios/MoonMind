@@ -251,7 +251,7 @@ def test_effective_launch_snapshot_carries_and_validates_block() -> None:
             },
             "execution": {
                 "profileRef": "omnigent-codex@1",
-                "agentIdentities": ["codex"],
+                "agentIdentities": ["codex-native-ui"],
                 "harness": "codex",
             },
             "endpoint": {"ref": "endpoint:1"},
@@ -298,7 +298,7 @@ def test_effective_launch_snapshot_defaults_to_disabled() -> None:
             },
             "execution": {
                 "profileRef": "omnigent-codex@1",
-                "agentIdentities": ["codex"],
+                "agentIdentities": ["codex-native-ui"],
                 "harness": "codex",
             },
             "endpoint": {"ref": "endpoint:1"},

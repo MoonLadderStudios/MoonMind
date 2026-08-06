@@ -387,7 +387,10 @@ class AcceptedRepositoryEvidence(BaseModel):
         False, alias="candidateContaminated"
     )
     remote_verified: Literal[True] = Field(..., alias="remoteVerified")
-    authority: Literal["agent_runtime.fetch_result"] = "agent_runtime.fetch_result"
+    authority: Literal[
+        "agent_runtime.fetch_result",
+        "omnigent.profile_bound_execution",
+    ] = "agent_runtime.fetch_result"
 
     @model_validator(mode="after")
     def _validate_push_evidence(self) -> "AcceptedRepositoryEvidence":

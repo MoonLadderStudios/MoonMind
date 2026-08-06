@@ -21,6 +21,10 @@ with workflow.unsafe.imports_passed_through():
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
     )
+    from moonmind.omnigent.stock_agents import (
+        CLAUDE_STOCK_AGENT_NAME,
+        CODEX_STOCK_AGENT_NAME,
+    )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
@@ -654,6 +658,9 @@ RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
 RUN_OMNIGENT_PREMATERIALIZATION_CHECKPOINT_GUARD_PATCH = (
     "run-omnigent-prematerialization-checkpoint-guard-v1"
 )
+RUN_OMNIGENT_SPLIT_SESSION_WORKSPACE_CHECKPOINT_PATCH = (
+    "run-omnigent-split-session-workspace-checkpoint-v1"
+)
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
@@ -675,6 +682,12 @@ RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
 )
 RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH = (
     "run-omnigent-agent-profile-snapshot-compiler-v1"
+)
+RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = (
+    "run-omnigent-stock-agent-identity-v1"
+)
+RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
+    "run-agent-required-capabilities-propagation-v1"
 )
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -891,6 +904,9 @@ RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH = (
 )
 RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH = (
     "run-existing-skillset-terminal-contract-v1"
+)
+RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH = (
+    "run-empty-agent-skillset-snapshot-v1"
 )
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
@@ -5833,6 +5849,16 @@ class MoonMindRunWorkflow:
         capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
             "runtime_capabilities"
         )
+        if not isinstance(capability_snapshot, Mapping):
+            # Provider result projections intentionally omit routing inputs such
+            # as agentId. Preserve the workflow-owned capability decision made
+            # before launch so a session checkpoint kind cannot be mistaken for
+            # the independently materialized workspace checkpoint kind.
+            previous_capability_snapshot = previous_capture.get(
+                "runtimeCapabilities"
+            ) or previous_capture.get("runtime_capabilities")
+            if isinstance(previous_capability_snapshot, Mapping):
+                capability_snapshot = previous_capability_snapshot
         try:
             capability_policy_enabled = workflow.patched(
                 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH
@@ -5951,15 +5977,18 @@ class MoonMindRunWorkflow:
                 "externalStateRef",
                 "external_state_ref",
             )
+            if external_state_ref:
+                # Omnigent's external-state artifact belongs to the session
+                # plane. Keep it alongside the sandbox locator so the v2
+                # checkpoint can attest both independent authorities.
+                capture_input["externalStateRef"] = external_state_ref
             if isinstance(workspace_locator, Mapping):
                 capture_input["workspaceLocator"] = dict(workspace_locator)
             elif workspace_path:
                 capture_input["workspacePath"] = workspace_path
             elif workspace_root_ref:
                 capture_input["workspaceRootRef"] = workspace_root_ref
-            elif external_state_ref:
-                capture_input["externalStateRef"] = external_state_ref
-            else:
+            elif not external_state_ref:
                 continue
 
             base_commit = self._checkpoint_capture_text(
@@ -5970,15 +5999,38 @@ class MoonMindRunWorkflow:
             if base_commit:
                 capture_input["baseCommit"] = base_commit
 
-            checkpoint_kind = self._checkpoint_capture_text(
+            workspace_checkpoint_kind = self._checkpoint_capture_text(
                 candidate,
-                "checkpointKind",
-                "checkpoint_kind",
                 "workspaceCheckpointKind",
                 "workspace_checkpoint_kind",
             )
+            checkpoint_kind = workspace_checkpoint_kind or self._checkpoint_capture_text(
+                candidate,
+                "checkpointKind",
+                "checkpoint_kind",
+            )
             if checkpoint_kind:
-                capture_input["kind"] = checkpoint_kind
+                session_kinds = (
+                    set(capabilities.session_state.checkpoint_kinds)
+                    if capabilities is not None
+                    and capabilities.session_state is not None
+                    else set()
+                )
+                is_omnigent_session_kind = (
+                    capabilities is not None
+                    and capabilities.runtime_id == "omnigent"
+                    and workspace_checkpoint_kind is None
+                    and checkpoint_kind in session_kinds
+                    and checkpoint_kind
+                    not in capabilities.checkpoint_capture_kinds
+                )
+                if not (
+                    is_omnigent_session_kind
+                    and workflow.patched(
+                        RUN_OMNIGENT_SPLIT_SESSION_WORKSPACE_CHECKPOINT_PATCH
+                    )
+                ):
+                    capture_input["kind"] = checkpoint_kind
             elif capabilities is None and (
                 capability_policy_enabled
                 or self._step_external_agent_ids.get(logical_step_id) != "omnigent"
@@ -6227,11 +6279,39 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(route),
         )
         if not isinstance(result, Mapping):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_RESULT_INVALID",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
             return None
         if result.get("status") != "captured":
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": str(result.get("status") or "failed"),
+                "failureCode": self._coerce_text(
+                    result.get("failureCode"), max_chars=100
+                )
+                or "CHECKPOINT_CAPTURE_FAILED",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+                "summary": self._coerce_text(result.get("summary"), max_chars=500),
+            }
             return None
         workspace_evidence = result.get("workspace")
         if not isinstance(workspace_evidence, Mapping):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_WORKSPACE_EVIDENCE_MISSING",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
             return None
         if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
             return None
@@ -6477,6 +6557,9 @@ class MoonMindRunWorkflow:
                 "after-execution checkpoint."
             )
             self._attention_required = criticality == "required"
+            if criticality == "required":
+                self._publish_status = "failed"
+                self._publish_reason = self._summary
             self._update_memo()
             return
         capture_outcome = self._step_checkpoint_capture_outcomes.get(logical_step_id)
@@ -6493,17 +6576,43 @@ class MoonMindRunWorkflow:
             failure_code = self._coerce_text(
                 capture_outcome.get("failureCode"), max_chars=100
             )
+            capture_status = str(capture_outcome.get("status") or "").strip()
+            finalization_status = "unsupported"
+            if capture_status not in {"unsupported", "deferred"}:
+                finalization_status = (
+                    "degraded" if criticality == "recoverability_only" else "failed"
+                )
             row["finalizationOutcome"] = {
-                "status": "unsupported",
+                "status": finalization_status,
                 "phase": "after_execution_checkpoint",
                 "criticality": criticality,
                 "failureCode": failure_code,
-                "terminalFailureCode": None,
+                "terminalFailureCode": (
+                    FINALIZATION_RETRY_EXHAUSTED
+                    if finalization_status == "failed"
+                    else None
+                ),
                 "retryCount": 0,
                 "checkpointRef": None,
-                "message": "Checkpoint capture is unsupported by this runtime.",
+                "message": (
+                    self._coerce_text(capture_outcome.get("summary"), max_chars=500)
+                    or (
+                        "Required checkpoint capture failed."
+                        if finalization_status == "failed"
+                        else "Checkpoint capture is unsupported by this runtime."
+                    )
+                ),
                 "updatedAt": updated_at.isoformat(),
             }
+            if finalization_status == "failed":
+                self._publish_status = "failed"
+                self._publish_reason = (
+                    "Execution succeeded, but its required after-execution "
+                    "workspace checkpoint failed."
+                )
+                self._summary = self._publish_reason
+                self._attention_required = True
+                self._update_memo()
             return
         row["finalizationOutcome"] = {
             "status": "succeeded" if checkpoint_ref else "unsupported",
@@ -18030,9 +18139,6 @@ class MoonMindRunWorkflow:
             task_skills,
             node_skills if node_skills is not None else node_inputs.get("skills"),
         )
-        if effective is None and not selected_skill:
-            return None
-
         effective_payload = (
             effective.model_dump(mode="json", exclude_none=True)
             if effective is not None
@@ -18061,7 +18167,14 @@ class MoonMindRunWorkflow:
                 effective_payload["include"] = include
 
         selector = SkillSelector.model_validate(effective_payload)
-        if not selector.sets and not selector.include and not selector.exclude:
+        if (
+            not selector.sets
+            and not selector.include
+            and not selector.exclude
+            and not self._workflow_patch_enabled(
+                RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
+            )
+        ):
             return None
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_skill.resolve")
@@ -18484,7 +18597,7 @@ class MoonMindRunWorkflow:
                 workspace_spec[ws_key] = ws_val
 
         parameters: dict[str, Any] = {}
-        for param_key in (
+        parameter_keys = (
             "model",
             "requestedModel",
             "modelTier",
@@ -18513,7 +18626,16 @@ class MoonMindRunWorkflow:
             "repository",
             "tenant",
             "tenantId",
+        )
+        if self._workflow_patch_enabled(
+            RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
         ):
+            # Capability requirements are authored workflow/step authority. They
+            # must reach the runtime request so mounted-tool preflight and the
+            # provider adapter enforce the same contract that admission accepted.
+            # Gate the new Activity payload field for replaying histories.
+            parameter_keys = (*parameter_keys, "requiredCapabilities")
+        for param_key in parameter_keys:
             param_val = runtime_block.get(param_key)
             if param_val is None:
                 param_val = node_inputs.get(param_key)
@@ -18601,8 +18723,23 @@ class MoonMindRunWorkflow:
                     snapshot.get("agentName") or snapshot.get("agent_name"),
                     max_chars=255,
                 )
-                if not profile_agent_name and snapshot.get("runtime_id") == "codex_cli":
-                    profile_agent_name = "codex"
+                runtime_id = snapshot.get("runtime_id")
+                if not profile_agent_name and runtime_id == "codex_cli":
+                    profile_agent_name = (
+                        CODEX_STOCK_AGENT_NAME
+                        if self._workflow_patch_enabled(
+                            RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH
+                        )
+                        else "codex"
+                    )
+                elif (
+                    not profile_agent_name
+                    and runtime_id == "claude_code"
+                    and self._workflow_patch_enabled(
+                        RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH
+                    )
+                ):
+                    profile_agent_name = CLAUDE_STOCK_AGENT_NAME
                 if profile_agent_name:
                     omnigent_parameters = (
                         dict(parameters.get("omnigent"))

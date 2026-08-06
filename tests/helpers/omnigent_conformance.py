@@ -129,7 +129,7 @@ class FakeOmnigentServer:
     def app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/v1/agents", self.list_agents)
-        app.router.add_get("/api/hosts", self.list_hosts)
+        app.router.add_get("/v1/hosts", self.list_hosts)
         app.router.add_post("/v1/sessions", self.create_session)
         app.router.add_get("/v1/sessions/{session_id}", self.get_session)
         app.router.add_post("/v1/sessions/{session_id}/events", self.post_event)

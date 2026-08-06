@@ -130,6 +130,20 @@ def compile_agent_profile_snapshot_parameters(
         if isinstance(authored_omnigent, Mapping)
         else {}
     )
+    # Older executions duplicated trusted snapshot identity into the authored
+    # block. A newly resolved snapshot must remove those stale copies before it
+    # writes the canonical target/policy fields, otherwise immutable profile
+    # version advancement creates two contradictory authorities in one request.
+    omnigent.pop("agentProfileRef", None)
+    omnigent.pop("executionProfileRef", None)
+    raw_agent = omnigent.get("agent")
+    if isinstance(raw_agent, Mapping):
+        agent = copy.deepcopy(dict(raw_agent))
+        agent.pop("agentId", None)
+        if agent:
+            omnigent["agent"] = agent
+        else:
+            omnigent.pop("agent", None)
     omnigent["executionTargetRef"] = snapshot["executionProfileRef"]
     omnigent["launchPolicyRef"] = snapshot["launchPolicyRef"]
     compiled["omnigent"] = omnigent
@@ -310,7 +324,100 @@ async def resolve_agent_profile_snapshot(
     return snapshot
 
 
+async def refresh_managed_bootstrap_snapshot_for_rerun(
+    session: AsyncSession,
+    *,
+    parameters: Mapping[str, Any],
+    consumer_id: str,
+    user: User,
+) -> dict[str, Any]:
+    """Refresh product-managed launch authority while preserving run intent.
+
+    Exact reruns retain authored task inputs and operator-owned immutable profile
+    selections. The deployment-managed bootstrap profile is different: its
+    active version advances when MoonMind moves a built-in launch policy, so a
+    rerun must re-resolve that trusted snapshot rather than replaying an
+    authority version that the durable host binding no longer selects.
+    """
+
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        BOOTSTRAP_PROFILE_ID,
+    )
+
+    compiled = copy.deepcopy(dict(parameters))
+    previous = compiled.get("agentProfileSnapshot")
+    if (
+        not isinstance(previous, Mapping)
+        or previous.get("profileId") != BOOTSTRAP_PROFILE_ID
+    ):
+        return compiled
+    previous_version_number = previous.get("version")
+    previous_digest = str(previous.get("digest") or "").strip()
+    if (
+        isinstance(previous_version_number, bool)
+        or not isinstance(previous_version_number, int)
+        or previous_version_number < 1
+        or not previous_digest
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "managed bootstrap snapshot lineage is incomplete",
+        )
+    previous_version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == previous_version_number,
+        )
+    )
+    if previous_version is None or previous_version.digest != previous_digest:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "managed bootstrap snapshot lineage does not match durable state",
+        )
+
+    selection: dict[str, Any] = {
+        "profileId": BOOTSTRAP_PROFILE_ID,
+        "providerProfileRef": previous.get("providerProfileRef"),
+    }
+    previous_document = previous.get("document")
+    if not isinstance(previous_document, Mapping):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "managed bootstrap snapshot document is unavailable",
+        )
+    overrides: dict[str, dict[str, Any]] = {}
+    for section in _OVERRIDABLE_SECTIONS:
+        baseline_section = previous_version.document.get(section) or {}
+        effective_section = previous_document.get(section) or {}
+        if not isinstance(baseline_section, Mapping) or not isinstance(
+            effective_section, Mapping
+        ):
+            continue
+        changed = {
+            key: copy.deepcopy(value)
+            for key, value in effective_section.items()
+            if baseline_section.get(key) != value
+        }
+        if changed:
+            overrides[section] = changed
+    if overrides:
+        selection["overrides"] = overrides
+
+    refreshed = await resolve_agent_profile_snapshot(
+        session,
+        selection=selection,
+        consumer_type="workflow",
+        consumer_id=consumer_id,
+        user=user,
+    )
+    return compile_agent_profile_snapshot_parameters(
+        compiled,
+        snapshot=refreshed,
+    )
+
+
 __all__ = [
     "compile_agent_profile_snapshot_parameters",
+    "refresh_managed_bootstrap_snapshot_for_rerun",
     "resolve_agent_profile_snapshot",
 ]

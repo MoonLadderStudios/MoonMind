@@ -21,6 +21,7 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
+from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -67,7 +68,6 @@ _ROOT_SELECTION_KEYS = {
     "reasoningEffort",
     "terminalLaunchArgs",
 }
-
 
 class OmnigentAdapterError(ValueError):
     """Adapter validation error carrying the canonical MoonMind failure class."""
@@ -246,6 +246,7 @@ def build_omnigent_session_create_payload(
     """Build the JSON session-create payload sent to Omnigent."""
 
     session = selection.session
+    terminal_launch_args = list(session.terminal_launch_args)
     title = (
         session.title
         or _clean((request.parameters or {}).get("title"))
@@ -267,7 +268,7 @@ def build_omnigent_session_create_payload(
         "workspace": session.workspace,
         "model_override": session.model_override,
         "reasoning_effort": session.reasoning_effort,
-        "terminal_launch_args": session.terminal_launch_args,
+        "terminal_launch_args": terminal_launch_args,
     }
     if session.host_type == "external":
         payload["host_id"] = session.host_id

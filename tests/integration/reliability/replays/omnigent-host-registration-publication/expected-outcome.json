@@ -1,0 +1,7 @@
+{
+  "invariant": "exact host resolution tolerates bounded catalog publication latency without weakening deterministic lease identity",
+  "hostId": "host-stock-replay",
+  "catalogReadCount": 3,
+  "sleepCount": 2,
+  "sleepSeconds": 2
+}

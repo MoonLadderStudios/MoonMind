@@ -16,7 +16,16 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    MoonMindRunWorkflow,
+)
+
+
+def _all_patches_except_empty_skillset(patch_id: str) -> bool:
+    """Keep generic execution fixtures focused on their asserted boundary."""
+
+    return patch_id != RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH
 
 
 @pytest.fixture(autouse=True)
@@ -257,7 +266,7 @@ def test_initialize_from_payload_tracks_declared_dependencies(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     workflow._update_memo()
 
@@ -411,7 +420,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -507,7 +516,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_finalizing_stage(
         parameters={"runtime": {"mode": "codex"}, "publishMode": "none"},
@@ -612,7 +621,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_memo",
@@ -743,7 +752,7 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -874,7 +883,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -979,7 +988,7 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -2586,7 +2595,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     with pytest.raises(ValueError) as exc_info:
         await workflow._run_execution_stage(
@@ -2675,7 +2684,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -2945,7 +2954,7 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3026,7 +3035,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     with pytest.raises(
         ValueError,
@@ -3096,7 +3105,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -3216,7 +3225,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3343,7 +3352,7 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3486,7 +3495,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={
@@ -3691,7 +3700,7 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
         "wait_condition",
         fake_wait_condition,
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "logger",
@@ -3846,7 +3855,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -4049,7 +4058,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -4210,7 +4219,7 @@ async def test_run_execution_stage_does_not_retry_permanent_agent_runtime_failur
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_resolve_agent_node_skillset_ref",
@@ -4400,7 +4409,7 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda _patch_id: True,
+        _all_patches_except_empty_skillset,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4558,7 +4567,7 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
         "now",
         lambda: datetime.now(timezone.utc),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -4687,7 +4696,7 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
         "now",
         lambda: datetime.now(timezone.utc),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -6111,7 +6120,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -6242,7 +6251,7 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -6375,7 +6384,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -6623,7 +6632,7 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -6741,7 +6750,7 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     await wf._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
@@ -6765,7 +6774,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
     from moonmind.config.settings import settings
     workflow = MoonMindRunWorkflow()
     monkeypatch.setattr(settings.workflow, "enable_proposals", False)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     
     # Enable proposing tasks in params, but global switch should stop it
     await workflow._run_proposals_stage(parameters={"proposeTasks": True})
@@ -6784,7 +6793,7 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -6823,7 +6832,7 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -6883,7 +6892,7 @@ def test_update_memo_persists_pull_request_url_under_canonical_key(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
 
     workflow._update_memo()
 

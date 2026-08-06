@@ -1,0 +1,8 @@
+{
+  "invariant": "the native Codex loopback WebSocket bypasses the proxy while every non-loopback destination remains proxy-enforced",
+  "noProxy": "localhost,127.0.0.1",
+  "loopbackHosts": [
+    "localhost",
+    "127.0.0.1"
+  ]
+}

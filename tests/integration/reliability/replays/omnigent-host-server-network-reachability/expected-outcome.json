@@ -1,0 +1,5 @@
+{
+  "invariant": "the trusted Omnigent server is reachable from isolated hosts without giving hosts general local-network access",
+  "serverNetworks": ["local-network", "omnigent-egress-network"],
+  "hostNetworks": ["omnigent-egress-network"]
+}

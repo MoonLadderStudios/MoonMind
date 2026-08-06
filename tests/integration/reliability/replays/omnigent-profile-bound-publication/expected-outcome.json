@@ -1,0 +1,6 @@
+{
+  "invariant": "committed agent work is scanned, pushed, and exact-remote-head verified before profile-bound execution reports repository success",
+  "pushStatus": "pushed",
+  "commitsAheadOfBase": 1,
+  "remoteVerified": true
+}

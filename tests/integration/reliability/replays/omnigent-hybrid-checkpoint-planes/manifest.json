@@ -1,0 +1,27 @@
+{
+  "incidentWorkflowId": "mm:595b687c-c611-4e85-8276-d71c5c6fd369",
+  "incidentRunId": "019fd38b-45bd-7b8d-865c-b3bca65c19da",
+  "failedChildWorkflowId": "mm:595b687c-c611-4e85-8276-d71c5c6fd369:agent:node-1",
+  "failedChildRunId": "019fd38b-5b22-7460-ac37-c6ea392c004a",
+  "reproductionWorkflowId": "mm:b72aad73-63bd-47ed-9412-e0a50c894227",
+  "reproductionRunId": "019fd3a9-79cf-72be-bde3-76032efb4b92",
+  "omnigentSessionId": "df52056b61994593a75874cbebbbc040",
+  "externalStateRef": "artifact://omnigent/replay/checkpoint.omnigent.external_state.json",
+  "initialInputs": {
+    "targetRuntime": "omnigent"
+  },
+  "resultOutputs": {
+    "workspaceLocator": {
+      "kind": "sandbox",
+      "workspaceId": "workspace-replay",
+      "relativePath": "repo"
+    },
+    "externalStateRef": "artifact://omnigent/replay/checkpoint.omnigent.external_state.json",
+    "checkpointKind": "external_state_ref",
+    "omnigentCheckpointCapture": {
+      "externalStateRef": "artifact://omnigent/replay/checkpoint.omnigent.external_state.json"
+    }
+  },
+  "failureShape": "the Omnigent result's session-plane external_state_ref overwrote the workspace checkpoint kind, so sandbox capture rejected it instead of archiving the materialized worktree",
+  "boundary": "Omnigent terminal evidence to canonical Step Execution checkpoint capture"
+}

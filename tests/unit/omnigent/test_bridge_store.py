@@ -190,6 +190,45 @@ async def test_get_or_create_is_idempotent_and_declared(store):
 
 
 @pytest.mark.asyncio
+async def test_get_or_create_reopens_terminal_attempt_that_never_posted(store):
+    """Temporal retries must not inherit a false first-message terminal edge."""
+
+    request = _request("unposted-retry")
+    created = await store.get_or_create(
+        request=request,
+        endpoint_ref="endpoint",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        target_metadata={},
+    )
+    await store.mark_terminal(
+        request.idempotency_key,
+        status="failed",
+        terminal_refs={"summary": "host registration failed before session start"},
+    )
+
+    reopened = await store.get_or_create(
+        request=request,
+        endpoint_ref="endpoint",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        target_metadata={},
+    )
+
+    assert reopened.bridge_session_id == created.bridge_session_id
+    assert reopened.status == STATUS_DECLARED
+    assert reopened.first_message_state == "not_prepared"
+    assert reopened.terminal_refs == {}
+    assert reopened.metadata_["unpostedAttemptHistory"][-1]["status"] == "failed"
+    assert (
+        reopened.metadata_["unpostedAttemptHistory"][-1]["terminalRefs"][
+            "summary"
+        ]
+        == "host registration failed before session start"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_persists_binding_identity_override(store):
     # The Session API Facade holds a verified workflow id out-of-band and
     # synthesizes a request with no step_execution (correlation id != workflow
@@ -631,6 +670,38 @@ async def test_conflicting_intent_digest_records_a_distinct_event(store):
         if event.event_type == "lifecycle.workspace_intent_compiled"
     )
     assert digests == ["sha256:first", "sha256:second"]
+
+
+@pytest.mark.asyncio
+async def test_long_lifecycle_retry_identities_preserve_distinct_attempts(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    attempt_prefix = (
+        "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678:"
+        "019fd325-7bba-79b5-a0b7-ed9c17c708f9:"
+        "node-1:execution:1:agent_execute"
+    )
+
+    for attempt in (1, 2):
+        identity = f"{attempt_prefix}:attempt:{attempt}:request_validated:started"
+        await store.record_lifecycle_event(
+            "idem-1",
+            event_type="request_validated",
+            event_identity=identity,
+        )
+        # Replaying one activity attempt still resolves to the same event.
+        await store.record_lifecycle_event(
+            "idem-1",
+            event_type="request_validated",
+            event_identity=identity,
+        )
+
+    events = await store.list_events(row.bridge_session_id)
+    assert len(events) == 2
+    assert len({event.deduplication_key for event in events}) == 2
+    assert all(len(event.deduplication_key) <= 128 for event in events)
 
 
 @pytest.mark.asyncio

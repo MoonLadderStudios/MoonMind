@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from api_service.db import models as db_models
-from api_service.services.omnigent_policies import OmnigentPolicyService, PolicyConflict
 from moonmind.omnigent.policies import (
     policy_authority_evidence,
     validate_policy_authority_evidence,
@@ -714,6 +713,14 @@ class RemediationEvidenceToolService:
             raise RemediationEvidenceToolError(
                 "Target run policy authority has no policyRef."
             )
+        # Keep the API service dependency at this side-effecting service
+        # boundary. Importing it while db.models registers workflow model
+        # dependencies creates a db.models -> workflow -> policy-service cycle.
+        from api_service.services.omnigent_policies import (
+            OmnigentPolicyService,
+            PolicyConflict,
+        )
+
         try:
             snapshot = await OmnigentPolicyService(
                 self._session

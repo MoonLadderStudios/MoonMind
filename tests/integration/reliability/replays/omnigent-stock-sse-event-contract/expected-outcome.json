@@ -1,0 +1,79 @@
+{
+  "invariant": "every stock Omnigent ServerStreamEvent type has an explicit MoonMind status mapping while unknown execution-critical types still fail closed",
+  "stockEventTypeCountWithoutSessionStatus": 52,
+  "eventTypesByStatus": {
+    "running": [
+      "session.usage",
+      "session.model",
+      "session.reasoning_effort",
+      "session.collaboration_mode",
+      "session.agent_changed",
+      "session.todos",
+      "session.terminal_pending",
+      "session.sandbox_status",
+      "session.mcp_startup",
+      "session.skills",
+      "session.model_options",
+      "session.input.consumed",
+      "response.output_text.delta",
+      "response.function_call_output.delta",
+      "response.reasoning.started",
+      "response.reasoning_text.delta",
+      "response.reasoning_summary_text.delta",
+      "response.output_item.done",
+      "injection.consumed",
+      "response.output_file.done",
+      "response.heartbeat",
+      "session.heartbeat",
+      "session.presence",
+      "response.elicitation_resolved",
+      "response.created",
+      "response.queued",
+      "response.in_progress",
+      "response.retry",
+      "response.compaction.in_progress",
+      "response.compaction.completed",
+      "response.compaction.failed",
+      "response.client_task.cancel",
+      "session.resource.created",
+      "session.resource.deleted",
+      "session.child_session.updated",
+      "session.changed_files.invalidated",
+      "session.terminal.activity",
+      "turn.started"
+    ],
+    "created": [
+      "session.created"
+    ],
+    "awaiting_approval": [
+      "response.elicitation_request"
+    ],
+    "intervention_requested": [
+      "browser.action_request"
+    ],
+    "completed": [
+      "response.completed",
+      "turn.completed"
+    ],
+    "failed": [
+      "response.failed",
+      "response.incomplete",
+      "response.error",
+      "response.policy_denied",
+      "turn.failed"
+    ],
+    "canceled": [
+      "response.cancelled",
+      "session.interrupted",
+      "session.superseded",
+      "turn.cancelled"
+    ]
+  },
+  "sessionStatusCases": [
+    {"input": "idle", "normalizedStatus": "idle"},
+    {"input": "launching", "normalizedStatus": "launching"},
+    {"input": "running", "normalizedStatus": "running"},
+    {"input": "waiting", "normalizedStatus": "intervention_requested"},
+    {"input": "failed", "normalizedStatus": "failed"}
+  ]
+}

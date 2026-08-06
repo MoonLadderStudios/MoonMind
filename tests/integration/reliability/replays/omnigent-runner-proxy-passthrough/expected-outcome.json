@@ -1,0 +1,16 @@
+{
+  "invariant": "every isolated Omnigent runner receives the host's enforced proxy and loopback-only bypass configuration while retaining only non-secret execution identity and GitHub config selectors",
+  "passthroughNames": [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "MOONMIND_STEP_EXECUTION_ID",
+    "XDG_CONFIG_HOME",
+    "GH_PROMPT_DISABLED",
+    "GH_NO_UPDATE_NOTIFIER",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER"
+  ]
+}

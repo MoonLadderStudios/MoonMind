@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:d4a7b625-c9d9-4cff-8512-141ce343362e",
+  "incidentRunId": "019fd52d-3a2e-7df0-a4f2-836055eb6ba8",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureStage": "credential_preflight",
+  "failureCode": "CODEX_OAUTH_LOGIN_STATUS_FAILED",
+  "actualFailureStage": "deployment_tool_initialization",
+  "failureShape": "the agent-runtime worker invoked deployment Docker Compose from /app even though its authoritative project mount is not a Docker-daemon-visible bind path"
+}

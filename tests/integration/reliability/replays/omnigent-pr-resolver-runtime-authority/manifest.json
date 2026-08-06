@@ -1,0 +1,23 @@
+{
+  "incidentWorkflowId": "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c",
+  "incidentRunId": "019fd504-5cb2-7927-9e03-f3c34efce2c5",
+  "failedChildWorkflowId": "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c:agent:node-1:execution2:retry1",
+  "idempotencyKey": "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c:019fd504-5cb2-7927-9e03-f3c34efce2c5:node-1:execution:2:agent_execute",
+  "stepExecutionId": "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c:019fd504-5cb2-7927-9e03-f3c34efce2c5:node-1:execution:2",
+  "omnigentSessionId": "16409b93c6144319a7080f44a9eb6921",
+  "hostWorkspaceAlias": "/workspaces/run",
+  "workspaceLocator": {
+    "kind": "sandbox",
+    "workspaceId": "7d6582c2f4e2363631715dc3",
+    "relativePath": "repo"
+  },
+  "terminalContract": {
+    "contractId": "pr_resolver_terminal.v1",
+    "owner": "agent",
+    "evidenceKind": "workspace_json",
+    "relativePath": "var/pr_resolver/result.json",
+    "expectedSchemaVersion": "pr-resolver-result.v1",
+    "executionRef": "mm:e09594b0-e1a0-4205-a54e-89e5b8734e6c:019fd504-5cb2-7927-9e03-f3c34efce2c5:node-1:execution:2"
+  },
+  "failureShape": "the resolver host proved GitHub authentication before launch, but Codex filtered GH_TOKEN and MoonMind's step execution identity from shell commands, so valid merge evidence had a blank executionRef and AgentRun rejected it as stale"
+}

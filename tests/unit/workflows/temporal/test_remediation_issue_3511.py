@@ -241,7 +241,7 @@ async def test_real_handoff_resolves_persisted_target_run_policy() -> None:
     policy_service = AsyncMock()
     policy_service.resolve_runtime_snapshot.return_value = snapshot
     with patch(
-        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        "api_service.services.omnigent_policies.OmnigentPolicyService",
         return_value=policy_service,
     ):
         resolved = await service._resolve_target_policy_snapshot(
@@ -266,7 +266,7 @@ async def test_real_handoff_rejects_stale_persisted_policy_before_dispatch() -> 
     policy_service = AsyncMock()
     policy_service.resolve_runtime_snapshot.return_value = current_snapshot
     with patch(
-        "moonmind.workflows.temporal.remediation_tools.OmnigentPolicyService",
+        "api_service.services.omnigent_policies.OmnigentPolicyService",
         return_value=policy_service,
     ), pytest.raises(RemediationEvidenceToolError, match="stale or unavailable"):
         await service._resolve_target_policy_snapshot(

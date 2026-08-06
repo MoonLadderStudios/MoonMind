@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:60a4ed2c-6834-42d2-99cf-ae294cd9b6aa",
+  "incidentRunId": "019fd36c-75de-70fc-bc8b-807e760aef88",
+  "failedChildWorkflowId": "mm:60a4ed2c-6834-42d2-99cf-ae294cd9b6aa:agent:node-1",
+  "failedChildRunId": "019fd36c-7e0f-76f8-af06-adf10b9afb4b",
+  "omnigentSessionId": "6506acd560ef4c77a4a03b25debeef97",
+  "failureShape": "MoonMind rejected the stock session.heartbeat SSE frame as unsupported and cleaned up a running Codex turn",
+  "boundary": "stock Omnigent ServerStreamEvent union to MoonMind bridge normalization"
+}
