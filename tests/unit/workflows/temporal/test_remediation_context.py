@@ -243,6 +243,16 @@ CANONICAL_REMEDIATION_ACTIONS = {
     "workload.reap_orphan_container",
 }
 
+# Actions whose owning execution adapter is not ready are advertised as
+# unavailable rather than executable, so list_allowed_actions omits them.
+CAPABILITY_UNAVAILABLE_ACTIONS = {
+    "session.terminate",
+    "session.restart_container",
+}
+AVAILABLE_REMEDIATION_ACTIONS = (
+    CANONICAL_REMEDIATION_ACTIONS - CAPABILITY_UNAVAILABLE_ACTIONS
+)
+
 def test_remediation_action_authority_lists_canonical_mm483_action_registry():
     service = RemediationActionAuthorityService(session=object())
 
@@ -253,7 +263,9 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         ),
     )
 
-    assert {item["actionKind"] for item in allowed} == CANONICAL_REMEDIATION_ACTIONS
+    # Only actions with a ready owning execution adapter and verifier are
+    # returned as executable; capability-unavailable actions are omitted.
+    assert {item["actionKind"] for item in allowed} == AVAILABLE_REMEDIATION_ACTIONS
     for item in allowed:
         assert item["riskTier"] in {"low", "medium", "high"}
         assert item["targetType"]
@@ -263,6 +275,31 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         assert item["verificationRequired"] is True
         assert item["verificationHint"]
         assert item["auditPayloadShape"]
+        assert item["capability"]["available"] is True
+        assert item["capability"]["executionBackendReady"] is True
+        assert item["capability"]["verificationBackendReady"] is True
+
+def test_remediation_action_capabilities_disable_unavailable_actions_with_reasons():
+    service = RemediationActionAuthorityService(session=object())
+
+    capabilities = service.list_action_capabilities(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(
+            allowed_action_kinds=tuple(sorted(CANONICAL_REMEDIATION_ACTIONS))
+        ),
+    )
+    by_kind = {item["actionKind"]: item for item in capabilities}
+
+    # Every canonical action is represented in the capability matrix.
+    assert set(by_kind) == CANONICAL_REMEDIATION_ACTIONS
+    for kind in CAPABILITY_UNAVAILABLE_ACTIONS:
+        capability = by_kind[kind]
+        assert capability["available"] is False
+        assert capability["requestable"] is False
+        assert capability["executionBackendReady"] is False
+        assert capability["blockedReasons"]
+    for kind in AVAILABLE_REMEDIATION_ACTIONS:
+        assert by_kind[kind]["available"] is True
 
 def test_remediation_action_authority_rejects_legacy_action_aliases():
     service = RemediationActionAuthorityService(session=object())
@@ -279,9 +316,10 @@ def test_remediation_action_authority_rejects_legacy_action_aliases():
         ),
     )
 
+    # session.terminate is a canonical action kind but its owning execution
+    # adapter is not ready, so it is not advertised as executable.
     assert {item["actionKind"] for item in allowed} == {
         "workload.restart_helper_container",
-        "session.terminate",
     }
 
 def test_remediation_action_authority_lists_policy_compatible_actions():
@@ -334,7 +372,7 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
     )
 
     action_kinds = {item["actionKind"] for item in allowed}
-    assert action_kinds == {"workload.restart_helper_container", "session.terminate"}
+    assert action_kinds == {"workload.restart_helper_container"}
     assert not action_kinds.intersection(
         {
             "raw_host_shell",
@@ -2938,19 +2976,42 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert payload["result"]["sideEffects"] == []
         assert payload["audit"]["executionPrincipal"] == "service:admin-healer"
 
+        # execution.force_terminate is a high-risk action with a ready owning
+        # execution adapter, so it passes the capability gate and reaches the
+        # high-risk approval requirement.
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="session.terminate",
+            action_kind="execution.force_terminate",
             parameters={},
             dry_run=False,
             idempotency_key="high-risk",
             requesting_principal="user:operator",
             permissions=_admin_permissions(),
-            security_profile=_admin_profile(),
+            security_profile=_admin_profile(
+                allowed_action_kinds=("execution.force_terminate",)
+            ),
         )
         assert high_risk.decision == "approval_required"
         assert high_risk.reason == "high_risk_requires_approval"
         assert high_risk.executable is False
+
+        # An action whose owning execution adapter is not ready is denied with a
+        # bounded capability reason before the approval gate is evaluated.
+        unavailable = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.terminate",
+            parameters={},
+            dry_run=False,
+            idempotency_key="unavailable-action",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(
+                allowed_action_kinds=("session.terminate",)
+            ),
+        )
+        assert unavailable.decision == "denied"
+        assert unavailable.reason == "session_control_plane_unavailable"
+        assert unavailable.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_rejects_unsupported_authority_mode(

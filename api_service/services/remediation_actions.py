@@ -207,16 +207,32 @@ class TemporalRemediationControlPlane:
                 "idempotencyKey": action_id,
             }
         )
+        # Graph creation is a distinct capability from a verified repair. The
+        # durable owner has persisted the branch graph and its first turn, but
+        # no branch turn has launched, reached a terminal result, or been
+        # verified as a repair. Report acceptance with verification pending so
+        # the catalog never describes branch-graph persistence as verified
+        # repair (coordinates with the branch execution/verification owners).
         return {
-            "status": "applied",
-            "message": "Checkpoint Branch was persisted by its durable owner.",
+            "status": "accepted",
+            "message": (
+                "Checkpoint Branch graph was created by its durable owner; the "
+                "branch turn has not yet launched, reached a terminal result, "
+                "or been verified."
+            ),
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": [
                 f"checkpoint-branch:{graph.branch.branch_id}",
                 f"checkpoint-branch-turn:{turn_id}",
                 context_ref,
             ],
-            "verification": {"status": "verified"},
+            "verification": {"status": "pending"},
+            "verificationRequired": True,
+            "verificationHint": (
+                "Verify the checkpoint branch turn launches, reaches an "
+                "authoritative terminal result, and passes post-action "
+                "verification before treating the repair as complete."
+            ),
         }
 
     async def session_control(

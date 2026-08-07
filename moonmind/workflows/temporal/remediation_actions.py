@@ -385,6 +385,135 @@ def remediation_action_kinds() -> tuple[str, ...]:
         for action_kind, metadata in _ACTION_CATALOG.items()
         if metadata.get("enabled") is True
     )
+
+
+# --- Action capability readiness model -------------------------------------
+#
+# Every catalog action publishes independently evaluated readiness so the
+# remediation catalog is capability-truthful: an operator or agent only sees an
+# action as executable when its owning MoonMind execution adapter and its
+# authoritative verifier are actually ready. Actions whose owning plane cannot
+# yet perform or verify the mutation are advertised as unavailable with bounded
+# ``blockedReasons`` instead of being discoverable only after a failed mutation.
+#
+# Entries here name every action whose owning execution adapter cannot perform
+# the mutation yet; those adapters fail closed at attempt time and the capability
+# model makes that truthful up front. Removing an entry requires wiring a real
+# owning execution adapter (and, where applicable, a real verifier) in
+# ``api_service/services/remediation_actions.py``. The contract test in
+# ``tests/unit/workflows/temporal/test_remediation_action_capabilities.py`` keeps
+# this map, the catalog, and the adapter handler map from drifting.
+_EXECUTION_BACKEND_UNAVAILABLE: dict[str, tuple[str, ...]] = {
+    "session.terminate": ("session_control_plane_unavailable",),
+    "session.restart_container": ("session_control_plane_unavailable",),
+    "cleanup.request_janitor": ("cleanup_owner_unresolved",),
+    "cleanup.verify": ("no_owning_evidence_adapter",),
+    "target.annotate": ("no_owning_evidence_adapter",),
+    "target.verify": ("no_owning_evidence_adapter",),
+}
+_OMNIGENT_ONLY_TARGET_TYPES = frozenset(
+    {"omnigent_host", "host_lease", "provider_profile_lease"}
+)
+_REQUIRED_EVIDENCE_CLASSES: dict[str, tuple[str, ...]] = {
+    "execution": ("target_run_identity", "terminal_execution_evidence"),
+    "managed_session": (
+        "session_epoch",
+        "active_turn",
+        "host_session_identity",
+        "continuity_boundary",
+    ),
+    "checkpoint_branch": (
+        "checkpoint_manifest",
+        "instruction_digest",
+        "branch_graph_identity",
+    ),
+    "omnigent_host": (
+        "host_lease",
+        "host_binding",
+        "provider_profile_lease",
+        "credential_generation",
+    ),
+    "host_lease": ("host_lease", "host_binding", "provider_profile_lease"),
+    "provider_profile_lease": ("provider_profile_lease", "host_lease"),
+    "workload_container": (
+        "container_identity",
+        "ownership_labels",
+        "target_run_linkage",
+    ),
+    "cleanup": ("cleanup_manifest", "owned_resource_set"),
+}
+
+
+def _supported_target_runtimes(target_type: str | None) -> tuple[str, ...]:
+    if target_type in _OMNIGENT_ONLY_TARGET_TYPES:
+        return ("omnigent",)
+    return ("managed_temporal", "omnigent")
+
+
+def action_capability(action_kind: str) -> dict[str, Any] | None:
+    """Return the independently evaluated readiness capability for an action.
+
+    ``None`` is returned for unknown or disabled action kinds so callers never
+    advertise an action the catalog does not own. ``available`` is the truthful
+    gate used by :meth:`RemediationActionAuthorityService.list_allowed_actions`:
+    it is ``True`` only when the owning execution adapter, its authoritative
+    verifier, and the approval backend are all ready.
+    """
+
+    info = _ACTION_CATALOG.get(action_kind)
+    if info is None or not info.get("enabled", False):
+        return None
+    target_type = str(info.get("target_type") or "") or None
+    raw_access = action_kind in _RAW_ACCESS_ACTION_KINDS or action_kind.startswith(
+        "raw_"
+    )
+    execution_blocks = _EXECUTION_BACKEND_UNAVAILABLE.get(action_kind, ())
+    execution_ready = not raw_access and not execution_blocks
+    # Verification ownership tracks execution ownership: an action with no owning
+    # execution adapter cannot produce authoritative terminal verification.
+    verification_ready = execution_ready
+    approval_ready = True
+    blocked_reasons: list[str] = []
+    if raw_access:
+        blocked_reasons.append("raw_access_denied")
+    blocked_reasons.extend(execution_blocks)
+    requestable = execution_ready
+    available = execution_ready and verification_ready and approval_ready
+    return {
+        "actionKind": action_kind,
+        "requestable": requestable,
+        "available": available,
+        "dryRunSupported": execution_ready,
+        "executionBackendReady": execution_ready,
+        "approvalBackendReady": approval_ready,
+        "verificationBackendReady": verification_ready,
+        "supportedTargetRuntimes": _supported_target_runtimes(target_type),
+        "supportedHostModes": ("approval_gated", "admin_auto"),
+        "requiredEvidenceClasses": _REQUIRED_EVIDENCE_CLASSES.get(
+            target_type or "", ()
+        ),
+        "blockedReasons": tuple(blocked_reasons),
+    }
+
+
+def remediation_action_capability_matrix() -> tuple[dict[str, Any], ...]:
+    """Return the readiness capability for every enabled catalog action.
+
+    This is the single generated source consumed by docs and the capability
+    contract test so the advertised catalog and the owning adapters cannot
+    silently drift apart.
+    """
+
+    matrix: list[dict[str, Any]] = []
+    for action_kind, info in _ACTION_CATALOG.items():
+        if not info.get("enabled", False):
+            continue
+        capability = action_capability(action_kind)
+        if capability is not None:
+            matrix.append(capability)
+    return tuple(matrix)
+
+
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )
@@ -675,6 +804,15 @@ class RemediationActionAuthorityService:
                 continue
             if action_kind not in allowed_by_profile:
                 continue
+            capability = action_capability(action_kind)
+            # Capability truthfulness: only advertise an action as executable
+            # when its owning execution adapter and authoritative verifier are
+            # ready. Unavailable actions are omitted here rather than discovered
+            # as unsupported only after a failed mutation; their bounded
+            # ``blockedReasons`` remain observable through
+            # ``list_action_capabilities``.
+            if capability is None or not capability["available"]:
+                continue
             actions.append(
                 {
                     "actionKind": action_kind,
@@ -686,9 +824,45 @@ class RemediationActionAuthorityService:
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
                     "auditPayloadShape": deepcopy(_COMMON_AUDIT_PAYLOAD_SHAPE),
+                    "capability": deepcopy(capability),
                 }
             )
         return tuple(actions)
+
+    def list_action_capabilities(
+        self,
+        *,
+        permissions: RemediationPermissionSet,
+        security_profile: RemediationSecurityProfile | None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Return readiness for every enabled catalog action the caller may see.
+
+        Unlike :meth:`list_allowed_actions`, unavailable actions are returned
+        with ``available: False`` and bounded ``blockedReasons`` so an operator
+        surface can disable them with a truthful reason before an action request
+        is attempted, rather than omit them silently.
+        """
+
+        if (
+            not permissions.can_view_target
+            or not permissions.can_request_admin_profile
+            or security_profile is None
+            or not security_profile.enabled
+        ):
+            return ()
+
+        allowed_by_profile = set(security_profile.allowed_action_kinds)
+        capabilities: list[Mapping[str, Any]] = []
+        for action_kind, action_info in _ACTION_CATALOG.items():
+            if not action_info.get("enabled", False):
+                continue
+            if action_kind not in allowed_by_profile:
+                continue
+            capability = action_capability(action_kind)
+            if capability is None:
+                continue
+            capabilities.append(deepcopy(capability))
+        return tuple(capabilities)
 
     async def evaluate_action_request(
         self,
@@ -849,6 +1023,27 @@ class RemediationActionAuthorityService:
                 risk=risk,
                 decision="denied",
                 reason="unsupported_action_kind",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+        capability = action_capability(action_kind)
+        # Capability truthfulness: reject an action whose owning execution
+        # adapter is not ready before any mutation is attempted, using the same
+        # bounded reason the catalog advertises. This closes the gap where an
+        # unavailable action was only discovered as unsupported after the
+        # owning adapter raised.
+        if capability is not None and not capability["requestable"]:
+            blocked = capability["blockedReasons"]
+            reason = blocked[0] if blocked else "action_backend_unavailable"
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=reason,
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,
@@ -2320,5 +2515,8 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "action_capability",
+    "remediation_action_capability_matrix",
+    "remediation_action_kinds",
     "remediation_changes_require_checkpoint_branch",
 ]

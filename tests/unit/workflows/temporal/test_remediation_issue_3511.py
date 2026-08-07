@@ -50,31 +50,54 @@ def test_corrected_execution_choices_require_checkpoint_branch() -> None:
 
 
 def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
-    expected = {
+    # Host/lease reconciliation actions have a ready owning execution adapter and
+    # are advertised as executable.
+    available = {
         "host.drain",
         "host.stop",
         "host.restart",
         "host.remove",
         "host_lease.reconcile_stale",
+    }
+    # Targeted cleanup and evidence-only actions are registered catalog kinds but
+    # have no ready owning execution adapter yet, so they are advertised as
+    # unavailable rather than executable (capability truthfulness).
+    unavailable = {
         "cleanup.request_janitor",
         "cleanup.verify",
         "target.annotate",
         "target.verify",
     }
+    requested = tuple(sorted(available | unavailable))
     service = RemediationActionAuthorityService(session=None)  # type: ignore[arg-type]
-    catalog = service.list_allowed_actions(
-        permissions=RemediationPermissionSet(
-            can_view_target=True,
-            can_request_admin_profile=True,
-        ),
-        security_profile=RemediationSecurityProfile(
-            profile_ref="admin",
-            execution_principal="service:test",
-            allowed_action_kinds=tuple(expected),
-        ),
+    permissions = RemediationPermissionSet(
+        can_view_target=True,
+        can_request_admin_profile=True,
+    )
+    profile = RemediationSecurityProfile(
+        profile_ref="admin",
+        execution_principal="service:test",
+        allowed_action_kinds=requested,
     )
 
-    assert expected == {item["actionKind"] for item in catalog}
+    catalog = service.list_allowed_actions(
+        permissions=permissions,
+        security_profile=profile,
+    )
+    assert available == {item["actionKind"] for item in catalog}
+
+    capabilities = {
+        item["actionKind"]: item
+        for item in service.list_action_capabilities(
+            permissions=permissions,
+            security_profile=profile,
+        )
+    }
+    assert available | unavailable == set(capabilities)
+    for kind in unavailable:
+        assert capabilities[kind]["available"] is False
+        assert capabilities[kind]["executionBackendReady"] is False
+        assert capabilities[kind]["blockedReasons"]
 
 
 def _policy_snapshot(decision: str) -> dict:
@@ -591,7 +614,11 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         _production_target_health(),
     )
 
-    assert result["status"] == "applied"
+    # Graph creation is accepted with verification pending; it is not reported as
+    # a verified repair (branch turn launch / terminal result are separate).
+    assert result["status"] == "accepted"
+    assert result["verification"]["status"] == "pending"
+    assert result["verificationRequired"] is True
     payload = checkpoint_service.create_branch_graph.await_args.args[0]
     assert payload["source"]["workflowId"] == "target"
     assert payload["source"]["runId"] == "target-run"

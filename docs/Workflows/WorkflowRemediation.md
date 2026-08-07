@@ -606,7 +606,11 @@ The remediation runtime should not scrape dashboard pages. It should receive a M
   Live follow when supported.
 
 - `remediation.list_allowed_actions()`
-  Return action kinds allowed by `actionPolicyRef`.
+  Return the action kinds allowed by `actionPolicyRef` **and** currently
+  executable — i.e. whose owning execution adapter and authoritative verifier are
+  ready (see §11.8). Unavailable actions are omitted here; the full readiness
+  matrix, including disabled actions and their bounded `blockedReasons`, is
+  available through `remediation.list_action_capabilities()`.
 
 - `remediation.execute_action(actionKind, params, dryRun?)`
   Request a typed intervention.
@@ -944,13 +948,23 @@ Representative shape:
 ```
 
 Allowed `status` values should include:
+- `accepted` (queued on an owning control plane; terminal evidence pending)
 - `applied`
 - `no_op`
+- `delivery_unknown`
 - `rejected`
+- `denied`
 - `precondition_failed`
 - `approval_required`
+- `verification_required`
 - `timed_out`
 - `failed`
+
+An owning adapter must never describe queued or partially completed work as
+verified repair. For example, Checkpoint Branch **graph creation** returns
+`accepted` with `verification.status = pending`; it is not reported as `applied`
+or `verified`, because the branch turn launch, terminal branch result, and
+post-action verification are separate readiness stages owned elsewhere.
 
 ### 11.6 Risk tiers and verification
 
@@ -978,6 +992,60 @@ The registry must **not** support by default:
 - bypassing artifact redaction rules.
 
 If MoonMind later adds more powerful operations, they must still be expressed as typed actions with explicit target classes and audit, never as “raw admin console.”
+
+### 11.8 Action capability readiness model
+
+The action catalog must be **capability-truthful**: an operator or agent may
+only see an action as executable when its owning MoonMind execution adapter and
+its authoritative verifier are actually ready. Unsupported operations must be
+unavailable up front, not discoverable only after a failed mutation attempt.
+
+For every enabled catalog action, `remediation_action_capability_matrix()`
+(`moonmind/workflows/temporal/remediation_actions.py`) publishes independently
+evaluated readiness fields:
+
+- `requestable` — the owning execution adapter can perform the mutation;
+- `dryRunSupported`;
+- `executionBackendReady`;
+- `approvalBackendReady`;
+- `verificationBackendReady`;
+- `supportedTargetRuntimes`;
+- `supportedHostModes`;
+- `requiredEvidenceClasses`;
+- `blockedReasons` — bounded machine-readable reasons when unavailable.
+
+`remediation.list_allowed_actions()` and Workflow Detail intersect immutable
+target policy, caller/security-profile permissions, current target state and
+evidence, owning execution adapter readiness, durable approval readiness, and
+authoritative verifier readiness. Only actions whose capability is `available`
+are returned as executable. `remediation.list_action_capabilities()` returns the
+full matrix — including unavailable actions with `available: false` and their
+`blockedReasons` — so a surface can disable an action with a truthful reason
+instead of omitting it silently. `evaluate_action_request()` also denies a
+not-yet-ready action with its bounded capability reason **before** any adapter is
+invoked.
+
+Actions whose owning execution adapter is not yet implemented are advertised as
+unavailable rather than executable:
+
+| Action kind | `blockedReasons` |
+| --- | --- |
+| `session.terminate` | `session_control_plane_unavailable` |
+| `session.restart_container` | `session_control_plane_unavailable` |
+| `cleanup.request_janitor` | `cleanup_owner_unresolved` |
+| `cleanup.verify` | `no_owning_evidence_adapter` |
+| `target.annotate` | `no_owning_evidence_adapter` |
+| `target.verify` | `no_owning_evidence_adapter` |
+
+Implementing a real owning adapter for any of these requires removing the action
+from `_EXECUTION_BACKEND_UNAVAILABLE` in the same change that wires the adapter
+(and, where the reason cites verification, its authoritative verifier). The
+contract test
+`tests/unit/workflows/temporal/test_remediation_action_capabilities.py` pins the
+capability matrix, the canonical catalog (`remediation_action_kinds()`), and the
+owning-adapter handler map together so documentation and implementation cannot
+drift: every advertised-executable action must have a ready execution adapter,
+and every capability-unavailable action's adapter must still fail closed.
 
 ---
 
