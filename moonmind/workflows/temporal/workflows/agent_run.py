@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRuntimeCancelInput,
         AgentRuntimeFetchResultInput,
         AgentRuntimeStatusInput,
+        AgentRuntimeTerminalCheckpointInput,
         ExternalAgentRunInput,
     )
     from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
@@ -79,6 +80,12 @@ with workflow.unsafe.imports_passed_through():
     )
 
 TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
+TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID = (
+    "agent-run-terminal-contract-fresh-process-continuation-v1"
+)
+TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID = (
+    "agent-run-terminal-contract-checkpoint-on-failure-v1"
+)
 TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
     "agent-run-terminal-contract-runtime-failure-authority-v1"
 )
@@ -88,6 +95,15 @@ PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
 )
 RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
+_RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
+    {
+        "INCOMPLETE_TERMINAL_CONTRACT",
+        "INVALID_TERMINAL_EVIDENCE",
+        "MALFORMED_TERMINAL_EVIDENCE",
+        "STALE_TERMINAL_EVIDENCE",
+        "missing_terminal_evidence",
+    }
+)
 
 
 def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
@@ -97,6 +113,15 @@ def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
         f"Missing required evidence: {evidence or 'valid terminal evidence'}. "
         "Resume the still-running work from durable state and do not declare "
         "completion until the terminal result contract is satisfied."
+    )
+
+
+def _terminal_contract_fresh_process_instruction(missing: list[str]) -> str:
+    return (
+        _terminal_contract_continuation_instruction(missing)
+        + " The prior one-shot process exited, so continue in this replacement "
+        "process using the existing authoritative workspace. Finish all work in "
+        "this process; do not schedule a wake-up or other deferred callback."
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -517,6 +542,7 @@ class MoonMindAgentRun:
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
         self._terminal_result_payload_compacted_for_history: bool = False
+        self._terminal_contract_fresh_process_history: list[dict[str, Any]] = []
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._managed_session_detached_for_runtime_selection: bool = False
@@ -2021,39 +2047,43 @@ class MoonMindAgentRun:
             if request.step_execution is not None
             else request.idempotency_key
         )
+
         async def _evaluate(candidate: AgentRunResult) -> AgentRunResult:
+            evaluation_input = {
+                "runId": (
+                    request.managed_session.agent_run_id
+                    if request.managed_session is not None
+                    else str(self.run_id or "")
+                ),
+                "workspacePath": workspace_path,
+                "workspaceLocator": (
+                    dict(workspace_locator)
+                    if isinstance(workspace_locator, Mapping)
+                    else None
+                ),
+                "workspaceOwnerWorkflowId": workspace_owner_workflow_id,
+                "workspaceOwnerStepExecutionId": workspace_owner_step_execution_id,
+                "artifactSpoolPath": (
+                    os.path.join(
+                        _MANAGED_RUNTIME_STORE_ROOT,
+                        request.managed_session.agent_run_id,
+                        "artifacts",
+                    )
+                    if request.managed_session is not None
+                    else ""
+                ),
+                "terminalContract": request.terminal_contract.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "result": candidate.model_dump(mode="json", by_alias=True),
+            }
+            if request.terminal_contract.contract_id == "auto_publish_terminal.v1":
+                selected_skill = _request_selected_skill(request)
+                if selected_skill:
+                    evaluation_input["selectedSkill"] = selected_skill
             payload = await self._execute_routed_activity(
                 "agent_runtime.evaluate_terminal_evidence",
-                {
-                    "runId": (
-                        request.managed_session.agent_run_id
-                        if request.managed_session is not None
-                        else str(self.run_id or "")
-                    ),
-                    "workspacePath": workspace_path,
-                    "workspaceLocator": (
-                        dict(workspace_locator)
-                        if isinstance(workspace_locator, Mapping)
-                        else None
-                    ),
-                    "workspaceOwnerWorkflowId": workspace_owner_workflow_id,
-                    "workspaceOwnerStepExecutionId": (
-                        workspace_owner_step_execution_id
-                    ),
-                    "artifactSpoolPath": (
-                        os.path.join(
-                            _MANAGED_RUNTIME_STORE_ROOT,
-                            request.managed_session.agent_run_id,
-                            "artifacts",
-                        )
-                        if request.managed_session is not None
-                        else ""
-                    ),
-                    "terminalContract": request.terminal_contract.model_dump(
-                        mode="json", by_alias=True
-                    ),
-                    "result": candidate.model_dump(mode="json", by_alias=True),
-                },
+                evaluation_input,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
             return (
@@ -2190,9 +2220,32 @@ class MoonMindAgentRun:
         history: list[dict[str, Any]] = []
         if not capabilities.supports_same_session_continuation:
             metadata = dict(evaluated.metadata or {})
+            try:
+                fresh_process_enabled = workflow.patched(
+                    TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID
+                )
+            except Exception as exc:
+                if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                    raise
+                fresh_process_enabled = True
+            failure_code = str(
+                metadata.get("failureCode")
+                or evaluated.provider_error_code
+                or ""
+            ).strip()
+            retryable = bool(metadata.get("terminalContractRetryable")) or (
+                failure_code in _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES
+            )
             metadata.update(
                 {
-                    "terminalContractRecoveryOutcome": "continuation_unsupported",
+                    "terminalContractRecoveryOutcome": (
+                        "fresh_process_available"
+                        if fresh_process_enabled
+                        and request.agent_kind == "managed"
+                        and self.run_id
+                        and retryable
+                        else "continuation_unsupported"
+                    ),
                     "terminalContractContinuationCount": 0,
                     "runtimeCapabilityDigest": capabilities.capability_digest,
                 }
@@ -2306,6 +2359,167 @@ class MoonMindAgentRun:
             }
         )
         return evaluated.model_copy(update={"metadata": metadata})
+
+    def _fresh_process_terminal_contract_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement process over the same workspace."""
+
+        metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
+        if (
+            request.agent_kind != "managed"
+            or request.managed_session is not None
+            or not self.run_id
+            or metadata.get("terminalContractRecoveryOutcome")
+            != "fresh_process_available"
+            or len(self._terminal_contract_fresh_process_history)
+            >= _MAX_TERMINAL_CONTRACT_CONTINUATIONS
+        ):
+            return None
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        if capabilities.workspace_authority != "managed_runtime":
+            return None
+
+        missing = [
+            str(item)
+            for item in metadata.get("terminalContractMissingEvidence", [])
+        ]
+        attempt = len(self._terminal_contract_fresh_process_history) + 1
+        self._terminal_contract_fresh_process_history.append(
+            {
+                "continuation": attempt,
+                "mode": "fresh_process",
+                "reason": "missing_terminal_evidence",
+                "outcome": "requested",
+            }
+        )
+        workspace_spec = dict(request.workspace_spec or {})
+        workspace_spec["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": self.run_id,
+            "relativePath": "repo",
+        }
+        instruction = str(request.instruction_ref or "").rstrip()
+        continuation_instruction = _terminal_contract_fresh_process_instruction(
+            missing
+        )
+        if instruction:
+            instruction = f"{instruction}\n\n{continuation_instruction}"
+        else:
+            instruction = continuation_instruction
+        return request.model_copy(
+            update={
+                "instruction_ref": instruction,
+                "workspace_spec": workspace_spec,
+            }
+        )
+
+    def _with_fresh_process_terminal_contract_history(
+        self,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        if not self._terminal_contract_fresh_process_history:
+            return result
+        history = [dict(item) for item in self._terminal_contract_fresh_process_history]
+        if history[-1]["outcome"] == "requested":
+            history[-1]["outcome"] = (
+                "recovered" if result.failure_class is None else "incomplete"
+            )
+            self._terminal_contract_fresh_process_history[-1]["outcome"] = history[-1][
+                "outcome"
+            ]
+        metadata = dict(result.metadata or {})
+        metadata.update(
+            {
+                "terminalContractContinuationCount": len(history),
+                "terminalContractContinuationHistory": history,
+                "terminalContractRecoveryOutcome": (
+                    "recovered"
+                    if result.failure_class is None
+                    else (
+                        "exhausted"
+                        if len(history) >= _MAX_TERMINAL_CONTRACT_CONTINUATIONS
+                        else metadata.get("terminalContractRecoveryOutcome")
+                    )
+                ),
+            }
+        )
+        return result.model_copy(update={"metadata": metadata})
+
+    async def _publish_terminal_contract_failure_checkpoint(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Preserve authoritative work after terminal-evidence retries exhaust."""
+
+        if (
+            request.agent_kind != "managed"
+            or not self.run_id
+            or (result.metadata or {}).get("terminalContractSatisfied") is not False
+            or result.failure_class
+            not in {"user_error", "execution_error", "integration_error", "timed_out"}
+        ):
+            return result
+        fetch_input = self._build_managed_fetch_result_activity_input(request)
+        if (
+            fetch_input.publish_mode == "none"
+            or not fetch_input.terminal_checkpoint_publication_enabled
+        ):
+            return result
+        metadata = dict(result.metadata or {})
+        existing = metadata.get("terminalPublication")
+        existing = existing if isinstance(existing, Mapping) else {}
+        try:
+            publication = await self._execute_routed_activity(
+                "agent_runtime.publish_terminal_checkpoint",
+                AgentRuntimeTerminalCheckpointInput(
+                    runId=self.run_id,
+                    agentId=request.agent_id,
+                    failureClass=result.failure_class,
+                    targetBranch=fetch_input.target_branch,
+                    existingBranch=existing.get("branchName"),
+                    existingHeadSha=existing.get("headSha"),
+                    existingPrUrl=existing.get("prUrl"),
+                    publicationEnabled=(
+                        fetch_input.terminal_checkpoint_publication_enabled
+                    ),
+                    noRemoteWrites=fetch_input.no_remote_writes,
+                    readOnly=fetch_input.read_only,
+                    dryRun=fetch_input.dry_run,
+                    workspaceAuthoritative=fetch_input.workspace_authoritative,
+                    runtimeCapabilitySupported=(
+                        fetch_input.terminal_checkpoint_capability_supported
+                    ),
+                    idempotencyKey=(
+                        f"terminal-contract-checkpoint-v1:{self.run_id}"
+                    ),
+                ),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+        except Exception as exc:
+            metadata["terminalPublication"] = {
+                "intent": "terminal_checkpoint",
+                "status": "failed",
+                "reasonCode": "terminal_checkpoint_activity_failed",
+                "attempted": True,
+                "errorType": type(exc).__name__,
+            }
+            return result.model_copy(update={"metadata": metadata})
+        publication_payload = (
+            publication.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(publication, "model_dump")
+            else dict(publication)
+        )
+        metadata["terminalPublication"] = publication_payload
+        return result.model_copy(update={"metadata": metadata})
 
     async def _poll_managed_status(
         self,
@@ -5098,6 +5312,49 @@ class MoonMindAgentRun:
                         request=request,
                         result=self.final_result,
                     )
+                    if workflow.patched(
+                        TERMINAL_CONTRACT_FRESH_PROCESS_CONTINUATION_PATCH_ID
+                    ):
+                        self.final_result = (
+                            self._with_fresh_process_terminal_contract_history(
+                                self.final_result
+                            )
+                        )
+                        continuation_request = (
+                            self._fresh_process_terminal_contract_request(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
+                        if continuation_request is not None:
+                            active_profile_id = str(
+                                request.execution_profile_ref
+                                or self._assigned_profile_id
+                                or ""
+                            ).strip()
+                            if manager_handle and active_profile_id:
+                                await manager_handle.signal(
+                                    "release_slot",
+                                    self._release_slot_payload(
+                                        profile_id=active_profile_id,
+                                        request=request,
+                                    ),
+                                )
+                            request = continuation_request
+                            self.completion_event.clear()
+                            self.final_result = None
+                            self._assigned_profile_id = None
+                            self.run_status = RunStatus.launching
+                            continue
+                    if workflow.patched(
+                        TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID
+                    ):
+                        self.final_result = (
+                            await self._publish_terminal_contract_failure_checkpoint(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
 
                 # Prefer the canonical structured provider failure event for the
                 # cooldown decision when present; fall back to text-marker codes.

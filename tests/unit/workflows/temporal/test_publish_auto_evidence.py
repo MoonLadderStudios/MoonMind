@@ -16,6 +16,7 @@ def _evidence(**overrides: object) -> dict[str, object]:
         "mode": "auto",
         "owner": "agent",
         "skillId": "fix-ci",
+        "executionRef": "workflow:run:fix-ci:execution:1",
         "status": "verified",
         "action": "push",
         "repository": "MoonLadderStudios/MoonMind",
@@ -43,6 +44,7 @@ def test_parse_auto_publish_evidence_accepts_verified_push() -> None:
 
     assert evidence.status == "verified"
     assert evidence.action == "push"
+    assert evidence.execution_ref == "workflow:run:fix-ci:execution:1"
     assert evidence.finish_code == "PUBLISHED_BRANCH"
     assert evidence.remote_verified is True
 
@@ -105,6 +107,7 @@ def test_parse_auto_publish_evidence_accepts_blocked_publish_unavailable() -> No
         ({"remoteBranchHead": "def456"}, "localHead must match remoteBranchHead"),
         ({"pushed": False, "merged": False}, "verified evidence must prove"),
         ({"status": "blocked", "blockedReason": None}, "blockedReason"),
+        ({"executionRef": None}, "executionRef"),
     ],
 )
 def test_parse_auto_publish_evidence_rejects_invalid_or_unproven_payloads(

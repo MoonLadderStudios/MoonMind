@@ -12549,10 +12549,10 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult:
         """Read one managed run result via activity execution.
 
-        When *publish_mode* is not ``"none"``, this activity also pushes the
-        agent's work branch to the remote **before** returning the result.
-        This is deterministic (the workflow awaits this activity) instead of
-        the old fire-and-forget pattern that could silently lose pushes.
+        For MoonMind-owned ``branch`` and ``pr`` modes, this activity also
+        pushes the agent's work branch to the remote **before** returning the
+        result. Agent-owned ``auto`` mode only collects Skill evidence here;
+        native publication would violate the publish authority contract.
         """
         if self._run_store is None:
             raise TemporalActivityRuntimeError(
@@ -12769,7 +12769,7 @@ class TemporalAgentRuntimeActivities:
                 )
             elif (
                 result.failure_class is None
-                and publish_mode != "none"
+                and publish_mode in {"branch", "pr"}
                 and _normalize_provider_native_pr_agent_id(publish_agent_id)
                 not in _PROVIDER_NATIVE_PR_AGENT_IDS
             ):
@@ -12856,43 +12856,74 @@ class TemporalAgentRuntimeActivities:
         raw_workspace_locator = request.get("workspaceLocator")
         if isinstance(raw_workspace_locator, Mapping):
             locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_workspace_locator)
-            if not isinstance(locator, SandboxWorkspaceLocator):
+            if isinstance(locator, ManagedWorkspaceLocator):
+                run_id = str(request.get("runId") or "").strip()
+                if not run_id or locator.agent_run_id != run_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace does not match the run",
+                    )
+                if self._run_store is None:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_LOCATOR_UNSUPPORTED,
+                        "terminal evidence managed workspace store is unavailable",
+                    )
+                managed_record = self._run_store.load(run_id)
+                if managed_record is None or not managed_record.workspace_path:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace record was not found",
+                    )
+                record_runtime_id = resolve_runtime_execution_capabilities(
+                    str(managed_record.runtime_id or "")
+                ).runtime_id
+                locator_runtime_id = resolve_runtime_execution_capabilities(
+                    locator.runtime_id
+                ).runtime_id
+                if record_runtime_id != locator_runtime_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence managed workspace runtime does not match",
+                    )
+                workspace_path = managed_record.workspace_path
+            elif isinstance(locator, SandboxWorkspaceLocator):
+                owner_workflow_id = str(
+                    request.get("workspaceOwnerWorkflowId") or ""
+                ).strip()
+                owner_step_execution_id = str(
+                    request.get("workspaceOwnerStepExecutionId") or ""
+                ).strip()
+                if not owner_workflow_id or not owner_step_execution_id:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence sandbox authority is incomplete",
+                    )
+                expected_workspace_id = hashlib.sha256(
+                    f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
+                ).hexdigest()[:24]
+                owner_record = SandboxWorkspaceRecordStore(self._workspace_root).load(
+                    expected_workspace_id
+                )
+                if owner_record is None:
+                    raise WorkspaceLocatorResolutionError(
+                        WORKSPACE_IDENTITY_MISMATCH,
+                        "terminal evidence sandbox owner record was not found",
+                    )
+                workspace_path = str(
+                    resolve_sandbox_workspace_locator(
+                        locator,
+                        workspace_root=self._workspace_root,
+                        expected_workspace_id=expected_workspace_id,
+                        owner_record=owner_record,
+                        expected_workflow_id=owner_workflow_id,
+                        expected_step_execution_id=owner_step_execution_id,
+                    )
+                )
+            else:
                 raise WorkspaceLocatorResolutionError(
                     WORKSPACE_LOCATOR_UNSUPPORTED,
-                    "terminal evidence requires a sandbox workspace locator",
+                    "terminal evidence requires a local authoritative workspace",
                 )
-            owner_workflow_id = str(
-                request.get("workspaceOwnerWorkflowId") or ""
-            ).strip()
-            owner_step_execution_id = str(
-                request.get("workspaceOwnerStepExecutionId") or ""
-            ).strip()
-            if not owner_workflow_id or not owner_step_execution_id:
-                raise WorkspaceLocatorResolutionError(
-                    WORKSPACE_IDENTITY_MISMATCH,
-                    "terminal evidence sandbox authority is incomplete",
-                )
-            expected_workspace_id = hashlib.sha256(
-                f"{owner_workflow_id}:{owner_step_execution_id}".encode("utf-8")
-            ).hexdigest()[:24]
-            owner_record = SandboxWorkspaceRecordStore(self._workspace_root).load(
-                expected_workspace_id
-            )
-            if owner_record is None:
-                raise WorkspaceLocatorResolutionError(
-                    WORKSPACE_IDENTITY_MISMATCH,
-                    "terminal evidence sandbox owner record was not found",
-                )
-            workspace_path = str(
-                resolve_sandbox_workspace_locator(
-                    locator,
-                    workspace_root=self._workspace_root,
-                    expected_workspace_id=expected_workspace_id,
-                    owner_record=owner_record,
-                    expected_workflow_id=owner_workflow_id,
-                    expected_step_execution_id=owner_step_execution_id,
-                )
-            )
         run_id = str(request.get("runId") or "").strip()
         if not workspace_path and run_id and self._run_store is not None:
             record = self._run_store.load(run_id)
@@ -12900,6 +12931,13 @@ class TemporalAgentRuntimeActivities:
 
         artifact_spool_path = str(request.get("artifactSpoolPath") or "").strip()
         contract_payload = dict(contract)
+        if (
+            str(contract_payload.get("contractId") or "")
+            == "auto_publish_terminal.v1"
+        ):
+            selected_skill = str(request.get("selectedSkill") or "").strip()
+            if selected_skill:
+                contract_payload["skillId"] = selected_skill
         evaluation = evaluate_terminal_evidence(
             contract_payload,
             workspace_path=workspace_path,
@@ -12966,6 +13004,7 @@ class TemporalAgentRuntimeActivities:
         # Terminal evidence is the authoritative full result for fan-out and
         # merge automation. Publish the validated run-scoped file here, before
         # the workflow projects large child records out of its result metadata.
+        terminal_evidence_ref: str | None = None
         if evaluation.metadata.get("terminalContractEvidencePath"):
             source = resolve_terminal_evidence_source(
                 contract_payload,
@@ -12979,6 +13018,13 @@ class TemporalAgentRuntimeActivities:
             )
             if terminal_evidence_ref:
                 metadata["terminalContractEvidenceRef"] = terminal_evidence_ref
+
+        if (
+            evaluation.satisfied
+            and metadata["terminalContractId"] == "auto_publish_terminal.v1"
+            and terminal_evidence_ref
+        ):
+            metadata["publishEvidence"] = terminal_evidence_ref
 
         # A successful pr-resolver contract already requires the portable Skill
         # to write its canonical publish_result.json companion. Preserve that

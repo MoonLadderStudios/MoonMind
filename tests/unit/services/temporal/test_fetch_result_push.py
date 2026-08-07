@@ -2659,6 +2659,50 @@ class TestFetchResultPushIntegration:
         assert result.metadata["push_branch"] == "my-branch"
 
     @pytest.mark.asyncio
+    async def test_fetch_result_never_native_pushes_agent_owned_auto_mode(self):
+        """Auto publication belongs to the Skill, not the managed publisher."""
+
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+            ) as mock_push,
+            patch.object(
+                activities,
+                "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            adapter_instance = MockAdapter.return_value
+            adapter_instance.fetch_result = AsyncMock(
+                return_value=AgentRunResult(summary="done", failure_class=None)
+            )
+
+            await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "auto"},
+            )
+
+        mock_push.assert_not_called()
+        adapter_instance.fetch_result.assert_awaited_once_with(
+            "run-1",
+            pr_resolver_expected=False,
+            pr_resolver_merge_gate_owned=False,
+            include_workspace_auto_publish_evidence=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_fetch_result_allows_same_target_branch_for_branch_publish(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

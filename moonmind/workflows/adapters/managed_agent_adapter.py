@@ -371,6 +371,7 @@ def _canonical_auto_publish_result(payload: Mapping[str, Any]) -> dict[str, Any]
         "mode": evidence.mode,
         "owner": evidence.owner,
         "skillId": evidence.skill_id,
+        "executionRef": evidence.execution_ref,
         "status": evidence.status,
         "action": evidence.action,
         "repository": evidence.repository,
@@ -470,7 +471,15 @@ def _normalize_pr_resolver_auto_publish_result(
         final.get("repository"),
         final.get("repo"),
     ) or _github_repository_from_pr_url(pr_url)
-    if not pr_url or not branch or not repository:
+    execution_ref = _first_stripped_text(
+        payload.get("executionRef"),
+        payload.get("execution_ref"),
+        resolver_payload.get("executionRef"),
+        resolver_payload.get("execution_ref"),
+        final.get("executionRef"),
+        final.get("execution_ref"),
+    )
+    if not pr_url or not branch or not repository or not execution_ref:
         return None
 
     verification = payload.get("verification")
@@ -496,6 +505,7 @@ def _normalize_pr_resolver_auto_publish_result(
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": execution_ref,
         "status": "verified",
         "action": "merge",
         "repository": repository,
@@ -1056,6 +1066,22 @@ class ManagedAgentAdapter:
             if isinstance(workspace_locator, Mapping)
             else ""
         )
+        restored_runtime_id = (
+            str(workspace_locator.get("runtimeId") or "").strip()
+            if isinstance(workspace_locator, Mapping)
+            else ""
+        )
+        if restored_run_id and restored_runtime_id:
+            from moonmind.workflows.executions.runtime_defaults import (
+                normalize_runtime_id,
+            )
+
+            if normalize_runtime_id(restored_runtime_id) != normalize_runtime_id(
+                runtime_for_profile
+            ):
+                raise RuntimeError(
+                    "managed workspace locator runtime does not match selected runtime"
+                )
         run_id = restored_run_id or _generate_run_id()
         started_at = _current_time()
 
@@ -1115,13 +1141,42 @@ class ManagedAgentAdapter:
             workspace_path = None
             restoration_requirement = None
             if restored_run_id:
-                workspace_path = str(
-                    Path("/var/lib/moonmind/managed-runs") / restored_run_id / "repo"
+                restored_record = (
+                    self._run_store.load(restored_run_id)
+                    if self._run_store is not None
+                    else None
                 )
-                restoration_requirement = {
-                    "checkpointRef": workspace_spec.get("sourceCheckpointRef"),
-                    "capabilityDigest": workspace_spec.get("capabilityDigest"),
-                }
+                if restored_record is not None and restored_record.workspace_path:
+                    allowed_workspace_workflow_ids = {
+                        self._workflow_id,
+                        request.correlation_id,
+                    }
+                    if request.step_execution is not None:
+                        allowed_workspace_workflow_ids.add(
+                            request.step_execution.workflow_id
+                        )
+                    if (
+                        restored_record.workflow_id
+                        and restored_record.workflow_id
+                        not in allowed_workspace_workflow_ids
+                    ):
+                        raise RuntimeError(
+                            "managed workspace locator belongs to another AgentRun"
+                        )
+                    workspace_path = restored_record.workspace_path
+                else:
+                    workspace_path = str(
+                        Path("/var/lib/moonmind/managed-runs")
+                        / restored_run_id
+                        / "repo"
+                    )
+                checkpoint_ref = workspace_spec.get("sourceCheckpointRef")
+                capability_digest = workspace_spec.get("capabilityDigest")
+                if checkpoint_ref or capability_digest:
+                    restoration_requirement = {
+                        "checkpointRef": checkpoint_ref,
+                        "capabilityDigest": capability_digest,
+                    }
             
             record_dict = await self._run_launcher(
                 payload={

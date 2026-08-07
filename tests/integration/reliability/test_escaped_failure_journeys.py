@@ -452,6 +452,147 @@ async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
     assert expected["parentState"] == "failed"
 
 
+async def test_auto_publish_one_shot_deferral_reenters_before_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:a5625f36 through evidence, continuation, and recovery seams."""
+
+    replay_id = "auto-publish-one-shot-deferred"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / manifest["agentRunId"] / "repo"
+    workspace.mkdir(parents=True)
+    for relative in manifest["dirtyFiles"]:
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("uncommitted recovery work\n", encoding="utf-8")
+
+    now = datetime.now(timezone.utc)
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=manifest["agentRunId"],
+            workflowId=f"{manifest['incidentWorkflowId']}:agent:fix-comments",
+            ownerRunId="incident-run",
+            logicalStepId="fix-comments",
+            executionOrdinal=1,
+            agentId=manifest["runtime"],
+            runtimeId=manifest["runtime"],
+            status="completed",
+            exitCode=manifest["processExitCode"],
+            startedAt=now,
+            finishedAt=now,
+            workspacePath=str(workspace),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    agent_run = MoonMindAgentRun()
+    agent_run.run_id = manifest["agentRunId"]
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch_id: True)
+
+    async def execute_activity(
+        name: str,
+        payload: object,
+        **_kwargs: object,
+    ) -> object:
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            assert isinstance(payload, dict)
+            assert payload["selectedSkill"] == manifest["selectedSkill"]
+            evaluated = await activities.agent_runtime_evaluate_terminal_evidence(
+                payload
+            )
+            return evaluated.model_dump(mode="json", by_alias=True)
+        assert name == expected["terminalCheckpointActivity"]
+        return {
+            "intent": "terminal_checkpoint",
+            "status": "pushed",
+            "reasonCode": expected["terminalCheckpointReason"],
+            "source": "live_workspace",
+            "attempted": True,
+            "branchPushed": True,
+            "branchName": "recovery/mm-a5625f36",
+            "headSha": "abc123",
+            "remoteVerified": True,
+            "idempotencyKey": (
+                f"terminal-contract-checkpoint-v1:{manifest['agentRunId']}"
+            ),
+        }
+
+    agent_run._execute_routed_activity = execute_activity  # type: ignore[method-assign]
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=manifest["runtime"],
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:fix-comments",
+        instructionRef="Resolve all applicable review comments and publish.",
+        stepExecution={
+            "workflowId": manifest["incidentWorkflowId"],
+            "runId": "incident-run",
+            "logicalStepId": "fix-comments",
+            "executionOrdinal": 1,
+            "stepExecutionId": manifest["terminalContract"]["executionRef"],
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": manifest["runtime"],
+                "agentRunId": manifest["agentRunId"],
+                "relativePath": "repo",
+            }
+        },
+        terminalContract=manifest["terminalContract"],
+        parameters={
+            "publishMode": manifest["publishMode"],
+            "metadata": {
+                "moonmind": {"selectedSkill": manifest["selectedSkill"]}
+            },
+        },
+    )
+    evaluated = await agent_run._evaluate_terminal_contract(
+        request=request,
+        result=AgentRunResult(
+            summary="Process exited cleanly after scheduling a wake-up.",
+        ),
+    )
+
+    assert evaluated.failure_class == expected["failureClass"]
+    assert evaluated.metadata["failureCode"] == expected["failureCode"]
+    assert (
+        evaluated.metadata["terminalContractRecoveryOutcome"]
+        == expected["recoveryOutcome"]
+    )
+    continuation = agent_run._fresh_process_terminal_contract_request(
+        request=request,
+        result=evaluated,
+    )
+    assert continuation is not None
+    assert continuation.workspace_spec["workspaceLocator"]["kind"] == expected[
+        "workspaceKind"
+    ]
+    assert agent_run._terminal_contract_fresh_process_history[-1]["mode"] == expected[
+        "continuationMode"
+    ]
+
+    exhausted = evaluated.model_copy(
+        update={
+            "metadata": {
+                **dict(evaluated.metadata or {}),
+                "terminalContractRecoveryOutcome": "exhausted",
+            }
+        }
+    )
+    checkpointed = await agent_run._publish_terminal_contract_failure_checkpoint(
+        request=request,
+        result=exhausted,
+    )
+    assert checkpointed.failure_class == expected["failureClass"]
+    assert checkpointed.metadata["terminalPublication"]["reasonCode"] == expected[
+        "terminalCheckpointReason"
+    ]
+
+
 async def test_verified_remediation_push_reaches_draft_publication_handoff() -> None:
     """Replay the two orphaned branches through the production authority seam."""
     replay_id = "draft-publication-authority-gap"
@@ -1081,7 +1222,31 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
                 publish_path = workspace / "artifacts/publish_result.json"
                 publish_path.parent.mkdir(parents=True, exist_ok=True)
                 publish_path.write_text(
-                    json.dumps({"status": "merged"}), encoding="utf-8"
+                    json.dumps(
+                        {
+                            "schemaVersion": "moonmind.publish.auto.v1",
+                            "mode": "auto",
+                            "owner": "agent",
+                            "skillId": "pr-resolver",
+                            "executionRef": execution_ref,
+                            "status": "verified",
+                            "action": "merge",
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "branch": "feature",
+                            "localHead": "abc123",
+                            "remoteBranchHead": None,
+                            "remoteVerified": True,
+                            "pushed": False,
+                            "merged": True,
+                            "prUrl": (
+                                "https://github.com/MoonLadderStudios/"
+                                "MoonMind/pull/1"
+                            ),
+                            "blockedReason": None,
+                            "verificationCommands": ["gh pr view 1"],
+                        }
+                    ),
+                    encoding="utf-8",
                 )
             return _turn_response(
                 session_id=payload.session_id,
@@ -3462,7 +3627,32 @@ async def test_omnigent_pr_resolver_runtime_authority_replay(
     )
     publish_path = workspace / "artifacts" / "publish_result.json"
     publish_path.parent.mkdir(parents=True)
-    publish_path.write_text('{"status":"already_merged"}', encoding="utf-8")
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "pr-resolver",
+                "executionRef": manifest["stepExecutionId"],
+                "status": "verified",
+                "action": "merge",
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": None,
+                "remoteVerified": True,
+                "pushed": False,
+                "merged": True,
+                "prUrl": (
+                    "https://github.com/MoonLadderStudios/MoonMind/pull/1"
+                ),
+                "blockedReason": None,
+                "verificationCommands": ["gh pr view 1"],
+            }
+        ),
+        encoding="utf-8",
+    )
     SandboxWorkspaceRecordStore(tmp_path).ensure(
         SandboxWorkspaceRecord(
             workspace_id=workspace_id,
@@ -3596,6 +3786,7 @@ async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": manifest["stepExecutionId"],
         "status": "verified",
         "action": "merge",
         "repository": "MoonLadderStudios/MoonMind",

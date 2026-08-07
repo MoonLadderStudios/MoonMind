@@ -6356,7 +6356,30 @@ async def test_terminal_evidence_activity_resolves_authoritative_sandbox_locator
     )
     publish_path = workspace / "artifacts" / "publish_result.json"
     publish_path.parent.mkdir(parents=True)
-    publish_path.write_text('{"status":"already_merged"}', encoding="utf-8")
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "pr-resolver",
+                "executionRef": step_execution_id,
+                "status": "verified",
+                "action": "merge",
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": None,
+                "remoteVerified": True,
+                "pushed": False,
+                "merged": True,
+                "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1",
+                "blockedReason": None,
+                "verificationCommands": ["gh pr view 1"],
+            }
+        ),
+        encoding="utf-8",
+    )
     SandboxWorkspaceRecordStore(tmp_path).ensure(
         SandboxWorkspaceRecord(
             workspace_id=workspace_id,
@@ -6398,6 +6421,71 @@ async def test_terminal_evidence_activity_resolves_authoritative_sandbox_locator
 
 
 @pytest.mark.asyncio
+async def test_terminal_evidence_activity_resolves_managed_workspace_locator(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    publish_path = workspace / "artifacts/publish_result.json"
+    publish_path.parent.mkdir(parents=True)
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "fix-comments",
+                "executionRef": "step-1",
+                "status": "verified",
+                "action": "push",
+                "repository": "MoonLadderStudios/Tactics",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": "abc123",
+                "remoteVerified": True,
+                "pushed": True,
+                "merged": False,
+                "prUrl": None,
+                "blockedReason": None,
+                "verificationCommands": ["git ls-remote origin refs/heads/feature"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = SimpleNamespace(
+        workspace_path=str(workspace),
+        runtime_id="claude_code",
+    )
+    store = MagicMock()
+    store.load.return_value = record
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "runId": "agent-run-1",
+            "workspacePath": "/untrusted/alias",
+            "workspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": "claude_code",
+                "agentRunId": "agent-run-1",
+                "relativePath": "repo",
+            },
+            "terminalContract": {
+                "contractId": "auto_publish_terminal.v1",
+                "relativePath": "artifacts/publish_result.json",
+                "expectedSchemaVersion": "moonmind.publish.auto.v1",
+                "executionRef": "step-1",
+            },
+            "selectedSkill": "fix-comments",
+            "result": {"summary": "done"},
+        }
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractSatisfied"] is True
+    store.load.assert_called_once_with("agent-run-1")
+
+
+@pytest.mark.asyncio
 async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
     tmp_path: Path,
 ) -> None:
@@ -6421,6 +6509,7 @@ async def test_terminal_evidence_activity_publishes_pr_resolver_companion(
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": execution_ref,
         "status": "verified",
         "action": "merge",
         "repository": "MoonLadderStudios/MoonMind",
