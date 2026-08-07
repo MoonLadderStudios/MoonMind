@@ -207,6 +207,18 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         "blockers": [],
         "directLaunchAllowed": True,
     }
+    # Operator-remediation release status (MoonLadderStudios/MoonMind#3626) is
+    # published on the same readiness endpoint and is fail-closed by default:
+    # with no mounted evidence document nothing is supported and the autonomous
+    # rollout gate stays closed.
+    remediation = body["remediationRelease"]
+    assert remediation["matrixVersion"] == "operator-remediation-support-matrix/v1"
+    assert remediation["manualDiagnosisSupported"] is False
+    assert remediation["manualMutationSupported"] is False
+    assert remediation["autonomousRolloutAuthorized"] is False
+    assert remediation["promotionAllowed"] is False
+    assert "autonomous_rollout_gate_closed" in remediation["blockers"]
+    assert "remediation_release_evidence_missing" in remediation["blockers"]
     assert body["hostModes"] == ["on_demand_docker"]
     assert body["eligibleProviderProfiles"] == [{
         "profileId": "codex-oauth",
