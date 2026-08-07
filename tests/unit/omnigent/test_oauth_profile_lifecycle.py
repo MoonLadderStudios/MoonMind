@@ -75,6 +75,12 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
+from moonmind.schemas.agent_skill_models import (
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+)
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
 from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
@@ -1013,6 +1019,62 @@ def test_runtime_script_snapshot_rejects_unsafe_step_identity(tmp_path) -> None:
         )
 
     assert raised.value.code == "OMNIGENT_STEP_EXECUTION_ID_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> None:
+    payload = b"---\nname: pr-resolver\ndescription: test\n---\n"
+    content_ref = "art-skill-pr-resolver"
+    skillset_ref = "art-resolved-skillset"
+    skillset = ResolvedSkillSet(
+        snapshot_id="skillset-workflow-1",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                content_ref=content_ref,
+                content_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    class ArtifactService:
+        def __init__(self) -> None:
+            self.reads: list[str] = []
+
+        async def read(self, *, artifact_id, **_kwargs):
+            self.reads.append(artifact_id)
+            if artifact_id == skillset_ref:
+                return object(), skillset.model_dump_json(by_alias=True).encode()
+            if artifact_id == content_ref:
+                return object(), payload
+            raise AssertionError(f"unexpected artifact read: {artifact_id}")
+
+    artifacts = ArtifactService()
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    first = await runtime._prepare_skill_projection(
+        workspace_key="workspace-1",
+        resolved_skillset_ref=skillset_ref,
+        artifact_gateway=artifacts,
+    )
+    first_inode = first.stat().st_ino
+
+    second = await runtime._prepare_skill_projection(
+        workspace_key="workspace-1",
+        resolved_skillset_ref=skillset_ref,
+        artifact_gateway=artifacts,
+    )
+
+    assert second == first
+    assert second.stat().st_ino == first_inode
+    assert artifacts.reads.count(content_ref) == 1
 
 
 @pytest.mark.asyncio

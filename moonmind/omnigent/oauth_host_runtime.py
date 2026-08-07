@@ -878,6 +878,28 @@ class OmnigentOAuthHostRuntime:
         )
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
         projection_root = (self._workspace_root / ".skill-projections" / digest).resolve()
+        active_snapshot = (
+            projection_root
+            / "runtime"
+            / "skills_active"
+            / resolved_skillset.snapshot_id
+        )
+        if active_snapshot.exists() or active_snapshot.is_symlink():
+            if active_snapshot.is_symlink() or not active_snapshot.is_dir():
+                raise OmnigentOAuthHostError(
+                    "existing Omnigent Skill projection is not an owned directory",
+                    code="OMNIGENT_SKILL_PROJECTION_UNAVAILABLE",
+                )
+            # Activity retries can reattach to the same live host. Replacing this
+            # directory would leave Docker's existing bind mount attached to the
+            # removed inode, so the host would observe a missing manifest even
+            # though the replacement looks valid from the worker. A resolved
+            # snapshot is immutable; verify and reuse its exact backing directory.
+            await verify_skill_projection(
+                materialization_metadata={"visiblePath": str(active_snapshot)},
+                resolved_skillset=resolved_skillset,
+            )
+            return active_snapshot.resolve()
         metadata = await materialize_run_skill_snapshot(
             workspace_path=projection_root,
             run_root=projection_root,
