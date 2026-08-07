@@ -3,3 +3,4 @@
 - [Frontend vitest colon-path workaround](frontend-vitest-colon-path-workaround.md) — vitest fails on colon in workspace dir; run from a colon-free copy under /tmp
 - [Omnigent #3507 workspace materialization](omnigent-3507-workspace-materialization.md) — done vs remaining for the normal-workflow workspace path
 - [Omnigent #3561 publication semantics](omnigent-3561-publication-semantics.md) — publication/saved-work/recovery proof + unified authority-chain evidence through the Omnigent path
+- [Remediation UI data availability](remediation-ui-data-availability.md) — which remediation-link/approval fields are actually backed by real data today (bounds #3623 scope)
