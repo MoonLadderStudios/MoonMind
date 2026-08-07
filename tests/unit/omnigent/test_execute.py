@@ -243,6 +243,70 @@ async def test_snapshot_polling_accepts_marked_progress_while_session_is_idle() 
 
 
 @pytest.mark.asyncio
+async def test_snapshot_polling_uses_pre_dispatch_item_ids_when_marker_is_evicted() -> None:
+    """A capped stock snapshot must not erase current-turn terminal evidence."""
+
+    marker = "MoonMind-Omnigent-Run: continuation-with-many-tools"
+    baseline_item_ids = frozenset({"prior-1", "prior-2"})
+    terminal = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {
+                "id": "call-current",
+                "type": "function_call",
+                "data": {"call_id": "call-current"},
+            },
+            {
+                "id": "output-current",
+                "type": "function_call_output",
+                "data": {"call_id": "call-current"},
+            },
+            {
+                "id": "assistant-current",
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return terminal
+
+    assert not _snapshot_contains_current_turn_progress(terminal, marker=marker)
+    assert _snapshot_contains_current_turn_progress(
+        terminal,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    assert not _snapshot_contains_current_turn_progress(
+        {
+            "status": "idle",
+            "items": [{"id": "prior-1", "type": "function_call_output"}],
+        },
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+        event_count=9,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+    )
+
+    assert status == "completed"
+    assert snapshot is terminal
+
+
+@pytest.mark.asyncio
 async def test_snapshot_polling_preserves_marked_provider_failure() -> None:
     marker = "MoonMind-Omnigent-Run: failed-turn"
     failed = {

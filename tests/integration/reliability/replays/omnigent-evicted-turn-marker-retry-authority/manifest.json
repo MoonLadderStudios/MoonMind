@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "moonmind.reliability-replay.v1",
+  "replayId": "omnigent-evicted-turn-marker-retry-authority",
+  "incidentWorkflowId": "mm:d41f834c-c276-4fc1-ac83-9740ed3ba88e",
+  "failedChildWorkflowId": "mm:d41f834c-c276-4fc1-ac83-9740ed3ba88e:agent:tpl:github-issue-implement:02:00d88605",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureShape": "a long continuation evicted its marked user item from the stock 100-item snapshot; MoonMind ignored the completed current response, timed out terminal polling, removed the durable on-demand host, and the Temporal retry was rejected when it tried to bind the immutable bridge to a replacement host",
+  "stockSnapshotItemLimit": 100,
+  "sessionId": "8aea8cc0feb544d0ab360294dae4d01f",
+  "currentTurnMarker": "MoonMind-Omnigent-Run: repository-continuation:1",
+  "preDispatchSnapshot": {
+    "status": "idle",
+    "active_response_id": null,
+    "items": [
+      {"id": "prior-item-98", "type": "function_call_output", "data": {"call_id": "prior-call-98"}},
+      {"id": "prior-assistant-99", "type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "Earlier turn complete"}]}}
+    ]
+  },
+  "observedProviderEvents": [
+    {"type": "response.in_progress", "response_id": "response-current"},
+    {"type": "response.completed", "response_id": "response-current"}
+  ],
+  "terminalSnapshot": {
+    "status": "idle",
+    "active_response_id": null,
+    "items": [
+      {"id": "current-call", "type": "function_call", "data": {"call_id": "current-call"}},
+      {"id": "current-output", "type": "function_call_output", "data": {"call_id": "current-call"}},
+      {"id": "current-assistant", "type": "message", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "Continuation complete"}]}}
+    ]
+  }
+}

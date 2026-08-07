@@ -1,0 +1,7 @@
+{
+  "acceptCurrentTurnProgress": true,
+  "acceptCurrentTurnTerminal": true,
+  "terminalBoundarySource": "pre_dispatch_item_ids",
+  "ambiguousCleanupCode": "ambiguous_terminal_state",
+  "retryAuthority": "same_host_profile_and_bridge"
+}

@@ -33,6 +33,7 @@ from moonmind.omnigent.checkpoints import (
     recovery_mode,
     validate_cold_restore_target,
 )
+from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceBinding,
@@ -742,7 +743,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         remediation_resolution: Mapping[str, Any] | None = None
         workspace_locator_payload: Mapping[str, Any] | None = None
         terminal_status = "completed"
-        attempt_cancelled = False
+        attempt_cleanup_deferred_code: str | None = None
         # Bounded, credential-free evidence accumulated across the run so the
         # unified authority chain (MoonLadderStudios/MoonMind#3561) can be emitted
         # once at terminal, covering both success and every failure path.
@@ -1726,7 +1727,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             return result
         except (Exception, asyncio.CancelledError) as exc:
-            attempt_cancelled = isinstance(exc, asyncio.CancelledError)
+            if isinstance(exc, asyncio.CancelledError):
+                attempt_cleanup_deferred_code = "activity_cancelled"
+            elif isinstance(exc, OmnigentSessionStillRunningError):
+                attempt_cleanup_deferred_code = "ambiguous_terminal_state"
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
@@ -1782,16 +1786,16 @@ class OmnigentProfileBoundExecutionCoordinator:
         finally:
             safe_to_release_provider = host_lease is None
             if host_lease is not None and binding is not None:
-                if attempt_cancelled:
-                    # A Temporal timeout can schedule the retry before the
-                    # canceled coroutine finishes. Leave the deterministic host
-                    # and credential lease for that retry (or the janitor) so an
-                    # old attempt cannot stop/remove the new attempt's host.
+                if attempt_cleanup_deferred_code is not None:
+                    # A Temporal timeout or ambiguous terminal observation can
+                    # schedule a retry against the same durable bridge. Leave the
+                    # deterministic host and credential lease for that retry (or
+                    # the janitor) so the retry cannot be redirected to a new host.
                     authority_cleanup_mode = "retry_or_janitor_reconciliation"
                     authority_reasons.append(
                         {
                             "stage": "host_cleanup",
-                            "code": "activity_cancelled",
+                            "code": attempt_cleanup_deferred_code,
                             "failureClass": "system_error",
                             "remediationAction": "retry_or_reconcile_stale_host",
                         }
@@ -1799,7 +1803,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     await emit(
                         "host_cleanup",
                         "waiting",
-                        code="activity_cancelled",
+                        code=attempt_cleanup_deferred_code,
                         remediation_action="retry_or_reconcile_stale_host",
                         metadata={
                             "cleanupCompleted": False,
