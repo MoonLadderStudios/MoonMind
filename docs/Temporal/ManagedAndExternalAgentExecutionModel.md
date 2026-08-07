@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-07-18  
+**Last updated:** 2026-08-07
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -211,6 +211,12 @@ Responsibilities include:
 - releasing provider capacity only after the credential consumer is stopped.
 
 Managed runtimes may maintain terminal loops, use persistent auth state, operate over a workspace for extended periods, emit incremental logs, and require approvals. They are launched asynchronously and supervised durably rather than modeled as one long model-call activity.
+
+Runtime capability admission is closed over the launch mode. A one-shot process
+may use only operations that can finish before that process exits. MoonMind must
+reject or hide any tool whose successful contract requires a later callback when
+the runtime has no durable same-session continuation owner. A tool's availability
+is not evidence that the selected execution lane can deliver its result.
 
 Direct Codex managed sessions remain compatibility substrate during the Codex-through-Omnigent cutover. They emit bridge-compatible evidence where required so Workflow Detail and downstream recovery do not depend on a permanent runtime-specific UI model.
 
@@ -432,6 +438,14 @@ Every lane publishes as applicable:
 
 Artifact persistence is authoritative. Live publication is secondary and must not prevent terminal completion or durable capture when a subscriber transport fails.
 
+Terminal-contract validation occurs before MoonMind releases the workspace,
+retry budget, credential lease, or cleanup authority. A successful process exit
+with missing evidence is a recoverable execution failure, not completion. A
+capable session receives bounded same-session continuation; a managed one-shot
+runtime receives bounded replacement-process continuation over the same
+authoritative workspace. Exhaustion routes to terminal checkpoint preservation
+when repository mutation was authorized.
+
 ---
 
 ## 14. Observability and UI projection
@@ -477,6 +491,16 @@ A detached process or provider job is not considered ongoing MoonMind-managed wo
 ### 16.1 Activity retry
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
+
+### 16.1.1 Terminal-contract continuation
+
+Terminal-contract continuation is semantic recovery, not an Activity retry. It
+reuses the immutable Skill, profile, policy, and workspace authority, carries a
+bounded corrective instruction naming the missing evidence, and records each
+attempt and outcome. Same-session continuation is preferred when the capability
+snapshot supports it. Otherwise a directly managed one-shot lane may relaunch a
+replacement process against the same run-owned workspace. No continuation may
+silently create a fresh checkout or switch source authority.
 
 ### 16.2 Workflow replay
 

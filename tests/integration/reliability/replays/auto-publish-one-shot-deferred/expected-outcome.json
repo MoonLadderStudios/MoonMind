@@ -1,0 +1,9 @@
+{
+  "failureClass": "execution_error",
+  "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+  "recoveryOutcome": "fresh_process_available",
+  "continuationMode": "fresh_process",
+  "workspaceKind": "managed_runtime",
+  "terminalCheckpointActivity": "agent_runtime.publish_terminal_checkpoint",
+  "terminalCheckpointReason": "graceful_failure_checkpoint_pushed"
+}

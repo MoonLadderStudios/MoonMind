@@ -39,18 +39,35 @@ Resolution rules:
 - `branch` and `pr` are invalid for auto-publish-capable skills unless that skill explicitly opts into MoonMind-managed publishing.
 - `auto` is invalid for tasks that do not declare agent-owned publishing capability.
 
-Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands.
+Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, the current `executionRef`, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands. MoonMind accepts the evidence only when `executionRef` exactly matches the terminal contract; evidence from another attempt or restored workspace is stale even when the Skill and remote head match.
+
+Resolving `publish.mode = auto` on a runtime with MoonMind-local workspace
+authority compiles that file into an execution-bound terminal contract for every
+auto-publish-capable Skill. An external-provider workspace must use its
+provider-owned result handoff and must not receive a `workspace_json` contract it
+cannot satisfy. A managed process exit, provider completion, or assistant claim
+cannot complete a compiled AgentRun until the contract is validated. Missing,
+malformed, or stale evidence receives bounded continuation while the original
+workspace and resolved Skill snapshot remain authoritative. If continuation
+exhausts after repository work, MoonMind attempts terminal checkpoint
+publication to an isolated recovery branch before cleanup; the run remains
+failed and the saved branch is recovery evidence only.
 
 Built-in auto-publish skills produce this evidence through the portable helper:
 
 ```bash
-python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
   --skill-id <skill> \
   --repo <owner/repo> \
   --branch <branch>
 ```
 
 The helper also supports `write-merged`, `write-no-op`, `write-blocked`, `write-failed`, and `from-pr-resolver-result`. It has no Temporal, database, or service-layer imports and can run in a local checkout outside MoonMind.
+
+Inside a managed runtime, Skills resolve the helper from
+`$MOONMIND_ACTIVE_SKILLS_DIR/_shared/publish_evidence.py`. The `.agents/skills`
+path is only the portable local fallback; a repository-owned path must not hide
+the immutable run snapshot.
 
 Allowed status values are `verified`, `no_op_verified`, `blocked`, and `failed`. Allowed action values are `none`, `commit`, `push`, `merge`, `commit_and_push`, and `push_and_merge`.
 
@@ -191,7 +208,16 @@ If no PR head branch can be resolved for `publishMode: pr`, the workflow raises 
 
 ## Post-Agent Git Push
 
-After a managed agent subprocess completes successfully, the infrastructure performs a deterministic `git push` of the work branch. This is **not** delegated to the agent via prompt instructions — it is an infrastructure guarantee.
+For `publishMode = branch` or `publishMode = pr`, after a managed agent
+subprocess completes successfully, the infrastructure performs a deterministic
+`git push` of the work branch. This is **not** delegated to the agent via prompt
+instructions — it is an infrastructure guarantee.
+
+This publisher never runs for `publishMode = auto`. Auto mode is agent-owned;
+MoonMind validates the Skill's evidence and may publish only an isolated
+terminal recovery checkpoint after a controlled failure. A recovery checkpoint
+must never be confused with normal auto publication or turn a failed objective
+into success.
 
 GitHub publishing resolves credentials through the canonical GitHub resolver
 before the push. The push command receives `GITHUB_TOKEN`, `GH_TOKEN`, and

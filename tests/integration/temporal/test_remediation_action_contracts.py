@@ -263,6 +263,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             decision="attempted",
             decision_reason="fresh_target_health_and_policy_allowed",
             repair_outcome="repaired",
+            verification_outcome="verified_resolved",
             action_request_ref=result["artifactRefs"]["actionRequest"],
             action_result_ref=result["artifactRefs"]["actionResult"],
             verification_ref=result["artifactRefs"]["verification"],

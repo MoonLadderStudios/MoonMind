@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    AutoPublishEvidenceError,
+    parse_auto_publish_evidence,
+)
+
 TerminalEvidenceOutcome = Literal[
     "terminal_success", "continuation_requested", "terminal_failure"
 ]
@@ -47,6 +52,53 @@ def _success(metadata: dict[str, Any] | None = None) -> TerminalEvidenceEvaluati
     return TerminalEvidenceEvaluation(
         True, metadata=metadata or {}, outcome="terminal_success"
     )
+
+
+def _evaluate_auto_publish_evidence(
+    payload: Mapping[str, Any],
+    *,
+    contract_id: str,
+    relative_path: str,
+    expected_skill_id: str,
+    expected_execution_ref: str,
+) -> TerminalEvidenceEvaluation:
+    """Validate agent-owned publication without reimplementing Skill semantics."""
+
+    metadata: dict[str, Any] = {
+        "terminalContractId": contract_id,
+        "terminalContractEvidencePath": relative_path,
+        "terminalContractRetryable": False,
+    }
+    try:
+        evidence = parse_auto_publish_evidence(payload)
+    except AutoPublishEvidenceError:
+        metadata["terminalContractRetryable"] = True
+        return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+
+    metadata.update(
+        {
+            "autoPublishSkillId": evidence.skill_id,
+            "autoPublishExecutionRef": evidence.execution_ref,
+            "autoPublishStatus": evidence.status,
+            "autoPublishAction": evidence.action,
+        }
+    )
+    if expected_skill_id and evidence.skill_id != expected_skill_id:
+        metadata["terminalContractRetryable"] = True
+        return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
+    if (
+        not expected_execution_ref
+        or evidence.execution_ref != expected_execution_ref
+    ):
+        metadata["terminalContractRetryable"] = True
+        return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
+    if evidence.status == "blocked":
+        metadata["autoPublishBlockedReason"] = evidence.blocked_reason
+        return _failure("AUTO_PUBLISH_BLOCKED", metadata=metadata)
+    if evidence.status == "failed":
+        metadata["autoPublishBlockedReason"] = evidence.blocked_reason
+        return _failure("AUTO_PUBLISH_FAILED", metadata=metadata)
+    return _success(metadata)
 
 
 def resolve_terminal_evidence_source(
@@ -175,6 +227,7 @@ def evaluate_terminal_evidence(
 ) -> TerminalEvidenceEvaluation:
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
     if contract_id not in {
+        "auto_publish_terminal.v1",
         "batch_dependabot_resolver_fanout.v1",
         "batch_workflows_fanout.v1",
         "pr_resolver_terminal.v1",
@@ -188,16 +241,51 @@ def evaluate_terminal_evidence(
     )
     normalized_relative = source.relative_path
     if source.failure_code:
-        return _failure(source.failure_code, source.missing_evidence)
+        metadata = None
+        if contract_id == "auto_publish_terminal.v1":
+            metadata = {"terminalContractRetryable": True}
+        return _failure(
+            source.failure_code,
+            source.missing_evidence,
+            metadata,
+        )
     if source.path is None:
         return _failure("INCOMPLETE_TERMINAL_CONTRACT", (relative,))
     workspace = Path(workspace_path).resolve()
     try:
         payload = json.loads(source.path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return _failure("MALFORMED_TERMINAL_EVIDENCE")
+        return _failure(
+            "MALFORMED_TERMINAL_EVIDENCE",
+            metadata=(
+                {"terminalContractRetryable": True}
+                if contract_id == "auto_publish_terminal.v1"
+                else None
+            ),
+        )
     if not isinstance(payload, dict):
-        return _failure("MALFORMED_TERMINAL_EVIDENCE")
+        return _failure(
+            "MALFORMED_TERMINAL_EVIDENCE",
+            metadata=(
+                {"terminalContractRetryable": True}
+                if contract_id == "auto_publish_terminal.v1"
+                else None
+            ),
+        )
+    if contract_id == "auto_publish_terminal.v1":
+        return _evaluate_auto_publish_evidence(
+            payload,
+            contract_id=contract_id,
+            relative_path=normalized_relative,
+            expected_skill_id=str(
+                contract.get("skillId") or contract.get("skill_id") or ""
+            ).strip(),
+            expected_execution_ref=str(
+                contract.get("executionRef")
+                or contract.get("execution_ref")
+                or ""
+            ).strip(),
+        )
     if contract_id == "pr_resolver_terminal.v1":
         disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
         expected_execution = str(
@@ -231,6 +319,28 @@ def evaluate_terminal_evidence(
                     "INCOMPLETE_TERMINAL_CONTRACT",
                     ("artifacts/publish_result.json",),
                     metadata,
+                )
+            try:
+                publish_payload = json.loads(
+                    publish_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                return _failure(
+                    "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                )
+            publish_evaluation = _evaluate_auto_publish_evidence(
+                publish_payload,
+                contract_id="auto_publish_terminal.v1",
+                relative_path="artifacts/publish_result.json",
+                expected_skill_id="pr-resolver",
+                expected_execution_ref=expected_execution,
+            )
+            if not publish_evaluation.satisfied:
+                return _failure(
+                    publish_evaluation.failure_code
+                    or "INVALID_TERMINAL_EVIDENCE",
+                    publish_evaluation.missing_evidence,
+                    {**metadata, **publish_evaluation.metadata},
                 )
             return _success(metadata)
         if disposition == "reenter_gate":

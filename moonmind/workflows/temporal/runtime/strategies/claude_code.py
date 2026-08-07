@@ -106,10 +106,18 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         if effort:
             cmd.extend(["--effort", effort])
 
-        # -p (--print) enables non-interactive mode, required for managed runs.
-        # --dangerously-skip-permissions ensures tool execution (e.g. edits) can
-        # proceed without interactive prompts in the managed workspace.
-        cmd.extend(["-p", "--dangerously-skip-permissions"])
+        # -p (--print) is a one-shot process: when it exits there is no durable
+        # Claude session for a deferred tool callback to resume. Deny tools
+        # whose contract requires that missing continuation authority. This is
+        # a launch-mode invariant, independent of the selected Skill.
+        cmd.extend(
+            [
+                "--disallowedTools",
+                "ScheduleWakeup",
+                "-p",
+                "--dangerously-skip-permissions",
+            ]
+        )
         if request.instruction_ref:
             cmd.append(request.instruction_ref)
 

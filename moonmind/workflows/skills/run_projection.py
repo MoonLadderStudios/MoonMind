@@ -17,6 +17,7 @@ the activity class.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillFormat,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
@@ -225,22 +227,103 @@ async def verify_skill_projection(
             f"({snapshot_id!r} != {resolved_skillset.snapshot_id!r})"
         )
 
-    manifest_skills = {
-        str(entry.get("name") or "").strip()
-        for entry in manifest.get("skills", [])
-        if isinstance(entry, Mapping)
+    raw_manifest_skills = manifest.get("skills")
+    if not isinstance(raw_manifest_skills, list):
+        raise SkillProjectionError(
+            "skill projection failed before runtime launch: "
+            "active skill manifest skills evidence is invalid"
+        )
+    manifest_skills: dict[str, Mapping[str, Any]] = {}
+    for manifest_entry in raw_manifest_skills:
+        if not isinstance(manifest_entry, Mapping):
+            raise SkillProjectionError(
+                "skill projection failed before runtime launch: "
+                "active skill manifest contains an invalid skill entry"
+            )
+        name = str(manifest_entry.get("name") or "").strip()
+        if not name or name in manifest_skills:
+            raise SkillProjectionError(
+                "skill projection failed before runtime launch: "
+                "active skill manifest contains a missing or duplicate skill name"
+            )
+        manifest_skills[name] = manifest_entry
+
+    expected_entries = {
+        entry.skill_name: entry for entry in resolved_skillset.skills
     }
-    expected_skills = {entry.skill_name for entry in resolved_skillset.skills}
-    missing = expected_skills - manifest_skills
+    expected_skills = set(expected_entries)
+    manifest_skill_names = set(manifest_skills)
+    missing = expected_skills - manifest_skill_names
     if missing:
         raise SkillProjectionError(
             "skill projection failed before runtime launch: "
             "active skill manifest is missing expected skills: "
             f"{sorted(missing)}"
         )
+    unexpected = manifest_skill_names - expected_skills
+    if unexpected:
+        raise SkillProjectionError(
+            "skill projection failed before runtime launch: "
+            "active skill manifest contains unexpected skills: "
+            f"{sorted(unexpected)}"
+        )
+
+    allowed_top_level = {"_manifest.json", "_shared", *expected_skills}
+    unexpected_paths = {
+        path.name for path in visible_skills_dir.iterdir()
+        if path.name not in allowed_top_level
+    }
+    if unexpected_paths:
+        raise SkillProjectionError(
+            "skill projection failed before runtime launch: "
+            "active skill projection contains unexpected paths: "
+            f"{sorted(unexpected_paths)}"
+        )
+
+    for skill_name, resolved_entry in expected_entries.items():
+        manifest_entry = manifest_skills[skill_name]
+        expected_evidence = {
+            "content_ref": resolved_entry.content_ref,
+            "content_digest": resolved_entry.content_digest,
+            "source_kind": resolved_entry.provenance.source_kind.value,
+        }
+        actual_evidence = {
+            key: manifest_entry.get(key) for key in expected_evidence
+        }
+        if actual_evidence != expected_evidence:
+            raise SkillProjectionError(
+                "skill projection failed before runtime launch: "
+                f"active skill manifest content evidence does not match "
+                f"resolvedSkillsetRef for '{skill_name}'"
+            )
+        skill_doc = visible_skills_dir / skill_name / "SKILL.md"
+        if not skill_doc.is_file():
+            raise SkillProjectionError(
+                "skill projection failed before runtime launch: "
+                f"active skill '{skill_name}' is missing {skill_doc}"
+            )
+        if (
+            resolved_entry.format == AgentSkillFormat.MARKDOWN
+            and resolved_entry.content_digest
+        ):
+            try:
+                skill_doc_digest = "sha256:" + hashlib.sha256(
+                    skill_doc.read_bytes()
+                ).hexdigest()
+            except OSError as exc:
+                raise SkillProjectionError(
+                    "skill projection failed before runtime launch: "
+                    f"active skill '{skill_name}' is unreadable: {exc}"
+                ) from exc
+            if skill_doc_digest != resolved_entry.content_digest:
+                raise SkillProjectionError(
+                    "skill projection failed before runtime launch: "
+                    f"active skill content digest does not match "
+                    f"resolvedSkillsetRef for '{skill_name}'"
+                )
 
     if selected_skill and selected_skill != AUTO_SKILL_SENTINEL:
-        if selected_skill not in manifest_skills:
+        if selected_skill not in manifest_skill_names:
             raise SkillProjectionError(
                 "skill projection failed before runtime launch: "
                 f"active skill manifest does not include selected skill '{selected_skill}'"
