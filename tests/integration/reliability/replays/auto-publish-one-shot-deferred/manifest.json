@@ -1,0 +1,19 @@
+{
+  "incidentWorkflowId": "mm:a5625f36-75ad-4cd5-9a23-f246f769fae5",
+  "agentRunId": "a5236ec4-d8dd-4a3f-b89f-f7ad7e9608ac",
+  "runtime": "claude_code",
+  "selectedSkill": "fix-comments",
+  "publishMode": "auto",
+  "processExitCode": 0,
+  "assistantDisposition": "deferred_with_schedule_wakeup",
+  "terminalContract": {
+    "contractId": "auto_publish_terminal.v1",
+    "relativePath": "artifacts/publish_result.json",
+    "expectedSchemaVersion": "moonmind.publish.auto.v1",
+    "executionRef": "mm:a5625f36-75ad-4cd5-9a23-f246f769fae5:incident-run:fix-comments:execution:1"
+  },
+  "dirtyFiles": [
+    "Source/Tactics/Private/Example.cpp",
+    "Source/Tactics/Tests/ExampleTest.cpp"
+  ]
+}

@@ -284,11 +284,12 @@ async def test_terminal_contract_replays_pre_authority_snapshot_behavior(
     assert turn.session_epoch == 1
 
 
-async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
+async def test_terminal_contract_uses_fresh_process_when_session_cannot_continue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
+    run.run_id = "run-claude-1"
     request = AgentExecutionRequest.model_validate(
         {
             **_request_with_terminal_contract().model_dump(by_alias=True),
@@ -303,7 +304,12 @@ async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
         return {
             "summary": "missing",
             "failureClass": "execution_error",
-            "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            "providerErrorCode": "INCOMPLETE_TERMINAL_CONTRACT",
+            "metadata": {
+                "failureCode": "INCOMPLETE_TERMINAL_CONTRACT",
+                "terminalContractRetryable": True,
+                "terminalContractMissingEvidence": ["reports/result.json"],
+            },
         }
 
     run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
@@ -312,9 +318,25 @@ async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
     )
 
     assert result.failure_class == "execution_error"
-    assert result.metadata["terminalContractRecoveryOutcome"] == "continuation_unsupported"
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "fresh_process_available"
+    )
     assert result.metadata["terminalContractContinuationCount"] == 0
     assert calls == ["agent_runtime.evaluate_terminal_evidence"]
+
+    continuation = run._fresh_process_terminal_contract_request(
+        request=request,
+        result=result,
+    )
+    assert continuation is not None
+    assert continuation.workspace_spec["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "claude_code",
+        "agentRunId": "run-claude-1",
+        "relativePath": "repo",
+    }
+    assert "do not schedule a wake-up" in continuation.instruction_ref
 
 
 async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(

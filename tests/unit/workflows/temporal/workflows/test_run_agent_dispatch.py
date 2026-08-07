@@ -26,6 +26,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
+    RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
@@ -43,6 +44,40 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+def test_auto_publish_compiles_execution_bound_terminal_contract() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:auto-publish-contract",
+        run_id="run-auto-publish-contract",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH
+            ),
+        ),
+    ):
+        request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={
+                "targetRuntime": "claude_code",
+                "selectedSkill": "fix-comments",
+            },
+            node_id="fix-comments",
+            tool_name="claude_code",
+            workflow_parameters={"publishMode": "auto"},
+        )
+
+    assert request.terminal_contract is not None
+    assert request.terminal_contract.contract_id == "auto_publish_terminal.v1"
+    assert request.terminal_contract.relative_path == "artifacts/publish_result.json"
 
 
 def test_agent_request_propagates_required_capabilities_with_replay_gate() -> None:

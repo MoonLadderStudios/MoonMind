@@ -238,6 +238,8 @@ _PUBLISHED_ARTIFACT_REF_KEYS = frozenset(
         "outputAgentResultRef",
         "outputSummaryRef",
         "primaryReportRef",
+        "publishEvidence",
+        "publishEvidenceRef",
         "reportBundle",
     }
 )

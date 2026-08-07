@@ -32,7 +32,7 @@ If no constraints are provided, default to addressing all applicable feedback.
 
 1. Resolve PR and collect all comments.
 - Resolve the comments helper before reading any existing comments artifact:
-  - Prefer `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
+  - Prefer `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/fix-comments/tools/get_branch_pr_comments.py`.
   - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
   - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
@@ -100,14 +100,14 @@ If no constraints are provided, default to addressing all applicable feedback.
 - Refresh `var/pr_comments/current-branch-comments.json` after resolving threads. Do not report success while any handled, non-outdated review comment still has `thread_resolved=false`.
 - After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD` by writing canonical evidence through the shared helper:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
   If there was no commit to push, use:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
@@ -115,7 +115,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   If push or remote verification is unavailable, write blocked evidence and
   stop as blocked with reason `publish_unavailable`:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH" \
