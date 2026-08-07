@@ -169,12 +169,80 @@ and architecture already recorded there.
 | Workflow Detail live/replay/resources/controls | proxy and direct compatibility events | supported hermetically; live Omnigent pending | `tests/integration/omnigent/test_bridge_conformance.py`, `tests/integration/omnigent/test_execute_fake_server.py` |
 | Cancellation, timeout, failure, cleanup, janitor | static/on-demand | implemented; live support pending | `tests/integration/omnigent/test_execute_fake_server.py`, `tests/unit/omnigent/test_oauth_host_janitor.py`; live lifecycle artifact required |
 | Checkpoint capture, reattach, cold restore, branches | external-state plus workspace evidence | partially implemented; unsupported as a complete matrix | [`CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md); capture/restore/branch live evidence required |
-| Operator/autonomous remediation | policy-bound actions | partial; autonomous gate closed | canonical remediation docs and protected action/verification evidence required |
+| Operator/autonomous remediation | policy-bound actions | partial; autonomous gate closed | Controlling contract `moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`), [`WorkflowRemediation.md`](../Workflows/WorkflowRemediation.md), [`RemediationVerificationCadence.md`](../Workflows/RemediationVerificationCadence.md), `tests/unit/omnigent/test_remediation_matrix.py`; protected per-row browser-to-verification evidence required and the autonomous rollout gate stays a hard blocker |
 | Initial/follow-up RAG | artifact-backed context | partial; unsupported as a complete matrix | canonical RAG docs and delivery/denial/budget evidence required |
 | Persistent policy and agent-profile UI | immutable selected versions | partial; unsupported as a complete matrix | persisted policy/profile UI and snapshot evidence required |
 | Enforced egress | host/runtime boundary | partial; unsupported | enforcement and denial evidence required; declarations alone do not qualify |
 | Architecture and images | `linux/amd64`; digest-pinned server/host | amd64 evidence contract implemented; other architectures unsupported until proven | `moonmind/omnigent/conformance.py`; each supported architecture requires immutable-image live evidence |
 | Direct runtime reads and fallback | historical read; phases 1–4 explicit fallback | compatibility supported; retirement gated | [`OmnigentBridge.md`](./OmnigentBridge.md), `tests/unit/omnigent/test_direct_compat_historical_reads.py`, `tests/unit/workflows/temporal/test_run_replayer.py` cutover replay tests, compatibility inventory above |
+
+## Operator remediation support matrix v1
+
+The Codex cutover matrix above qualifies *runtime and submission* support. The
+distinct question "can an operator safely diagnose and repair a real workflow
+through the normal MoonMind UI and a stock profile-bound Omnigent host" is
+qualified by its own versioned controlling artifact
+(`moonmind.omnigent.remediation_matrix`, support-matrix version
+`operator-remediation-support-matrix/v1`; source
+MoonLadderStudios/MoonMind#3626). It reuses the same evidence discipline: support
+is observed, never asserted.
+
+`REMEDIATION_ROW_CATALOG` is the machine-readable required-row inventory. Each
+`RemediationMatrixRow` names scenario identity and owner, target and remediation
+runtime provenance, host mode and released architecture, the required
+action/verification capability, the required policy/profile authority mode and
+egress authority, the required normal-Create UI journey, the owning evidence
+kind and artifact schema, the exact pass/fail threshold keys, whether the row
+gates manual diagnosis, manual mutation, or autonomous rollout, and whether the
+row is satisfied by a passing capability or by an *intentional* safety denial.
+Row ownership is fixed by this catalog; a caller-supplied row list never
+qualifies support.
+
+Protected owners publish one passing
+`moonmind.operator-remediation-evidence/v1` artifact per owning evidence kind
+(`diagnosisEvidence`, `recoveryBranchEvidence`, `actionApprovalEvidence`,
+`verificationPreventionEvidence`, `reliabilitySecurityEvidence`). Each observed
+row records its owned `row`, `gate`, `observedDisposition`, `hostMode`,
+`targetProvenance`/`remediationProvenance`, `authorityMode`, `egress`,
+`actionCapability`/`verificationCapability`, a normal-product-path `uiJourney`,
+immutable `images`, `profileVersion`/`profileSha256`, `launchPolicyVersion`,
+`agentProfileVersion`, `remediationPolicyVersion`, `thresholds`, and per-channel
+`secretScan`. Mutating rows additionally record `actionDelivery.status` and,
+**as a separate field**, `repairVerification.outcome`: action delivery and
+target repair are never the same column (MoonLadderStudios/MoonMind#3622). The
+`uiJourney` must assert the browser-originated normal Create path
+(`browserOriginated`, `importedPinnedRemediationDraft`, `normalCreateRequest`,
+`validatedPolicyProfileFields`, `workflowDetailFollowThrough`) and must carry no
+prohibited authority marker (`hiddenSubmission`, `manualHostOrSessionId`,
+`alternateWireContract`, `unvalidatedPolicyProfileFields`, `directCodexFallback`,
+`logDerivedAuthority`); any prohibited marker fails the row closed.
+
+`validate_remediation_evidence_artifact` rejects any artifact whose rows are
+unknown, foreign to the artifact's kind, observed on the wrong host mode,
+runtime provenance, authority mode, or egress, produced for different images or
+profile/policy/agent-profile/remediation-policy versions, missing the
+delivery/repair separation, carrying a prohibited UI-journey authority or an
+over-limit threshold, carrying a self-asserted or incomplete secret scan, or not
+observed with the required disposition. When the release declares more than one
+architecture, each owned row must carry its own observation for every released
+architecture. `evaluate_remediation_release` (mounted via
+`MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF`, published on
+`/api/omnigent/codex-catalog-readiness` as `remediationRelease`) re-resolves every
+manifest ref, binds its bytes to the recorded digest, re-validates each artifact,
+binds each evidence kind to exactly one artifact, and requires the full row
+cross-product before it reports `manualDiagnosisSupported` or
+`manualMutationSupported`. A missing, stale, malformed, secret-bearing, or
+over-threshold document fails closed.
+
+**Autonomous rollout stays disabled.** A fully passing manual matrix never
+authorizes autonomous mutating remediation: `autonomousRolloutAuthorized` is
+always `false` and `autonomous_rollout_gate_closed` is a permanent blocker in
+this matrix version (acceptance criterion 9). No workflow is granted
+`admin_auto` by publishing evidence. The manual-diagnosis and manual-mutation
+rows, the production-shaped browser scenario execution, and the independently
+resolvable per-row evidence artifacts remain required work before this matrix
+qualifies operator remediation as supported; until then the classification above
+stays `partial; autonomous gate closed`.
 
 ## Release thresholds and telemetry
 

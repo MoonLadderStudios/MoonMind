@@ -3,6 +3,13 @@
 Omnigent remediation and approvals use the exact
 [immutable policy version](../Omnigent/PolicyAuthority.md).
 
+Release support for operator remediation through the normal product path is
+qualified by the versioned controlling artifact
+`moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`);
+see [Operator remediation support matrix v1](../Omnigent/CodexSupportAndCutover.md#operator-remediation-support-matrix-v1).
+Autonomous mutating remediation stays fail-closed until every required row and
+operational gate passes.
+
 **Status:** Desired-state design
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
