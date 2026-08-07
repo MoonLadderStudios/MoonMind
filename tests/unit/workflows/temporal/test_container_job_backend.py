@@ -17,6 +17,7 @@ from moonmind.security.egress import (
     OMNIGENT_EGRESS_NETWORK_REF,
     PROXY_URL,
 )
+from moonmind.security.egress_conformance_evidence import verify_evidence_digest
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
@@ -367,21 +368,25 @@ async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> 
 
     assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
     assert result.cleanup_succeeded is True
-    assert published == [
-        (
-            f"{JOB_ID}-egress-lifecycle.json",
-            {
-                "cleanupResult": "succeeded",
-                "launchAttestationRef": "artifact:launch-attestation",
-                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
-                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
-                "reconciliationResult": "succeeded",
-                "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
-                "schemaVersion": 1,
-                "workloadAttachmentIdentity": "owned-workload",
-            },
-        )
-    ]
+    assert len(published) == 1
+    name, evidence = published[0]
+    assert name == f"{JOB_ID}-egress-lifecycle.json"
+    # The lifecycle artifact is digest-bound so a resolver can re-verify it after
+    # the workload is gone (MoonLadderStudios/MoonMind#3625). Verify and strip the
+    # digest, then assert the exact terminal body it commits to.
+    verify_evidence_digest(evidence)
+    assert {
+        key: value for key, value in evidence.items() if key != "evidenceDigest"
+    } == {
+        "cleanupResult": "succeeded",
+        "launchAttestationRef": "artifact:launch-attestation",
+        "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+        "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+        "reconciliationResult": "succeeded",
+        "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
+        "schemaVersion": 1,
+        "workloadAttachmentIdentity": "owned-workload",
+    }
 
 
 @pytest.mark.asyncio
