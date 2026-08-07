@@ -6,7 +6,7 @@
   "activityType": "integration.omnigent.profile_bound_execute",
   "failureShape": "a long continuation evicted its marked user item from the stock 100-item snapshot; MoonMind ignored the completed current response, timed out terminal polling, removed the durable on-demand host, and the Temporal retry was rejected when it tried to bind the immutable bridge to a replacement host",
   "stockSnapshotItemLimit": 100,
-  "sessionId": "8aea8cc0feb544d0ab360294dae4d01f",
+  "sessionId": "synthetic-evicted-marker-session",
   "currentTurnMarker": "MoonMind-Omnigent-Run: repository-continuation:1",
   "preDispatchSnapshot": {
     "status": "idle",

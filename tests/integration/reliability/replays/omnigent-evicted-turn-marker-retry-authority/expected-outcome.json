@@ -1,6 +1,7 @@
 {
   "acceptCurrentTurnProgress": true,
   "acceptCurrentTurnTerminal": true,
+  "frontierAuthority": "durable_bridge_metadata",
   "terminalBoundarySource": "pre_dispatch_item_ids",
   "ambiguousCleanupCode": "ambiguous_terminal_state",
   "retryAuthority": "same_host_profile_and_bridge"

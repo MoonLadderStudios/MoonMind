@@ -38,6 +38,7 @@ from moonmind.omnigent.bridge_security import (
     redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
     FIRST_MESSAGE_NOT_PREPARED,
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
@@ -531,6 +532,33 @@ def _snapshot_item_ids(snapshot: Mapping[str, Any] | None) -> frozenset[str] | N
         for raw_item in raw_items
         if isinstance(raw_item, Mapping)
         if (item_id := str(raw_item.get("id") or "").strip())
+    )
+
+
+def _validated_pre_dispatch_item_ids(raw_item_ids: Any) -> frozenset[str]:
+    """Validate one bounded persisted or heartbeat item frontier."""
+
+    if not isinstance(raw_item_ids, list):
+        raise OmnigentContractError("Persisted pre-dispatch item frontier is invalid")
+    item_ids = frozenset(
+        str(item_id).strip() for item_id in raw_item_ids if str(item_id).strip()
+    )
+    if len(item_ids) != len(raw_item_ids):
+        raise OmnigentContractError("Persisted pre-dispatch item frontier is invalid")
+    return item_ids
+
+
+def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
+    """Restore the exact item frontier recorded before the message side effect."""
+
+    metadata = getattr(durable_row, "metadata_", None)
+    if (
+        not isinstance(metadata, Mapping)
+        or FIRST_MESSAGE_ITEM_FRONTIER_KEY not in metadata
+    ):
+        return None
+    return _validated_pre_dispatch_item_ids(
+        metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY]
     )
 
 
@@ -1290,6 +1318,27 @@ async def run_omnigent_execution(
                 )
 
             retry_state = _heartbeat_state()
+            heartbeat_pre_dispatch_item_ids = (
+                _validated_pre_dispatch_item_ids(retry_state["preDispatchItemIds"])
+                if "preDispatchItemIds" in retry_state
+                else None
+            )
+            durable_pre_dispatch_item_ids = _persisted_pre_dispatch_item_ids(
+                durable_row
+            )
+            if (
+                heartbeat_pre_dispatch_item_ids is not None
+                and durable_pre_dispatch_item_ids is not None
+                and heartbeat_pre_dispatch_item_ids != durable_pre_dispatch_item_ids
+            ):
+                raise OmnigentContractError(
+                    "Omnigent retry item frontier conflicts with durable state"
+                )
+            pre_dispatch_item_ids = (
+                durable_pre_dispatch_item_ids
+                if durable_pre_dispatch_item_ids is not None
+                else heartbeat_pre_dispatch_item_ids
+            )
             durable_session_id = str(
                 getattr(durable_row, "omnigent_session_id", None) or ""
             ).strip()
@@ -1390,7 +1439,34 @@ async def run_omnigent_execution(
                 )
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
-            pre_dispatch_item_ids = _snapshot_item_ids(initial_snapshot)
+            if (
+                pre_dispatch_item_ids is None
+                and not first_message_posted
+                and not first_message_reconcile_required
+            ):
+                pre_dispatch_item_ids = _snapshot_item_ids(initial_snapshot)
+                if pre_dispatch_item_ids is not None and run_store is not None:
+                    record_frontier = getattr(
+                        run_store, "record_first_message_item_frontier", None
+                    )
+                    if callable(record_frontier):
+                        durable_row = await record_frontier(
+                            request.idempotency_key,
+                            item_ids=sorted(pre_dispatch_item_ids),
+                        )
+                        persisted_frontier = _persisted_pre_dispatch_item_ids(
+                            durable_row
+                        )
+                        if persisted_frontier is not None:
+                            pre_dispatch_item_ids = persisted_frontier
+            if pre_dispatch_item_ids is not None:
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "firstMessagePosted": first_message_posted,
+                        "preDispatchItemIds": sorted(pre_dispatch_item_ids),
+                    }
+                )
 
             if first_message_text is not None:
                 first_message = {
@@ -1849,18 +1925,29 @@ async def run_omnigent_execution(
                     "canceled",
                     "timed_out",
                 }:
-                    if isinstance(final_snapshot.get("items"), list) and not (
-                        _snapshot_contains_current_turn_progress(
+                    if isinstance(final_snapshot.get("items"), list):
+                        turn_state = _marked_turn_item_state(
                             final_snapshot,
                             marker=marker,
                             baseline_item_ids=pre_dispatch_item_ids,
                         )
-                    ):
-                        raise OmnigentSessionStillRunningError(
-                            "Omnigent stream ended before the current marked turn "
-                            "produced provider work"
+                        if not turn_state["progress"]:
+                            raise OmnigentSessionStillRunningError(
+                                "Omnigent stream ended before the current marked turn "
+                                "produced provider work"
+                            )
+                        terminal_status, final_snapshot = (
+                            await _await_marked_turn_terminal(
+                                client=client,
+                                session_id=session_id,
+                                marker=marker,
+                                baseline_item_ids=pre_dispatch_item_ids,
+                                event_count=event_count["value"],
+                                terminal_status=normalized_snapshot,
+                            )
                         )
-                    terminal_status = normalized_snapshot
+                    else:
+                        terminal_status = normalized_snapshot
                     # The stream ended without emitting a terminal event but the
                     # final snapshot is terminal. Append an indexed terminal event
                     # derived from the snapshot so the durable event index records

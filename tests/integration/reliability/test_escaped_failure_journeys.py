@@ -24,11 +24,15 @@ from api_service.db.models import Base
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
+    OmnigentBridgeSessionStore,
+)
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
     _marked_turn_item_state,
+    _persisted_pre_dispatch_item_ids,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
@@ -206,9 +210,18 @@ async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> N
     replay_id = "omnigent-evicted-turn-marker-retry-authority"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
-    baseline_item_ids = frozenset(
-        str(item["id"]) for item in manifest["preDispatchSnapshot"]["items"]
+    baseline_item_ids = _persisted_pre_dispatch_item_ids(
+        SimpleNamespace(
+            metadata_={
+                FIRST_MESSAGE_ITEM_FRONTIER_KEY: [
+                    str(item["id"])
+                    for item in manifest["preDispatchSnapshot"]["items"]
+                ]
+            }
+        )
     )
+    assert baseline_item_ids is not None
+    assert expected["frontierAuthority"] == "durable_bridge_metadata"
     terminal_snapshot = manifest["terminalSnapshot"]
     marker = manifest["currentTurnMarker"]
 
