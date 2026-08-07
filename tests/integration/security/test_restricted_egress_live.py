@@ -24,6 +24,9 @@ from moonmind.security.egress import (
     PROXY_URL,
     attest_docker_egress,
 )
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+)
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
@@ -408,10 +411,10 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
 ) -> None:
     """Use the real Container Job adapter, including attestation and evidence."""
 
-    published: dict[str, dict] = {}
+    published: dict[str, bytes] = {}
 
     async def publish(_request, name, data):
-        published[name] = json.loads(data)
+        published[name] = data
         return f"artifact:{name}"
 
     backend = DockerContainerJobBackend(
@@ -423,6 +426,9 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
     created = await backend.create_container(request)
     request.container_ref = created.container_ref
     request.egress_attestation_ref = created.diagnostics_ref
+    request.publication = AuxiliaryOutcome(
+        state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
+    )
     try:
         inspected = _docker(
             "inspect",
@@ -432,12 +438,29 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
         )
         assert inspected.returncode == 0, inspected.stderr[-1000:]
         assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
-        evidence = published[f"{request.job_id}-egress-attestation.json"]
-        assert evidence["attestation"]["validationState"] == "attested"
+        evidence = parse_and_verify_conformance_evidence(
+            published[f"{request.job_id}-egress-attestation.json"],
+            location="egress-attestation",
+        )
+        assert evidence["attestation"]["validationResult"] == "passed"
+        assert evidence["attestation"]["healthResult"] == "healthy"
         assert evidence["attachmentIdentity"] == created.container_ref
     finally:
         await backend.remove_container(request)
         await backend.cleanup(request)
+
+    # One versioned artifact per required row remains independently resolvable
+    # and digest-checkable after the live workload is gone (#3625).
+    attestation = parse_and_verify_conformance_evidence(
+        published[f"{request.job_id}-egress-attestation.json"],
+        location="egress-attestation",
+    )
+    lifecycle = parse_and_verify_conformance_evidence(
+        published[f"{request.job_id}-egress-lifecycle.json"],
+        location="egress-lifecycle",
+    )
+    assert attestation["attestation"]["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+    assert lifecycle["cleanupResult"] == "succeeded"
 
 
 @pytest.mark.asyncio

@@ -85,6 +85,9 @@ from moonmind.security.egress import (
     attest_docker_egress,
     restricted_proxy_env,
 )
+from moonmind.security.egress_conformance_evidence import (
+    serialize_conformance_evidence,
+)
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
     ManagedWorkspaceLocator,
@@ -1466,7 +1469,9 @@ class DockerContainerJobBackend:
         return await self._publish(
             request,
             f"{request.job_id}-egress-attestation.json",
-            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
+            serialize_conformance_evidence(
+                evidence, location="egress-attestation"
+            ),
         )
 
     async def _materialized_env(
@@ -1665,9 +1670,9 @@ class DockerContainerJobBackend:
                 egress_evidence_ref = await self._publish(
                     request,
                     f"{request.job_id}-egress-attestation.json",
-                    json.dumps(
-                        evidence, sort_keys=True, separators=(",", ":")
-                    ).encode(),
+                    serialize_conformance_evidence(
+                        evidence, location="egress-attestation"
+                    ),
                 )
             except Exception as exc:
                 # Evidence is part of readiness at this authority boundary. A
@@ -2383,9 +2388,9 @@ class DockerContainerJobBackend:
             diagnostics_ref = await self._publish(
                 request,
                 f"{request.job_id}-egress-lifecycle.json",
-                json.dumps(
-                    lifecycle, sort_keys=True, separators=(",", ":")
-                ).encode(),
+                serialize_conformance_evidence(
+                    lifecycle, location="egress-lifecycle"
+                ),
             )
         return ContainerJobActivityResult(
             diagnosticsRef=diagnostics_ref,
