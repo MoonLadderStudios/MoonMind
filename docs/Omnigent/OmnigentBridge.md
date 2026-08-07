@@ -853,6 +853,7 @@ type WorkflowChatBinding = {
   logicalStepId?: string;
   stepExecutionId?: string;
   chatUrl: string;
+  apiBase: string;
   state: 'starting' | 'available' | 'ended' | 'unavailable';
   readOnly: boolean;
   capabilities: Record<string, boolean>;
