@@ -1,102 +1,153 @@
 # Temporal Chat Instruction Contract
 
-**Status:** Design Draft / normative target  
+**Document Class:** Canonical declarative  
+**Status:** Deferred optional extension  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-07-02  
+**Last updated:** 2026-08-07  
 **Audience:** backend, workflow authors, managed-runtime, integrations
 
-**Implementation tracking:** Rollout tasks and tactical sequencing belong under `docs/tmp/`, issues, pull requests, or local-only handoffs.
+**Authority:** This document reserves the Temporal boundary for a possible future explicit Workflow-steering action. It does not apply to ordinary native Omnigent chat messages. The primary Chat product contract is `docs/UI/WorkflowChatPanel.md`.
+
+**Implementation tracking:** Rollout tasks and tactical sequencing belong under `docs/tmp/`, issues, pull requests, or local-only handoffs. No workflow-loop changes are required until the capability is explicitly promoted.
 
 ## 1. Purpose
 
-This document defines the Temporal-facing contract for chat instructions. It is a focused companion to `docs/Workflows/ChatInstructionIntervention.md` and should be folded into the larger Temporal architecture docs as implementation stabilizes.
+The ordinary Workflow Detail Chat path does not pass through Temporal:
 
-## 2. Primitive selection
+```text
+Native Omnigent composer -> native Omnigent session event API
+```
 
-Public user chat instructions use a Temporal Update:
+This document applies only to a future, separately invoked command such as:
+
+```text
+Steer Workflow -> MoonMind.UserWorkflow.SubmitChatInstruction
+```
+
+MoonMind must not classify native chat text and silently convert it into a Temporal Update.
+
+## 2. Reserved primitive
+
+If the extension is promoted, the public workflow primitive remains:
 
 ```text
 MoonMind.UserWorkflow.SubmitChatInstruction
 ```
 
-Reasons:
+A Temporal Update is appropriate for explicit workflow steering because the caller needs a synchronous accepted or rejected decision and the workflow must validate current run, Step, plan, and policy state.
 
-- the caller needs synchronous accepted/rejected semantics,
-- the workflow must validate stale `runId`, Step, plan revision, and policy before accepting semantic effects,
-- the response must explain whether the instruction attached to active work, queued for a safe point, triggered replan, or was rejected.
+The reserved Update is not:
 
-Internal child workflow delivery uses a typed artifact-ref Signal after the parent has accepted the instruction and is notifying an active child asynchronously. The existing `operator_message` Signal remains legacy non-chat behavior because it carries raw message text in workflow history.
+- the Omnigent session message transport,
+- a compatibility alias for native chat,
+- a required part of the Workflow Chat rollout,
+- a reason to duplicate the native composer.
 
-## 3. Update handling pattern
+## 3. Promotion gate
 
-The `SubmitChatInstruction` handler should stay lightweight:
+The Update handler and workflow command queue should be implemented only after `docs/Workflows/ChatInstructionIntervention.md` is promoted from its deferred status.
+
+Promotion requires:
+
+- a separately labeled workflow-steering UI,
+- demonstrated need beyond native chat and existing Workflow actions,
+- stale-target and side-effect policy,
+- explicit accepted/rejected semantics,
+- no interception of ordinary native session messages.
+
+## 4. Future handler invariants
+
+If implemented, the `SubmitChatInstruction` handler must remain lightweight:
 
 1. validate the typed request,
-2. dedupe by stable client keys (`idempotencyKey` and/or `instructionId`) when present, with Temporal Update ID only as a fallback for requests without a client key,
+2. dedupe by stable client keys,
 3. reject stale targets before acceptance,
-4. record a compact instruction command in workflow state,
+4. record a compact artifact-backed command in workflow state,
 5. wake the main workflow loop,
-6. return `ChatInstructionDecision`.
+6. return a bounded decision.
 
-The handler must not perform provider calls, artifact writes, or plan generation directly. Those belong in Activities or in the main workflow loop after the command is accepted.
+The handler must not:
 
-## 4. Main-loop safe points
+- perform provider calls,
+- post to an Omnigent session,
+- write large artifacts directly,
+- generate a revised plan directly,
+- cancel a child directly,
+- claim that a provider consumed the instruction.
 
-`MoonMind.UserWorkflow` should drain accepted chat commands at safe points such as:
+Activities or the main workflow loop own any promoted orchestration effects after acceptance.
+
+## 5. Future safe-point handling
+
+A promoted implementation may drain explicit workflow commands at legal workflow-owned boundaries such as:
 
 - before selecting the next ready Step,
 - before launching a child `MoonMind.AgentRun`,
 - while paused,
-- while awaiting provider/profile slot assignment,
-- between external-provider polling cycles,
-- before final completion if a bounded completion-grace window is enabled.
+- before final completion during a bounded completion-grace window.
 
-Conflicting mutations are serialized through the workflow-owned command queue rather than by relying on handler interleaving behavior.
+The current native-chat plan does not require adding these safe points or a workflow command queue.
 
-## 5. Continue-As-New carry-forward
+Conflicting workflow mutations, if later supported, must be serialized through workflow-owned state rather than browser or handler interleaving.
 
-Continue-As-New payloads must not carry full chat text. Carry-forward state is limited to:
+## 6. Artifact and history posture
 
-- current plan ref and plan revision,
-- pending compact chat instruction commands,
-- processed instruction IDs needed for bounded dedupe,
-- active Step and child refs,
-- Step ledger compact state,
-- artifact refs needed to resume safely.
+A future workflow-facing request carries:
 
-## 6. Child workflow delivery
+- `instructionId`,
+- optional stable idempotency key,
+- `messageArtifactRef`,
+- bounded message summary,
+- observed run, Step, and plan identity,
+- explicit policy fields.
 
-When a chat instruction targets active agent work, the parent workflow may signal the child `MoonMind.AgentRun` with an internal typed message.
+It must not carry full chat transcripts, provider payloads, diffs, logs, or large user text in workflow history.
 
-Recommended internal payload concepts:
+Continue-As-New, if relevant, carries only compact pending command state, bounded dedupe state, plan refs, Step refs, and artifact refs.
 
-```json
-{
-  "instructionId": "client-generated-id",
-  "messageArtifactRef": "artifact://chat-instruction",
-  "messageSummary": "Bounded display summary",
-  "targetLogicalStepId": "implement-change",
-  "stepExecutionOrdinal": 1,
-  "deliveryPolicy": "append_live"
-}
+Native Omnigent transcript history remains outside this command contract.
+
+## 7. Future child delivery
+
+If an accepted explicit workflow command targets active agent work, the parent workflow may later deliver a typed artifact-ref instruction to the child workflow or runtime.
+
+Workflow acceptance and provider delivery are different states:
+
+```text
+accepted by Temporal != consumed by Omnigent session
 ```
 
-Child delivery remains best-effort unless the runtime declares stronger support. The parent decision should distinguish accepted workflow instruction from confirmed provider/runtime delivery when that distinction matters to the UI.
+The parent decision must not claim live provider delivery without provider evidence.
 
-## 7. Replan and reattempt boundaries
+Ordinary native messages bypass this mechanism and use the native Omnigent session directly.
 
-Plan revision and active-Step reattempt are workflow orchestration effects, not Signal effects.
+## 8. Future replan and reattempt effects
 
-- Plan revision should call a planning Activity such as `plan.revise_from_chat_instruction`.
-- Active-Step reattempt should request cancellation of the active child, preserve evidence, then start a new Step Execution attempt.
-- External side effects require explicit policy or approval before automatic compensation.
+If promoted:
 
-## 8. Terminal executions
+- plan revision is a workflow orchestration effect that creates a new immutable plan artifact,
+- active-Step reattempt requests cancellation, preserves evidence, and creates a new Step Execution attempt,
+- external side effects require explicit policy or approval,
+- superseded future Steps remain visible in the Step ledger.
 
-Closed Workflow Executions do not accept `SubmitChatInstruction` as an ordinary mutation. The API creates linked follow-up executions for terminal sources and pins source `workflowId`, source `runId`, plan refs, finish-summary refs, optional Step ledger refs, and chat instruction refs.
+None of these effects are implied by a message sent through the native composer.
 
-## 9. Visibility posture
+## 9. Terminal executions
 
-The workflow may update `mm_updated_at` on accepted chat instructions. Do not put chat text, full summaries, prompts, diffs, logs, or provider payloads into Search Attributes or Memo.
+Closed Workflow Executions do not accept `SubmitChatInstruction` as an ordinary mutation.
 
-A future `mm_state = replanning` value should be added only if product surfaces need a first-class list/detail state for chat-driven plan revision.
+The default terminal product path is defined by `docs/UI/WorkflowChatPanel.md`:
+
+- inspect the terminal native transcript read-only,
+- view captured MoonMind evidence,
+- use **Continue in a new workflow** when authorized.
+
+That linked continuation does not require this deferred Temporal Update contract.
+
+## 10. Visibility posture
+
+Do not put chat text, full summaries, prompts, diffs, logs, or provider payloads into Search Attributes or Memo.
+
+No new `mm_state`, pending-instruction field, or chat-steering Search Attribute is required for the native Chat rollout.
+
+If the extension is later promoted, bounded visibility fields should be added only when a real list or detail filtering requirement exists.
