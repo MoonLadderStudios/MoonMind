@@ -207,16 +207,30 @@ class TemporalRemediationControlPlane:
                 "idempotencyKey": action_id,
             }
         )
+        # Persisting the branch graph and its launch request is not a verified
+        # repair: no fresh Omnigent branch turn has executed yet, so the action
+        # is only `accepted` and its repair outcome still requires verification
+        # once a real branch Step Execution reaches an authoritative terminal
+        # state (MoonLadderStudios/MoonMind#3621).
         return {
-            "status": "applied",
-            "message": "Checkpoint Branch was persisted by its durable owner.",
+            "status": "accepted",
+            "message": (
+                "Checkpoint Branch and its launch request were persisted by the "
+                "durable owner; no branch runtime turn has executed yet."
+            ),
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": [
                 f"checkpoint-branch:{graph.branch.branch_id}",
                 f"checkpoint-branch-turn:{turn_id}",
                 context_ref,
             ],
-            "verification": {"status": "verified"},
+            "verification": {"status": "pending"},
+            "verificationRequired": True,
+            "verificationHint": (
+                "Verify a branch Step Execution reaches an authoritative terminal "
+                "state and that target repair is established before treating this "
+                "checkpoint branch as a verified repair."
+            ),
         }
 
     async def session_control(

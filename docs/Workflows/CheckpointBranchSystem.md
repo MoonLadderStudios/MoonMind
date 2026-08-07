@@ -94,6 +94,8 @@ Every branch turn that executes agent/tool work must:
 6. declare runtime/session policy before launch;
 7. write or update Step Execution manifest evidence.
 
+All of these runtime identities are **server-owned**. A branch turn launch request carries operator intent (workspace baseline, prior evidence refs, bounded summaries, builder metadata) and an idempotency key only; the trusted service allocates the Step Execution id and Agent Run id deterministically from the immutable branch turn identity and rejects any caller-supplied Step Execution, Agent Run, provider session, runtime request/result, or diagnostics identities. The source checkpoint/workspace authority and the immutable instruction ref and digest are validated before any identity allocation or state mutation; stale or changed source authority fails closed with a bounded reason.
+
 ### 2.4 Branches are candidates until promoted
 
 Creating, continuing, or publishing a branch does not automatically make it the canonical continuation of the workflow. A branch becomes canonical only through an explicit promotion operation.

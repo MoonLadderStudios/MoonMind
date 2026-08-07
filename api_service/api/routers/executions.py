@@ -71,6 +71,7 @@ from api_service.services.control_stop_continuation import (
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
+    build_branch_turn_step_execution_id,
 )
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
@@ -1430,7 +1431,7 @@ def _branch_turn_launch_manifest_payload(
     workflow_id: str,
     branch: WorkflowCheckpointBranch,
     turn: WorkflowCheckpointBranchTurn,
-    payload: CheckpointBranchTurnLaunchRequest,
+    step_execution_id: str,
     context_bundle_ref: str,
 ) -> dict[str, Any]:
     follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
@@ -1440,7 +1441,7 @@ def _branch_turn_launch_manifest_payload(
         "runId": branch.source_run_id,
         "logicalStepId": branch.logical_step_id,
         "executionOrdinal": branch.source_execution_ordinal,
-        "stepExecutionId": payload.created_step_execution_id,
+        "stepExecutionId": step_execution_id,
         "reason": "checkpoint_branch",
         "status": "running",
         "runtimeSelection": (
@@ -13634,8 +13635,13 @@ async def launch_checkpoint_branch_turn(
             "branchId": branch.branch_id,
             "branchTurnId": turn.branch_turn_id,
             "operation": "checkpoint_branch.turn.launch",
+            "idempotencyKey": payload.idempotency_key,
         },
     )
+    # The server owns every runtime identity for a branch turn; it is allocated
+    # deterministically from the immutable turn id rather than taken from the
+    # caller (MoonLadderStudios/MoonMind#3621).
+    step_execution_id = build_branch_turn_step_execution_id(turn.branch_turn_id)
     existing_op = (
         await session.execute(
             select(WorkflowCheckpointBranchOperation).where(
@@ -13718,7 +13724,7 @@ async def launch_checkpoint_branch_turn(
         workflow_id=workflow_id,
         branch=branch,
         turn=turn,
-        payload=payload,
+        step_execution_id=step_execution_id,
         context_bundle_ref=context_bundle_ref,
     )
     manifest_digest = _operation_digest(manifest_payload)
@@ -13727,20 +13733,17 @@ async def launch_checkpoint_branch_turn(
         artifact_name="step-execution-manifest",
         payload_digest=manifest_digest,
     )
-    diagnostics_ref = (
-        payload.diagnostics_ref
-        or _branch_turn_artifact_ref(
-            branch_turn_id=turn.branch_turn_id,
-            artifact_name="diagnostics",
-            payload_digest=_operation_digest(
-                {
-                    "workflowId": workflow_id,
-                    "branchId": branch.branch_id,
-                    "branchTurnId": turn.branch_turn_id,
-                    "launchIdempotencyKey": launch_key,
-                }
-            ),
-        )
+    diagnostics_ref = _branch_turn_artifact_ref(
+        branch_turn_id=turn.branch_turn_id,
+        artifact_name="diagnostics",
+        payload_digest=_operation_digest(
+            {
+                "workflowId": workflow_id,
+                "branchId": branch.branch_id,
+                "branchTurnId": turn.branch_turn_id,
+                "launchIdempotencyKey": launch_key,
+            }
+        ),
     )
     try:
         launched = await CheckpointBranchService(session).launch_turn(
@@ -13752,11 +13755,6 @@ async def launch_checkpoint_branch_turn(
             checkpoint_ref=None,
             diagnostics_ref=diagnostics_ref,
             idempotency_key=launch_key,
-            created_step_execution_id=payload.created_step_execution_id,
-            runtime_agent_run_id=payload.runtime_agent_run_id,
-            provider_session_id=payload.provider_session_id,
-            agent_request_ref=payload.runtime_request_ref,
-            agent_result_ref=payload.runtime_result_ref,
         )
     except ValueError as exc:
         raise HTTPException(

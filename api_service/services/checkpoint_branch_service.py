@@ -69,6 +69,24 @@ def build_branch_turn_launch_idempotency_key(
     return ":".join(parts)
 
 
+def build_branch_turn_step_execution_id(branch_turn_id: str, *, ordinal: int = 1) -> str:
+    """Allocate the server-owned semantic Step Execution id for a branch turn.
+
+    The identity is derived deterministically from the immutable branch turn id
+    and execution ordinal so retries and Temporal replays resolve to the exact
+    same Step Execution rather than trusting a caller-supplied value
+    (MoonLadderStudios/MoonMind#3621). Each turn owns its own Step Execution, so
+    continue/fork turns each allocate a distinct identity.
+    """
+
+    turn = branch_turn_id.strip()
+    if not turn:
+        raise ValueError("branch turn Step Execution id requires a branch turn id")
+    if ordinal < 1:
+        raise ValueError("branch turn execution ordinal must be positive")
+    return f"{turn}:execution:{ordinal}"
+
+
 @dataclass(frozen=True)
 class CheckpointBranchGitBindingInput:
     """Input for persisting a git binding for a product checkpoint branch."""
@@ -1025,6 +1043,47 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         return await self._branch_graph(branch)
 
+    @staticmethod
+    def _validate_branch_turn_source_authority(
+        branch: WorkflowCheckpointBranch,
+        turn: WorkflowCheckpointBranchTurn,
+    ) -> None:
+        """Fail closed on stale or changed source authority before any mutation.
+
+        The source checkpoint/workspace authority and the immutable branch
+        instruction ref/digest must resolve and agree before the server
+        allocates identities or mutates branch/turn state
+        (MoonLadderStudios/MoonMind#3621).
+        """
+
+        if not branch.source_run_id:
+            raise ValueError("branch turn launch requires source run lineage")
+        if not (branch.source_checkpoint_ref or branch.source_state_ref):
+            raise ValueError(
+                "branch turn launch requires source checkpoint or typed state authority"
+            )
+        if not (turn.source_checkpoint_ref or turn.source_state_ref):
+            raise ValueError(
+                "branch turn launch requires resolved turn source authority"
+            )
+        if not turn.instruction_ref or not turn.instruction_digest:
+            raise ValueError(
+                "branch turn launch requires an immutable instruction ref and digest"
+            )
+        if not turn.instruction_digest.startswith("sha256:"):
+            raise ValueError("branch turn instruction digest must be a sha256 digest")
+        # A turn that reuses the root source checkpoint must not silently diverge
+        # from the branch's pinned source digest.
+        if (
+            branch.source_checkpoint_digest
+            and turn.source_checkpoint_ref == branch.source_checkpoint_ref
+            and turn.source_checkpoint_digest is not None
+            and turn.source_checkpoint_digest != branch.source_checkpoint_digest
+        ):
+            raise ValueError(
+                "branch turn source checkpoint digest does not match branch source"
+            )
+
     async def launch_turn(
         self,
         *,
@@ -1036,13 +1095,14 @@ class CheckpointBranchService:
         checkpoint_ref: str | None,
         diagnostics_ref: str,
         idempotency_key: str,
-        created_step_execution_id: str | None = None,
-        runtime_agent_run_id: str | None = None,
-        provider_session_id: str | None = None,
-        agent_request_ref: str | None = None,
-        agent_result_ref: str | None = None,
     ) -> WorkflowCheckpointBranchTurn:
-        """Launch one persisted branch turn as semantic runtime evidence."""
+        """Launch one persisted branch turn as server-owned semantic evidence.
+
+        The server allocates the Step Execution and Agent Run identities from the
+        immutable turn identity; callers may not supply runtime identities
+        (MoonLadderStudios/MoonMind#3621). Source authority is validated before
+        any state mutation.
+        """
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         if branch.state in {
@@ -1068,8 +1128,19 @@ class CheckpointBranchService:
                 "branch turn launch idempotency key must include workflow, "
                 "branch, and branch turn identity"
             )
-        if not created_step_execution_id:
-            raise ValueError("branch turn launch requires Step Execution evidence")
+        # Validate source and immutable branch intent before mutating any state.
+        self._validate_branch_turn_source_authority(branch, turn)
+        # Allocate all runtime identities server-side and deterministically so
+        # replays and retries resolve to the exact same Step Execution.
+        created_step_execution_id = build_branch_turn_step_execution_id(
+            turn.branch_turn_id
+        )
+        runtime_agent_run_id = f"{created_step_execution_id}:agent-run"
+        # No live provider session exists until a real branch runtime turn is
+        # dispatched; do not fabricate a session identity here.
+        provider_session_id: str | None = None
+        agent_request_ref: str | None = None
+        agent_result_ref: str | None = None
         launch_values = {
             "context_bundle_ref": context_bundle_ref,
             "step_execution_manifest_ref": step_execution_manifest_ref,

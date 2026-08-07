@@ -6212,14 +6212,18 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
-        /** CheckpointBranchTurnLaunchRequest */
+        /**
+         * CheckpointBranchTurnLaunchRequest
+         * @description Operator intent for launching a branch turn.
+         *
+         *     The request carries operator intent and an idempotency key only. Runtime
+         *     identities (Step Execution id, Agent Run id, provider session, runtime
+         *     request/result, and diagnostics refs) are allocated by the trusted server;
+         *     callers may not supply or fabricate them (MoonLadderStudios/MoonMind#3621).
+         */
         CheckpointBranchTurnLaunchRequest: {
-            /** Createdstepexecutionid */
-            createdStepExecutionId: string;
-            /** Runtimeagentrunid */
-            runtimeAgentRunId?: string | null;
-            /** Providersessionid */
-            providerSessionId?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
             /** Workspacebaseline */
             workspaceBaseline?: {
                 [key: string]: unknown;
@@ -6234,12 +6238,6 @@ export interface components {
             builderMetadata?: {
                 [key: string]: unknown;
             };
-            /** Runtimerequestref */
-            runtimeRequestRef?: string | null;
-            /** Runtimeresultref */
-            runtimeResultRef?: string | null;
-            /** Diagnosticsref */
-            diagnosticsRef?: string | null;
         };
         /** CheckpointBranchTurnListResponse */
         CheckpointBranchTurnListResponse: {

@@ -163,16 +163,18 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
 
 
 class CheckpointBranchTurnLaunchRequest(BaseModel):
+    """Operator intent for launching a branch turn.
+
+    The request carries operator intent and an idempotency key only. Runtime
+    identities (Step Execution id, Agent Run id, provider session, runtime
+    request/result, and diagnostics refs) are allocated by the trusted server;
+    callers may not supply or fabricate them (MoonLadderStudios/MoonMind#3621).
+    """
+
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    created_step_execution_id: str = Field(
-        ..., alias="createdStepExecutionId", min_length=1, max_length=255
-    )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1, max_length=255
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1, max_length=255
+    idempotency_key: str = Field(
+        ..., alias="idempotencyKey", min_length=1, max_length=512
     )
     workspace_baseline: dict[str, Any] = Field(
         default_factory=dict, alias="workspaceBaseline"
@@ -186,25 +188,8 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
     builder_metadata: dict[str, Any] = Field(
         default_factory=dict, alias="builderMetadata"
     )
-    runtime_request_ref: str | None = Field(
-        None, alias="runtimeRequestRef", min_length=1, max_length=1024
-    )
-    runtime_result_ref: str | None = Field(
-        None, alias="runtimeResultRef", min_length=1, max_length=1024
-    )
-    diagnostics_ref: str | None = Field(
-        None, alias="diagnosticsRef", min_length=1, max_length=1024
-    )
 
-    @field_validator(
-        "created_step_execution_id",
-        "runtime_agent_run_id",
-        "provider_session_id",
-        "runtime_request_ref",
-        "runtime_result_ref",
-        "diagnostics_ref",
-        mode="before",
-    )
+    @field_validator("idempotency_key", mode="before")
     @classmethod
     def _strip_text(cls, value: Any) -> str | None:
         return _optional_text(value)
@@ -228,12 +213,6 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
             if summary is not None and len(str(summary)) > 1200:
                 raise ValueError("boundedSummaries entries must be bounded")
         return value
-
-    @model_validator(mode="after")
-    def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
-        if not self.created_step_execution_id:
-            raise ValueError("launch requires Step Execution evidence")
-        return self
 
 
 class CheckpointBranchPromoteRequest(BaseModel):

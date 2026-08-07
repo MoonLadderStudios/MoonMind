@@ -178,6 +178,9 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
             branch_id="cbr-integration",
             branch_turn_id=turn_id,
         )
+        # Runtime identities are allocated by the server; the caller supplies
+        # only branch/turn identity and evidence refs
+        # (MoonLadderStudios/MoonMind#3621).
         launch_args = {
             "workflow_id": "mm:wf-branch",
             "branch_id": "cbr-integration",
@@ -186,11 +189,6 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
             "step_execution_manifest_ref": "artifact://manifest/integration",
             "checkpoint_ref": "artifact://checkpoint/integration",
             "diagnostics_ref": "artifact://diagnostics/integration",
-            "agent_request_ref": "artifact://agent-request/integration",
-            "agent_result_ref": "artifact://agent-result/integration",
-            "created_step_execution_id": (
-                "mm:wf-branch:run-branch:implement:execution:3"
-            ),
             "idempotency_key": launch_key,
         }
 
@@ -213,8 +211,6 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
         "output.branch_turn.checkpoint.json",
         "output.branch_turn.diagnostics.json",
         "output.branch_turn.step_execution_manifest.json",
-        "runtime.branch_turn.agent_request.json",
-        "runtime.branch_turn.agent_result.json",
         "runtime.branch_turn.context_bundle.json",
     ]
 

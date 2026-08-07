@@ -591,7 +591,13 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         _production_target_health(),
     )
 
-    assert result["status"] == "applied"
+    # Persisting the branch graph is not a verified repair: the action is only
+    # accepted and still requires verification once a branch runtime turn
+    # reaches an authoritative terminal state (MoonLadderStudios/MoonMind#3621).
+    assert result["status"] == "accepted"
+    assert result["verification"] == {"status": "pending"}
+    assert result["verificationRequired"] is True
+    assert result["verificationHint"]
     payload = checkpoint_service.create_branch_graph.await_args.args[0]
     assert payload["source"]["workflowId"] == "target"
     assert payload["source"]["runId"] == "target-run"
