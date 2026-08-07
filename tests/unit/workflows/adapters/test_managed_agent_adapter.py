@@ -1891,6 +1891,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -1974,6 +1975,7 @@ async def test_fetch_result_ignores_stale_auto_publish_evidence(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -2053,6 +2055,7 @@ async def test_fetch_result_does_not_bypass_pr_resolver_publish_normalization(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "pr-resolver",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "merge",\n'
             '  "repository": "MoonLadderStudios/MoonMind",\n'
@@ -2975,6 +2978,7 @@ async def test_fetch_result_normalizes_pr_resolver_publish_result_evidence(
             '  "status": "merged",\n'
             '  "merge_outcome": "merged",\n'
             '  "mergeAutomationDisposition": "merged",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "reason": "ci_complete"\n'
             "}\n"
         ),

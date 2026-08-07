@@ -182,6 +182,7 @@ def _auto_publish_evidence(**overrides: object) -> dict[str, object]:
         "mode": "auto",
         "owner": "agent",
         "skillId": "fix-ci",
+        "executionRef": "workflow:run:fix-ci:execution:1",
         "status": "verified",
         "action": "push",
         "repository": "MoonLadderStudios/MoonMind",

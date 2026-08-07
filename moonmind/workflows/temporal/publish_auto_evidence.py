@@ -24,6 +24,7 @@ class AutoPublishEvidence:
     mode: str
     owner: str
     skill_id: str
+    execution_ref: str
     status: str
     action: str
     repository: str
@@ -115,6 +116,7 @@ def parse_auto_publish_evidence(raw: bytes | str | Mapping[str, Any]) -> AutoPub
         mode=mode,
         owner=owner,
         skill_id=_required_text(payload, "skillId"),
+        execution_ref=_required_text(payload, "executionRef"),
         status=status,
         action=action,
         repository=_required_text(payload, "repository"),

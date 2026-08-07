@@ -371,6 +371,7 @@ def _canonical_auto_publish_result(payload: Mapping[str, Any]) -> dict[str, Any]
         "mode": evidence.mode,
         "owner": evidence.owner,
         "skillId": evidence.skill_id,
+        "executionRef": evidence.execution_ref,
         "status": evidence.status,
         "action": evidence.action,
         "repository": evidence.repository,
@@ -470,7 +471,15 @@ def _normalize_pr_resolver_auto_publish_result(
         final.get("repository"),
         final.get("repo"),
     ) or _github_repository_from_pr_url(pr_url)
-    if not pr_url or not branch or not repository:
+    execution_ref = _first_stripped_text(
+        payload.get("executionRef"),
+        payload.get("execution_ref"),
+        resolver_payload.get("executionRef"),
+        resolver_payload.get("execution_ref"),
+        final.get("executionRef"),
+        final.get("execution_ref"),
+    )
+    if not pr_url or not branch or not repository or not execution_ref:
         return None
 
     verification = payload.get("verification")
@@ -496,6 +505,7 @@ def _normalize_pr_resolver_auto_publish_result(
         "mode": "auto",
         "owner": "agent",
         "skillId": "pr-resolver",
+        "executionRef": execution_ref,
         "status": "verified",
         "action": "merge",
         "repository": repository,

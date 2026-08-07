@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -95,6 +96,12 @@ def _first_text(*values: object) -> str:
         if text:
             return text
     return ""
+
+
+def _execution_ref(skill_id: str) -> str:
+    """Bind evidence to the managed step, with a portable local identity."""
+
+    return _text(os.getenv("MOONMIND_STEP_EXECUTION_ID")) or f"local:{skill_id}"
 
 
 def _nested_mapping(payload: Mapping[str, Any], *keys: str) -> dict[str, Any]:
@@ -240,6 +247,7 @@ def _evidence_payload(
         "mode": "auto",
         "owner": "agent",
         "skillId": skill_id,
+        "executionRef": _execution_ref(skill_id),
         "status": status,
         "action": action,
         "repository": repository_value,

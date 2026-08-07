@@ -339,6 +339,49 @@ async def test_terminal_contract_uses_fresh_process_when_session_cannot_continue
     assert "do not schedule a wake-up" in continuation.instruction_ref
 
 
+async def test_terminal_checkpoint_activity_failure_preserves_primary_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-checkpoint"
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "parameters": {"publishMode": "auto"},
+        }
+    )
+    primary = AgentRunResult(
+        summary="terminal evidence missing",
+        failureClass="execution_error",
+        metadata={"terminalContractSatisfied": False},
+    )
+
+    async def fail_checkpoint(
+        name: str, _payload: Any, **_kwargs: Any
+    ) -> Any:
+        assert name == "agent_runtime.publish_terminal_checkpoint"
+        raise RuntimeError("checkpoint routing unavailable")
+
+    run._execute_routed_activity = fail_checkpoint  # type: ignore[method-assign]
+    result = await run._publish_terminal_contract_failure_checkpoint(
+        request=request,
+        result=primary,
+    )
+
+    assert result.failure_class == primary.failure_class
+    assert result.summary == primary.summary
+    assert result.metadata["terminalPublication"] == {
+        "intent": "terminal_checkpoint",
+        "status": "failed",
+        "reasonCode": "terminal_checkpoint_activity_failed",
+        "attempted": True,
+        "errorType": "RuntimeError",
+    }
+
+
 async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

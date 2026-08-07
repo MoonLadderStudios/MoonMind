@@ -36,6 +36,7 @@ def _write_auto_publish_result(
     *,
     skill_id: str = "fix-comments",
     status: str = "verified",
+    execution_ref: str = "step:auto",
 ) -> None:
     path = workspace / "artifacts/publish_result.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,6 +47,7 @@ def _write_auto_publish_result(
                 "mode": "auto",
                 "owner": "agent",
                 "skillId": skill_id,
+                "executionRef": execution_ref,
                 "status": status,
                 "action": "push" if status == "verified" else "none",
                 "repository": "MoonLadderStudios/MoonMind",
@@ -90,6 +92,13 @@ def test_auto_publish_terminal_requires_valid_skill_owned_evidence(
     assert stale.failure_code == "STALE_TERMINAL_EVIDENCE"
     assert stale.metadata["terminalContractRetryable"] is True
 
+    _write_auto_publish_result(tmp_path, execution_ref="step:old")
+    wrong_execution = evaluate_terminal_evidence(
+        _auto_publish_contract(), workspace_path=str(tmp_path)
+    )
+    assert wrong_execution.failure_code == "STALE_TERMINAL_EVIDENCE"
+    assert wrong_execution.metadata["terminalContractRetryable"] is True
+
 
 def test_auto_publish_terminal_preserves_explicit_blocked_outcome(
     tmp_path: Path,
@@ -109,6 +118,7 @@ def test_auto_publish_evidence_ref_survives_workflow_history_compaction() -> Non
             "metadata": {
                 "publishEvidence": "art-publish-evidence",
                 "oversizedAuxiliaryObservation": "x" * 200_000,
+                "providerFailure": {"detail": "y" * 200_000},
             },
         }
     )
@@ -406,7 +416,9 @@ def test_pr_resolver_terminal_requires_result_and_publish_evidence(tmp_path: Pat
     )
     missing_publish = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
     assert missing_publish.failure_code == "INCOMPLETE_TERMINAL_CONTRACT"
-    _write_auto_publish_result(tmp_path, skill_id="pr-resolver")
+    _write_auto_publish_result(
+        tmp_path, skill_id="pr-resolver", execution_ref="step-1"
+    )
     assert evaluate_terminal_evidence(contract, workspace_path=str(tmp_path)).satisfied
 
 
@@ -425,7 +437,9 @@ def test_pr_resolver_terminal_accepts_publish_evidence_from_spool(tmp_path: Path
         encoding="utf-8",
     )
     spool.mkdir()
-    _write_auto_publish_result(workspace, skill_id="pr-resolver")
+    _write_auto_publish_result(
+        workspace, skill_id="pr-resolver", execution_ref="step-1"
+    )
     (workspace / "artifacts/publish_result.json").replace(
         spool / "publish_result.json"
     )

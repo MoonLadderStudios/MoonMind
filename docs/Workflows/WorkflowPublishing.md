@@ -39,16 +39,19 @@ Resolution rules:
 - `branch` and `pr` are invalid for auto-publish-capable skills unless that skill explicitly opts into MoonMind-managed publishing.
 - `auto` is invalid for tasks that do not declare agent-owned publishing capability.
 
-Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands.
+Every successful auto run must produce `artifacts/publish_result.json` with `schemaVersion = "moonmind.publish.auto.v1"`, `mode = "auto"`, `owner = "agent"`, the selected skill id, the current `executionRef`, status, action, repository, branch, local and remote head fields, remote verification status, push/merge booleans, optional PR URL, optional blocked reason, and verification commands. MoonMind accepts the evidence only when `executionRef` exactly matches the terminal contract; evidence from another attempt or restored workspace is stale even when the Skill and remote head match.
 
-Resolving `publish.mode = auto` compiles that file into an execution-bound
-terminal contract for every auto-publish-capable Skill. A managed process exit,
-provider completion, or assistant claim cannot complete the AgentRun until the
-contract is validated. Missing, malformed, or stale evidence receives bounded
-continuation while the original workspace and resolved Skill snapshot remain
-authoritative. If continuation exhausts after repository work, MoonMind attempts
-terminal checkpoint publication to an isolated recovery branch before cleanup;
-the run remains failed and the saved branch is recovery evidence only.
+Resolving `publish.mode = auto` on a runtime with MoonMind-local workspace
+authority compiles that file into an execution-bound terminal contract for every
+auto-publish-capable Skill. An external-provider workspace must use its
+provider-owned result handoff and must not receive a `workspace_json` contract it
+cannot satisfy. A managed process exit, provider completion, or assistant claim
+cannot complete a compiled AgentRun until the contract is validated. Missing,
+malformed, or stale evidence receives bounded continuation while the original
+workspace and resolved Skill snapshot remain authoritative. If continuation
+exhausts after repository work, MoonMind attempts terminal checkpoint
+publication to an isolated recovery branch before cleanup; the run remains
+failed and the saved branch is recovery evidence only.
 
 Built-in auto-publish skills produce this evidence through the portable helper:
 

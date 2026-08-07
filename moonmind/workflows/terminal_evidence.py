@@ -60,6 +60,7 @@ def _evaluate_auto_publish_evidence(
     contract_id: str,
     relative_path: str,
     expected_skill_id: str,
+    expected_execution_ref: str,
 ) -> TerminalEvidenceEvaluation:
     """Validate agent-owned publication without reimplementing Skill semantics."""
 
@@ -77,11 +78,18 @@ def _evaluate_auto_publish_evidence(
     metadata.update(
         {
             "autoPublishSkillId": evidence.skill_id,
+            "autoPublishExecutionRef": evidence.execution_ref,
             "autoPublishStatus": evidence.status,
             "autoPublishAction": evidence.action,
         }
     )
     if expected_skill_id and evidence.skill_id != expected_skill_id:
+        metadata["terminalContractRetryable"] = True
+        return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
+    if (
+        not expected_execution_ref
+        or evidence.execution_ref != expected_execution_ref
+    ):
         metadata["terminalContractRetryable"] = True
         return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
     if evidence.status == "blocked":
@@ -272,6 +280,11 @@ def evaluate_terminal_evidence(
             expected_skill_id=str(
                 contract.get("skillId") or contract.get("skill_id") or ""
             ).strip(),
+            expected_execution_ref=str(
+                contract.get("executionRef")
+                or contract.get("execution_ref")
+                or ""
+            ).strip(),
         )
     if contract_id == "pr_resolver_terminal.v1":
         disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
@@ -320,6 +333,7 @@ def evaluate_terminal_evidence(
                 contract_id="auto_publish_terminal.v1",
                 relative_path="artifacts/publish_result.json",
                 expected_skill_id="pr-resolver",
+                expected_execution_ref=expected_execution,
             )
             if not publish_evaluation.satisfied:
                 return _failure(

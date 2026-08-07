@@ -2477,30 +2477,42 @@ class MoonMindAgentRun:
         metadata = dict(result.metadata or {})
         existing = metadata.get("terminalPublication")
         existing = existing if isinstance(existing, Mapping) else {}
-        publication = await self._execute_routed_activity(
-            "agent_runtime.publish_terminal_checkpoint",
-            AgentRuntimeTerminalCheckpointInput(
-                runId=self.run_id,
-                agentId=request.agent_id,
-                failureClass=result.failure_class,
-                targetBranch=fetch_input.target_branch,
-                existingBranch=existing.get("branchName"),
-                existingHeadSha=existing.get("headSha"),
-                existingPrUrl=existing.get("prUrl"),
-                publicationEnabled=(
-                    fetch_input.terminal_checkpoint_publication_enabled
+        try:
+            publication = await self._execute_routed_activity(
+                "agent_runtime.publish_terminal_checkpoint",
+                AgentRuntimeTerminalCheckpointInput(
+                    runId=self.run_id,
+                    agentId=request.agent_id,
+                    failureClass=result.failure_class,
+                    targetBranch=fetch_input.target_branch,
+                    existingBranch=existing.get("branchName"),
+                    existingHeadSha=existing.get("headSha"),
+                    existingPrUrl=existing.get("prUrl"),
+                    publicationEnabled=(
+                        fetch_input.terminal_checkpoint_publication_enabled
+                    ),
+                    noRemoteWrites=fetch_input.no_remote_writes,
+                    readOnly=fetch_input.read_only,
+                    dryRun=fetch_input.dry_run,
+                    workspaceAuthoritative=fetch_input.workspace_authoritative,
+                    runtimeCapabilitySupported=(
+                        fetch_input.terminal_checkpoint_capability_supported
+                    ),
+                    idempotencyKey=(
+                        f"terminal-contract-checkpoint-v1:{self.run_id}"
+                    ),
                 ),
-                noRemoteWrites=fetch_input.no_remote_writes,
-                readOnly=fetch_input.read_only,
-                dryRun=fetch_input.dry_run,
-                workspaceAuthoritative=fetch_input.workspace_authoritative,
-                runtimeCapabilitySupported=(
-                    fetch_input.terminal_checkpoint_capability_supported
-                ),
-                idempotencyKey=f"terminal-contract-checkpoint-v1:{self.run_id}",
-            ),
-            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-        )
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+        except Exception as exc:
+            metadata["terminalPublication"] = {
+                "intent": "terminal_checkpoint",
+                "status": "failed",
+                "reasonCode": "terminal_checkpoint_activity_failed",
+                "attempted": True,
+                "errorType": type(exc).__name__,
+            }
+            return result.model_copy(update={"metadata": metadata})
         publication_payload = (
             publication.model_dump(mode="json", by_alias=True, exclude_none=True)
             if hasattr(publication, "model_dump")
