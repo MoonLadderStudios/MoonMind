@@ -32,7 +32,7 @@ If no constraints are provided, default to addressing all applicable feedback.
 
 1. Resolve PR and collect all comments.
 - Resolve the comments helper before reading any existing comments artifact:
-  - Prefer `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/fix-comments/tools/get_branch_pr_comments.py`.
+  - Prefer `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/fix-comments/tools/get_branch_pr_comments.py`; its repository-default path is `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
   - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
   - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
