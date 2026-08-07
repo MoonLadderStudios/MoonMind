@@ -1615,6 +1615,73 @@ class TemporalExecutionRemediationLink(Base):
         onupdate=func.now(),
     )
 
+
+class RemediationApproval(Base):
+    """Authoritative reviewer decision for one exact remediation action.
+
+    MoonLadderStudios/MoonMind#3620.  The JSON authority binding contains only
+    immutable identifiers and digests; credential material and raw host
+    authority are forbidden at the service boundary.
+    """
+
+    __tablename__ = "remediation_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "remediation_workflow_id",
+            "idempotency_key",
+            name="uq_remediation_approvals_workflow_idempotency",
+        ),
+        Index("ix_remediation_approvals_target", "target_workflow_id"),
+        Index("ix_remediation_approvals_status_expiry", "status", "expires_at"),
+    )
+
+    approval_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    remediation_workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    remediation_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    risk_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    redacted_parameters: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    parameter_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    authority_binding: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    approval_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer_rule: Mapped[str] = mapped_column(String(128), nullable=False)
+    requesting_actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    decision_actor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    decided_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consumption_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    evidence_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+
 class ControlStopContinuationRecord(Base):
     """Authoritative admission and idempotency record for a control stop."""
 

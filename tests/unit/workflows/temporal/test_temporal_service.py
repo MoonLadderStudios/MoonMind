@@ -5,7 +5,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -1374,9 +1374,66 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         link.status = "awaiting_approval"
         await session.commit()
 
+        approval = await service.create_remediation_approval_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.interrupt_turn",
+            risk_tier="medium",
+            redacted_parameters={"reason": "bounded repair"},
+            authority_binding={
+                "targetRunId": link.target_run_id,
+                "targetExpectedState": link.target_run_id,
+                "policyRef": "policy:test@1",
+                "policyDigest": "sha256:" + "a" * 64,
+                "snapshotRef": "omnigent-policy:sha256:" + "b" * 64,
+            },
+            approval_class="operator",
+            reviewer_rule="workflow-owner",
+            requesting_actor="requester@example.com",
+            idempotency_key="approval-request-1",
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        )
+        duplicate = await service.create_remediation_approval_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="session.interrupt_turn",
+            risk_tier="medium",
+            redacted_parameters={"reason": "bounded repair"},
+            authority_binding={
+                "targetRunId": link.target_run_id,
+                "targetExpectedState": link.target_run_id,
+                "policyRef": "policy:test@1",
+                "policyDigest": "sha256:" + "a" * 64,
+                "snapshotRef": "omnigent-policy:sha256:" + "b" * 64,
+            },
+            approval_class="operator",
+            reviewer_rule="workflow-owner",
+            requesting_actor="requester@example.com",
+            idempotency_key="approval-request-1",
+            expires_at=approval.expires_at,
+        )
+        assert duplicate.approval_id == approval.approval_id
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="idempotency_key_reused_with_different_approval_request",
+        ):
+            await service.create_remediation_approval_request(
+                remediation_workflow_id=remediation.workflow_id,
+                action_kind="session.interrupt_turn",
+                risk_tier="medium",
+                redacted_parameters={"reason": "different repair"},
+                authority_binding={
+                    "targetRunId": link.target_run_id,
+                    "targetExpectedState": link.target_run_id,
+                },
+                approval_class="operator",
+                reviewer_rule="workflow-owner",
+                requesting_actor="requester@example.com",
+                idempotency_key="approval-request-1",
+                expires_at=approval.expires_at,
+            )
+
         result = await service.record_remediation_approval_decision(
             remediation_workflow_id=remediation.workflow_id,
-            request_id=f"{remediation.workflow_id}:approval",
+            request_id=approval.approval_id,
             decision="approved",
             comment="Reviewed blast radius.",
             actor="ops@example.com",
@@ -1385,7 +1442,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert result == {
             "accepted": True,
             "workflowId": remediation.workflow_id,
-            "requestId": f"{remediation.workflow_id}:approval",
+            "requestId": approval.approval_id,
             "decision": "approved",
         }
         record = await service.describe_execution(remediation.workflow_id)
@@ -1393,7 +1450,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["action"] == "remediation_approval_approved"
         assert audit[-1]["transport"] == "api"
         assert audit[-1]["summary"] == "Remediation approval approved."
-        assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
+        assert approval.approval_id in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
 
 @pytest.mark.asyncio

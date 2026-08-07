@@ -18,12 +18,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     MoonMindWorkflowState,
+    RemediationApproval,
     SettingsOverride,
     TemporalArtifact,
     TemporalArtifactLink,
@@ -123,6 +124,17 @@ from moonmind.workflows.executions.checkpoint_resume_admission import (
 )
 from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
 from moonmind.workflows.temporal.title_search import tokenize_title
+
+
+def _stable_digest(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
@@ -1025,6 +1037,254 @@ class TemporalExecutionService:
                 branch_links_by_remediation.get(link.remediation_workflow_id, []),
             )
 
+        approval_result = await self._session.execute(
+            select(RemediationApproval)
+            .where(RemediationApproval.remediation_workflow_id.in_(remediation_ids))
+            .order_by(RemediationApproval.requested_at.desc())
+        )
+        approvals_by_remediation: dict[str, RemediationApproval] = {}
+        now = datetime.now(UTC)
+        expired_records = False
+        for approval in approval_result.scalars():
+            approvals_by_remediation.setdefault(
+                approval.remediation_workflow_id, approval
+            )
+        for link in links:
+            approval = approvals_by_remediation.get(link.remediation_workflow_id)
+            if approval is None:
+                continue
+            status_value = approval.status
+            expires_at = approval.expires_at
+            if (
+                status_value == "pending"
+                and expires_at is not None
+                and _as_utc(expires_at) <= now
+            ):
+                status_value = "expired"
+                approval.status = "expired"
+                expired_records = True
+            setattr(
+                link,
+                "approval_state",
+                {
+                    "requestId": approval.approval_id,
+                    "actionKind": approval.action_kind,
+                    "riskTier": approval.risk_tier,
+                    "decision": status_value,
+                    "decisionActor": approval.decision_actor,
+                    "decisionAt": approval.decided_at,
+                    "canDecide": status_value == "pending",
+                    "auditRef": (approval.evidence_refs or {}).get("decision"),
+                },
+            )
+        if expired_records:
+            await self._session.commit()
+
+    async def create_remediation_approval_request(
+        self,
+        *,
+        remediation_workflow_id: str,
+        action_kind: str,
+        risk_tier: str,
+        redacted_parameters: Mapping[str, Any],
+        authority_binding: Mapping[str, Any],
+        approval_class: str,
+        reviewer_rule: str,
+        requesting_actor: str,
+        idempotency_key: str,
+        expires_at: datetime,
+        evidence_refs: Mapping[str, Any] | None = None,
+    ) -> RemediationApproval:
+        """Persist an immutable, replay-safe approval request for #3620."""
+        link = await self._session.get(
+            TemporalExecutionRemediationLink, remediation_workflow_id
+        )
+        if link is None:
+            raise TemporalExecutionValidationError("remediation link was not found")
+        from moonmind.workflows.temporal.remediation_actions import (
+            RemediationActionAuthorityService,
+            RemediationPermissionSet,
+            RemediationSecurityProfile,
+        )
+
+        authority = await RemediationActionAuthorityService(
+            session=self._session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=action_kind,
+            parameters=redacted_parameters,
+            dry_run=False,
+            idempotency_key=idempotency_key,
+            requesting_principal=requesting_actor,
+            permissions=RemediationPermissionSet(
+                can_view_target=True,
+                can_request_admin_profile=True,
+                can_approve_high_risk=False,
+            ),
+            security_profile=RemediationSecurityProfile(
+                profile_ref="persisted:approval_request",
+                execution_principal=requesting_actor,
+                allowed_action_kinds=(action_kind,),
+            ),
+        )
+        if authority.decision != "approval_required":
+            raise TemporalExecutionValidationError(
+                f"action is not approval-required: {authority.reason}"
+            )
+        if authority.risk != risk_tier:
+            raise TemporalExecutionValidationError("risk_tier_mismatch")
+        binding = dict(authority_binding)
+        required = {"targetRunId", "targetExpectedState"}
+        policy_fields = {"policyRef", "policyDigest", "snapshotRef"}
+        if policy_fields.intersection(binding):
+            required.update(policy_fields)
+        if missing := sorted(required - set(binding)):
+            raise TemporalExecutionValidationError(
+                f"approval authority binding is missing: {', '.join(missing)}"
+            )
+        if str(binding["targetRunId"]) != link.target_run_id:
+            raise TemporalExecutionValidationError("stale_target_run")
+        if binding.get("approvalClass") not in {None, approval_class}:
+            raise TemporalExecutionValidationError("approval_class_mismatch")
+        if binding.get("reviewerRule") not in {None, reviewer_rule}:
+            raise TemporalExecutionValidationError("reviewer_rule_mismatch")
+        parameters = dict(redacted_parameters)
+        serialized_parameters = json.dumps(parameters, sort_keys=True)
+        scan_result = scan_outbound_text(
+            serialized_parameters,
+            location="remediation.approval.redactedParameters",
+            high_security_mode=True,
+        )
+        if not scan_result.allowed:
+            raise TemporalExecutionValidationError(
+                "approval_parameters_contain_secret_material"
+            )
+        forbidden_authority_keys = {
+            "credentialBody",
+            "secretValue",
+            "shellAuthority",
+            "dockerAuthority",
+            "sqlAuthority",
+            "storageAuthority",
+        }
+        if forbidden_authority_keys.intersection(binding):
+            raise TemporalExecutionValidationError(
+                "approval_binding_contains_unrestricted_authority"
+            )
+        parameter_digest = _stable_digest(parameters)
+        immutable_request = {
+            "remediationWorkflowId": remediation_workflow_id,
+            "remediationRunId": link.remediation_run_id,
+            "targetWorkflowId": link.target_workflow_id,
+            "targetRunId": link.target_run_id,
+            "actionKind": action_kind,
+            "riskTier": risk_tier,
+            "parameterDigest": parameter_digest,
+            "authorityBinding": binding,
+            "approvalClass": approval_class,
+            "reviewerRule": reviewer_rule,
+            "requestingActor": requesting_actor,
+            "expiresAt": _as_utc(expires_at).isoformat(),
+        }
+        request_digest = _stable_digest(immutable_request)
+        existing = (
+            await self._session.execute(
+                select(RemediationApproval).where(
+                    RemediationApproval.remediation_workflow_id
+                    == remediation_workflow_id,
+                    RemediationApproval.idempotency_key == idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.request_digest != request_digest:
+                raise TemporalExecutionValidationError(
+                    "idempotency_key_reused_with_different_approval_request"
+                )
+            return existing
+        if _as_utc(expires_at) <= datetime.now(UTC):
+            raise TemporalExecutionValidationError("approval expiration must be future")
+        approval = RemediationApproval(
+            approval_id=(
+                "approval:"
+                + hashlib.sha256(
+                    f"{remediation_workflow_id}:{idempotency_key}".encode()
+                ).hexdigest()[:32]
+            ),
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            remediation_workflow_id=remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            action_kind=action_kind,
+            risk_tier=risk_tier,
+            redacted_parameters=parameters,
+            parameter_digest=parameter_digest,
+            authority_binding=binding,
+            approval_class=approval_class,
+            reviewer_rule=reviewer_rule,
+            requesting_actor=requesting_actor,
+            expires_at=expires_at,
+            evidence_refs={
+                "request": f"remediation-approval:{request_digest}",
+                **dict(evidence_refs or {}),
+            },
+        )
+        self._session.add(approval)
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = (
+                await self._session.execute(
+                    select(RemediationApproval).where(
+                        RemediationApproval.remediation_workflow_id
+                        == remediation_workflow_id,
+                        RemediationApproval.idempotency_key == idempotency_key,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None or existing.request_digest != request_digest:
+                raise TemporalExecutionValidationError(
+                    "idempotency_key_reused_with_different_approval_request"
+                )
+            return existing
+        await self._session.refresh(approval)
+        return approval
+
+    async def list_remediation_approvals(
+        self, workflow_id: str
+    ) -> list[RemediationApproval]:
+        """Read canonical approvals for either side of a remediation link."""
+        approvals = list(
+            (
+                await self._session.execute(
+                    select(RemediationApproval)
+                    .where(
+                        or_(
+                            RemediationApproval.remediation_workflow_id
+                            == workflow_id,
+                            RemediationApproval.target_workflow_id == workflow_id,
+                        )
+                    )
+                    .order_by(RemediationApproval.requested_at.desc())
+                )
+            ).scalars()
+        )
+        now = datetime.now(UTC)
+        changed = False
+        for approval in approvals:
+            if (
+                approval.status == "pending"
+                and _as_utc(approval.expires_at) <= now
+            ):
+                approval.status = "expired"
+                changed = True
+        if changed:
+            await self._session.commit()
+        return approvals
+
     async def record_remediation_approval_decision(
         self,
         *,
@@ -1033,8 +1293,9 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        can_approve_high_risk: bool = False,
     ) -> dict[str, Any]:
-        if decision not in {"approved", "rejected"}:
+        if decision not in {"approved", "rejected", "denied", "cancelled"}:
             raise TemporalExecutionValidationError(
                 "decision must be 'approved' or 'rejected'."
             )
@@ -1043,16 +1304,73 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
+        approval = (
+            await self._session.execute(
+                select(RemediationApproval)
+                .where(RemediationApproval.approval_id == request_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if (
             link is None
             or link.authority_mode != "approval_gated"
-            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
-            or request_id != expected_request_id
+            or approval is None
+            or approval.remediation_workflow_id != remediation_workflow_id
         ):
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
             )
+        now = datetime.now(UTC)
+        if approval.status != "pending":
+            normalized = "denied" if decision == "rejected" else decision
+            if approval.status == normalized and approval.decision_actor == actor:
+                return {
+                    "accepted": True,
+                    "workflowId": remediation_workflow_id,
+                    "requestId": request_id,
+                    "decision": decision,
+                }
+            raise TemporalExecutionValidationError("approval_not_pending")
+        if _as_utc(approval.expires_at) <= now:
+            approval.status = "expired"
+            await self._session.commit()
+            raise TemporalExecutionValidationError("approval_expired")
+        if decision == "cancelled":
+            if not actor or actor != approval.requesting_actor:
+                raise TemporalExecutionValidationError(
+                    "approval_requester_required_to_cancel"
+                )
+        elif not actor or actor == approval.requesting_actor:
+            raise TemporalExecutionValidationError("independent_reviewer_required")
+        if (
+            decision != "cancelled"
+            and (
+                approval.risk_tier == "high"
+                or "operator" in approval.reviewer_rule.casefold()
+                or "admin" in approval.reviewer_rule.casefold()
+            )
+            and not can_approve_high_risk
+        ):
+            raise TemporalExecutionValidationError(
+                "high_risk_approval_permission_required"
+            )
+        approval.status = (
+            "approved"
+            if decision == "approved"
+            else "cancelled"
+            if decision == "cancelled"
+            else "denied"
+        )
+        approval.decision_actor = actor
+        approval.rationale = comment[:500] if comment else None
+        approval.decided_at = now
+        approval.evidence_refs = {
+            **dict(approval.evidence_refs or {}),
+            "decision": (
+                f"execution-audit:{remediation_workflow_id}:"
+                f"remediation_approval_{approval.status}:{now.isoformat()}"
+            ),
+        }
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")

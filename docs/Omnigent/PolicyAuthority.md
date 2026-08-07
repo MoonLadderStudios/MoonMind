@@ -64,6 +64,14 @@ Requests bind policy ref/digest, target expected state, and snapshot ref. Policy
 changes do not authorize pending requests; mismatch fails stale and is
 re-evaluated.
 
+The API-owned `remediation_approvals` store is the decision authority. An opaque
+caller string or approval-shaped agent input has no authority. Dispatch resolves
+the stored, actor-attributed and unexpired decision and compares its exact
+action/parameter digest plus run, state, checkpoint, bridge/session/host/lease,
+credential-generation, policy, and security-profile bindings before any owning
+adapter runs. Approved records are consumed once (with replay-safe reuse only
+for the identical action idempotency key); all mismatches fail closed.
+
 ## Bootstrap migration
 
 Startup seeds `omnigent-codex@1`, `codex-static@1`, and

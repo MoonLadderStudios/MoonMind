@@ -5750,7 +5750,53 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        can_approve_high_risk=False,
     )
+
+
+def test_list_remediation_approvals_reads_canonical_records(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    now = datetime.now(UTC)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.list_remediation_approvals.return_value = [
+        SimpleNamespace(
+            approval_id="approval:1",
+            request_digest="sha256:" + "a" * 64,
+            remediation_workflow_id="mm:remediation-1",
+            remediation_run_id="run-remediation-1",
+            target_workflow_id="mm:target-1",
+            target_run_id="run-target-1",
+            action_kind="session.interrupt_turn",
+            risk_tier="medium",
+            redacted_parameters={"reason": "bounded"},
+            parameter_digest="sha256:" + "b" * 64,
+            authority_binding={"targetRunId": "run-target-1"},
+            approval_class="remediation",
+            reviewer_rule="workflow-owner",
+            requesting_actor="requester@example.com",
+            decision_actor="reviewer@example.com",
+            rationale="Reviewed.",
+            status="approved",
+            requested_at=now,
+            decided_at=now,
+            expires_at=now + timedelta(minutes=10),
+            consumed_at=None,
+            evidence_refs={"decision": "execution-audit:1"},
+        )
+    ]
+
+    response = test_client.get(
+        "/api/executions/mm:target-1/remediation/approvals"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["approvalId"] == "approval:1"
+    assert response.json()["items"][0]["status"] == "approved"
+    service.list_remediation_approvals.assert_awaited_once_with("mm:target-1")
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

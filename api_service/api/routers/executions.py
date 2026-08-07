@@ -677,6 +677,54 @@ class RemediationApprovalDecisionResponse(BaseModel):
     decision: str
 
 
+class RemediationApprovalRequestModel(BaseModel):
+    actionKind: str
+    riskTier: str
+    redactedParameters: dict[str, Any] = Field(default_factory=dict)
+    authorityBinding: dict[str, Any]
+    approvalClass: str
+    reviewerRule: str
+    idempotencyKey: str
+    expiresAt: datetime
+    evidenceRefs: dict[str, Any] = Field(default_factory=dict)
+
+
+class RemediationApprovalRequestResponse(BaseModel):
+    approvalId: str
+    requestDigest: str
+    status: str
+    expiresAt: datetime
+
+
+class RemediationApprovalRecordModel(BaseModel):
+    approvalId: str
+    requestDigest: str
+    remediationWorkflowId: str
+    remediationRunId: str
+    targetWorkflowId: str
+    targetRunId: str
+    actionKind: str
+    riskTier: str
+    redactedParameters: dict[str, Any]
+    parameterDigest: str
+    authorityBinding: dict[str, Any]
+    approvalClass: str
+    reviewerRule: str
+    requestingActor: str
+    decisionActor: str | None = None
+    rationale: str | None = None
+    status: str
+    requestedAt: datetime
+    decidedAt: datetime | None = None
+    expiresAt: datetime
+    consumedAt: datetime | None = None
+    evidenceRefs: dict[str, Any]
+
+
+class RemediationApprovalListResponse(BaseModel):
+    items: list[RemediationApprovalRecordModel]
+
+
 class PublicationRecoveryResponse(BaseModel):
     sourceWorkflowId: str
     sourceRunId: str
@@ -12084,6 +12132,88 @@ async def create_remediation_checkpoint_branch(
     return _branch_to_model(branch)
 
 @router.post(
+    "/{workflow_id}/remediation/approvals",
+    response_model=RemediationApprovalRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_remediation_approval_request(
+    workflow_id: str,
+    payload: RemediationApprovalRequestModel,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationApprovalRequestResponse:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    actor = getattr(user, "email", None) or str(getattr(user, "id", ""))
+    try:
+        approval = await service.create_remediation_approval_request(
+            remediation_workflow_id=workflow_id,
+            action_kind=payload.actionKind,
+            risk_tier=payload.riskTier,
+            redacted_parameters=payload.redactedParameters,
+            authority_binding=payload.authorityBinding,
+            approval_class=payload.approvalClass,
+            reviewer_rule=payload.reviewerRule,
+            requesting_actor=actor,
+            idempotency_key=payload.idempotencyKey,
+            expires_at=payload.expiresAt,
+            evidence_refs=payload.evidenceRefs,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_remediation_approval_request", "message": str(exc)},
+        ) from exc
+    return RemediationApprovalRequestResponse(
+        approvalId=approval.approval_id,
+        requestDigest=approval.request_digest,
+        status=approval.status,
+        expiresAt=approval.expires_at,
+    )
+
+
+@router.get(
+    "/{workflow_id}/remediation/approvals",
+    response_model=RemediationApprovalListResponse,
+)
+async def list_remediation_approvals(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationApprovalListResponse:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    approvals = await service.list_remediation_approvals(workflow_id)
+    return RemediationApprovalListResponse(
+        items=[
+            RemediationApprovalRecordModel(
+                approvalId=approval.approval_id,
+                requestDigest=approval.request_digest,
+                remediationWorkflowId=approval.remediation_workflow_id,
+                remediationRunId=approval.remediation_run_id,
+                targetWorkflowId=approval.target_workflow_id,
+                targetRunId=approval.target_run_id,
+                actionKind=approval.action_kind,
+                riskTier=approval.risk_tier,
+                redactedParameters=dict(approval.redacted_parameters or {}),
+                parameterDigest=approval.parameter_digest,
+                authorityBinding=dict(approval.authority_binding or {}),
+                approvalClass=approval.approval_class,
+                reviewerRule=approval.reviewer_rule,
+                requestingActor=approval.requesting_actor,
+                decisionActor=approval.decision_actor,
+                rationale=approval.rationale,
+                status=approval.status,
+                requestedAt=approval.requested_at,
+                decidedAt=approval.decided_at,
+                expiresAt=approval.expires_at,
+                consumedAt=approval.consumed_at,
+                evidenceRefs=dict(approval.evidence_refs or {}),
+            )
+            for approval in approvals
+        ]
+    )
+
+
+@router.post(
     "/{workflow_id}/remediation/approvals/{request_id}",
     response_model=RemediationApprovalDecisionResponse,
 )
@@ -12094,7 +12224,7 @@ async def record_remediation_approval_decision(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RemediationApprovalDecisionResponse:
-    if payload.decision not in {"approved", "rejected"}:
+    if payload.decision not in {"approved", "rejected", "cancelled"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -12110,6 +12240,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            can_approve_high_risk=_is_execution_admin(user),
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

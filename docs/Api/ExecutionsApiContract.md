@@ -837,6 +837,18 @@ Purpose:
 
 - deliver a human or policy approval signal.
 
+Remediation approvals use `POST
+/api/executions/{workflowId}/remediation/approvals` to persist an exact,
+expiring request and `POST
+/api/executions/{workflowId}/remediation/approvals/{approvalId}` to record an
+actor-attributed approve or deny decision. `GET
+/api/executions/{workflowId}/remediation/approvals` returns the canonical safe
+records for either the remediation or target Workflow, including persisted
+expiration and consumption state. Repeating an idempotency key with an
+identical request returns the canonical record; changing the action, parameters,
+or authority binding is rejected. Action dispatch accepts an `approvalRef` only
+after resolving and consuming that record from the authoritative store.
+
 Required payload fields:
 
 - `approval_type`

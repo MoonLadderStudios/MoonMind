@@ -587,6 +587,13 @@ Panel button destination:
 
 The remediation panel never replaces the header action buttons.
 
+Both the remediation Workflow Detail and its target Workflow Detail project
+approval requests directly from the canonical approval store. The panel shows
+pending and completed status, action and risk, expiration, decision actor/time,
+and linked evidence. Approve and deny controls appear only for a pending request
+the current reviewer is authorized to decide; state is never inferred from logs
+or chat text.
+
 ## Outputs section
 
 The outputs section is present when outputs exist.

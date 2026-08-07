@@ -8,6 +8,7 @@ that the context explicitly names.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -891,6 +892,7 @@ class RemediationEvidenceToolService:
         # from tool arguments. Re-resolve the persisted version immediately
         # before dispatch so disabled, invalid, or digest-conflicting policy
         # versions fail before an owning adapter can run.
+        policy_snapshot: dict[str, Any] | None = None
         if isinstance(
             self._action_executor, MoonMindControlPlaneRemediationActionExecutor
         ):
@@ -915,6 +917,28 @@ class RemediationEvidenceToolService:
                 action_request["approvalRef"] = _required_string(
                     approval_ref, "approvalRef"
                 )
+        resolved_approval = None
+        effective_approval_ref = _string_or_none(approval_ref) or _string_or_none(
+            authority_result.get("approvalRef")
+        )
+        requires_persisted_approval = (
+            link.authority_mode == "approval_gated"
+            or str(authority_result.get("risk") or "") == "high"
+        )
+        if requires_persisted_approval and effective_approval_ref is None:
+            raise RemediationEvidenceToolError("approval_reference_required")
+        if effective_approval_ref is not None:
+            resolved_approval = await self._resolve_and_consume_approval(
+                approval_ref=effective_approval_ref,
+                action_request=action_request,
+                target=preparation.target,
+                context_target=preparation.context_target,
+                policy_snapshot=policy_snapshot,
+            )
+            action_request["approvalRef"] = resolved_approval.approval_id
+            action_request["approvalBinding"] = dict(
+                resolved_approval.authority_binding
+            )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_request",
@@ -924,6 +948,18 @@ class RemediationEvidenceToolService:
                     **dict(action_request),
                     "authority": dict(authority_result),
                     "guard": dict(guard_result),
+                    "approvalEvidence": (
+                        {
+                            "approvalId": resolved_approval.approval_id,
+                            "requestDigest": resolved_approval.request_digest,
+                            "decisionActor": resolved_approval.decision_actor,
+                            "decidedAt": resolved_approval.decided_at.isoformat()
+                            if resolved_approval and resolved_approval.decided_at
+                            else None,
+                        }
+                        if resolved_approval
+                        else None
+                    ),
                 }
             ),
             target_workflow_id=link.target_workflow_id,
@@ -1137,6 +1173,19 @@ class RemediationEvidenceToolService:
             )
         )
 
+        if resolved_approval is not None:
+            refs = dict(resolved_approval.evidence_refs or {})
+            refs.update(
+                {
+                    "actionRequest": request_artifact.artifact_id,
+                    "actionResult": result_artifact.artifact_id,
+                    "verification": verification_artifact.artifact_id,
+                    "auditEvent": audit_artifact.artifact_id,
+                    "targetAnnotation": annotation_artifact.artifact_id,
+                }
+            )
+            resolved_approval.evidence_refs = refs
+
         link.latest_action_summary = action_kind
         # ``outcome`` records the action *delivery* status; the repair
         # verification outcome is tracked separately so a delivered action never
@@ -1173,6 +1222,132 @@ class RemediationEvidenceToolService:
         if "approvalBinding" in result_payload:
             response["approvalBinding"] = result_payload["approvalBinding"]
         return response
+
+    async def _resolve_and_consume_approval(
+        self,
+        *,
+        approval_ref: str,
+        action_request: Mapping[str, Any],
+        target: RemediationTargetHealthSnapshot,
+        context_target: Mapping[str, Any],
+        policy_snapshot: Mapping[str, Any] | None,
+    ) -> db_models.RemediationApproval:
+        """Resolve exact persisted authority immediately before dispatch (#3620)."""
+        approval = (
+            await self._session.execute(
+                select(db_models.RemediationApproval)
+                .where(db_models.RemediationApproval.approval_id == approval_ref)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if approval is None:
+            raise RemediationEvidenceToolError("approval_not_found")
+        now = datetime.now(timezone.utc)
+        expires_at = approval.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        consumption_key = _required_string(
+            action_request.get("idempotencyKey") or action_request.get("actionId"),
+            "idempotencyKey",
+        )
+        parameters = action_request.get("params")
+        parameter_payload = dict(parameters) if isinstance(parameters, Mapping) else {}
+        parameter_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                parameter_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode()
+        ).hexdigest()
+        if approval.action_kind != action_request.get("actionKind"):
+            raise RemediationEvidenceToolError("approval_action_mismatch")
+        if approval.parameter_digest != parameter_digest:
+            raise RemediationEvidenceToolError("approval_parameter_mismatch")
+        if approval.status == "consumed":
+            if approval.consumption_key == consumption_key:
+                return approval
+            raise RemediationEvidenceToolError("approval_consumed")
+        if approval.status != "approved":
+            raise RemediationEvidenceToolError(f"approval_{approval.status}")
+        if expires_at <= now:
+            approval.status = "expired"
+            await self._session.commit()
+            raise RemediationEvidenceToolError("approval_expired")
+        if approval.target_workflow_id != target.workflow_id:
+            raise RemediationEvidenceToolError("approval_target_mismatch")
+        if approval.target_run_id != target.current_run_id or target.target_run_changed:
+            approval.status = "stale"
+            await self._session.commit()
+            raise RemediationEvidenceToolError("stale_target_run")
+        binding = dict(approval.authority_binding or {})
+        current: dict[str, Any] = {
+            "targetRunId": target.current_run_id,
+            # Existing Omnigent policy authority names the optimistic run
+            # identity ``targetExpectedState``; preserve that canonical meaning.
+            "targetExpectedState": target.current_run_id,
+            "targetWorkflowState": target.state,
+        }
+        current.update(
+            {
+                key: context_target.get(key)
+                for key in (
+                    "checkpointRef",
+                    "stepExecutionId",
+                    "bridgeId",
+                    "sessionId",
+                    "hostId",
+                    "hostLeaseId",
+                    "providerProfileLeaseId",
+                    "credentialGeneration",
+                    "securityProfileRef",
+                )
+                if context_target.get(key) is not None
+            }
+        )
+        if policy_snapshot is not None:
+            current.update(
+                {
+                    "policyRef": policy_snapshot.get("policyRef"),
+                    "policyDigest": policy_snapshot.get("policyDigest"),
+                    "snapshotRef": policy_snapshot.get("snapshotRef"),
+                }
+            )
+        runtime_authority_fields = {
+            "targetRunId",
+            "targetExpectedState",
+            "targetWorkflowState",
+            "checkpointRef",
+            "stepExecutionId",
+            "bridgeId",
+            "sessionId",
+            "hostId",
+            "hostLeaseId",
+            "providerProfileLeaseId",
+            "credentialGeneration",
+            "securityProfileRef",
+            "policyRef",
+            "policyDigest",
+            "snapshotRef",
+        }
+        for key, expected in binding.items():
+            if key in runtime_authority_fields and current.get(key) != expected:
+                approval.status = "stale"
+                await self._session.commit()
+                reason = {
+                    "targetExpectedState": "stale_target_state",
+                    "checkpointRef": "stale_checkpoint",
+                    "credentialGeneration": "stale_credential_generation",
+                    "policyRef": "stale_policy",
+                    "policyDigest": "stale_policy",
+                    "snapshotRef": "stale_policy",
+                }.get(key, f"stale_{key}")
+                raise RemediationEvidenceToolError(reason)
+        approval.status = "consumed"
+        approval.consumed_at = now
+        approval.consumption_key = consumption_key
+        await self._session.commit()
+        return approval
 
     async def publish_lifecycle_summary(
         self,

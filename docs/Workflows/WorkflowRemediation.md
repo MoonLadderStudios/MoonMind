@@ -1404,6 +1404,23 @@ When a remediation Workflow Execution is `approval_gated` or encounters a high-r
 - allow approve/reject,
 - keep the decision in the audit trail.
 
+The API service owns the canonical `remediation_approvals` record. A request is
+created only after action authority evaluation and immutably binds the redacted
+parameter digest, pinned target run and expected state, checkpoint/Step
+Execution identity, applicable Omnigent bridge/session/host/lease and credential
+generation, policy snapshot digest, security profile, approval class, reviewer
+rule, requester, and expiration. Reviewer decisions are actor-attributed;
+high-risk decisions require the stronger operator permission and the requester
+cannot review its own request.
+
+Immediately before adapter dispatch, MoonMind resolves `approvalRef` from this
+store. Unknown, pending, denied, expired, consumed-by-another-action, or stale
+records fail closed with bounded reason codes. Consumption is single-use and
+idempotent for the same action idempotency key. Request, decision, action,
+audit, target annotation, and verification artifact references are retained on
+the approval record so Workflow Detail can project pending and completed state
+without reconstructing logs.
+
 ---
 
 ## 16. Failure modes and edge cases
