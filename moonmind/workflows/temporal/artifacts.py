@@ -2808,6 +2808,7 @@ class TemporalArtifactActivities:
             "mode": "auto",
             "owner": "agent",
             "skillId": "pr-resolver",
+            "executionRef": terminal.get("executionRef") or idempotency_key,
             "status": "verified"
             if status in {"merged", "already_merged"}
             else "blocked",

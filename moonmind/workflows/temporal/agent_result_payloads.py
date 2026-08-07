@@ -238,6 +238,8 @@ _PUBLISHED_ARTIFACT_REF_KEYS = frozenset(
         "outputAgentResultRef",
         "outputSummaryRef",
         "primaryReportRef",
+        "publishEvidence",
+        "publishEvidenceRef",
         "reportBundle",
     }
 )
@@ -247,6 +249,7 @@ def _published_metadata_key_is_durable(key: str) -> bool:
     normalized = key.lower()
     return (
         key in _ESSENTIAL_PUBLISHED_METADATA_KEYS
+        or key in _PUBLISHED_ARTIFACT_REF_KEYS
         or normalized.endswith("ref")
         or normalized.endswith("refs")
     )

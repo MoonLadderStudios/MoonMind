@@ -760,6 +760,75 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     assert "GITHUB_TOKEN" not in env_overrides
     assert "OPENAI_API_KEY" not in env_overrides
 
+
+async def test_start_reuses_authoritative_managed_workspace_for_continuation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "existing-run" / "repo"
+    workspace.mkdir(parents=True)
+    captured_payload: dict[str, Any] = {}
+
+    class _Store:
+        store_root = tmp_path / "managed_runs"
+
+        @staticmethod
+        def load(run_id: str):
+            assert run_id == "existing-run"
+            return type(
+                "Record",
+                (),
+                {
+                    "workspace_path": str(workspace),
+                    "workflow_id": "wf-continuation",
+                },
+            )()
+
+    async def _run_launcher(**kwargs: Any):
+        captured_payload.update(kwargs["payload"])
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(
+            [
+                {
+                    "profile_id": "claude-profile",
+                    "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+                    "command_template": ["claude"],
+                }
+            ]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-continuation",
+        runtime_id="claude_code",
+        run_store=_Store(),
+        run_launcher=_run_launcher,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    await adapter.start(
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            executionProfileRef="claude-profile",
+            correlationId="corr-continuation",
+            idempotencyKey="idem-continuation",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "managed_runtime",
+                    "runtimeId": "claude_code",
+                    "agentRunId": "existing-run",
+                    "relativePath": "repo",
+                }
+            },
+        )
+    )
+
+    assert captured_payload["run_id"] == "existing-run"
+    assert captured_payload["workspace_path"] == str(workspace)
+    assert captured_payload["restoration_requirement"] is None
+
 async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     profiles = [
         {
@@ -1822,6 +1891,7 @@ async def test_fetch_result_surfaces_auto_publish_evidence_for_fix_comments(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -1905,6 +1975,7 @@ async def test_fetch_result_ignores_stale_auto_publish_evidence(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "fix-comments",\n'
+            '  "executionRef": "workflow:run:fix-comments:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "push",\n'
             '  "repository": "MoonLadderStudios/Tactics",\n'
@@ -1984,6 +2055,7 @@ async def test_fetch_result_does_not_bypass_pr_resolver_publish_normalization(
             '  "mode": "auto",\n'
             '  "owner": "agent",\n'
             '  "skillId": "pr-resolver",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "status": "verified",\n'
             '  "action": "merge",\n'
             '  "repository": "MoonLadderStudios/MoonMind",\n'
@@ -2906,6 +2978,7 @@ async def test_fetch_result_normalizes_pr_resolver_publish_result_evidence(
             '  "status": "merged",\n'
             '  "merge_outcome": "merged",\n'
             '  "mergeAutomationDisposition": "merged",\n'
+            '  "executionRef": "workflow:run:pr-resolver:execution:1",\n'
             '  "reason": "ci_complete"\n'
             "}\n"
         ),

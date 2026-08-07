@@ -46,6 +46,9 @@ def test_write_pushed_verifies_exact_remote_head(
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_STEP_EXECUTION_ID", "workflow:run:fix-ci:execution:1"
+    )
 
     def fake_run(cmd: list[str], **_: object) -> SimpleNamespace:
         if cmd == ["git", "rev-parse", "HEAD"]:
@@ -76,6 +79,7 @@ def test_write_pushed_verifies_exact_remote_head(
     )
     assert evidence.finish_code == "PUBLISHED_BRANCH"
     assert evidence.local_head == "abc123"
+    assert evidence.execution_ref == "workflow:run:fix-ci:execution:1"
 
 
 def test_write_pushed_reports_redacted_command_stderr(

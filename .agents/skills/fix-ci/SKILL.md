@@ -58,14 +58,14 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - Write `artifacts/publish_result.json` through the shared helper after every
   pushed or verified no-op outcome:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-pushed \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
   If no commit was needed, use:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-no-op \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH"
@@ -78,7 +78,7 @@ If no inputs are provided, investigate the failing CI checks for the current bra
   or the task explicitly forbids pushing, write blocked evidence and stop with
   the current SHA, check state, and next action:
   ```bash
-  python3 .agents/skills/_shared/publish_evidence.py write-blocked \
+  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH" \

@@ -902,6 +902,9 @@ RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH = (
 RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH = (
     "run-resolved-skill-terminal-contract-v1"
 )
+RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH = (
+    "run-auto-publish-terminal-contract-v1"
+)
 RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH = (
     "run-existing-skillset-terminal-contract-v1"
 )
@@ -19561,6 +19564,39 @@ class MoonMindRunWorkflow:
                             "stepExecutionId"
                         ],
                     }
+
+        # ``auto`` means that the selected portable Skill owns repository
+        # publication.  Compile that ownership into the same execution-bound
+        # terminal contract used by other agent side effects so a clean CLI
+        # exit cannot bypass the evidence handoff.  This is derived from the
+        # resolved publish mode and runtime workspace authority, not from a
+        # per-skill or per-runtime allowlist. External-provider workspaces need
+        # a provider-owned evidence handoff and must not receive workspace_json.
+        auto_publish_workspace_contract = False
+        if (
+            terminal_contract_payload is None
+            and str(parameters.get("publishMode") or "").strip().lower()
+            == "auto"
+            and workflow.patched(RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH)
+        ):
+            auto_publish_workspace_authority = (
+                resolve_runtime_execution_capabilities(
+                    _normalize_agent_runtime_id(agent_id)
+                ).workspace_authority
+            )
+            auto_publish_workspace_contract = (
+                auto_publish_workspace_authority
+                in {"managed_runtime", "moonmind_sandbox"}
+            )
+        if auto_publish_workspace_contract:
+            terminal_contract_payload = {
+                "contractId": "auto_publish_terminal.v1",
+                "owner": "agent",
+                "evidenceKind": "workspace_json",
+                "relativePath": "artifacts/publish_result.json",
+                "expectedSchemaVersion": "moonmind.publish.auto.v1",
+                "executionRef": step_execution_payload["stepExecutionId"],
+            }
 
         terminal_continuation_authority = None
         if (
