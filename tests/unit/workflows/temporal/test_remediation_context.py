@@ -147,6 +147,10 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLiveFollowResult,
     RemediationLogReadResult,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    RemediationVerificationPhase,
+    TargetEvidenceSnapshot,
+)
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 def _valid_user_workflow_parameters() -> dict[str, object]:
@@ -1848,10 +1852,6 @@ class RecordingActionExecutor:
             "beforeStateRef": "artifact://before-state",
             "afterStateRef": "artifact://after-state",
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {
-                "status": "verified",
-                "targetWorkflowId": target_health.workflow_id,
-            },
         }
 
 
@@ -1876,7 +1876,6 @@ class SensitiveHintActionExecutor:
                 "with token=raw-secret-token"
             ),
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {"status": "verified"},
         }
 
 
@@ -1897,7 +1896,6 @@ class StatusOnlyActionExecutor:
             "status": self.status,
             "message": f"returned {self.status}",
             "sideEffects": [],
-            "verification": {"status": "not_verified"},
         }
 
 async def _read_artifact_json(artifact_service, artifact_id: str):
@@ -3780,3 +3778,181 @@ async def test_remediation_mutation_guard_serialization_redacts_sensitive_values
         assert "secret-token-value" not in serialized
         assert "/work/agent_jobs" not in serialized
         assert "X-Amz-Signature" not in serialized
+
+
+class _ScriptedVerificationReader:
+    """Deterministic fresh-evidence reader for verification-phase wiring tests."""
+
+    def __init__(self, *, before, after_sequence):
+        self._before = before
+        self._after = list(after_sequence)
+        self._index = -1
+
+    async def read_target_evidence(
+        self, *, contract, workflow_id, stage, pinned_run_id=None
+    ):
+        if stage == "before":
+            return self._before
+        self._index += 1
+        idx = min(self._index, len(self._after) - 1)
+        return self._after[idx]
+
+
+async def _noop_verification_sleep(_seconds):
+    return None
+
+
+def _verification_snapshot(stage, *, state, close_status=None, run_id="target-run", paused=None):
+    return TargetEvidenceSnapshot(
+        stage=stage,
+        available=True,
+        workflow_id="wf",
+        run_id=run_id,
+        state=state,
+        close_status=close_status,
+        paused=paused,
+    )
+
+
+async def _run_verified_cancel(session, tmp_path, mock_client_adapter, *, after_sequence):
+    """Drive execute_action for execution.cancel with a scripted verifier."""
+
+    target, remediation = await _create_target_and_remediation(
+        session,
+        mock_client_adapter,
+        authority_mode="admin_auto",
+    )
+    artifact_service = TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+    )
+    await RemediationContextBuilder(
+        session=session,
+        artifact_service=artifact_service,
+    ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key="verify-cancel-1",
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key="verify-cancel-1",
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+
+    before = _verification_snapshot("before", state="executing")
+    phase = RemediationVerificationPhase(
+        reader=_ScriptedVerificationReader(before=before, after_sequence=after_sequence),
+        sleep=_noop_verification_sleep,
+        is_canceled=lambda: False,
+    )
+    executor = RecordingActionExecutor()
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=artifact_service,
+        action_executor=executor,
+        verification_phase=phase,
+    )
+    result = await tools.execute_action(
+        remediation_workflow_id=remediation.workflow_id,
+        authority_result=authority.to_dict(),
+        guard_result=guard.to_dict(),
+        principal="service:test",
+    )
+    link = await session.get(TemporalExecutionRemediationLink, remediation.workflow_id)
+    verification_payload = await _read_artifact_json(
+        artifact_service, result["artifactRefs"]["verification"]
+    )
+    return result, link, verification_payload, artifact_service
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_phase_reports_verified_resolved(
+    tmp_path, mock_client_adapter
+):
+    """A cancel that reaches a terminal state is verified as resolved, and the
+    repair outcome is recorded separately from the delivery status."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"  # delivery
+        assert result["verification"]["outcome"] == "verified_resolved"  # repair
+        assert result["verification"]["deliveryStatus"] == "applied"
+        assert verification_payload["status"] == "verified_resolved"
+        assert verification_payload["outcome"] == "verified_resolved"
+        assert verification_payload["deliveryStatus"] == "applied"
+        assert "before" in verification_payload["targetStates"]
+        assert "immediateAfter" in verification_payload["targetStates"]
+        # Delivery and repair are separate durable projections.
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_delivered_but_target_still_failed_is_not_repaired(
+    tmp_path, mock_client_adapter
+):
+    """A delivered action must not relabel a still-failing target as repaired."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot("immediate_after", state="executing"),
+            _verification_snapshot("stabilized", state="executing"),
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"
+        assert result["verification"]["outcome"] == "still_failed"
+        assert verification_payload["outcome"] == "still_failed"
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "still_failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_artifact_metadata_carries_classification(
+    tmp_path, mock_client_adapter
+):
+    """The verification artifact metadata exposes the classification for the UI."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, _link, _payload, artifact_service = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+        artifact, _payload_bytes = await artifact_service.read(
+            artifact_id=result["artifactRefs"]["verification"],
+            principal="service:test",
+        )
+        assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
+        assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"

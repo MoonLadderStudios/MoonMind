@@ -62,12 +62,14 @@ class TemporalRemediationControlPlane:
     def _accepted(
         before: list[str], *, after: list[str], message: str
     ) -> Mapping[str, Any]:
+        # Adapters report *delivery* only. Repair verification is decided by the
+        # trusted post-action verification phase (issue #3622) from fresh durable
+        # evidence, never from an adapter-returned verification mapping.
         return {
             "status": "accepted",
             "message": message,
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": after,
-            "verification": {"status": "pending"},
             "verificationRequired": True,
             "verificationHint": message,
         }
@@ -150,7 +152,6 @@ class TemporalRemediationControlPlane:
             "afterEvidenceRefs": [
                 f"execution:{resulting_workflow_id}:rerun-request:{action_id}"
             ],
-            "verification": {"status": "pending" if accepted else "verified"},
             "verificationRequired": accepted,
             "verificationHint": (
                 "Verify the resulting workflow reaches an authoritative terminal state."
@@ -207,6 +208,10 @@ class TemporalRemediationControlPlane:
                 "idempotencyKey": action_id,
             }
         )
+        # Persisting the branch graph is *delivery*, not a verified repair. The
+        # trusted verification phase re-reads the target objective from fresh
+        # evidence and classifies the actual repair outcome (issue #3622); this
+        # adapter no longer claims "verified" immediately after persistence.
         return {
             "status": "applied",
             "message": "Checkpoint Branch was persisted by its durable owner.",
@@ -216,7 +221,11 @@ class TemporalRemediationControlPlane:
                 f"checkpoint-branch-turn:{turn_id}",
                 context_ref,
             ],
-            "verification": {"status": "verified"},
+            "verificationRequired": True,
+            "verificationHint": (
+                "Re-verify the target objective from fresh evidence; a persisted "
+                "branch is a remediation candidate, not a confirmed repair."
+            ),
         }
 
     async def session_control(

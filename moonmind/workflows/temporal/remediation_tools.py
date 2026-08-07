@@ -40,6 +40,14 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationSecurityProfile,
     remediation_changes_require_checkpoint_branch,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    CanonicalRecordEvidenceReader,
+    RemediationVerificationPhase,
+    TargetEvidenceSnapshot,
+    VerificationContract,
+    snapshot_from_health,
+    verification_contract_for,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
@@ -302,6 +310,7 @@ class RemediationEvidenceToolService:
         log_reader: RemediationLogReader | None = None,
         live_follower: RemediationLiveFollower | None = None,
         action_executor: RemediationActionExecutor | None = None,
+        verification_phase: RemediationVerificationPhase | None = None,
         cursor_recorder: Callable[[str, dict[str, Any] | None], Awaitable[None]]
         | None = None,
     ) -> None:
@@ -310,6 +319,13 @@ class RemediationEvidenceToolService:
         self._log_reader = log_reader or _UnavailableLogReader()
         self._live_follower = live_follower or _UnavailableLiveFollower()
         self._action_executor = action_executor or _UnavailableActionExecutor()
+        # The verification phase reads fresh canonical evidence after each
+        # action; it performs no side effects and is safe under Activity retry
+        # and Temporal replay. Tests inject a phase with a deterministic reader,
+        # no-op sleep, and controllable cancellation.
+        self._verification_phase = verification_phase or RemediationVerificationPhase(
+            reader=CanonicalRecordEvidenceReader(session)
+        )
         self._lifecycle_publisher = RemediationLifecyclePublisher(
             session=session,
             artifact_service=artifact_service,
@@ -668,6 +684,39 @@ class RemediationEvidenceToolService:
             context_target=context_target_mapping,
         )
 
+    async def _read_verification_before_snapshot(
+        self,
+        *,
+        contract: VerificationContract,
+        target: RemediationTargetHealthSnapshot,
+    ) -> TargetEvidenceSnapshot:
+        """Capture the pre-action baseline for the verification phase.
+
+        Verifiable actions read fresh evidence through the owning reader so the
+        baseline includes fields like ``paused``. Unverifiable actions (or a
+        transient read error) fall back to the already-resolved target health so
+        the artifact still records the known pre-action target state.
+        """
+
+        if contract.verifier_kind != "unavailable":
+            try:
+                snapshot = await self._verification_phase.read_before_snapshot(
+                    contract=contract,
+                    workflow_id=target.workflow_id,
+                    pinned_run_id=target.pinned_run_id,
+                )
+                if snapshot.available:
+                    return snapshot
+            except Exception:  # noqa: BLE001 - fall back to the known health read
+                pass
+        return snapshot_from_health(
+            stage="before",
+            workflow_id=target.workflow_id,
+            run_id=target.current_run_id,
+            state=target.state,
+            close_status=target.close_status,
+        )
+
     async def _resolve_target_policy_snapshot(
         self, *, target: RemediationTargetHealthSnapshot
     ) -> dict[str, Any] | None:
@@ -881,6 +930,15 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
+        # Capture fresh "before" target evidence immediately prior to the side
+        # effect so the verification phase can classify against a real baseline
+        # rather than the pre-action context cache.
+        verification_contract = verification_contract_for(action_kind)
+        before_snapshot = await self._read_verification_before_snapshot(
+            contract=verification_contract,
+            target=preparation.target,
+        )
+
         raw_result = await self._action_executor.execute_action(
             action_request=action_request,
             guard_result=guard_result,
@@ -940,14 +998,23 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        verification = raw_result.get("verification")
-        verification_payload = (
-            dict(verification)
-            if isinstance(verification, Mapping)
-            else {"status": "not_verified"}
+        # Trusted post-action verification phase (issue #3622): re-read fresh
+        # canonical evidence after the action, perform bounded stabilization, and
+        # classify the actual repair outcome. This replaces the prior behavior of
+        # serializing adapter output or defaulting to "not_verified". Delivery
+        # status (``status`` on the action result) and the repair verification
+        # outcome are now separate fields.
+        verification_result = await self._verification_phase.run(
+            contract=verification_contract,
+            action_kind=action_kind,
+            action_id=action_request["actionId"],
+            delivery_status=status,
+            target_workflow_id=link.target_workflow_id,
+            pinned_run_id=link.target_run_id,
+            before_snapshot=before_snapshot,
+            action_result=raw_result,
         )
-        verification_payload.setdefault("actionKind", action_kind)
-        verification_payload.setdefault("actionId", action_request["actionId"])
+        verification_payload = _redact_payload_value(verification_result.to_payload())
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -955,6 +1022,7 @@ class RemediationEvidenceToolService:
             payload=verification_payload,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
+            extra_metadata=verification_result.to_metadata(),
             principal=principal,
         )
 
@@ -978,6 +1046,7 @@ class RemediationEvidenceToolService:
                 "status": status,
                 "idempotencyKey": action_request["actionId"],
                 "verificationRequired": verification_required,
+                "verificationOutcome": verification_result.outcome,
             },
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -1004,7 +1073,11 @@ class RemediationEvidenceToolService:
             },
             timestamp=audit_timestamp,
             metadata={
+                # Delivery status and repair-verification outcome are recorded
+                # as separate supplemental evidence; the target's original
+                # outcome is never rewritten by this annotation.
                 "status": status,
+                "verificationOutcome": verification_result.outcome,
                 "nativeArtifactPolicy": "preserve",
             },
         )
@@ -1023,12 +1096,28 @@ class RemediationEvidenceToolService:
         )
 
         link.latest_action_summary = action_kind
+        # ``outcome`` records the action *delivery* status; the repair
+        # verification outcome is tracked separately so a delivered action never
+        # relabels the target as repaired.
         link.outcome = status
+        link.verification_outcome = verification_result.outcome
         await self._session.commit()
         response = {
             "schemaVersion": "v1",
             "actionKind": action_kind,
+            # Delivery/application status of the action itself.
             "status": status,
+            # Trusted post-action repair verification, kept distinct from delivery.
+            "verification": {
+                "outcome": verification_result.outcome,
+                "deliveryStatus": status,
+                "automaticallyVerifiable": (
+                    verification_result.contract.automatically_verifiable
+                ),
+                "verifierKind": verification_result.contract.verifier_kind,
+                "reason": verification_result.reason,
+                "resultingIdentity": dict(verification_result.resulting_identity),
+            },
             "artifactRefs": {
                 "actionRequest": request_artifact.artifact_id,
                 "actionResult": result_artifact.artifact_id,

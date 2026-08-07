@@ -20,6 +20,9 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    REMEDIATION_VERIFICATION_OUTCOMES,
+)
 from moonmind.utils.logging import redact_sensitive_text
 
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
@@ -90,6 +93,18 @@ REMEDIATION_PREVENTION_STATUSES = frozenset(
         "findings_reported",
         "no_reviewable_fix",
         "policy_blocked",
+    }
+)
+# Prevention verification is distinct from immediate repair verification: it
+# describes whether the long-term recurrence-prevention change (branch/PR) has
+# been verified, not whether the failed target was repaired (issue #3622).
+REMEDIATION_PREVENTION_VERIFICATION_OUTCOMES = frozenset(
+    {
+        "not_applicable",
+        "pending",
+        "verified",
+        "failed",
+        "unverified",
     }
 )
 REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
@@ -724,6 +739,7 @@ class RemediationLifecyclePublisher:
         payload: Mapping[str, Any],
         target_workflow_id: str | None = None,
         target_run_id: str | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
         principal: str = "service:remediation-lifecycle",
     ) -> db_models.TemporalArtifact:
         workflow_id = _required_string(
@@ -769,6 +785,12 @@ class RemediationLifecyclePublisher:
             metadata_json["targetWorkflowId"] = target_workflow_id
         if target_run_id := _string_or_none(target_run_id):
             metadata_json["targetRunId"] = target_run_id
+        if extra_metadata:
+            # Compact, non-sensitive projection so dashboards can render the
+            # verification classification without fetching the artifact body.
+            safe_extra = _safe_policy_mapping(extra_metadata)
+            for key, value in (safe_extra or {}).items():
+                metadata_json.setdefault(str(key), value)
 
         artifact, _upload = await self._artifact_service.create(
             principal=principal,
@@ -1152,15 +1174,34 @@ def build_remediation_repair_decision(
     action_request_ref: str | None = None,
     action_result_ref: str | None = None,
     verification_ref: str | None = None,
+    delivery_status: str | None = None,
+    verification_outcome: str | None = None,
+    resulting_identity: Mapping[str, Any] | None = None,
+    remaining_operator_work: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded target-level immediate repair decision."""
+    """Build a bounded target-level immediate repair decision.
+
+    ``delivery_status`` (the action delivery/application status) and
+    ``verification_outcome`` (the trusted post-action repair-verification
+    classification) are recorded as separate fields so a delivered action never
+    relabels the target as repaired (issue #3622).
+    """
 
     normalized_decision = _validated_choice(
         decision, REMEDIATION_REPAIR_DECISIONS, "decision"
     )
     normalized_outcome = _validated_choice(
         repair_outcome, REMEDIATION_REPAIR_OUTCOMES, "repair_outcome"
+    )
+    normalized_verification_outcome = (
+        _validated_choice(
+            verification_outcome,
+            REMEDIATION_VERIFICATION_OUTCOMES,
+            "verification_outcome",
+        )
+        if verification_outcome is not None
+        else None
     )
     if normalized_decision == "attempted" and not (
         action_request_ref and action_result_ref and verification_ref
@@ -1198,6 +1239,17 @@ def build_remediation_repair_decision(
         ),
         "repairOutcome": normalized_outcome,
     }
+    if delivery_status is not None:
+        payload["deliveryStatus"] = _required_redacted_text(
+            delivery_status, "delivery_status"
+        )
+    if normalized_verification_outcome is not None:
+        payload["verificationOutcome"] = normalized_verification_outcome
+    if resulting_identity is not None:
+        if safe_identity := _safe_policy_mapping(resulting_identity):
+            payload["resultingIdentity"] = safe_identity
+    if remaining := _redacted_optional_text(remaining_operator_work):
+        payload["remainingOperatorWork"] = remaining
     candidate = _repair_candidate_payload(
         action_kind=candidate_action_kind,
         reason=candidate_reason,
@@ -1218,12 +1270,27 @@ def build_remediation_prevention_outcome(
     pull_request_url: str | None = None,
     findings_ref: str | None = None,
     blocked_reason: str | None = None,
+    prevention_verification_outcome: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded recurrence-prevention outcome."""
+    """Build a bounded recurrence-prevention outcome.
+
+    ``prevention_verification_outcome`` is the verification of the long-term
+    prevention change (branch/PR) and remains distinct from immediate repair
+    verification (issue #3622).
+    """
 
     normalized_status = _validated_choice(
         status, REMEDIATION_PREVENTION_STATUSES, "status"
+    )
+    normalized_prevention_verification = (
+        _validated_choice(
+            prevention_verification_outcome,
+            REMEDIATION_PREVENTION_VERIFICATION_OUTCOMES,
+            "prevention_verification_outcome",
+        )
+        if prevention_verification_outcome is not None
+        else None
     )
     safe_pr_url = _safe_public_url(pull_request_url)
     safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
@@ -1259,6 +1326,8 @@ def build_remediation_prevention_outcome(
         payload["findingsRef"] = safe_findings_ref
     if safe_blocked_reason:
         payload["blockedReason"] = safe_blocked_reason
+    if normalized_prevention_verification is not None:
+        payload["preventionVerificationOutcome"] = normalized_prevention_verification
     if safe_metadata := _safe_policy_mapping(metadata):
         payload["metadata"] = safe_metadata
     return payload

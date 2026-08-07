@@ -952,6 +952,12 @@ Allowed `status` values should include:
 - `timed_out`
 - `failed`
 
+This `status` is the action **delivery/application** status only. It is not the
+repair outcome. The trusted post-action verification phase (§11.6.1) publishes a
+separate `remediation.verification` artifact with a normalized repair outcome, so
+a delivered action or a persisted Checkpoint Branch never relabels the failed
+target as repaired.
+
 ### 11.6 Risk tiers and verification
 
 Every side-effecting action must declare:
@@ -964,6 +970,50 @@ Examples:
 - `execution.retry_failed_step_with_remediation_context` — verify the retried step started from the intended checkpoint, preserved prior-step refs were reused rather than re-executed, corrected remediation context was recorded, and the target reached the expected repaired or still-failed state.
 - `session.restart_container` — verify new session identity fields and new continuity boundary artifact.
 - `execution.request_rerun_same_workflow` — verify target run state changes and runId rollover if applicable.
+
+### 11.6.1 Trusted post-action verification phase
+
+Action **delivery** and remediation **repair** are separate facts. Every
+side-effecting administrative action enters an explicit, trusted verification
+phase after it is delivered or applied. The phase never serializes an
+adapter-returned `verification` mapping and never defaults to a fabricated
+`verified`/`not_verified`; it re-reads fresh canonical evidence and classifies
+the actual repair outcome.
+
+**Typed contract and capability-aware registry.** Each action kind declares a
+verification contract: the authoritative evidence owner, the target resource
+kind and identity to verify, the immediate expected state, an optional bounded
+stabilization interval and poll strategy, a terminal timeout, and the
+before/after evidence classes. The registry is capability-aware: an action is
+advertised as automatically verifiable only when an owning verifier and a
+readable evidence surface exist. Actions whose owning subsystem verifier is not
+wired (managed session, host/lease, container, cleanup, annotation) return a
+truthful `evidence_unavailable` capability rather than a fabricated result.
+
+**Phase steps.** After delivery the phase (1) persists the immutable action
+result, (2) re-resolves the current target identity, (3) reads fresh canonical
+evidence rather than the pre-action context cache, (4) performs bounded
+stabilization/polling where the contract requires it, (5) publishes a typed
+verification result, and (6) updates the remediation/target projections without
+rewriting the target's original outcome. The phase performs no side effects of
+its own, so worker restart, Activity retry, and Temporal replay re-run it safely;
+the original action stays idempotent through the owning adapters' stable keys.
+
+**Normalized verification outcomes.** The `remediation.verification` artifact
+`status`/`outcome` is one of:
+
+- `verified_resolved` — the target reached the expected repaired state;
+- `verified_no_change` — the action was accepted but the target did not change and no change was expected (including no-op and not-applied deliveries);
+- `still_failed` — the target remains in the failure state the action was meant to repair (for example a Checkpoint Branch was created as a candidate but the target objective is not yet resolved);
+- `regressed` — the target looked repaired immediately after the action, then degraded during stabilization;
+- `evidence_unavailable` — fresh evidence could not be read, or no owning verifier exists, degraded with a bounded reason;
+- `approval_required` — the action is approval-gated and repair is not yet verifiable;
+- `verification_failed` — the verifier itself failed;
+- `canceled` — verification was canceled.
+
+The artifact records the target state `before` the action, `immediateAfter`
+delivery, and `stabilized` after bounded stabilization, plus the resulting
+run/branch/session identity and the exact action linkage.
 
 ### 11.7 Explicitly unsupported actions
 
@@ -1248,6 +1298,15 @@ Recommended `resolution` values:
 - `lock_conflict`
 - `evidence_unavailable`
 - `failed`
+
+The final summary reports the immediate `repair` block and the long-term
+`prevention` block separately. The `repair` block carries the action
+`deliveryStatus`, the normalized repair `verificationOutcome` (§11.6.1), the
+resulting run/branch/session identity, and any `remainingOperatorWork`. The
+`prevention` block carries the prevention branch/PR `status` and its own
+`preventionVerificationOutcome`. A successfully delivered action or a prevention
+PR must not relabel the failed target as repaired: immediate repair verification
+and prevention verification stay distinct.
 
 ### 14.4 Target-side linkage summary
 

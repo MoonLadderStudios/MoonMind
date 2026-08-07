@@ -7707,6 +7707,22 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+// Post-action verification (issue #3622) publishes a compact classification into
+// the verification artifact metadata so the dashboard can render the trusted
+// repair-verification outcome separately from action delivery without fetching
+// the artifact body.
+function remediationVerificationSummary(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): { outcome: string; delivery: string; verifierKind: string } | null {
+  const outcome = metadataString(artifact.metadata, 'verificationOutcome');
+  if (!outcome) return null;
+  return {
+    outcome,
+    delivery: metadataString(artifact.metadata, 'verificationDeliveryStatus'),
+    verifierKind: metadataString(artifact.metadata, 'verificationVerifierKind'),
+  };
+}
+
 function RemediationCheckpointBranches({
   branches,
 }: {
@@ -7974,21 +7990,42 @@ function RemediationEvidencePanel({
             <tr>
               <th>Evidence</th>
               <th>Artifact</th>
+              <th>Verification</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {remediationArtifacts.map(({ artifact, type }) => (
-              <tr key={artifact.artifactId}>
-                <td>{remediationArtifactLabel(type)}</td>
-                <td><code>{artifact.artifactId}</code></td>
-                <td>
-                  <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
-                    Open Evidence
-                  </a>
-                </td>
-              </tr>
-            ))}
+            {remediationArtifacts.map(({ artifact, type }) => {
+              const verification = remediationVerificationSummary(artifact);
+              return (
+                <tr key={artifact.artifactId}>
+                  <td>{remediationArtifactLabel(type)}</td>
+                  <td><code>{artifact.artifactId}</code></td>
+                  <td>
+                    {verification ? (
+                      <span className="td-verification-cell">
+                        <span title="Repair verification outcome">
+                          {formatStatusLabel(verification.outcome)}
+                        </span>
+                        {verification.delivery ? (
+                          <span className="small subtle" title="Action delivery status">
+                            {' '}
+                            (delivery: {formatStatusLabel(verification.delivery)})
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>
+                    <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
+                      Open Evidence
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
