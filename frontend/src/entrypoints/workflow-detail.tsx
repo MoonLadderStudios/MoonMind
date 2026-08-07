@@ -1065,6 +1065,7 @@ const RemediationLinkSchema = z
     activeLockScope: z.string().nullable().optional(),
     activeLockHolder: z.string().nullable().optional(),
     latestActionSummary: z.string().nullable().optional(),
+    deliveryStatus: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
     selectedSteps: z.array(z.string()).nullable().optional(),
@@ -7839,6 +7840,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
+                  <Card label="Delivery">{item.deliveryStatus || '—'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (

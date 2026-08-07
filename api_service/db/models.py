@@ -1588,6 +1588,11 @@ class TemporalExecutionRemediationLink(Base):
     )
     # ``outcome`` records the latest action *delivery* status.
     outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # ``resolution`` records the terminal remediation *lifecycle* resolution
+    # (issue #3622). It is stored separately from ``outcome`` so the final
+    # lifecycle summary never overwrites the delivery projection, and the two
+    # never change meaning across phases.
+    resolution: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # ``verification_outcome`` records the trusted post-action *repair*
     # verification classification (issue #3622), kept distinct from delivery so
     # a delivered action never relabels the target as repaired.

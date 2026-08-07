@@ -45,6 +45,7 @@ from moonmind.workflows.temporal.remediation_verification import (
     RemediationVerificationPhase,
     TargetEvidenceSnapshot,
     VerificationContract,
+    resolve_verification_target,
     snapshot_from_health,
     verification_contract_for,
 )
@@ -1004,13 +1005,25 @@ class RemediationEvidenceToolService:
         # serializing adapter output or defaulting to "not_verified". Delivery
         # status (``status`` on the action result) and the repair verification
         # outcome are now separate fields.
+        # Fresh reruns create a new execution identity (returned in
+        # afterEvidenceRefs); verify against that resulting workflow rather than
+        # the original terminal record, which would always read as still_failed.
+        (
+            verification_target_workflow_id,
+            verification_pinned_run_id,
+        ) = resolve_verification_target(
+            verification_contract,
+            raw_result,
+            default_workflow_id=link.target_workflow_id,
+            default_run_id=link.target_run_id,
+        )
         verification_result = await self._verification_phase.run(
             contract=verification_contract,
             action_kind=action_kind,
             action_id=action_request["actionId"],
             delivery_status=status,
-            target_workflow_id=link.target_workflow_id,
-            pinned_run_id=link.target_run_id,
+            target_workflow_id=verification_target_workflow_id,
+            pinned_run_id=verification_pinned_run_id,
             before_snapshot=before_snapshot,
             action_result=raw_result,
         )
@@ -1024,6 +1037,35 @@ class RemediationEvidenceToolService:
             target_run_id=link.target_run_id,
             extra_metadata=verification_result.to_metadata(),
             principal=principal,
+        )
+
+        # Retry/replay safety: publish_json_artifact deduplicates on the stable
+        # (artifact_type, label) key and returns the pre-existing immutable
+        # artifact when the action is retried after the verification artifact was
+        # published but before the projections committed. That persisted artifact
+        # — and its compact metadata projection — is authoritative. Continuing
+        # with the freshly recomputed, time-sensitive outcome would let the
+        # projections and response disagree with the durable artifact (the exact
+        # "artifact says still_failed while projections say verified_resolved"
+        # bug). Reuse the persisted outcome so every downstream projection matches
+        # the artifact.
+        persisted_metadata = getattr(verification_artifact, "metadata_json", None) or {}
+        persisted_outcome = _string_or_none(
+            persisted_metadata.get("verificationOutcome")
+        )
+        verification_outcome = persisted_outcome or verification_result.outcome
+        verification_reused = bool(
+            persisted_outcome and persisted_outcome != verification_result.outcome
+        )
+        verification_reason = (
+            "Reused the persisted verification outcome from the authoritative "
+            "remediation.verification artifact; the action was retried before the "
+            "projections committed, so the recomputed outcome is discarded."
+            if verification_reused
+            else verification_result.reason
+        )
+        verification_resulting_identity = (
+            {} if verification_reused else dict(verification_result.resulting_identity)
         )
 
         audit_timestamp = datetime.now(timezone.utc)
@@ -1046,7 +1088,7 @@ class RemediationEvidenceToolService:
                 "status": status,
                 "idempotencyKey": action_request["actionId"],
                 "verificationRequired": verification_required,
-                "verificationOutcome": verification_result.outcome,
+                "verificationOutcome": verification_outcome,
             },
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -1077,7 +1119,7 @@ class RemediationEvidenceToolService:
                 # as separate supplemental evidence; the target's original
                 # outcome is never rewritten by this annotation.
                 "status": status,
-                "verificationOutcome": verification_result.outcome,
+                "verificationOutcome": verification_outcome,
                 "nativeArtifactPolicy": "preserve",
             },
         )
@@ -1100,7 +1142,7 @@ class RemediationEvidenceToolService:
         # verification outcome is tracked separately so a delivered action never
         # relabels the target as repaired.
         link.outcome = status
-        link.verification_outcome = verification_result.outcome
+        link.verification_outcome = verification_outcome
         await self._session.commit()
         response = {
             "schemaVersion": "v1",
@@ -1109,14 +1151,14 @@ class RemediationEvidenceToolService:
             "status": status,
             # Trusted post-action repair verification, kept distinct from delivery.
             "verification": {
-                "outcome": verification_result.outcome,
+                "outcome": verification_outcome,
                 "deliveryStatus": status,
                 "automaticallyVerifiable": (
                     verification_result.contract.automatically_verifiable
                 ),
                 "verifierKind": verification_result.contract.verifier_kind,
-                "reason": verification_result.reason,
-                "resultingIdentity": dict(verification_result.resulting_identity),
+                "reason": verification_reason,
+                "resultingIdentity": verification_resulting_identity,
             },
             "artifactRefs": {
                 "actionRequest": request_artifact.artifact_id,
@@ -1175,7 +1217,13 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
-        link.outcome = str(final_summary.get("resolution") or link.outcome or "")
+        # The lifecycle resolution is recorded in its own column so it never
+        # overwrites ``link.outcome`` (the latest action *delivery* status). Prior
+        # to issue #3622 this write clobbered the delivery projection and changed
+        # the column's meaning across phases.
+        resolution = _string_or_none(final_summary.get("resolution"))
+        if resolution is not None:
+            link.resolution = resolution
         await self._session.commit()
         return {
             "schemaVersion": "v1",

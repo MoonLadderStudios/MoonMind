@@ -1187,6 +1187,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         decision="attempted",
         decision_reason="fresh_target_health_and_policy_allowed",
         repair_outcome="repaired",
+        verification_outcome="verified_resolved",
         fresh_target_health_ref="art_health",
         authority_decision_ref="art_authority",
         guard_decision_ref="art_guard",
@@ -1223,6 +1224,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
             "verification": "art_verification",
         },
         "repairOutcome": "repaired",
+        "verificationOutcome": "verified_resolved",
         "metadata": {"safe": "value"},
     }
 
@@ -1478,6 +1480,39 @@ def test_remediation_lifecycle_contract_rejects_invalid_or_incomplete_values():
             repair_outcome="repaired",
             action_request_ref="art_request",
             action_result_ref="art_result",
+        )
+
+    # A delivered action may not be labeled repaired without a trusted
+    # verified_resolved verification outcome (issue #3622).
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_repair_decision(
+            target_workflow_id="target-workflow",
+            pinned_run_id="target-run",
+            decision="attempted",
+            decision_reason="fresh",
+            repair_outcome="repaired",
+            action_request_ref="art_request",
+            action_result_ref="art_result",
+            verification_ref="art_verification",
+            verification_outcome="still_failed",
+        )
+
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_final_summary(
+            summary=build_remediation_summary_block(
+                target_workflow_id="target-workflow",
+                target_run_id="target-run",
+                phase="resolved",
+                mode="snapshot_then_follow",
+                authority_mode="admin_auto",
+            ),
+            repair={"decision": "attempted", "repairOutcome": "repaired"},
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            lock_release="released",
         )
 
     with pytest.raises(ValueError, match="pullRequestUrl"):
@@ -3956,3 +3991,228 @@ async def test_execute_action_verification_artifact_metadata_carries_classificat
         )
         assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
         assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"
+
+
+async def _cancel_authority_and_guard(
+    session, target, remediation, *, idempotency_key
+):
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key=idempotency_key,
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key=idempotency_key,
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+    return authority, guard
+
+
+@pytest.mark.asyncio
+async def test_execute_action_reuses_persisted_verification_on_retry_dedup(
+    tmp_path, mock_client_adapter
+):
+    """A retry after the verification artifact was published must reuse the
+    persisted authoritative outcome, not a freshly recomputed one (issue #3622)."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+
+        # First attempt: fresh evidence shows a terminal (canceled) state, so the
+        # verification artifact is published as verified_resolved.
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        first_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+        assert first_result["verification"]["outcome"] == "verified_resolved"
+
+        # Retry with the same action identity but evidence that would recompute
+        # still_failed. The verification artifact dedups to the persisted one, so
+        # projections and the response must reflect the persisted outcome.
+        authority2, guard2 = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        retry_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot("immediate_after", state="executing"),
+                        _verification_snapshot("stabilized", state="executing"),
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority2.to_dict(),
+            guard_result=guard2.to_dict(),
+            principal="service:test",
+        )
+
+        assert (
+            retry_result["artifactRefs"]["verification"]
+            == first_result["artifactRefs"]["verification"]
+        )
+        assert retry_result["verification"]["outcome"] == "verified_resolved"
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.verification_outcome == "verified_resolved"
+        verification_payload = await _read_artifact_json(
+            artifact_service, retry_result["artifactRefs"]["verification"]
+        )
+        assert verification_payload["outcome"] == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
+    tmp_path, mock_client_adapter
+):
+    """The lifecycle resolution is stored distinctly from the delivery status
+    (issue #3622); it must not overwrite link.outcome."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="lifecycle-delivery"
+        )
+        service = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        )
+        await service.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.outcome == "applied"
+        assert link.resolution is None
+
+        summary_block = build_remediation_summary_block(
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            phase="resolved",
+            mode="snapshot_then_follow",
+            authority_mode="admin_auto",
+            resolution="resolved_after_action",
+        )
+        await service.publish_lifecycle_summary(
+            remediation_workflow_id=remediation.workflow_id,
+            summary=summary_block,
+            repair=build_remediation_repair_decision(
+                target_workflow_id=target.workflow_id,
+                pinned_run_id=target.run_id,
+                decision="skipped",
+                decision_reason="target_already_healthy",
+                repair_outcome="not_attempted",
+            ),
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            decision_log_entries=(
+                {
+                    "timestamp": "2026-04-23T00:00:00Z",
+                    "phase": "resolved",
+                    "decisionType": "lifecycle_summary",
+                    "decision": "skipped",
+                    "reason": "target_already_healthy",
+                    "actor": "service:test",
+                    "targetWorkflowId": target.workflow_id,
+                    "targetRunId": target.run_id,
+                },
+            ),
+            lock_release="released",
+        )
+
+        await session.refresh(link)
+        # Delivery status is preserved; resolution is recorded separately.
+        assert link.outcome == "applied"
+        assert link.resolution == "resolved_after_action"

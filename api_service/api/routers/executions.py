@@ -622,6 +622,10 @@ class RemediationLinkSummaryModel(BaseModel):
     activeLockScope: str | None = None
     activeLockHolder: str | None = None
     latestActionSummary: str | None = None
+    # ``deliveryStatus`` is the latest action delivery/application status;
+    # ``resolution`` is the terminal remediation lifecycle resolution. They are
+    # distinct projections (issue #3622) and must never share a column.
+    deliveryStatus: str | None = None
     resolution: str | None = None
     contextArtifactRef: str | None = None
     selectedSteps: list[str] | None = None
@@ -653,6 +657,7 @@ class RemediationCollectionItemModel(BaseModel):
     authorityMode: str
     mode: str
     latestActionSummary: str | None = None
+    deliveryStatus: str | None = None
     resolution: str | None = None
     createdAt: datetime
     updatedAt: datetime
@@ -11629,7 +11634,8 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         activeLockScope=getattr(link, "active_lock_scope", None),
         activeLockHolder=getattr(link, "active_lock_holder", None),
         latestActionSummary=getattr(link, "latest_action_summary", None),
-        resolution=getattr(link, "outcome", None),
+        deliveryStatus=getattr(link, "outcome", None),
+        resolution=getattr(link, "resolution", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
         currentTargetState=getattr(link, "current_target_state", None),
@@ -11792,7 +11798,8 @@ async def list_remediation_collection(
             authorityMode=link.authority_mode,
             mode=link.mode,
             latestActionSummary=link.latest_action_summary,
-            resolution=link.outcome,
+            deliveryStatus=link.outcome,
+            resolution=link.resolution,
             createdAt=link.created_at,
             updatedAt=link.updated_at,
         )

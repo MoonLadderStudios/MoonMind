@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.remediation_verification import (
     REMEDIATION_VERIFICATION_OUTCOMES,
+    VERIFIED_RESOLVED,
 )
 from moonmind.utils.logging import redact_sensitive_text
 
@@ -1212,6 +1213,18 @@ def build_remediation_repair_decision(
         )
     if normalized_decision != "attempted" and normalized_outcome == "repaired":
         raise ValueError("repair_outcome repaired requires an attempted repair")
+    # A delivered action is only a *repair* once trusted post-action verification
+    # independently confirmed the target reached ``verified_resolved`` (issue
+    # #3622). Actions whose contract has no owning verifier (e.g.
+    # workload.restart_helper_container) therefore can never be labeled repaired
+    # from delivery alone.
+    if normalized_outcome == "repaired" and (
+        normalized_verification_outcome != VERIFIED_RESOLVED
+    ):
+        raise ValueError(
+            "repair_outcome repaired requires verification_outcome "
+            f"'{VERIFIED_RESOLVED}'"
+        )
 
     pinned = _required_lifecycle_string(pinned_run_id, "pinned_run_id")
     current = _safe_identifier_string(current_run_id) or pinned
@@ -1610,11 +1623,23 @@ def _validate_repair_payload(value: Mapping[str, Any]) -> None:
     _validated_choice(
         value.get("decision"), REMEDIATION_REPAIR_DECISIONS, "repair.decision"
     )
-    _validated_choice(
+    repair_outcome = _validated_choice(
         value.get("repairOutcome"),
         REMEDIATION_REPAIR_OUTCOMES,
         "repair.repairOutcome",
     )
+    # A caller-supplied repair mapping may only claim ``repaired`` when trusted
+    # post-action verification confirmed ``verified_resolved`` (issue #3622).
+    # This closes the integration-lifecycle path where a delivered action with no
+    # owning verifier (e.g. workload.restart_helper_container) could be published
+    # as repaired without verification.
+    if repair_outcome == "repaired":
+        verification_outcome = _string_or_none(value.get("verificationOutcome"))
+        if verification_outcome != VERIFIED_RESOLVED:
+            raise ValueError(
+                "repair.repairOutcome repaired requires "
+                f"repair.verificationOutcome '{VERIFIED_RESOLVED}'"
+            )
 
 def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping):

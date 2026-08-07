@@ -8,6 +8,8 @@ a database — a scripted evidence reader drives the fresh-evidence reads.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from moonmind.workflows.temporal.remediation_verification import (
@@ -23,6 +25,7 @@ from moonmind.workflows.temporal.remediation_verification import (
     RemediationVerificationPhase,
     TargetEvidenceSnapshot,
     is_action_automatically_verifiable,
+    resolve_verification_target,
     verification_contract_for,
 )
 
@@ -278,6 +281,149 @@ async def test_payload_separates_delivery_and_repair_and_records_states():
     metadata = result.to_metadata()
     assert metadata["verificationOutcome"] == VERIFIED_RESOLVED
     assert metadata["verificationDeliveryStatus"] == "applied"
+
+
+# --------------------------------------------------------------------------
+# Force-terminate requires the forced terminated close status (issue #3622)
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_force_terminate_verified_resolved_only_on_terminated_close_status():
+    before = _snap("before", state="executing", run_id="r")
+    after = _snap(state="canceled", close_status="terminated", run_id="r")
+    result = await _run("execution.force_terminate", before, [after])
+    assert result.outcome == VERIFIED_RESOLVED
+
+
+@pytest.mark.asyncio
+async def test_force_terminate_still_failed_when_target_failed_naturally():
+    before = _snap("before", state="executing", run_id="r")
+    after = _snap(state="failed", close_status="failed", run_id="r")
+    result = await _run("execution.force_terminate", before, [after])
+    assert result.outcome == STILL_FAILED
+
+
+@pytest.mark.asyncio
+async def test_force_terminate_still_failed_when_canceled_by_other_actor():
+    before = _snap("before", state="executing", run_id="r")
+    after = _snap(state="canceled", close_status="canceled", run_id="r")
+    result = await _run("execution.force_terminate", before, [after])
+    assert result.outcome == STILL_FAILED
+
+
+@pytest.mark.asyncio
+async def test_force_terminate_no_change_when_already_terminated():
+    before = _snap("before", state="canceled", close_status="terminated", run_id="r")
+    after = _snap(state="canceled", close_status="terminated", run_id="r")
+    result = await _run("execution.force_terminate", before, [after])
+    assert result.outcome == VERIFIED_NO_CHANGE
+
+
+# --------------------------------------------------------------------------
+# Unavailable stabilized evidence must not be discarded (issue #3622)
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_pause_evidence_unavailable_when_surface_disappears_during_stabilization():
+    # Immediate read shows paused=True, but the canonical evidence surface
+    # disappears during stabilization. The phase must report evidence_unavailable
+    # instead of asserting a repair from the stale immediate observation.
+    before = _snap("before", state="executing", paused=False, run_id="r")
+    immediate = _snap("immediate_after", state="executing", paused=True, run_id="r")
+    gone = TargetEvidenceSnapshot(
+        stage="stabilized", available=False, degraded_reason="surface vanished"
+    )
+    result = await _run("execution.pause", before, [immediate, gone])
+    assert result.outcome == EVIDENCE_UNAVAILABLE
+
+
+# --------------------------------------------------------------------------
+# Real cancellation during stabilization is best-effort (issue #3622)
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cancellation_during_stabilization_reports_canceled_best_effort():
+    before = _snap("before", state="executing", run_id="r")
+    immediate = _snap("immediate_after", state="executing", run_id="r")
+
+    async def _canceling_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    reader = ScriptedReader(before, [immediate])
+    phase = RemediationVerificationPhase(
+        reader=reader,
+        sleep=_canceling_sleep,
+        is_canceled=lambda: False,
+        max_poll_cap=6,
+    )
+    contract = verification_contract_for("execution.cancel")
+    result = await phase.run(
+        contract=contract,
+        action_kind="execution.cancel",
+        action_id="act-1",
+        delivery_status="applied",
+        target_workflow_id="wf",
+        pinned_run_id="run-0",
+        before_snapshot=before,
+        action_result={"beforeEvidenceRefs": [], "afterEvidenceRefs": []},
+    )
+    assert result.outcome == CANCELED
+    # Best-effort terminal evidence is preserved rather than lost to the raise.
+    assert result.immediate_after_state is immediate
+
+
+# --------------------------------------------------------------------------
+# Fresh reruns are verified against the resulting workflow (issue #3622)
+# --------------------------------------------------------------------------
+def test_resolve_verification_target_prefers_fresh_rerun_workflow():
+    contract = verification_contract_for("execution.start_fresh_rerun")
+    action_result = {"afterEvidenceRefs": ["execution:new-wf:rerun-request:act-9"]}
+    wf, run = resolve_verification_target(
+        contract,
+        action_result,
+        default_workflow_id="old-wf",
+        default_run_id="old-run",
+    )
+    assert wf == "new-wf"
+    assert run is None
+
+
+def test_resolve_verification_target_terminal_same_workflow_rerun_uses_new_identity():
+    # A terminal request_rerun_same_workflow is converted into a fresh execution;
+    # the adapter returns the new workflow identity in afterEvidenceRefs.
+    contract = verification_contract_for("execution.request_rerun_same_workflow")
+    action_result = {"afterEvidenceRefs": ["execution:new-wf:rerun-request:act-9"]}
+    wf, run = resolve_verification_target(
+        contract,
+        action_result,
+        default_workflow_id="old-wf",
+        default_run_id="old-run",
+    )
+    assert wf == "new-wf"
+    assert run is None
+
+
+def test_resolve_verification_target_same_workflow_keeps_default():
+    contract = verification_contract_for("execution.request_rerun_same_workflow")
+    action_result = {"afterEvidenceRefs": ["execution:old-wf:rerun-request:act-9"]}
+    wf, run = resolve_verification_target(
+        contract,
+        action_result,
+        default_workflow_id="old-wf",
+        default_run_id="old-run",
+    )
+    assert wf == "old-wf"
+    assert run == "old-run"
+
+
+def test_resolve_verification_target_non_rerun_keeps_default():
+    contract = verification_contract_for("execution.cancel")
+    action_result = {"afterEvidenceRefs": ["execution:new-wf:rerun-request:act-9"]}
+    wf, run = resolve_verification_target(
+        contract,
+        action_result,
+        default_workflow_id="old-wf",
+        default_run_id="old-run",
+    )
+    assert wf == "old-wf"
+    assert run == "old-run"
 
 
 def test_all_outcomes_are_in_the_normalized_set():

@@ -269,7 +269,7 @@ _VERIFICATION_CONTRACTS: dict[str, VerificationContract] = {
         "execution.cancel", "execution_terminal", "canceled_or_terminal"
     ),
     "execution.force_terminate": _execution_contract(
-        "execution.force_terminate", "execution_terminal", "terminated"
+        "execution.force_terminate", "execution_force_terminate", "terminated"
     ),
     "execution.request_rerun_same_workflow": _execution_contract(
         "execution.request_rerun_same_workflow",
@@ -439,7 +439,8 @@ class VerificationEvidenceReader(Protocol):
         workflow_id: str,
         stage: str,
         pinned_run_id: str | None = None,
-    ) -> TargetEvidenceSnapshot: ...
+    ) -> TargetEvidenceSnapshot:
+        """Read one fresh canonical evidence snapshot for ``stage``."""
 
 
 class CanonicalRecordEvidenceReader:
@@ -569,7 +570,13 @@ def _stabilized(
     immediate: TargetEvidenceSnapshot | None,
     stabilized: TargetEvidenceSnapshot | None,
 ) -> TargetEvidenceSnapshot | None:
-    if stabilized is not None and stabilized.available:
+    # When a stabilization read actually happened, it is the latest authoritative
+    # reading and must win even when it came back unavailable. Falling back to an
+    # earlier available ``immediate`` snapshot would let the phase assert a repair
+    # (e.g. paused=True) from stale evidence after the canonical surface
+    # disappeared during stabilization; retaining the unavailable stabilized
+    # snapshot makes the phase emit ``evidence_unavailable`` instead.
+    if stabilized is not None:
         return stabilized
     return immediate
 
@@ -656,6 +663,50 @@ def _classify_execution_terminal(
     return STILL_FAILED, "Target is still active after the termination action."
 
 
+def _classify_execution_force_terminate(
+    before: TargetEvidenceSnapshot,
+    immediate: TargetEvidenceSnapshot | None,
+    stabilized: TargetEvidenceSnapshot | None,
+) -> tuple[str, str]:
+    """Force-terminate: repair is confirmed only by the forced ``terminated`` close status.
+
+    Unlike ``execution.cancel`` (whose contract accepts any terminal/canceled
+    state), ``execution.force_terminate`` must observe the specific
+    force-termination close status. A target that fails naturally, is canceled by
+    another actor, times out, or completes while the request is in flight is
+    *not* evidence that this action terminated it, so those states must never be
+    reported as ``verified_resolved``.
+    """
+
+    final = _stabilized(immediate, stabilized)
+    if final is None or not final.available:
+        return (
+            EVIDENCE_UNAVAILABLE,
+            "Fresh target evidence was unavailable after force-terminate.",
+        )
+
+    def _is_force_terminated(snapshot: TargetEvidenceSnapshot) -> bool:
+        return bool(snapshot.available and snapshot.close_status == "terminated")
+
+    if _is_force_terminated(final):
+        if _is_force_terminated(before):
+            return (
+                VERIFIED_NO_CHANGE,
+                "Target was already terminated; force-terminate was a no-op.",
+            )
+        return VERIFIED_RESOLVED, "Target reached the forced 'terminated' close status."
+    # It showed the forced terminated status immediately after but is active again.
+    if immediate is not None and _is_force_terminated(immediate) and _is_active(final):
+        return REGRESSED, "Target left its terminated state during stabilization."
+    if _is_active(final):
+        return STILL_FAILED, "Target is still active after the force-terminate action."
+    return (
+        STILL_FAILED,
+        "Target reached a terminal state without the forced 'terminated' close "
+        "status; force-terminate repair is not confirmed.",
+    )
+
+
 def _classify_execution_rerun(
     before: TargetEvidenceSnapshot,
     immediate: TargetEvidenceSnapshot | None,
@@ -737,6 +788,7 @@ _CLASSIFIERS: dict[
     "execution_pause": _classify_execution_pause,
     "execution_resume": _classify_execution_resume,
     "execution_terminal": _classify_execution_terminal,
+    "execution_force_terminate": _classify_execution_force_terminate,
     "execution_rerun": _classify_execution_rerun,
     "checkpoint_branch": _classify_checkpoint_branch,
 }
@@ -769,6 +821,50 @@ def _resulting_identity(
     return identity
 
 
+def _rerun_result_workflow_id(action_result: Mapping[str, Any]) -> str | None:
+    """Extract the resulting workflow id from a rerun action's evidence refs.
+
+    Rerun adapters record ``execution:<workflow_id>:rerun-request:<action_id>``
+    in ``afterEvidenceRefs``. For a fresh rerun this ``workflow_id`` is the newly
+    created execution's identity.
+    """
+
+    marker = ":rerun-request:"
+    for ref in _string_sequence(action_result.get("afterEvidenceRefs")):
+        if ref.startswith("execution:") and marker in ref:
+            candidate = ref[len("execution:") : ref.index(marker)].strip()
+            if candidate:
+                return candidate
+    return None
+
+
+def resolve_verification_target(
+    contract: VerificationContract,
+    action_result: Mapping[str, Any],
+    *,
+    default_workflow_id: str,
+    default_run_id: str | None,
+) -> tuple[str, str | None]:
+    """Resolve which execution identity the verifier must read fresh evidence for.
+
+    Fresh-rerun actions (``execution.start_fresh_rerun`` and terminal
+    ``execution.request_rerun_same_workflow``, which the execution service also
+    converts into a fresh execution) create a *new* workflow identity and return
+    it in ``afterEvidenceRefs``. Verifying the original ``target_workflow_id``
+    would re-read the prior terminal record and always classify it as
+    ``still_failed``, never observing the newly created execution. When the
+    resulting workflow differs from the original the verifier reads that workflow
+    with an unpinned run so it observes the new run identity and its health.
+    """
+
+    if contract.verifier != "execution_rerun":
+        return default_workflow_id, default_run_id
+    resulting = _rerun_result_workflow_id(action_result)
+    if not resulting or resulting == default_workflow_id:
+        return default_workflow_id, default_run_id
+    return resulting, None
+
+
 # ---------------------------------------------------------------------------
 # The verification phase
 # ---------------------------------------------------------------------------
@@ -785,7 +881,14 @@ class RemediationVerificationPhase:
     ) -> None:
         self._reader = reader
         self._sleep = sleep or asyncio.sleep
-        self._is_canceled = is_canceled or (lambda: False)
+        # In production the phase runs inside a Temporal Activity, so the real
+        # cancellation signal is the Activity's own cancellation state. Fall back
+        # to that when no explicit probe is injected (tests inject a controllable
+        # one). ``asyncio.CancelledError`` raised on the awaited sleeps/reads is
+        # the primary in-flight signal and is handled in ``run``/``_stabilize``;
+        # this cooperative probe lets the phase short-circuit before the next
+        # bounded wait as well.
+        self._is_canceled = is_canceled or _activity_cancellation_probe
         self._max_poll_cap = max(0, int(max_poll_cap))
 
     async def read_before_snapshot(
@@ -886,6 +989,14 @@ class RemediationVerificationPhase:
                 stage="immediate_after",
                 pinned_run_id=pinned_run_id,
             )
+        except asyncio.CancelledError:
+            # Preserve best-effort terminal evidence: a canceled verification
+            # records a ``canceled`` outcome instead of propagating and skipping
+            # the declared verification artifact/projection.
+            return _result(
+                CANCELED,
+                "Verification was canceled during the immediate evidence read.",
+            )
         except Exception as exc:  # noqa: BLE001 - classify verifier failure truthfully
             return _result(
                 VERIFICATION_FAILED,
@@ -984,7 +1095,14 @@ class RemediationVerificationPhase:
             if self._is_canceled():
                 info["canceled"] = True
                 break
-            await self._sleep(contract.poll_interval_seconds)
+            try:
+                await self._sleep(contract.poll_interval_seconds)
+            except asyncio.CancelledError:
+                # Real cancellation during the bounded stabilization sleep: stop
+                # and let the phase publish a best-effort ``canceled`` outcome
+                # with whatever evidence has already been read.
+                info["canceled"] = True
+                break
             info["polls"] = poll
             try:
                 latest = await self._reader.read_target_evidence(
@@ -993,6 +1111,9 @@ class RemediationVerificationPhase:
                     stage="stabilized",
                     pinned_run_id=pinned_run_id,
                 )
+            except asyncio.CancelledError:
+                info["canceled"] = True
+                break
             except Exception:  # noqa: BLE001
                 info["verifierFailed"] = True
                 break
@@ -1010,6 +1131,24 @@ class RemediationVerificationPhase:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _activity_cancellation_probe() -> bool:
+    """Return whether the surrounding Temporal Activity has been canceled.
+
+    Safe outside a Temporal Activity (returns ``False``) and resilient to any
+    temporalio import/runtime error, so the phase never fails merely because it
+    is exercised outside a worker.
+    """
+
+    try:
+        from temporalio import activity as _temporal_activity
+
+        if not _temporal_activity.in_activity():
+            return False
+        return bool(_temporal_activity.is_cancelled())
+    except Exception:  # noqa: BLE001 - cancellation probing must never raise
+        return False
+
+
 def _string_sequence(value: Any) -> list[str]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [str(item) for item in value]
@@ -1067,6 +1206,7 @@ __all__ = [
     "VerificationOutcome",
     "VerificationResult",
     "is_action_automatically_verifiable",
+    "resolve_verification_target",
     "snapshot_from_health",
     "verification_contract_for",
 ]

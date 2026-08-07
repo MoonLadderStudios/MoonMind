@@ -1,9 +1,11 @@
-"""Add remediation link verification_outcome projection.
+"""Add remediation link verification_outcome and resolution projections.
 
 Issue MoonLadderStudios/MoonMind#3622: post-action verification becomes a
 first-class authoritative phase. The remediation link now records the trusted
-repair-verification classification separately from the action delivery
-``outcome`` so a delivered action never relabels the target as repaired.
+repair-verification classification (``verification_outcome``) and the terminal
+lifecycle ``resolution`` separately from the action delivery ``outcome`` so a
+delivered action never relabels the target as repaired and the final lifecycle
+summary never overwrites the delivery projection.
 
 Revision ID: 352_remediation_verification
 Revises: 351_claude_oauth_capacity
@@ -26,7 +28,12 @@ def upgrade() -> None:
         "execution_remediation_links",
         sa.Column("verification_outcome", sa.String(length=64), nullable=True),
     )
+    op.add_column(
+        "execution_remediation_links",
+        sa.Column("resolution", sa.String(length=64), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("execution_remediation_links", "resolution")
     op.drop_column("execution_remediation_links", "verification_outcome")
