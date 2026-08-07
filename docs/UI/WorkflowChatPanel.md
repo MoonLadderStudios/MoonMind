@@ -1,117 +1,333 @@
 # Workflow Chat Panel
 
-**Status:** Design Draft  
-**Owner:** MoonMind Dashboard  
-**Last updated:** 2026-07-02  
-**Audience:** dashboard, backend, workflow authors
+**Document Class:** Canonical declarative  
+**Status:** Accepted target  
+**Owner:** MoonMind Dashboard / Platform  
+**Last updated:** 2026-08-07  
+**Audience:** dashboard, backend, Omnigent integration, workflow authors
+
+**Authority:** This document owns the Workflow Detail **Chat** product surface. Omnigent owns the native session presentation and interaction model. MoonMind owns the workflow/session binding, request authorization, effective capabilities, security policy, durable evidence, and linked continuation.
 
 **Implementation tracking:** Rollout tasks belong under `docs/tmp/`, issues, or pull requests.
 
 ## 1. Purpose
 
-This document defines the dashboard contract for the workflow detail chat panel. The panel lets a user submit chat instructions that affect a running Workflow Execution or create linked follow-up work after completion.
+The Workflow Detail Chat surface presents the **native Omnigent chat experience** for the Omnigent session bound to a MoonMind Workflow Execution.
 
-This is a UI companion to:
+MoonMind does not build a second chat application that imitates Omnigent. The Workflow Detail page provides a thin workflow shell around the native Omnigent UI, while every provider-facing request continues through a MoonMind-authorized bridge boundary.
 
+Related documents:
+
+- `docs/Omnigent/OmnigentBridge.md`
+- `docs/Omnigent/AgentProfiles.md`
+- `docs/Omnigent/NormalCodexProductPathReconciliation.md`
+- `docs/Security/SecretsSystem.md`
+- `docs/UI/WorkflowDetailsPage.md`
+- `docs/Workflows/WorkflowRunsApi.md`
 - `docs/Workflows/ChatInstructionIntervention.md`
 - `docs/Api/ChatInstructionsApiContract.md`
 - `docs/Temporal/ChatInstructionTemporalContract.md`
 
-## 2. Product stance
+The three Chat Instruction documents define a deferred, explicit workflow-steering extension. They do not define the ordinary Workflow Detail Chat send path.
 
-The chat panel is a control and clarification surface for Workflow Executions. It does not replace the Step ledger, artifacts, logs, or execution actions.
+## 2. Product and authority boundary
 
-The UI must render the explicit `ChatInstructionDecision` returned by the API. It must not infer acceptance from local state or optimistic UI alone.
+The primary Workflow Detail Chat experience uses the native Omnigent application for:
 
-## 3. Entry points
+- transcript rendering,
+- the composer,
+- optimistic and queued messages,
+- steering while a turn is active,
+- attachments and workspace mentions,
+- Markdown, code, image, reasoning, tool, approval, and status presentation,
+- files, terminals, agents, tasks, and browser workspace surfaces,
+- session history, liveness, wake, reconnect, and interruption affordances.
 
-The workflow detail page may expose the chat panel when:
+MoonMind remains authoritative for:
 
-- the caller is authorized to update or follow up on the execution,
-- the execution is running, waiting, paused, or terminal with follow-up policy enabled,
-- the backend runtime config exposes the chat instruction endpoint.
+- resolving the Workflow-to-Omnigent session binding,
+- authenticating and authorizing every UI, HTTP, SSE, and WebSocket request,
+- deriving the effective control and resource capabilities,
+- enforcing immutable Agent Profile, Provider Profile, launch-policy, workflow-state, and caller-permission constraints,
+- applying high-security outbound scans before provider sends,
+- recording actor, idempotency, expected-state, outcome, and audit evidence for mutations,
+- capturing durable event, resource, artifact, terminal, cleanup, and lease evidence,
+- offering a linked **Continue in a new workflow** action after terminal work.
 
-The panel should be available from the main detail route:
+The native application is therefore the presentation client, not a second control plane. Hiding or disabling a native control is an affordance only; the MoonMind bridge must reject any request that exceeds effective authority.
+
+The existing MoonMind event-to-chat projection is a compatibility and diagnostic surface. It is not the target primary chat product.
+
+## 3. Route and layout
+
+The primary route is:
 
 ```text
-/workflows/{workflowId}
+/workflows/{workflowId}/chat
 ```
 
-## 4. Send flow
+The route renders:
 
-The panel sends:
+```text
+Workflow context bar
+Native Omnigent chat application
+```
+
+The workflow context bar is intentionally small. It may show:
+
+- workflow title,
+- workflow status,
+- current or source Step,
+- runtime label,
+- **Back to Overview**,
+- **View captured evidence**,
+- **Continue in a new workflow** when terminal continuation is available.
+
+MoonMind must not add a second composer, transcript toolbar, approval tray, file rail, or session-control panel around the native UI.
+
+In embedded mode, Omnigent may hide application-global chrome that MoonMind already supplies, such as the global conversation sidebar. Session-specific controls and the native workspace rail remain visible only when the effective capability projection permits them.
+
+On mobile, the native chat application fills the Workflow Detail content region and uses its own responsive behavior.
+
+## 4. Native application integration
+
+The preferred deployment exposes the native Omnigent web application through the MoonMind origin, for example:
+
+```text
+/omnigent-ui/workflow-chat/{chatBindingId}?embedded=1
+```
+
+`chatBindingId` is an opaque MoonMind binding identifier. The browser does not author an upstream endpoint, provider session id, host id, runner id, profile ref, workspace path, or provider credential.
+
+`embedded=1` is a presentational mode only. It must not create a second session protocol, transcript model, composer implementation, or fork of Omnigent behavior.
+
+A same-origin embedded application boundary may use an iframe or equivalent microfrontend isolation. A full-page **Open in Omnigent** action, when offered, must open the same MoonMind-scoped surface rather than bypassing MoonMind authorization by navigating directly to the upstream server.
+
+The integration must provide:
+
+- authenticated same-origin access,
+- a server-generated `chatUrl` based on an authorized opaque binding,
+- frame and content-security policy compatible with the deployment,
+- a binding-scoped API base used by the native application,
+- bounded loading, unavailable, disconnected, and terminal states,
+- an authorized full-page escape hatch when embedding is unavailable.
+
+## 5. Workflow chat binding
+
+The Workflow Detail API exposes one authoritative binding for the session that the Chat route opens.
+
+Representative browser-safe projection:
+
+```ts
+type WorkflowChatBinding = {
+  chatBindingId: string;
+  workflowId: string;
+  runId: string;
+  logicalStepId?: string;
+  stepExecutionId?: string;
+  chatUrl: string;
+  state: 'starting' | 'available' | 'ended' | 'unavailable';
+  readOnly: boolean;
+  capabilities: {
+    viewTranscript: boolean;
+    sendMessage: boolean;
+    interruptTurn: boolean;
+    resolveElicitation: boolean;
+    readResources: boolean;
+    createTerminal: boolean;
+    writeTerminal: boolean;
+    mutateWorkspace: boolean;
+    changeModel: boolean;
+    changeEffort: boolean;
+    changeGoal: boolean;
+  };
+  unavailableReason?: string;
+};
+```
+
+Provider session, bridge session, host, runner, endpoint, credential, and immutable profile-snapshot identifiers remain server-side unless a separately authorized diagnostic surface exposes bounded safe refs.
+
+Binding rules:
+
+1. The backend resolves the binding from durable Workflow, Step Execution, AgentRun, and Omnigent Bridge state.
+2. The active chat-capable session is preferred while work is running.
+3. For terminal workflows, the last authoritative chat-capable session may be returned read-only.
+4. The browser does not infer a session by scanning logs, events, URLs, or provider metadata.
+5. A stale, missing, or unauthorized binding fails closed and never falls back to an arbitrary provider session.
+6. The browser uses only the server-generated `chatUrl` and binding-scoped API base.
+7. Possession of a binding id or URL is not authorization; every subsequent request is independently checked.
+
+## 6. Per-request proxy authorization
+
+Every native application request that crosses the MoonMind origin—HTML/bootstrap, session snapshot, history, message, stream, resource, terminal, approval, control, reconnect, and WebSocket traffic—must pass through the binding-scoped MoonMind bridge boundary.
+
+For every request and reconnect, the bridge must:
+
+1. authenticate the MoonMind caller,
+2. resolve `chatBindingId` from durable state,
+3. authorize the caller against the bound Workflow Execution and requested operation,
+4. verify that any route, payload, or query session reference maps to the one bound provider session,
+5. reject caller-supplied upstream endpoints, alternate session ids, host ids, runner ids, workspace roots, and provider identities,
+6. recompute effective capabilities from the immutable Agent Profile snapshot, Provider Profile and launch policy, workflow/session state, and caller role,
+7. validate expected workflow, run, Step Execution, bridge session, provider session, session epoch, and active turn where the operation can race,
+8. apply required security scans and policy checks before forwarding,
+9. record durable mutation audit evidence,
+10. forward only to the server-resolved upstream target.
+
+The proxy strips MoonMind cookies, bearer tokens, CSRF tokens, internal authorization headers, and other MoonMind credentials before forwarding upstream. It injects only server-side Omnigent credentials and an allowlisted set of transport headers. No deployment option may turn browser-supplied upstream authorization into provider authority.
+
+SSE and WebSocket upgrades receive the same authorization and binding validation before connection, and reconnects repeat the check rather than relying on the authorization that opened an earlier stream.
+
+## 7. Native control policy
+
+The native UI receives a filtered capability projection so it can retain the Omnigent interaction model without displaying controls that MoonMind policy forbids.
+
+The effective capability set is the intersection of:
+
+```text
+upstream session capabilities
+∩ immutable Omnigent Agent Profile snapshot
+∩ Provider Profile and effective launch policy
+∩ Workflow and Step state
+∩ caller permission
+```
+
+In particular:
+
+- pinned model and effort values cannot be changed from native controls,
+- approval and elicitation decisions require the MoonMind approval capability for the caller and request,
+- terminal creation/input, workspace mutation, browser actions, clear/reset, stop, cancel, cleanup, and resource access remain separately capability-gated,
+- upstream support for an operation does not grant MoonMind authority to use it,
+- unsupported or denied controls are hidden or disabled in the native client and rejected server-side if invoked directly.
+
+Every mutating session or control request carries or receives a MoonMind idempotency key and records the actor, operation, expected identities/state, normalized outcome, upstream correlation, timestamp, and durable audit reference. Approval and control events are not authoritative unless this evidence is retained.
+
+## 8. Message semantics and outbound security
+
+For an active native Omnigent session:
+
+```text
+User message
+  -> native Omnigent composer
+  -> binding-scoped MoonMind bridge
+  -> authorized native Omnigent session event
+```
+
+Ordinary messages do not pass through Temporal and do not call:
 
 ```http
 POST /api/executions/{workflowId}/chat-instructions
 ```
 
-The request includes the chat message, optional target hints, the current UI-observed `runId`, active `logicalStepId`, plan revision when known, and policy flags implied by the selected UI action.
+When high-security mode is enabled, the bridge must run the canonical MoonMind outbound-text scan over every text-bearing native message or command payload before forwarding it. This includes message text, supported slash-command arguments, approval response text, and textual attachment content that MoonMind forwards to the provider.
 
-The response tells the UI what happened.
+A blocked scan prevents the provider request and returns only redacted finding category and location data. If high-security mode is enabled and MoonMind cannot parse the native event safely, cannot inspect a required textual payload, or cannot run the configured scanner, the send fails closed with a stable error; it must not bypass the scan or forward first and diagnose later.
 
-## 5. Decision rendering
+When high-security mode is disabled, the scan contract allows the unchanged caller payload. The proxy must never silently rewrite user content.
 
-| Decision | UI behavior |
-| --- | --- |
-| `attached_to_active_step` | Show accepted state on the message and link to the active Step. |
-| `queued_for_safe_point` | Show queued state and explain that it will apply before the next safe boundary. |
-| `queued_for_step` | Show the target Step or next Step if known. |
-| `active_step_cancel_requested` | Show that current active work is being canceled before reattempt. |
-| `step_reattempt_scheduled` | Show the new Step Execution attempt once available. |
-| `plan_revision_requested` | Show replanning state and keep the Step list loading from server truth. |
-| `future_steps_superseded` | Show superseded Step badges and link to the new plan revision. |
-| `created_followup_execution` | Show a link to the follow-up Workflow Execution. |
-| `rejected_stale_target` | Ask the user to refresh or retarget because the page was stale. |
-| `rejected_terminal` | Offer follow-up creation if policy allows. |
-| `rejected_policy` | Explain the policy block and show available safe actions. |
-| `rejected_invalid_payload` | Explain that the submitted instruction payload or target state is invalid. |
-| `rejected_unsupported_runtime` | Explain that the active runtime cannot accept live chat instructions. |
+MoonMind does not classify ordinary session messages as workflow mutations. A native message does not implicitly:
 
-## 6. Targeting controls
+- cancel or reattempt a Step,
+- revise the workflow plan,
+- supersede future Steps,
+- rerun or resume the Workflow,
+- create a new Workflow Execution.
 
-The first implementation may default to `scope = auto`. Advanced controls may later allow:
+Workflow-level operations remain explicit MoonMind actions such as **Edit Workflow**, **Rerun**, **Resume**, **Remediate**, **Cancel**, and **Continue in a new workflow**.
 
-- target active Step,
-- target a specific Step,
-- apply to future Steps,
-- create follow-up from a completed execution,
-- allow or deny active-Step cancellation,
-- allow or deny future-Step voiding.
+A future workflow-level chat-steering product must use a separately labeled action governed by `docs/Workflows/ChatInstructionIntervention.md`. It must not replace or intercept the native composer.
 
-Target controls should be disabled or hidden when the backend cannot enforce the requested policy.
+## 9. Terminal behavior
 
-## 7. Step ledger integration
+When the bound Omnigent session is terminal:
 
-The Steps section remains the primary operator comprehension surface. The chat panel should not duplicate Step truth.
+- the native transcript remains available when authorized,
+- the native composer is read-only or absent,
+- mutating native controls fail closed,
+- MoonMind shows terminal Workflow and session context,
+- MoonMind may show **Continue in a new workflow**.
 
-When chat changes Step state, the UI should refetch or subscribe to server state and render:
+**Continue in a new workflow** creates a linked Workflow Execution. It pins the source workflow and run and carries authorized source evidence refs needed for continuation, such as the final session snapshot, finish summary, relevant artifacts, and source Step identity.
 
-- instruction refs on affected Step rows,
-- new Step Execution attempts,
-- superseded future Steps,
-- plan revision refs,
-- follow-up links for terminal source executions.
+The source Workflow Execution and source Omnigent session remain immutable.
 
-## 8. Terminal follow-up UI
+Terminal continuation is an explicit MoonMind workflow action. It is not a message sent through the native composer and is not automatically routed through `SubmitChatInstruction`.
 
-For terminal executions, the composer should make the product behavior explicit:
+## 10. Durable evidence
 
-- the source execution will remain unchanged,
-- a new linked follow-up execution may be created,
-- the follow-up will pin source workflow/run/plan/report refs,
-- the user will be taken to or shown a link to the follow-up Workflow Execution.
+The embedded native UI presents live session state. MoonMind artifacts remain the durable workflow evidence boundary.
 
-## 9. Stale-state handling
+The Omnigent Bridge continues to capture and publish authorized evidence such as:
 
-Every chat request should include the UI-observed `runId`, active Step, and plan revision when known. If the backend returns `rejected_stale_target`, the panel should refresh execution detail and Step ledger before allowing retry.
+- raw and normalized event journals,
+- changed files and diffs,
+- session files,
+- initial and final snapshots,
+- diagnostics,
+- terminal outcome,
+- capture manifests,
+- mutation and approval audit refs,
+- cleanup and lease-release evidence.
 
-## 10. Rollout flags
+The workflow context bar may link to **View captured evidence**. MoonMind should not duplicate all evidence inside the native transcript.
 
-Recommended flags:
+The product distinction is:
 
-- `workflowChatPanelEnabled`
-- `workflowChatFollowupEnabled`
-- `workflowChatPlanRevisionEnabled`
-- `workflowChatCancelReattemptEnabled`
+```text
+Native Omnigent UI = live interactive session presentation
+MoonMind bridge = request and policy authority
+MoonMind artifacts = immutable workflow evidence
+```
 
-Read-first behavior remains required: the UI should fetch current execution detail and Step ledger before presenting destructive chat actions.
+## 11. Compatibility and diagnostics
+
+The existing MoonMind `ChatSessionView`, raw timeline, bridge event projection, resource evidence panel, and administrative diagnostics remain useful for:
+
+- bridge diagnostics,
+- support evidence,
+- legacy managed-session compatibility,
+- cases where the native UI cannot be reached,
+- raw event and artifact inspection.
+
+They belong under **Debug**, **Diagnostics**, or a clearly labeled read-only compatibility fallback. They must not present a second ordinary composer once native chat is available.
+
+When the native UI is unavailable, the Chat route shows the stable reason, a retry action, the authorized full-page native surface when available, and a read-only compatibility transcript when available. It must not silently switch to a behaviorally different custom chat implementation.
+
+For runtimes without a native Omnigent session, the route may show a read-only compatibility transcript or a clear `Chat unavailable for this runtime` state.
+
+## 12. Explicit non-goals
+
+The Workflow Detail frontend does not build or maintain its own versions of:
+
+- the Omnigent composer,
+- queued-message editing or reordering,
+- rich message and Markdown rendering,
+- tool, reasoning, or approval cards,
+- file, terminal, agent, task, or browser rails,
+- model, effort, plan, or goal controls,
+- session reconnect and wake flows,
+- reply, quote, history, or transcript navigation systems.
+
+The primary Chat route also does not require implementation of:
+
+- `SubmitChatInstruction`,
+- chat-driven plan revision,
+- chat-driven Step cancellation and reattempt,
+- chat-driven future-Step supersession,
+- heuristic routing between session chat and workflow steering.
+
+## 13. Acceptance criteria
+
+The target is satisfied when:
+
+1. Opening Workflow Chat lands in the native Omnigent conversation for the authoritative bound session.
+2. The native transcript, composer, queue, approvals, workspace rail, and lifecycle affordances retain Omnigent behavior within the effective MoonMind capability set.
+3. MoonMind adds only bounded workflow context and does not duplicate native interaction components.
+4. Every UI, HTTP, SSE, WebSocket, resource, and control request is authorized against the durable binding; substituting another session or upstream target fails closed.
+5. MoonMind credentials never reach the upstream Omnigent server, and upstream credentials never reach the browser.
+6. Native controls cannot override immutable profile, billing, approval, workflow-state, or caller-permission policy.
+7. High-security mode scans outbound native message payloads before send and fails closed when enforcement is unavailable.
+8. Ordinary messages use the native session path rather than Temporal chat instructions.
+9. MoonMind continues to publish durable workflow evidence independently of the native UI.
+10. Terminal work can be inspected read-only and continued through an explicit linked-workflow action.
+11. The existing MoonMind projection remains available for diagnostics without competing with the native primary experience.
