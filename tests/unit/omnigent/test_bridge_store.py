@@ -10,6 +10,9 @@ Source design traceability: OmnigentBridge.md (MM-1152, source issue MM-1140).
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import UTC, datetime, timedelta
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -1399,3 +1402,213 @@ async def test_resolve_chat_binding_prefers_active_over_terminal(store):
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
     assert resolution.chat_binding_id == active_binding
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_read_only_without_capability_snapshot(store):
+    """Fail closed when no capability snapshot exists (MoonLadderStudios/MoonMind#3633)."""
+
+    # Historical rows and compatibility paths persist no ``interventionCapabilities``
+    # snapshot; the binding must be read-only rather than advertising send.
+    await _seed_chat_session(
+        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        session_id="sess-1", capabilities=None,
+    )
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.read_only is True
+    assert resolution.capabilities == {}
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_read_only_when_send_capability_absent(store):
+    """A partial snapshot without ``sendMessage`` still fails closed."""
+
+    await _seed_chat_session(
+        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        session_id="sess-1", capabilities={"viewTranscript": True},
+    )
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.read_only is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_rejects_cross_runtime_compat_session(store):
+    """A direct-Codex compatibility row reuses ``provider="omnigent"`` but the
+    Omnigent facade cannot serve it (MoonLadderStudios/MoonMind#3633)."""
+
+    await store.get_or_create(
+        request=_request("idem-1"),
+        endpoint_ref="direct-codex-compat",
+        agent_id="agent-1",
+        agent_name="Codex CLI",
+        target_metadata={
+            "hostType": "managed",
+            "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+            "producer": "direct_codex_managed_session",
+        },
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+    )
+    await store.attach_session("idem-1", "sess-1")
+    await store.record_session_created("idem-1", session_id="sess-1")
+
+    row = await store.get_existing("idem-1")
+    # The provider column is still the shared Omnigent provider...
+    assert row.provider == "omnigent"
+
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    # ...but the compatibility profile is not one the facade can serve.
+    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert resolution.unavailable_reason == "unsupported_runtime"
+
+
+async def _set_updated_at(store, bridge_session_id: str, when: datetime) -> None:
+    async with store._session_factory() as session:
+        row = await session.get(OmnigentBridgeSession, bridge_session_id)
+        row.updated_at = when
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_fails_closed_when_latest_terminal_cleaned_up(store):
+    """Never replay an older run's transcript when the newest terminal session
+    was cleaned up (MoonLadderStudios/MoonMind#3633)."""
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # Older terminal session whose transcript is still present.
+    await _seed_chat_session(
+        store, key="idem-old", workflow_id="mm:wf-1", agent_run_id="ar-old",
+        session_id="sess-old", terminal_status="completed",
+    )
+    old_row = await store.get_existing("idem-old")
+    # Newest terminal session, whose provider transcript was cleaned up.
+    await _seed_chat_session(
+        store, key="idem-new", workflow_id="mm:wf-1", agent_run_id="ar-new",
+        session_id="sess-new", terminal_status="completed", delete_session=True,
+    )
+    new_row = await store.get_existing("idem-new")
+    await _set_updated_at(store, old_row.bridge_session_id, base)
+    await _set_updated_at(store, new_row.bridge_session_id, base + timedelta(minutes=5))
+
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert resolution.unavailable_reason == "session_cleaned_up"
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_uses_latest_terminal_when_older_cleaned_up(store):
+    """The authoritative latest terminal session is returned even if an older
+    session was cleaned up."""
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await _seed_chat_session(
+        store, key="idem-old", workflow_id="mm:wf-1", agent_run_id="ar-old",
+        session_id="sess-old", terminal_status="completed", delete_session=True,
+    )
+    old_row = await store.get_existing("idem-old")
+    await _seed_chat_session(
+        store, key="idem-new", workflow_id="mm:wf-1", agent_run_id="ar-new",
+        session_id="sess-new", terminal_status="completed",
+    )
+    new_row = await store.get_existing("idem-new")
+    await _set_updated_at(store, old_row.bridge_session_id, base)
+    await _set_updated_at(store, new_row.bridge_session_id, base + timedelta(minutes=5))
+
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_ENDED
+    assert resolution.read_only is True
+    assert resolution.chat_binding_id == new_row.chat_binding_id
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_persists_logical_step_id_in_metadata(store):
+    """The logical step id is projected onto the chat binding
+    (MoonLadderStudios/MoonMind#3633)."""
+
+    await store.get_or_create(
+        request=_request("idem-1", with_step=True),
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex",
+        target_metadata={"hostType": "managed"},
+    )
+    row = await store.get_existing("idem-1")
+    assert row.metadata_.get("logicalStepId") == "implement"
+
+    await store.attach_session("idem-1", "sess-1")
+    await store.record_session_created("idem-1", session_id="sess-1")
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.logical_step_id == "implement"
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_binding_returns_persisted_winner_on_concurrent_allocation(
+    tmp_path, monkeypatch
+):
+    """The losing side of a concurrent first-time allocation must return the
+    *persisted* winning id, never its own unpersisted candidate
+    (MoonLadderStudios/MoonMind#3633)."""
+
+    from moonmind.omnigent import bridge_store as bridge_store_module
+
+    db_path = f"{tmp_path}/bridge_race.db"
+    # WAL lets the simulated concurrent winner commit through a second connection
+    # while the resolver holds its read transaction open.
+    seed = sqlite3.connect(db_path)
+    try:
+        seed.execute("PRAGMA journal_mode=WAL")
+    finally:
+        seed.close()
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 30}
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    race_store = OmnigentBridgeSessionStore(session_maker)
+    try:
+        await race_store.get_or_create(
+            request=_request("idem-race"),
+            endpoint_ref="default",
+            agent_id="agent-1",
+            agent_name="codex",
+            target_metadata={"hostType": "managed"},
+            workflow_id="mm:wf-race",
+            agent_run_id="ar-race",
+        )
+        # A bound provider session with no chat-binding id yet (historical row).
+        await race_store.attach_session("idem-race", "sess-race")
+        row = await race_store.get_existing("idem-race")
+        assert row.chat_binding_id is None
+
+        winner = f"{CHAT_BINDING_ID_PREFIX}winner"
+        loser = f"{CHAT_BINDING_ID_PREFIX}loser"
+
+        def _winning_allocation() -> str:
+            # Commit the winning id in the gap between this caller's SELECT and
+            # its guarded UPDATE, so the guarded UPDATE affects zero rows.
+            writer = sqlite3.connect(db_path, timeout=30)
+            try:
+                writer.execute(
+                    "UPDATE omnigent_bridge_sessions SET chat_binding_id = ? "
+                    "WHERE bridge_session_id = ? AND chat_binding_id IS NULL",
+                    (winner, row.bridge_session_id),
+                )
+                writer.commit()
+            finally:
+                writer.close()
+            return loser
+
+        monkeypatch.setattr(
+            bridge_store_module, "_generate_chat_binding_id", _winning_allocation
+        )
+
+        resolved = await race_store.ensure_chat_binding_id(row.bridge_session_id)
+        assert resolved == winner
+
+        persisted = await race_store.get_existing("idem-race")
+        assert persisted.chat_binding_id == winner
+    finally:
+        await engine.dispose()
