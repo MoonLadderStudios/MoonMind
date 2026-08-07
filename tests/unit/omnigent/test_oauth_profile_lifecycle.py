@@ -1140,11 +1140,12 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
-        lambda path: Path(path),
+        Path,
     )
 
     state = {
         "running": False,
+        "mount_source": None,
         "mount_fd": None,
         "launches": 0,
         "manifest_checks": 0,
@@ -1182,7 +1183,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                 for field in skill_mount.split(",")
                 if field.startswith("src=")
             )
-            state["mount_fd"] = os.open(source, os.O_RDONLY | os.O_DIRECTORY)
+            state["mount_source"] = source
             state["running"] = True
             state["launches"] += 1
             return (0, "container-id\n", "")
@@ -1195,16 +1196,18 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             "/opt/moonmind/check-runner-projections.sh",
         ):
             mount_fd = state["mount_fd"]
-            assert isinstance(mount_fd, int)
-            try:
-                manifest_fd = os.open("_manifest.json", os.O_RDONLY, dir_fd=mount_fd)
-            except FileNotFoundError as exc:
-                raise OmnigentOAuthHostError(
-                    "mounted Skill manifest disappeared",
-                    code="OMNIGENT_SKILL_PROJECTION_UNAVAILABLE",
-                ) from exc
+            if isinstance(mount_fd, int):
+                try:
+                    os.stat("_manifest.json", dir_fd=mount_fd)
+                except FileNotFoundError as exc:
+                    raise OmnigentOAuthHostError(
+                        "mounted Skill manifest disappeared",
+                        code="OMNIGENT_SKILL_PROJECTION_UNAVAILABLE",
+                    ) from exc
             else:
-                os.close(manifest_fd)
+                mount_source = state["mount_source"]
+                assert isinstance(mount_source, str)
+                assert (Path(mount_source) / "_manifest.json").is_file()
             state["manifest_checks"] += 1
             return (0, "", "")
         if args[:3] == ("docker", "exec", "mm-host-lease-1"):
@@ -1241,13 +1244,15 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "effective_launch": launch,
     }
 
+    first = await runtime.prepare_host(**request)
+    mount_source = state["mount_source"]
+    assert isinstance(mount_source, str)
+    mount_fd = os.open(mount_source, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        first = await runtime.prepare_host(**request)
+        state["mount_fd"] = mount_fd
         retry = await runtime.prepare_host(**request)
     finally:
-        mount_fd = state["mount_fd"]
-        if isinstance(mount_fd, int):
-            os.close(mount_fd)
+        os.close(mount_fd)
 
     assert first["activeSkillsPath"] == retry["activeSkillsPath"]
     assert state["launches"] == 1
