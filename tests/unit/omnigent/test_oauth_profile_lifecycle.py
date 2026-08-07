@@ -75,6 +75,12 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
+from moonmind.schemas.agent_skill_models import (
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+)
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
 from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
@@ -1013,6 +1019,244 @@ def test_runtime_script_snapshot_rejects_unsafe_step_identity(tmp_path) -> None:
         )
 
     assert raised.value.code == "OMNIGENT_STEP_EXECUTION_ID_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> None:
+    payload = b"---\nname: pr-resolver\ndescription: test\n---\n"
+    content_ref = "art-skill-pr-resolver"
+    skillset_ref = "art-resolved-skillset"
+    skillset = ResolvedSkillSet(
+        snapshot_id="skillset-workflow-1",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                content_ref=content_ref,
+                content_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    class ArtifactService:
+        def __init__(self) -> None:
+            self.reads: list[str] = []
+
+        async def read(self, *, artifact_id, **_kwargs):
+            self.reads.append(artifact_id)
+            if artifact_id == skillset_ref:
+                return object(), skillset.model_dump_json(by_alias=True).encode()
+            if artifact_id == content_ref:
+                return object(), payload
+            raise AssertionError(f"unexpected artifact read: {artifact_id}")
+
+    artifacts = ArtifactService()
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    first = await runtime._prepare_skill_projection(
+        workspace_key="workspace-1",
+        resolved_skillset_ref=skillset_ref,
+        artifact_gateway=artifacts,
+    )
+    first_inode = first.stat().st_ino
+
+    second = await runtime._prepare_skill_projection(
+        workspace_key="workspace-1",
+        resolved_skillset_ref=skillset_ref,
+        artifact_gateway=artifacts,
+    )
+
+    assert second == first
+    assert second.stat().st_ino == first_inode
+    assert artifacts.reads.count(content_ref) == 1
+
+
+@pytest.mark.asyncio
+async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"---\nname: pr-resolver\ndescription: test\n---\n"
+    content_ref = "art-skill-pr-resolver"
+    skillset_ref = "art-resolved-skillset"
+    skillset = ResolvedSkillSet(
+        snapshot_id="skillset-workflow-1",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                content_ref=content_ref,
+                content_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    class ArtifactService:
+        async def read(self, *, artifact_id, **_kwargs):
+            if artifact_id == skillset_ref:
+                return object(), skillset.model_dump_json(by_alias=True).encode()
+            if artifact_id == content_ref:
+                return object(), payload
+            raise AssertionError(f"unexpected artifact read: {artifact_id}")
+
+    class Client:
+        async def list_hosts(self):
+            return [
+                {
+                    "id": "host-1",
+                    "name": "mm-host-lease-1",
+                    "status": "online",
+                    "harnesses": ["codex-native"],
+                }
+            ]
+
+    workspace = tmp_path / "workspaces" / "run" / "repo"
+    workspace.mkdir(parents=True)
+    runtime = OmnigentOAuthHostRuntime(
+        client=Client(),
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._prepare_workspace = AsyncMock(return_value=workspace)  # type: ignore[method-assign]
+    runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
+    runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
+        return_value=tmp_path / "runtime-scripts"
+    )
+    runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(
+            model_dump=lambda **_kwargs: {"profile": "test"}
+        )
+    )
+    runtime._attest_workload_attachment = AsyncMock(  # type: ignore[method-assign]
+        return_value="mm-host-lease-1"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
+        Path,
+    )
+
+    state = {
+        "running": False,
+        "mount_source": None,
+        "mount_fd": None,
+        "launches": 0,
+        "manifest_checks": 0,
+    }
+
+    async def run(*args, **_kwargs):
+        if args[:3] == ("docker", "inspect", "--format"):
+            template = args[3]
+            if template == "{{.State.Running}}":
+                return (
+                    (0, "true\n", "")
+                    if state["running"]
+                    else (1, "", "not found")
+                )
+            if "moonmind.host_lease_id" in template:
+                return (
+                    (0, "host-lease-1\n", "")
+                    if state["running"]
+                    else (1, "", "not found")
+                )
+        if args[:4] == ("docker", "image", "inspect", "--format"):
+            return (0, "PATH=/usr/local/bin:/usr/bin:/bin\n", "")
+        if args[:3] == ("docker", "run", "-d"):
+            mount_specs = [
+                args[index + 1]
+                for index, value in enumerate(args[:-1])
+                if value == "--mount"
+            ]
+            skill_mount = next(
+                value for value in mount_specs
+                if "dst=/opt/moonmind-skills" in value
+            )
+            source = next(
+                field.removeprefix("src=")
+                for field in skill_mount.split(",")
+                if field.startswith("src=")
+            )
+            state["mount_source"] = source
+            state["running"] = True
+            state["launches"] += 1
+            return (0, "container-id\n", "")
+        if args[:3] == ("docker", "run", "--rm"):
+            return (0, "", "")
+        if args[:4] == (
+            "docker",
+            "exec",
+            "mm-host-lease-1",
+            "/opt/moonmind/check-runner-projections.sh",
+        ):
+            mount_fd = state["mount_fd"]
+            if isinstance(mount_fd, int):
+                try:
+                    os.stat("_manifest.json", dir_fd=mount_fd)
+                except FileNotFoundError as exc:
+                    raise OmnigentOAuthHostError(
+                        "mounted Skill manifest disappeared",
+                        code="OMNIGENT_SKILL_PROJECTION_UNAVAILABLE",
+                    ) from exc
+            else:
+                mount_source = state["mount_source"]
+                assert isinstance(mount_source, str)
+                assert (Path(mount_source) / "_manifest.json").is_file()
+            state["manifest_checks"] += 1
+            return (0, "", "")
+        if args[:3] == ("docker", "exec", "mm-host-lease-1"):
+            return (0, "", "")
+        raise AssertionError(f"unexpected runtime command: {args}")
+
+    runtime._run = run  # type: ignore[method-assign]
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    binding = _binding().model_copy(
+        update={
+            "static_host_id": None,
+            "host_launch_profile_ref": "codex-on-demand",
+            "execution_profile_ref": "omnigent-codex@1",
+            "launch_policy_ref": "codex-on-demand@1",
+            "effective_launch_snapshot": launch,
+        }
+    )
+    lease = _host_lease().model_copy(
+        update={"container_name": "mm-host-lease-1"}
+    )
+    request = {
+        "binding": binding,
+        "host_lease": lease,
+        "workspace_key": "workspace-1",
+        "workspace_locator": {"kind": "sandbox", "workspaceId": "unused"},
+        "current_workflow_id": "workflow-1",
+        "current_step_execution_id": "step-1",
+        "resolved_skillset_ref": skillset_ref,
+        "artifact_gateway": ArtifactService(),
+        "effective_launch": launch,
+    }
+
+    first = await runtime.prepare_host(**request)
+    mount_source = state["mount_source"]
+    assert isinstance(mount_source, str)
+    mount_fd = os.open(mount_source, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        state["mount_fd"] = mount_fd
+        retry = await runtime.prepare_host(**request)
+    finally:
+        os.close(mount_fd)
+
+    assert first["activeSkillsPath"] == retry["activeSkillsPath"]
+    assert state["launches"] == 1
+    assert state["manifest_checks"] == 2
 
 
 @pytest.mark.asyncio

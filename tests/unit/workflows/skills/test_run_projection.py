@@ -284,16 +284,27 @@ async def test_verify_raises_on_snapshot_id_mismatch(tmp_path: Path) -> None:
 async def test_verify_raises_when_selected_skill_doc_missing(tmp_path: Path) -> None:
     visible = tmp_path / ".agents" / "skills"
     visible.mkdir(parents=True)
+    payload = _skill_payload("pr-resolver")
     (visible / "_manifest.json").write_text(
         json.dumps(
-            {"snapshot_id": "snap-x", "skills": [{"name": "pr-resolver"}]}
+            {
+                "snapshot_id": "snap-x",
+                "skills": [
+                    {
+                        "name": "pr-resolver",
+                        "content_ref": "art-pr",
+                        "content_digest": _digest(payload),
+                        "source_kind": "deployment",
+                    }
+                ],
+            }
         ),
         encoding="utf-8",
     )
     skillset = _resolved_skillset(
         "snap-x",
         [("pr-resolver", "art-pr")],
-        {"art-pr": _skill_payload("pr-resolver")},
+        {"art-pr": payload},
     )
     with pytest.raises(SkillProjectionError, match="missing"):
         await verify_skill_projection(
@@ -322,6 +333,60 @@ async def test_verify_raises_when_manifest_missing_expected_skill(
     with pytest.raises(SkillProjectionError, match="missing expected skills"):
         await verify_skill_projection(
             materialization_metadata={"visiblePath": str(visible)},
+            resolved_skillset=skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_manifest_content_evidence_mismatch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws" / "repo"
+    workspace.mkdir(parents=True)
+    payloads = {"art-pr": _skill_payload("pr-resolver")}
+    skillset = _resolved_skillset(
+        "snap-evidence", [("pr-resolver", "art-pr")], payloads
+    )
+    metadata = await materialize_run_skill_snapshot(
+        workspace_path=workspace,
+        run_root=workspace.parent,
+        runtime_id="claude_code",
+        resolved_skillset=skillset,
+        artifact_service=_StaticArtifactService(payloads),
+    )
+    manifest_path = Path(metadata["visiblePath"]) / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["skills"][0]["content_ref"] = "art-stale"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SkillProjectionError, match="content evidence does not match"):
+        await verify_skill_projection(
+            materialization_metadata=metadata,
+            resolved_skillset=skillset,
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_damaged_markdown_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws" / "repo"
+    workspace.mkdir(parents=True)
+    payloads = {"art-pr": _skill_payload("pr-resolver")}
+    skillset = _resolved_skillset(
+        "snap-damaged", [("pr-resolver", "art-pr")], payloads
+    )
+    metadata = await materialize_run_skill_snapshot(
+        workspace_path=workspace,
+        run_root=workspace.parent,
+        runtime_id="claude_code",
+        resolved_skillset=skillset,
+        artifact_service=_StaticArtifactService(payloads),
+    )
+    skill_doc = Path(metadata["visiblePath"]) / "pr-resolver" / "SKILL.md"
+    skill_doc.write_text("damaged", encoding="utf-8")
+
+    with pytest.raises(SkillProjectionError, match="content digest does not match"):
+        await verify_skill_projection(
+            materialization_metadata=metadata,
             resolved_skillset=skillset,
         )
 
