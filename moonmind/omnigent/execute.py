@@ -38,6 +38,7 @@ from moonmind.omnigent.bridge_security import (
     redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
     FIRST_MESSAGE_NOT_PREPARED,
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
@@ -92,6 +93,8 @@ _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
 
 class OmnigentSessionStillRunningError(OmnigentClientError):
     """Raised when the stream ends while the provider session is still active."""
+
+    code = "OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS"
 
 
 def _session_id(payload: dict[str, Any]) -> str:
@@ -497,65 +500,89 @@ def _snapshot_contains_current_turn_progress(
     snapshot: Mapping[str, Any],
     *,
     marker: str,
+    baseline_item_ids: frozenset[str] | None = None,
 ) -> bool:
     """Prove provider work occurred after this invocation's marked message.
 
     Omnigent can replay the previous turn's terminal SSE event when a stream is
-    opened before posting the next message. The per-message marker is durable in
-    the user item, so item ordering—not a stale session status—authoritatively
-    distinguishes current-turn progress from the preceding turn.
+    opened before posting the next message. Prefer the per-message marker; when
+    the bounded stock snapshot has evicted that marker, item identities captured
+    immediately before dispatch preserve the same ordering boundary.
     """
 
+    return bool(
+        _marked_turn_item_state(
+            snapshot,
+            marker=marker,
+            baseline_item_ids=baseline_item_ids,
+        )["progress"]
+    )
+
+
+def _snapshot_item_ids(snapshot: Mapping[str, Any] | None) -> frozenset[str] | None:
+    """Capture the bounded item identity frontier before dispatching a turn."""
+
+    if not isinstance(snapshot, Mapping):
+        return None
     raw_items = snapshot.get("items")
     if not isinstance(raw_items, list):
-        return False
-    marked_message_index = -1
-    for index, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, Mapping):
-            continue
-        if str(raw_item.get("type") or "").strip() != "message":
-            continue
-        data = raw_item.get("data")
-        item_data = data if isinstance(data, Mapping) else {}
-        if str(item_data.get("role") or "").strip().lower() != "user":
-            continue
-        if _nested_value_contains_text(raw_item, needle=marker):
-            marked_message_index = index
-    if marked_message_index < 0:
-        return False
-    for raw_item in raw_items[marked_message_index + 1 :]:
-        if not isinstance(raw_item, Mapping):
-            continue
-        item_type = str(raw_item.get("type") or "").strip()
-        if item_type in {"function_call", "function_call_output"}:
-            return True
-        if item_type != "message":
-            continue
-        data = raw_item.get("data")
-        item_data = data if isinstance(data, Mapping) else {}
-        if str(item_data.get("role") or "").strip().lower() == "assistant":
-            return True
-    return False
+        return None
+    return frozenset(
+        item_id
+        for raw_item in raw_items
+        if isinstance(raw_item, Mapping)
+        if (item_id := str(raw_item.get("id") or "").strip())
+    )
+
+
+def _validated_pre_dispatch_item_ids(raw_item_ids: Any) -> frozenset[str]:
+    """Validate one bounded persisted or heartbeat item frontier."""
+
+    if not isinstance(raw_item_ids, list):
+        raise OmnigentContractError("Persisted pre-dispatch item frontier is invalid")
+    item_ids = frozenset(
+        str(item_id).strip() for item_id in raw_item_ids if str(item_id).strip()
+    )
+    if len(item_ids) != len(raw_item_ids):
+        raise OmnigentContractError("Persisted pre-dispatch item frontier is invalid")
+    return item_ids
+
+
+def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
+    """Restore the exact item frontier recorded before the message side effect."""
+
+    metadata = getattr(durable_row, "metadata_", None)
+    if (
+        not isinstance(metadata, Mapping)
+        or FIRST_MESSAGE_ITEM_FRONTIER_KEY not in metadata
+    ):
+        return None
+    return _validated_pre_dispatch_item_ids(
+        metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY]
+    )
 
 
 def _marked_turn_item_state(
     snapshot: Mapping[str, Any],
     *,
     marker: str,
+    baseline_item_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Summarize ordered completion evidence after one marked user item.
 
     Native Codex can accept a new message as a steer while the preceding turn
     is still producing tools. Those items share the same session response id,
-    so the completion boundary must come from item ordering: a textual
-    assistant after the last tool is terminal, while an unmatched tool call is
-    still active regardless of the stock server's stale ``idle`` projection.
+    so the completion boundary must come from item ordering: the marker when it
+    remains projected, otherwise item IDs absent from the pre-dispatch snapshot.
+    A textual assistant after the last tool is terminal, while an unmatched tool
+    call is still active regardless of the stock server's stale ``idle`` state.
     """
 
     raw_items = snapshot.get("items")
     if not isinstance(raw_items, list):
         return {
             "markerIndex": -1,
+            "boundarySource": None,
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
@@ -575,9 +602,28 @@ def _marked_turn_item_state(
         if _nested_value_contains_text(raw_item, needle=marker):
             marked_message_index = index
 
-    if marked_message_index < 0:
+    progress_start_index: int | None = (
+        marked_message_index + 1 if marked_message_index >= 0 else None
+    )
+    boundary_source = "marker" if progress_start_index is not None else None
+    if progress_start_index is None and baseline_item_ids is not None:
+        progress_start_index = next(
+            (
+                index
+                for index, raw_item in enumerate(raw_items)
+                if isinstance(raw_item, Mapping)
+                and (item_id := str(raw_item.get("id") or "").strip())
+                and item_id not in baseline_item_ids
+            ),
+            None,
+        )
+        if progress_start_index is not None:
+            boundary_source = "pre_dispatch_item_ids"
+
+    if progress_start_index is None:
         return {
             "markerIndex": -1,
+            "boundarySource": None,
             "progress": False,
             "terminalAssistantAfterWork": False,
             "unfinishedToolCall": False,
@@ -590,8 +636,8 @@ def _marked_turn_item_state(
     pending_call_ids: set[str] = set()
     anonymous_pending_calls = 0
     for index, raw_item in enumerate(
-        raw_items[marked_message_index + 1 :],
-        start=marked_message_index + 1,
+        raw_items[progress_start_index:],
+        start=progress_start_index,
     ):
         if not isinstance(raw_item, Mapping):
             continue
@@ -643,9 +689,11 @@ def _marked_turn_item_state(
     )
     return {
         "markerIndex": marked_message_index,
+        "boundarySource": boundary_source,
         "progress": progress,
         "terminalAssistantAfterWork": (
-            last_text_assistant_index > max(marked_message_index, last_tool_index)
+            last_text_assistant_index
+            > max(progress_start_index - 1, last_tool_index)
         ),
         "unfinishedToolCall": bool(pending_call_ids or anonymous_pending_calls),
         "signature": signature,
@@ -675,6 +723,7 @@ def _snapshot_confirms_current_turn_terminal(
     snapshot: Mapping[str, Any],
     *,
     marker: str,
+    baseline_item_ids: frozenset[str] | None = None,
 ) -> bool:
     """Identify a structurally terminal assistant candidate for a marked turn.
 
@@ -685,7 +734,11 @@ def _snapshot_confirms_current_turn_terminal(
     assistant preamble can be followed by a tool that has not appeared yet.
     """
 
-    state = _marked_turn_item_state(snapshot, marker=marker)
+    state = _marked_turn_item_state(
+        snapshot,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
     return bool(
         state["progress"]
         and state["terminalAssistantAfterWork"]
@@ -806,6 +859,7 @@ async def _await_marked_turn_terminal(
     client: OmnigentHttpClient,
     session_id: str,
     marker: str,
+    baseline_item_ids: frozenset[str] | None = None,
     event_count: int,
     terminal_status: str,
     timeout_seconds: float = 1800.0,
@@ -832,7 +886,11 @@ async def _await_marked_turn_terminal(
     while loop.time() < deadline:
         snapshot = await client.get_session(session_id)
         normalized = normalize_omnigent_observation(snapshot)
-        turn_state = _marked_turn_item_state(snapshot, marker=marker)
+        turn_state = _marked_turn_item_state(
+            snapshot,
+            marker=marker,
+            baseline_item_ids=baseline_item_ids,
+        )
         progress = bool(turn_state["progress"])
         if not isinstance(snapshot.get("items"), list) and normalized in {
             "completed",
@@ -850,7 +908,7 @@ async def _await_marked_turn_terminal(
             ), snapshot
         if (
             normalized in {"failed", "canceled", "timed_out"}
-            and turn_state["markerIndex"] >= 0
+            and turn_state["boundarySource"] is not None
             and progress
         ):
             # A marked provider failure is stronger than a replayed successful
@@ -901,6 +959,7 @@ async def _await_marked_turn_terminal(
                 "firstMessagePosted": True,
                 "terminalSnapshotPolling": True,
                 "currentTurnProgress": progress,
+                "currentTurnBoundarySource": turn_state["boundarySource"],
                 "terminalAssistantAfterWork": bool(
                     turn_state["terminalAssistantAfterWork"]
                 ),
@@ -1156,6 +1215,7 @@ async def run_omnigent_execution(
     first_message_posted = False
     first_message_response_identifiers: dict[str, str] = {}
     initial_snapshot: dict[str, Any] | None = None
+    pre_dispatch_item_ids: frozenset[str] | None = None
     raw_events: list[dict[str, Any]] = []
     normalized_events: list[dict[str, Any]] = []
     event_diagnostics: list[dict[str, Any]] = []
@@ -1258,6 +1318,27 @@ async def run_omnigent_execution(
                 )
 
             retry_state = _heartbeat_state()
+            heartbeat_pre_dispatch_item_ids = (
+                _validated_pre_dispatch_item_ids(retry_state["preDispatchItemIds"])
+                if "preDispatchItemIds" in retry_state
+                else None
+            )
+            durable_pre_dispatch_item_ids = _persisted_pre_dispatch_item_ids(
+                durable_row
+            )
+            if (
+                heartbeat_pre_dispatch_item_ids is not None
+                and durable_pre_dispatch_item_ids is not None
+                and heartbeat_pre_dispatch_item_ids != durable_pre_dispatch_item_ids
+            ):
+                raise OmnigentContractError(
+                    "Omnigent retry item frontier conflicts with durable state"
+                )
+            pre_dispatch_item_ids = (
+                durable_pre_dispatch_item_ids
+                if durable_pre_dispatch_item_ids is not None
+                else heartbeat_pre_dispatch_item_ids
+            )
             durable_session_id = str(
                 getattr(durable_row, "omnigent_session_id", None) or ""
             ).strip()
@@ -1358,6 +1439,34 @@ async def run_omnigent_execution(
                 )
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
+            if (
+                pre_dispatch_item_ids is None
+                and not first_message_posted
+                and not first_message_reconcile_required
+            ):
+                pre_dispatch_item_ids = _snapshot_item_ids(initial_snapshot)
+                if pre_dispatch_item_ids is not None and run_store is not None:
+                    record_frontier = getattr(
+                        run_store, "record_first_message_item_frontier", None
+                    )
+                    if callable(record_frontier):
+                        durable_row = await record_frontier(
+                            request.idempotency_key,
+                            item_ids=sorted(pre_dispatch_item_ids),
+                        )
+                        persisted_frontier = _persisted_pre_dispatch_item_ids(
+                            durable_row
+                        )
+                        if persisted_frontier is not None:
+                            pre_dispatch_item_ids = persisted_frontier
+            if pre_dispatch_item_ids is not None:
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "firstMessagePosted": first_message_posted,
+                        "preDispatchItemIds": sorted(pre_dispatch_item_ids),
+                    }
+                )
 
             if first_message_text is not None:
                 first_message = {
@@ -1749,6 +1858,7 @@ async def run_omnigent_execution(
                             _snapshot_confirms_current_turn_terminal(
                                 terminal_snapshot,
                                 marker=marker,
+                                baseline_item_ids=pre_dispatch_item_ids,
                             )
                         )
                         if arrived_after_message_post and not current_turn_progress:
@@ -1767,6 +1877,7 @@ async def run_omnigent_execution(
                                         _snapshot_confirms_current_turn_terminal(
                                             terminal_snapshot,
                                             marker=marker,
+                                            baseline_item_ids=pre_dispatch_item_ids,
                                         )
                                     )
                                     if current_turn_progress:
@@ -1784,6 +1895,7 @@ async def run_omnigent_execution(
                             client=client,
                             session_id=session_id,
                             marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
                             terminal_status=normalized,
                         )
@@ -1813,17 +1925,29 @@ async def run_omnigent_execution(
                     "canceled",
                     "timed_out",
                 }:
-                    if isinstance(final_snapshot.get("items"), list) and not (
-                        _snapshot_contains_current_turn_progress(
+                    if isinstance(final_snapshot.get("items"), list):
+                        turn_state = _marked_turn_item_state(
                             final_snapshot,
                             marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
                         )
-                    ):
-                        raise OmnigentSessionStillRunningError(
-                            "Omnigent stream ended before the current marked turn "
-                            "produced provider work"
+                        if not turn_state["progress"]:
+                            raise OmnigentSessionStillRunningError(
+                                "Omnigent stream ended before the current marked turn "
+                                "produced provider work"
+                            )
+                        terminal_status, final_snapshot = (
+                            await _await_marked_turn_terminal(
+                                client=client,
+                                session_id=session_id,
+                                marker=marker,
+                                baseline_item_ids=pre_dispatch_item_ids,
+                                event_count=event_count["value"],
+                                terminal_status=normalized_snapshot,
+                            )
                         )
-                    terminal_status = normalized_snapshot
+                    else:
+                        terminal_status = normalized_snapshot
                     # The stream ended without emitting a terminal event but the
                     # final snapshot is terminal. Append an indexed terminal event
                     # derived from the snapshot so the durable event index records

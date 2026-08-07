@@ -24,9 +24,15 @@ from api_service.db.models import Base
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
+    OmnigentBridgeSessionStore,
+)
 from moonmind.omnigent.execute import (
+    OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
+    _marked_turn_item_state,
+    _persisted_pre_dispatch_item_ids,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
@@ -196,6 +202,82 @@ async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_
     assert "host_stop" not in owner_calls
     assert "provider_released" not in actions
     assert expected["releaseProviderLeaseOnCancellation"] is False
+
+
+async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> None:
+    """Replay mm:d41f834c at both terminal and host-authority boundaries."""
+
+    replay_id = "omnigent-evicted-turn-marker-retry-authority"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    baseline_item_ids = _persisted_pre_dispatch_item_ids(
+        SimpleNamespace(
+            metadata_={
+                FIRST_MESSAGE_ITEM_FRONTIER_KEY: [
+                    str(item["id"])
+                    for item in manifest["preDispatchSnapshot"]["items"]
+                ]
+            }
+        )
+    )
+    assert baseline_item_ids is not None
+    assert expected["frontierAuthority"] == "durable_bridge_metadata"
+    terminal_snapshot = manifest["terminalSnapshot"]
+    marker = manifest["currentTurnMarker"]
+
+    state = _marked_turn_item_state(
+        terminal_snapshot,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    assert state["markerIndex"] == -1
+    assert state["boundarySource"] == expected["terminalBoundarySource"]
+    assert _snapshot_contains_current_turn_progress(
+        terminal_snapshot,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    ) is expected["acceptCurrentTurnProgress"]
+    assert _snapshot_confirms_current_turn_terminal(
+        terminal_snapshot,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    ) is expected["acceptCurrentTurnTerminal"]
+
+    class CappedSnapshotClient:
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            return terminal_snapshot
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=CappedSnapshotClient(),
+        session_id=manifest["sessionId"],
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+        event_count=len(manifest["observedProviderEvents"]),
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+    )
+    assert status == "completed"
+    assert snapshot is terminal_snapshot
+
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="resource_harvest",
+        code="OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS",
+        injected_error=OmnigentSessionStillRunningError(
+            "current marked turn did not reach terminal state"
+        ),
+    )
+    cleanup_event = next(
+        payload
+        for event_type, payload in events
+        if event_type == "host_cleanup" and payload["status"] == "waiting"
+    )
+    assert cleanup_event["code"] == expected["ambiguousCleanupCode"]
+    assert cleanup_event["metadata"]["janitorRequired"] is True
+    assert "host_stop" not in owner_calls
+    assert "host_remove" not in owner_calls
+    assert "provider_released" not in actions
+    assert expected["retryAuthority"] == "same_host_profile_and_bridge"
 
 
 async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(

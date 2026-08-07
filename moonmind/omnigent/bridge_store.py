@@ -42,6 +42,7 @@ FIRST_MESSAGE_PREPARED = "prepared"
 FIRST_MESSAGE_POSTING = "posting"
 FIRST_MESSAGE_POSTED = "posted"
 FIRST_MESSAGE_TERMINAL = "terminal"
+FIRST_MESSAGE_ITEM_FRONTIER_KEY = "first_message_pre_dispatch_item_ids"
 
 # MM-1155 (source: MM-1140): durable bridge event journal carried on the
 # canonical bridge session row metadata. ``session.created`` (OmnigentBridge.md
@@ -1687,6 +1688,53 @@ class OmnigentBridgeSessionStore:
                 )
             await session.commit()
             await session.refresh(row)
+            return _detached(session, row)
+
+    async def record_first_message_item_frontier(
+        self,
+        idempotency_key: str,
+        *,
+        item_ids: Sequence[str],
+    ) -> OmnigentBridgeSession:
+        """Persist the bounded pre-dispatch item frontier exactly once."""
+
+        normalized = sorted(
+            {
+                str(item_id).strip()
+                for item_id in item_ids
+                if str(item_id).strip()
+            }
+        )
+        if len(normalized) > 256:
+            raise ValueError("pre-dispatch item frontier exceeds 256 items")
+        if any(len(item_id) > 255 for item_id in normalized):
+            raise ValueError(
+                "pre-dispatch item frontier contains an oversized item id"
+            )
+        if len(json.dumps(normalized).encode("utf-8")) > 32_768:
+            raise ValueError("pre-dispatch item frontier exceeds the 32 KiB limit")
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            metadata = dict(row.metadata_ or {})
+            existing = metadata.get(FIRST_MESSAGE_ITEM_FRONTIER_KEY)
+            if existing is not None:
+                if existing != normalized:
+                    raise OmnigentIdempotencyError(
+                        "pre-dispatch item frontier changed after persistence"
+                    )
+            else:
+                if row.first_message_state not in {
+                    FIRST_MESSAGE_NOT_PREPARED,
+                    FIRST_MESSAGE_PREPARED,
+                }:
+                    raise OmnigentIdempotencyError(
+                        "pre-dispatch item frontier cannot be recorded after posting"
+                    )
+                metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY] = normalized
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
             return _detached(session, row)
 
     async def record_initial_context(

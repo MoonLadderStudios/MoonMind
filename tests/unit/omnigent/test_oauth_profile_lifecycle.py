@@ -44,6 +44,7 @@ from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     validate_effective_launch_snapshot,
 )
+from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
@@ -3849,9 +3850,10 @@ async def _run_coordinator_failure_case(
     elif fail_at in {"none", "host_stop", "host_remove", "release"}:
         await coordinator.execute(request)
     else:
-        with pytest.raises(OmnigentOAuthHostError) as captured:
+        with pytest.raises(type(error)) as captured:
             await coordinator.execute(request)
-        assert captured.value.code == code
+        if isinstance(error, OmnigentOAuthHostError):
+            assert captured.value.code == code
     return events, actions, owners.calls
 
 
@@ -3870,6 +3872,54 @@ async def test_cancelled_attempt_defers_host_and_profile_cleanup_to_retry_or_jan
         event_type == "host_cleanup"
         and payload["status"] == "waiting"
         and payload["code"] == "activity_cancelled"
+        for event_type, payload in events
+    )
+    assert any(
+        event_type == "profile_lease_release"
+        and payload["status"] == "waiting"
+        for event_type, payload in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_terminal_attempt_preserves_exact_host_for_temporal_retry() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-ambiguous-terminal",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-ambiguous-terminal"
+                ).hexdigest()[:24],
+            }
+        },
+        parameters={
+            "omnigent": {
+                "launchPolicyRef": "codex-on-demand@1",
+                "session": {"workspace": "https://example.com/repo.git"},
+            }
+        },
+    )
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="resource_harvest",
+        code="OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS",
+        request=request,
+        injected_error=OmnigentSessionStillRunningError(
+            "current marked turn did not reach terminal state"
+        ),
+    )
+
+    assert "host_remove" not in owner_calls
+    assert "host_removed" not in actions
+    assert "provider_released" not in actions
+    assert any(
+        event_type == "host_cleanup"
+        and payload["status"] == "waiting"
+        and payload["code"] == "ambiguous_terminal_state"
         for event_type, payload in events
     )
     assert any(

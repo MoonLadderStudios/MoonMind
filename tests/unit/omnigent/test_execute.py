@@ -18,6 +18,10 @@ from moonmind.omnigent.bridge_artifacts import (
     build_omnigent_result,
     build_omnigent_terminal_refs,
 )
+from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
+    OmnigentDigestMismatchError,
+)
 from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
@@ -34,7 +38,6 @@ from moonmind.omnigent.execute import (
     run_omnigent_execution,
 )
 from moonmind.rag.context_injection import PromptContextResolution
-from moonmind.omnigent.bridge_store import OmnigentDigestMismatchError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -233,6 +236,70 @@ async def test_snapshot_polling_accepts_marked_progress_while_session_is_idle() 
         session_id="session-1",
         marker=marker,
         event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+    )
+
+    assert status == "completed"
+    assert snapshot is terminal
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_uses_pre_dispatch_item_ids_when_marker_is_evicted() -> None:
+    """A capped stock snapshot must not erase current-turn terminal evidence."""
+
+    marker = "MoonMind-Omnigent-Run: continuation-with-many-tools"
+    baseline_item_ids = frozenset({"prior-1", "prior-2"})
+    terminal = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {
+                "id": "call-current",
+                "type": "function_call",
+                "data": {"call_id": "call-current"},
+            },
+            {
+                "id": "output-current",
+                "type": "function_call_output",
+                "data": {"call_id": "call-current"},
+            },
+            {
+                "id": "assistant-current",
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Client:
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            return terminal
+
+    assert not _snapshot_contains_current_turn_progress(terminal, marker=marker)
+    assert _snapshot_contains_current_turn_progress(
+        terminal,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    assert not _snapshot_contains_current_turn_progress(
+        {
+            "status": "idle",
+            "items": [{"id": "prior-1", "type": "function_call_output"}],
+        },
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+        event_count=9,
         terminal_status="completed",
         interval_seconds=0.001,
         quiet_period_seconds=0.002,
@@ -1022,7 +1089,9 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
         async def list_agents(self) -> dict[str, object]:
             return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
 
-        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+        async def create_session(
+            self, payload: dict[str, object]
+        ) -> dict[str, object]:
             assert payload["agent_id"] == "agent-1"
             assert payload["labels"]["moonmind.issue"] == "MM-1059"
             return {"id": "session-1"}
@@ -1197,7 +1266,9 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
         async def list_agents(self) -> dict[str, object]:
             raise AssertionError("agentId should avoid list_agents lookup")
 
-        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+        async def create_session(
+            self, payload: dict[str, object]
+        ) -> dict[str, object]:
             captured_session_payloads.append(payload)
             return {"id": "session-1"}
 
@@ -1769,6 +1840,89 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
 
 
 @pytest.mark.asyncio
+async def test_stream_end_polls_unfinished_current_turn_before_completion(
+    monkeypatch,
+) -> None:
+    snapshots = [
+        {
+            "status": "idle",
+            "active_response_id": None,
+            "items": [{"id": "prior-item", "type": "function_call_output"}],
+        },
+        {
+            "status": "completed",
+            "active_response_id": None,
+            "items": [
+                {
+                    "id": "current-call",
+                    "type": "function_call",
+                    "data": {"call_id": "current-call"},
+                }
+            ],
+        },
+    ]
+    awaited: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.snapshot_index = 0
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {}
+
+        async def stream_events(self, session_id: str):
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            snapshot = snapshots[min(self.snapshot_index, len(snapshots) - 1)]
+            self.snapshot_index += 1
+            return snapshot
+
+    async def reject_unfinished_turn(**kwargs: object):
+        awaited.update(kwargs)
+        raise OmnigentSessionStillRunningError("unfinished current tool call")
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        reject_unfinished_turn,
+    )
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-unfinished-current-turn",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            )
+        )
+
+    assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
+    assert awaited["terminal_status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
     monkeypatch,
     tmp_path,
@@ -2004,6 +2158,122 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
         "itemId": "item-1",
     }
     assert external_state["artifactRefs"]["diagnosticsRef"] == result.diagnostics_ref
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_reuses_persisted_item_frontier_on_retry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[str] = []
+    awaited: dict[str, object] = {}
+    terminal_snapshot = {
+        "status": "idle",
+        "active_response_id": None,
+        "summary": "durably reattached after marker eviction",
+        "items": [
+            {
+                "id": "current-call",
+                "type": "function_call",
+                "data": {"call_id": "current-call"},
+            },
+            {
+                "id": "current-output",
+                "type": "function_call_output",
+                "data": {"call_id": "current-call"},
+            },
+            {
+                "id": "current-assistant",
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class Row:
+        omnigent_session_id = "persisted-session"
+        first_message_state = "posted"
+        first_message_pending_id = "pending-1"
+        first_message_item_id = "marked-item"
+        metadata_ = {FIRST_MESSAGE_ITEM_FRONTIER_KEY: ["prior-item"]}
+
+    class Store:
+        async def get_or_create(self, **_: object) -> Row:
+            return Row()
+
+        async def get_binding(self, *_a: object, **_k: object) -> None:
+            return None
+
+        async def mark_prepared(self, *_: object, **__: object) -> Row:
+            return Row()
+
+        async def mark_terminal(self, *_: object, **__: object) -> Row:
+            return Row()
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            calls.append("create_session")
+            return {"id": "new-session"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            calls.append("post_event")
+            return {}
+
+        async def stream_events(self, session_id: str):
+            assert session_id == "persisted-session"
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "persisted-session"
+            return terminal_snapshot
+
+    async def capture_terminal_wait(**kwargs: object):
+        awaited.update(kwargs)
+        return "completed", terminal_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        capture_terminal_wait,
+    )
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-persisted-frontier",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "continue"},
+                },
+            },
+        ),
+        run_store=Store(),
+        artifact_gateway=artifact_gateway,
+    )
+
+    assert result.summary == "durably reattached after marker eviction"
+    assert calls == []
+    assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base, OmnigentBridgeSession
 from moonmind.omnigent.bridge_store import (
     BRIDGE_EVENT_JOURNAL_KEY,
+    FIRST_MESSAGE_ITEM_FRONTIER_KEY,
     FIRST_MESSAGE_TERMINAL,
     SESSION_CREATED_EVENT_TYPE,
     STATUS_ACTIVE,
@@ -421,6 +422,43 @@ async def test_attach_and_first_message_transitions(store):
     assert posted.first_message_state == "posted"
     assert posted.first_message_pending_id == "pnd-1"
     assert posted.first_message_item_id == "itm-1"
+
+
+@pytest.mark.asyncio
+async def test_first_message_item_frontier_is_durable_and_immutable(store):
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    recorded = await store.record_first_message_item_frontier(
+        "idem-1", item_ids=["prior-2", "prior-1", "prior-1"]
+    )
+    assert recorded.metadata_[FIRST_MESSAGE_ITEM_FRONTIER_KEY] == [
+        "prior-1",
+        "prior-2",
+    ]
+    repeated = await store.record_first_message_item_frontier(
+        "idem-1", item_ids=["prior-1", "prior-2"]
+    )
+    assert repeated.metadata_[FIRST_MESSAGE_ITEM_FRONTIER_KEY] == [
+        "prior-1",
+        "prior-2",
+    ]
+
+    await store.mark_prepared("idem-1", digest="sha256:abc", marker="marker")
+    await store.mark_posting("idem-1")
+    await store.mark_posted("idem-1")
+    with pytest.raises(
+        OmnigentIdempotencyError,
+        match="pre-dispatch item frontier changed",
+    ):
+        await store.record_first_message_item_frontier(
+            "idem-1", item_ids=["replacement-item"]
+        )
 
 
 @pytest.mark.asyncio
