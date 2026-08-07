@@ -19259,6 +19259,156 @@ describe("Task Create runtime command previews", () => {
     ).toBeTruthy();
   });
 
+  it("groups the pinned target immutably and prepopulates editable repair intent", async () => {
+    const draft = {
+      source: "remediation",
+      createdAt: Date.now(),
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+        state: "failed",
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "feature/repair-work",
+      startingBranch: "main",
+      publishMode: "pr",
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "codex" },
+      remediation: {
+        target: {
+          workflowId: "mm:remediation-target",
+          runId: "run-original",
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.grouped",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=grouped",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    // Immutable pinned target and editable repair intent are explicitly grouped.
+    const pinned = screen.getByLabelText("Pinned target (immutable)");
+    expect(pinned).toBeTruthy();
+    expect(screen.getByLabelText("Editable repair intent")).toBeTruthy();
+    // Immutable identity is read-only, including the authored starting branch.
+    const startingBranch = screen.getByLabelText("Starting branch") as HTMLInputElement;
+    expect(startingBranch.value).toBe("main");
+    expect(startingBranch.readOnly).toBe(true);
+    expect(
+      (screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly,
+    ).toBe(true);
+    // The editable work branch is prepopulated from the draft.
+    expect((screen.getByLabelText("Branch") as HTMLInputElement).value).toBe(
+      "feature/repair-work",
+    );
+  });
+
+  it("discards a remediation draft and clears it from session storage", async () => {
+    const draft = {
+      source: "remediation",
+      createdAt: Date.now(),
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      publishMode: "pr",
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "codex" },
+      remediation: {
+        target: { workflowId: "mm:remediation-target", runId: "run-original" },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.discardable",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=discardable",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    fireEvent.click(screen.getByText("Discard draft"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Remediation Draft")).toBeNull();
+    });
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.remediation-create-draft.discardable",
+      ),
+    ).toBeNull();
+    expect(
+      await screen.findByText(
+        "Remediation draft discarded. You can author a normal workflow, or open Remediate from the target workflow again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows an actionable safe error when a remediation draft has expired", async () => {
+    const draft = {
+      source: "remediation",
+      createdAt: Date.now() - 13 * 60 * 60 * 1000,
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      publishMode: "pr",
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "codex" },
+      remediation: {
+        target: { workflowId: "mm:remediation-target", runId: "run-original" },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.expired",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=expired",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(
+      await screen.findByText(
+        "This remediation draft has expired. Because the pinned target run may have changed since it was created, it was discarded. Open Remediate from the target workflow again to capture the current run.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Remediation Draft")).toBeNull();
+    // Expired drafts are removed on read.
+    expect(
+      window.sessionStorage.getItem("moonmind.remediation-create-draft.expired"),
+    ).toBeNull();
+  });
+
   it("previews unknown valid slash commands as opaque pass-through", async () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 

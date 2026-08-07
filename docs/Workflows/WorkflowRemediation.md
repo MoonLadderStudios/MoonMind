@@ -371,17 +371,36 @@ The important rule is that **automatic remediation is policy-driven and bounded*
 
 ### 7.7 Create-page first remediation flow
 
-The dashboard `Remediate` action should open `/workflows/new` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
+The dashboard `Remediate` action should open `/workflows/new?intent=remediate&draftId=…` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
 
 - target `workflowId` and pinned `runId`;
 - selected step or checkpoint refs when available;
 - repository `MoonLadderStudios/MoonMind` for MoonMind platform or prevention work;
+- editable work branch and (when authored on the target) starting branch;
+- Codex-via-Omnigent runtime, Provider Profile, Agent Profile, execution
+  profile (execution target), launch policy, model, effort, and retrieval /
+  context controls captured from the target run;
 - default mode `snapshot_then_follow`;
 - default authority `approval_gated`;
 - default action policy `admin_healer_default`;
+- evidence, approval, lock, verification, and Checkpoint Branch policy defaults;
 - branch and publish controls through the normal Create page fields.
 
-The operator can then edit instructions, runtime, model, branch, and publish mode before submitting through the normal `POST /api/executions` path with `task.remediation`.
+The Create page clearly separates the **immutable pinned target identity**
+(target workflow, pinned run, starting branch, target outcome — read-only) from
+the **editable repair intent** (instructions, runtime/profile/policy, branch,
+retrieval, publish). The operator can edit the repair intent before submitting
+through the normal `POST /api/executions` path with `task.remediation`.
+
+The draft is stored in session storage and is single-hop and short-lived:
+
+- it is applied once and is **cleared only after a successful import or an
+  explicit `Discard draft`** action (there is no hidden one-click submission);
+- it carries a `createdAt` timestamp and expires after a bounded TTL so a stale
+  draft cannot silently prepopulate against a target run that has since changed;
+- missing, malformed (tampered/corrupt), expired, and cross-tab/cross-session
+  drafts each surface a distinct, actionable, safe error directing the operator
+  to open `Remediate` from the target workflow again.
 
 ---
 
@@ -451,6 +470,42 @@ GET /api/executions/{workflowId}/remediations?direction=outbound
 Where:
 - `inbound` means remediation Workflow Executions targeting this execution,
 - `outbound` means executions that this Workflow Execution is remediating.
+
+### 8.6 Approval decision API
+
+When a remediation Workflow Execution is `approval_gated` and a proposed action
+is awaiting a human decision, an authorized operator records the decision
+through the durable approval owner:
+
+```http
+POST /api/executions/{workflowId}/remediation/approvals/{requestId}
+```
+
+Where `{workflowId}` is the remediation Workflow Execution id and `{requestId}`
+is the pending approval request id surfaced on the remediation link
+(`approvalState.requestId`).
+
+Request body:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `decision` | `approved \| rejected` | yes | Any other value is rejected with `422 invalid_remediation_approval_decision`. |
+| `comment` | string | no | Operator rationale. Recorded in the remediation intervention audit trail so the decision is durable and reviewable. |
+
+Response body:
+
+```json
+{ "accepted": true, "workflowId": "...", "requestId": "...", "decision": "approved" }
+```
+
+Semantics:
+- The decision is only accepted while the request is still pending; a decision
+  against a non-pending target is rejected.
+- The endpoint does not grant raw runtime authority; it only records the
+  policy-scoped approve/deny decision. Operator cancellation/takeover continues
+  to flow through the existing managed-session control surfaces.
+- The recorded rationale and actor are the durable authority for the decision;
+  the UI must never infer approval from chat, logs, or model prose.
 
 ---
 
@@ -1299,12 +1354,18 @@ The create UI should let the operator:
 ### 15.2 Target Workflow detail
 
 The target Workflow should show a **Remediation Workflows** panel with:
-- remediation Workflow links,
-- status,
-- authority mode,
+- remediation Workflow link **and remediation run id**,
+- pinned target run id and selected steps,
+- mode and authority mode,
 - last action,
 - resolution,
-- active lock badge.
+- active lock badge and, when released, the lock-release time,
+- a **Repair verification** summary derived from the checkpoint branches
+  (explicit pending / running / terminal state and verdict).
+
+This panel is a distinct, separately annotated region: the original target
+outcome remains immutable and is never overwritten by later remediation
+annotations.
 
 ### 15.3 Remediation Workflow detail
 
@@ -1314,9 +1375,14 @@ The remediation Workflow detail should show a **Remediation Target** panel with:
 - selected steps,
 - current target state,
 - evidence bundle link,
-- allowed actions,
+- allowed actions (with a bounded, truthful reason shown when none are offered —
+  e.g. observe-only authority or an action policy that has not authorized a
+  mutating action),
 - approval state,
-- lock state.
+- lock state, including the lock-release time when the lease has been released,
+- an explicit **Repair verification** summary (pending / running / terminal +
+  verdict + evidence ref), kept semantically distinct from branch creation,
+  branch execution, and action delivery.
 
 ### 15.4 Evidence presentation
 
@@ -1342,8 +1408,17 @@ When a remediation Workflow Execution is `approval_gated` or encounters a high-r
 - show the proposed action,
 - show preconditions,
 - show expected blast radius,
-- allow approve/reject,
+- allow authorized approve/deny with an operator **rationale**, sent as the
+  approval `comment` (see §8.6) and recorded in the audit trail,
+- surface the decision actor and decision time once recorded,
+- indicate when a previously recorded decision is **stale** (a new pending
+  request superseded it) so the operator knows a fresh decision is required,
 - keep the decision in the audit trail.
+
+Approve/deny controls appear only when the current operator is authorized to
+decide (`approvalState.canDecide` with a `requestId`); otherwise the approval
+state is read-only. Operator cancellation/takeover uses the existing
+managed-session controls and does not grant raw runtime authority.
 
 ---
 

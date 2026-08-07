@@ -7743,6 +7743,54 @@ function RemediationCheckpointBranches({
   );
 }
 
+// Explicit, canonical repair-verification state derived from the checkpoint
+// branch verification refs/verdicts. Verification is kept semantically distinct
+// from branch creation/execution and action delivery: a branch can exist and
+// have run without its repair being verified. Phases:
+// - pending: no verification has been requested yet;
+// - running: a verification ref exists but has not returned a verdict;
+// - terminal: a verdict is recorded (e.g. verified / failed / regressed).
+function branchVerificationPhase(
+  branch: z.infer<typeof RemediationLinkSchema>['checkpointBranches'][number],
+): { phase: 'pending' | 'running' | 'terminal'; label: string } {
+  const verdict = String(branch.latestVerificationVerdict || '').trim();
+  if (verdict) {
+    return { phase: 'terminal', label: verdict };
+  }
+  if (branch.latestVerificationRef) {
+    return { phase: 'running', label: 'Verification running' };
+  }
+  return { phase: 'pending', label: 'Verification pending' };
+}
+
+function RemediationVerificationSummary({
+  branches,
+}: {
+  branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+}) {
+  if (!branches || branches.length === 0) return null;
+  return (
+    <div className="td-remediation-live" aria-label="Repair verification">
+      <strong>Repair verification</strong>
+      <ul className="td-remediation-list">
+        {branches.map((branch) => {
+          const { phase, label } = branchVerificationPhase(branch);
+          return (
+            <li key={`verify:${branch.workflowId}:${branch.branchId}`} className="card">
+              <div className="grid-2">
+                <Card label="Branch"><code className="text-xs break-all">{branch.branchId}</code></Card>
+                <Card label="Verification state">{formatStatusLabel(phase)}</Card>
+                <Card label="Verdict">{label}</Card>
+                <Card label="Evidence"><code className="text-xs break-all">{branch.latestVerificationRef || '—'}</code></Card>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function RemediationApprovalSummary({
   approval,
 }: {
@@ -7759,6 +7807,15 @@ function RemediationApprovalSummary({
 
   if (!hasDetails) return null;
 
+  const decisionRecorded =
+    approval.decision === 'approved' || approval.decision === 'rejected';
+  // A recorded terminal decision is stale when the authority owner has opened a
+  // new pending request (canDecide + requestId), meaning the earlier decision
+  // no longer authorizes the current action and a fresh decision is needed.
+  const staleDecision = Boolean(
+    decisionRecorded && approval.canDecide && approval.requestId,
+  );
+
   return (
     <div className="td-remediation-approval">
       <div className="grid-2">
@@ -7768,10 +7825,80 @@ function RemediationApprovalSummary({
         <Card label="Audit">{approval.auditRef || '—'}</Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        {approval.decisionActor ? (
+          <Card label="Decided By">{approval.decisionActor}</Card>
+        ) : null}
+        {approval.decisionAt ? (
+          <Card label="Decided At">{formatWhen(approval.decisionAt)}</Card>
+        ) : null}
       </div>
-      {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
+      {staleDecision ? (
+        <p className="notice subtle" role="status">
+          The previous {approval.decision} decision is stale; a new approval
+          request is pending because the proposed action changed.
+        </p>
+      ) : approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}
+    </div>
+  );
+}
+
+// Operator approve/deny controls with a rationale field. The rationale is sent
+// as the decision `comment`, which the durable approval owner persists in the
+// remediation intervention audit trail. Kept as a small self-contained
+// component so the rationale text stays local per remediation link and both
+// inbound (target-side) and outbound (remediation-side) surfaces reuse it.
+function RemediationApprovalControls({
+  remediationWorkflowId,
+  requestId,
+  busy,
+  onApprovalDecision,
+}: {
+  remediationWorkflowId: string;
+  requestId: string;
+  busy: boolean;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
+}) {
+  const [rationale, setRationale] = useState('');
+  return (
+    <div className="stack td-remediation-approval-controls">
+      <label>
+        Decision rationale (recorded in the approval audit trail)
+        <textarea
+          value={rationale}
+          onChange={(event) => setRationale(event.target.value)}
+          rows={2}
+          placeholder="Why are you approving or denying this action?"
+        />
+      </label>
+      <div className="actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() =>
+            onApprovalDecision(remediationWorkflowId, requestId, 'approved', rationale)
+          }
+        >
+          Approve remediation action
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() =>
+            onApprovalDecision(remediationWorkflowId, requestId, 'rejected', rationale)
+          }
+        >
+          Deny remediation action
+        </button>
+      </div>
     </div>
   );
 }
@@ -7789,7 +7916,12 @@ function RemediationRelationshipsPanel({
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
   approvalBusy: boolean;
   showEmpty: boolean;
 }) {
@@ -7820,37 +7952,34 @@ function RemediationRelationshipsPanel({
                   <code className="text-xs break-all">{item.remediationWorkflowId}</code>
                 </a>
                 <div className="grid-2">
+                  <Card label="Remediation Run"><code className="text-xs break-all">{item.remediationRunId || '—'}</code></Card>
+                  <Card label="Pinned Target Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
+                  <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
+                  <Card label="Current Target">{item.currentTargetState || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (
                     <Card label="Lock Holder">{item.activeLockHolder}</Card>
                   ) : null}
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
+                <RemediationVerificationSummary branches={item.checkpointBranches} />
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
               </li>
             ))}
@@ -7881,7 +8010,17 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                 </div>
+                {(!item.allowedActions || item.allowedActions.length === 0) ? (
+                  <p className="notice subtle">
+                    {item.authorityMode === 'observe_only'
+                      ? 'Observe-only authority: no mutating actions are offered for this target.'
+                      : 'No actions are currently offered; the action policy has not authorized any mutating action for the current target/runtime state.'}
+                  </p>
+                ) : null}
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
                     Evidence is degraded. Unavailable: {remediationListValue(item.unavailableEvidenceClasses)}.
@@ -7904,6 +8043,7 @@ function RemediationRelationshipsPanel({
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
+                <RemediationVerificationSummary branches={item.checkpointBranches} />
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.mode?.includes('follow') && !item.contextArtifactRef ? (
                   <p className="notice subtle">
@@ -7912,24 +8052,12 @@ function RemediationRelationshipsPanel({
                 ) : null}
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
               </li>
             ))}
@@ -9081,17 +9209,22 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      comment,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      comment?: string;
     }) => {
+      const trimmedComment = (comment || '').trim();
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify(
+            trimmedComment ? { decision, comment: trimmedComment } : { decision },
+          ),
         },
       );
       if (!response.ok) {
@@ -10443,9 +10576,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, comment) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({
+                  remediationWorkflowId,
+                  requestId,
+                  decision,
+                  ...(comment ? { comment } : {}),
+                });
               }}
             />
           ) : null}

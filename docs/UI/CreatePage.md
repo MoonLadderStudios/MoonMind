@@ -383,6 +383,47 @@ Branch behavior:
 - Allow manual branch entry as an advanced fallback.
 - Show generated publish branch names before submission when relevant.
 
+## Remediation Prefill
+
+When the Create page is opened as `/workflows/new?intent=remediate&draftId=…`
+(for example from a failed workflow's **Remediate** action — see
+`docs/UI/WorkflowDetailsPage.md` and `docs/Workflows/WorkflowRemediation.md`
+§7.7), it consumes a short-lived remediation draft from session storage and
+prefills the ordinary create form. This is normal, editable authoring — there
+is no hidden one-click submission path.
+
+The page renders a **Remediation Draft** section that clearly separates two
+groups:
+
+- **Pinned target (immutable):** target workflow, pinned run, authored starting
+  branch, and target outcome, shown read-only. This identity is never edited on
+  the Create page.
+- **Editable repair intent:** instructions, repository, work branch, publish
+  mode, Codex-via-Omnigent runtime, Provider/Agent Profile, execution profile
+  (execution target), launch policy, model, effort, retrieval/context controls,
+  and the remediation mode, authority, action policy, and evidence/approval/
+  lock/verification/Checkpoint-Branch policies. All of these are prefilled from
+  the draft (or the target run) and remain editable before submission.
+
+Submission uses the ordinary `POST /api/executions` path with a canonical
+`task.remediation` payload; the server independently revalidates and pins the
+target/run and rejects tampered target, run, profile, policy, branch, publish,
+or authority fields.
+
+Draft lifecycle:
+
+- The draft is applied once and is **cleared only after a successful submission
+  or an explicit `Discard draft`** action. `Discard draft` removes the stored
+  draft, drops the `intent`/`draftId` query params, and returns the page to
+  ordinary authoring.
+- Drafts carry a `createdAt` timestamp and **expire** after a bounded TTL so a
+  stale draft cannot silently prefill against a target run that has changed.
+- Missing, malformed (tampered/corrupt), expired, and cross-tab/cross-session
+  drafts each surface a distinct, actionable, safe error and do not partially
+  apply.
+- If the pinned target run has changed since the draft was created, the page
+  shows a freshness warning directing the operator to open **Remediate** again.
+
 ## Jira Integration on Create
 
 Jira can appear in multiple places on the Create page:

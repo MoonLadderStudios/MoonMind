@@ -1,4 +1,8 @@
 import {
+  type ContextRetrievalAuthoring,
+  parseContextRetrievalParameters,
+} from './contextRetrievalAuthoring';
+import {
   buildRemediationRuntimeRequestFields,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
@@ -8,8 +12,35 @@ import {
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
 
+/**
+ * Remediation create drafts are short-lived, single-hop handoffs from a target
+ * Workflow Detail page into the normal Create page. They expire so a stale
+ * session-storage entry (for example an abandoned tab reopened a day later)
+ * cannot silently prepopulate the Create page against a target run that has
+ * since changed. Twelve hours is generous for an operator who steps away
+ * mid-authoring while still bounding the pinned-target staleness window.
+ */
+export const REMEDIATION_DRAFT_TTL_MS = 12 * 60 * 60 * 1000;
+
+export type RemediationDraftLoadStatus =
+  | 'available'
+  | 'missing'
+  | 'malformed'
+  | 'expired';
+
+export type RemediationDraftLoadResult = {
+  status: RemediationDraftLoadStatus;
+  draft: RemediationCreateDraft | null;
+};
+
 export type RemediationCreateDraft = {
   source: 'remediation';
+  /**
+   * Epoch milliseconds when the draft was built. Used to expire stale drafts
+   * before they prepopulate the Create page. Optional so older/hand-authored
+   * drafts remain readable, but the builder always sets it.
+   */
+  createdAt?: number;
   target: {
     workflowId: string;
     runId: string;
@@ -19,8 +50,20 @@ export type RemediationCreateDraft = {
     agentRunIds?: string[];
   };
   repository: string;
+  /** Editable work branch for the remediation run. */
   branch?: string;
+  /** Editable starting/base branch the remediation branches from. */
+  startingBranch?: string;
   publishMode?: string;
+  /** Omnigent execution profile authored on the target run. */
+  executionProfileRef?: string;
+  /** Omnigent launch policy authored on the target run. */
+  launchPolicyRef?: string;
+  /**
+   * Retrieval/context controls authored on the target run, already normalized
+   * into the Create page's authoring shape so it can be applied directly.
+   */
+  contextRetrieval?: ContextRetrievalAuthoring;
   runtime?: {
     mode?: string;
     model?: string;
@@ -88,6 +131,12 @@ type RemediationDraftExecution = {
 
 function cleanText(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function remediationMode(value: unknown): RemediationCreateDraft['remediation']['mode'] {
@@ -224,8 +273,25 @@ export function buildRemediationCreateDraft(
   const selectedAgentProfileVersion = Number(
     execution.agentProfile?.version || storedAgentProfile.version || storedSnapshot.version || 0,
   );
+  const inputParameters = asRecord(execution.inputParameters);
+  const omnigentParams = asRecord(inputParameters.omnigent);
+  const gitParams = asRecord(inputParameters.git);
+  const taskParams = asRecord(inputParameters.task);
+  const executionProfileRef = cleanText(omnigentParams.executionTargetRef);
+  const launchPolicyRef = cleanText(omnigentParams.launchPolicyRef);
+  const workBranch = cleanText(
+    inputParameters.branch || gitParams.branch || taskParams.branch,
+  );
+  const startingBranch = cleanText(
+    inputParameters.startingBranch ||
+      inputParameters.baseBranch ||
+      gitParams.baseBranch ||
+      gitParams.startingBranch,
+  );
+  const contextRetrieval = parseContextRetrievalParameters(inputParameters);
   return {
     source: 'remediation',
+    createdAt: Date.now(),
     target: {
       workflowId,
       runId,
@@ -234,7 +300,12 @@ export function buildRemediationCreateDraft(
       ...(stepSelectors.length > 0 ? { stepSelectors } : {}),
     },
     repository: cleanText(execution.repository) || DEFAULT_REMEDIATION_REPOSITORY,
+    ...(workBranch ? { branch: workBranch } : {}),
+    ...(startingBranch ? { startingBranch } : {}),
     publishMode: 'pr',
+    ...(executionProfileRef ? { executionProfileRef } : {}),
+    ...(launchPolicyRef ? { launchPolicyRef } : {}),
+    ...(contextRetrieval ? { contextRetrieval } : {}),
     runtime: {
       ...(cleanText(runtime.mode) ? { mode: cleanText(runtime.mode) } : {}),
       ...(cleanText(runtime.model) ? { model: cleanText(runtime.model) } : {}),
@@ -294,17 +365,46 @@ export function storeRemediationCreateDraft(draft: RemediationCreateDraft): stri
   return draftId;
 }
 
-export function readRemediationCreateDraft(draftId: string | null | undefined): RemediationCreateDraft | null {
+/**
+ * Load a remediation draft with an explicit availability status so the Create
+ * page can surface an actionable, safe error for each failure mode:
+ * - `missing`: no draft under this id (cleared, or opened in another tab/session);
+ * - `malformed`: present but not a valid remediation draft (tampered/corrupt);
+ * - `expired`: present but older than {@link REMEDIATION_DRAFT_TTL_MS};
+ * - `available`: a valid, fresh draft.
+ * Expired drafts are removed on read so they cannot be reapplied later.
+ */
+export function loadRemediationCreateDraft(
+  draftId: string | null | undefined,
+): RemediationDraftLoadResult {
   const normalized = cleanText(draftId);
-  if (!normalized) return null;
+  if (!normalized) return { status: 'missing', draft: null };
   const raw = window.sessionStorage.getItem(storageKey(normalized));
-  if (!raw) return null;
+  if (!raw) return { status: 'missing', draft: null };
+  let parsed: RemediationCreateDraft;
   try {
-    const parsed = JSON.parse(raw) as RemediationCreateDraft;
-    return parsed?.source === 'remediation' ? parsed : null;
+    parsed = JSON.parse(raw) as RemediationCreateDraft;
   } catch {
-    return null;
+    return { status: 'malformed', draft: null };
   }
+  if (!parsed || parsed.source !== 'remediation') {
+    return { status: 'malformed', draft: null };
+  }
+  const createdAt = Number(parsed.createdAt);
+  if (Number.isFinite(createdAt) && createdAt > 0) {
+    if (Date.now() - createdAt > REMEDIATION_DRAFT_TTL_MS) {
+      window.sessionStorage.removeItem(storageKey(normalized));
+      return { status: 'expired', draft: null };
+    }
+  }
+  return { status: 'available', draft: parsed };
+}
+
+export function readRemediationCreateDraft(
+  draftId: string | null | undefined,
+): RemediationCreateDraft | null {
+  const result = loadRemediationCreateDraft(draftId);
+  return result.status === 'available' ? result.draft : null;
 }
 
 export function clearRemediationCreateDraft(draftId: string | null | undefined): void {

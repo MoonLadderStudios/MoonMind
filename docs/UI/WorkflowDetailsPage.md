@@ -587,6 +587,52 @@ Panel button destination:
 
 The remediation panel never replaces the header action buttons.
 
+### Remediation relationships region
+
+On the Artifacts tab, a distinct **Remediation** region renders the bidirectional
+remediation relationships from bounded, canonical remediation link metadata (see
+`docs/Workflows/WorkflowRemediation.md` §8). It never reconstructs authority from
+logs, chat messages, or model prose. It has two lists:
+
+- **Remediation Workflows** (target-side / inbound): for each remediator, the
+  remediation Workflow link and remediation run id, the pinned target run,
+  selected steps, mode, authority, current target state, latest action,
+  resolution, lock scope/holder and lock-release time, and last update. Each
+  entry shows a **Repair verification** summary (explicit pending / running /
+  terminal state plus verdict) derived from its checkpoint branches. This region
+  is separate from the target's original outcome, which remains immutable.
+- **Remediation Target** (remediation-side / outbound): the pinned target run,
+  mode, authority, status, evidence bundle, selected steps, current target
+  state, allowed actions, lock state and lock-release time, evidence-degradation
+  notice, live-follow observation (cursor/reconnect/epoch/status), the
+  checkpoint-branch lifecycle, and the same **Repair verification** summary.
+  When no actions are offered, a bounded, truthful reason is shown (observe-only
+  authority, or an action policy that has not authorized a mutating action).
+
+### Approval decision UI
+
+When a remediation link is `approval_gated` with a pending approval request and
+the current operator is authorized to decide (`approvalState.canDecide` with a
+`requestId`), the region renders approve/deny controls:
+
+- an approval summary (action, risk, decision, audit ref, preconditions, blast
+  radius, and — once recorded — the deciding actor and decision time);
+- a **decision rationale** field whose text is sent as the approval `comment`
+  and recorded in the remediation audit trail;
+- **Approve remediation action** and **Deny remediation action** buttons that
+  POST to `POST /api/executions/{workflowId}/remediation/approvals/{requestId}`
+  (see `docs/Api/ExecutionsApiContract.md` and `WorkflowRemediation.md` §8.6);
+- a **stale-decision** notice when a previously recorded decision has been
+  superseded by a new pending request, explaining that a fresh decision is
+  required.
+
+When the operator is not authorized, the approval state is read-only
+("Approval is read-only for this operator."). These controls only record the
+policy-scoped decision; they do not grant raw runtime authority. Operator
+cancellation/takeover continues to use the existing managed-session controls.
+All controls preserve keyboard navigation, screen-reader labels, and
+loading/error states.
+
 ## Outputs section
 
 The outputs section is present when outputs exist.

@@ -6615,9 +6615,17 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
     expect(screen.getByText('mm:remediation-1')).toBeTruthy();
     expect(screen.getAllByText('mm:target-1').length).toBeGreaterThan(0);
-    expect(screen.getByText('cbr-remediation-inbound')).toBeTruthy();
-    expect(screen.getByText('cbr-remediation-outbound')).toBeTruthy();
-    expect(screen.getByText('verified incomplete')).toBeTruthy();
+    // Branch ids and verdicts appear both in the checkpoint-branch list and in
+    // the explicit repair-verification summary, so allow more than one match.
+    expect(screen.getAllByText('cbr-remediation-inbound').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('cbr-remediation-outbound').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('verified incomplete').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Repair verification').length).toBeGreaterThan(0);
+    // Target-side inbound rows now surface the remediation run link and pinned
+    // target run identity, not just a status inventory.
+    expect(screen.getAllByText('Remediation Run:').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pinned Target Run:').length).toBeGreaterThan(0);
+    expect(screen.getByText('run-remediation-1')).toBeTruthy();
     expect(screen.getByText('2 / 3')).toBeTruthy();
     expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
     expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
@@ -6627,6 +6635,10 @@ describe('Workflow Detail Entrypoint', () => {
       '/api/artifacts/art_context/download',
     );
 
+    // Operators capture a decision rationale, sent as the approval `comment`.
+    fireEvent.change(screen.getByLabelText(/Decision rationale/), {
+      target: { value: 'Root cause confirmed; safe to apply.' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
 
     await waitFor(() => {
@@ -6638,6 +6650,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(approvalCall).toBeTruthy();
       expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
         decision: 'approved',
+        comment: 'Root cause confirmed; safe to apply.',
       });
     });
 
@@ -6892,7 +6905,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('One managed session.')).toBeTruthy();
     expect(screen.getByText('Approval is read-only for this operator.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve remediation action' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Reject remediation action' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny remediation action' })).toBeNull();
   });
 
   it('renders degraded remediation states for missing links, evidence, and live follow data', async () => {

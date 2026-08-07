@@ -31,7 +31,7 @@ import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowW
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
   clearRemediationCreateDraft,
-  readRemediationCreateDraft,
+  loadRemediationCreateDraft,
   type RemediationCreateDraft,
 } from "../lib/remediationCreateDraft";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
@@ -59,6 +59,20 @@ function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDa
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
+
+// Actionable, safe messages for each remediation-draft load failure so the
+// operator understands what happened and how to recover, instead of a single
+// generic "no longer available" string. Keyed by loadRemediationCreateDraft
+// status; "available" is unused here (the happy path clears any message).
+const REMEDIATION_DRAFT_LOAD_MESSAGES = {
+  missing:
+    "This remediation draft is no longer available — it may have been cleared, already used, or opened in another browser tab or session. Open Remediate from the target workflow again to start a fresh draft.",
+  malformed:
+    "This remediation draft could not be read (it was incomplete or altered). For safety it was not applied. Open Remediate from the target workflow again to rebuild it.",
+  expired:
+    "This remediation draft has expired. Because the pinned target run may have changed since it was created, it was discarded. Open Remediate from the target workflow again to capture the current run.",
+  available: "",
+} as const;
 export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
@@ -6827,15 +6841,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
     const draftId = String(params.get("draftId") || "").trim();
-    if (!draftId || remediationDraftAppliedRef.current === draftId) {
+    if (remediationDraftAppliedRef.current === draftId) {
       return;
     }
-    const draft = readRemediationCreateDraft(draftId);
-    if (!draft) {
+    const { status, draft } = loadRemediationCreateDraft(draftId);
+    if (status !== "available" || !draft) {
       setRemediationDraft(null);
-      remediationDraftAppliedRef.current = null;
+      remediationDraftAppliedRef.current = draftId || null;
       remediationDraftIdRef.current = null;
-      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
+      setSubmitMessage(REMEDIATION_DRAFT_LOAD_MESSAGES[status]);
       return;
     }
 
@@ -6849,6 +6863,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.publishMode) {
       setPublishMode(normalizePublishModeForSubmit(draft.publishMode));
+    }
+    if (draft.executionProfileRef) {
+      setOmnigentExecutionTargetRef(draft.executionProfileRef);
+    }
+    if (draft.launchPolicyRef) {
+      setOmnigentLaunchPolicyRef(draft.launchPolicyRef);
+      setOmnigentLaunchPolicyAuthored(true);
+    }
+    if (draft.contextRetrieval) {
+      // Already normalized to the authoring shape by the draft builder.
+      setContextRetrieval(draft.contextRetrieval);
     }
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
@@ -12013,16 +12038,70 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftIdRef.current);
+                  remediationDraftAppliedRef.current = null;
+                  remediationDraftIdRef.current = null;
+                  setRemediationDraft(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState(
+                    {},
+                    "",
+                    `${url.pathname}${url.search}`,
+                  );
+                  setSubmitMessage(
+                    "Remediation draft discarded. You can author a normal workflow, or open Remediate from the target workflow again.",
+                  );
+                }}
+              >
+                Discard draft
+              </button>
             </div>
+            <fieldset
+              className="queue-remediation-pinned-target stack"
+              aria-label="Pinned target (immutable)"
+            >
+              <legend className="small">
+                Pinned target — immutable identity captured when you clicked
+                Remediate. These fields cannot be edited here.
+              </legend>
+              <div className="grid-2">
+                <label>
+                  Target workflow
+                  <input value={remediationDraft.target.workflowId} readOnly />
+                </label>
+                <label>
+                  Pinned run
+                  <input value={remediationDraft.target.runId} readOnly />
+                </label>
+                {remediationDraft.startingBranch ? (
+                  <label>
+                    Starting branch
+                    <input value={remediationDraft.startingBranch} readOnly />
+                  </label>
+                ) : null}
+                {remediationDraft.target.state ? (
+                  <label>
+                    Target outcome
+                    <input value={remediationDraft.target.state} readOnly />
+                  </label>
+                ) : null}
+              </div>
+            </fieldset>
+            <fieldset
+              className="queue-remediation-repair-intent stack"
+              aria-label="Editable repair intent"
+            >
+              <legend className="small">
+                Editable repair intent — adjust these before you submit. The
+                pinned target above stays fixed.
+              </legend>
             <div className="grid-2">
-              <label>
-                Target workflow
-                <input value={remediationDraft.target.workflowId} readOnly />
-              </label>
-              <label>
-                Pinned run
-                <input value={remediationDraft.target.runId} readOnly />
-              </label>
               <label>
                 Remediation mode
                 <select
@@ -12213,6 +12292,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 Create branch for corrected inputs
               </label>
             </div>
+            </fieldset>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">
                 {remediationTargetFreshnessWarning}

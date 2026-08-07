@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildRemediationCreateDraft,
   clearRemediationCreateDraft,
+  loadRemediationCreateDraft,
   remediationCreateDraftHref,
   readRemediationCreateDraft,
+  REMEDIATION_DRAFT_TTL_MS,
   storeRemediationCreateDraft,
 } from './remediationCreateDraft';
 
@@ -102,6 +104,72 @@ describe('remediationCreateDraft', () => {
       version: 2,
       providerProfileRef: 'oauth-team',
     });
+  });
+
+  it('prepopulates branch, execution profile, launch policy, and retrieval from the target run', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      targetRuntime: 'omnigent',
+      inputParameters: {
+        branch: 'feature/work',
+        git: { baseBranch: 'main' },
+        omnigent: {
+          executionTargetRef: 'exec:profile-a',
+          launchPolicyRef: 'launch:policy-a',
+        },
+        rag: { collections: ['docs'], required: true },
+      },
+    });
+
+    expect(draft.branch).toBe('feature/work');
+    expect(draft.startingBranch).toBe('main');
+    expect(draft.executionProfileRef).toBe('exec:profile-a');
+    expect(draft.launchPolicyRef).toBe('launch:policy-a');
+    expect(draft.contextRetrieval).toMatchObject({
+      initial: { collections: ['docs'], required: true },
+    });
+    expect(typeof draft.createdAt).toBe('number');
+  });
+
+  it('distinguishes missing, malformed, and expired drafts on load', () => {
+    expect(loadRemediationCreateDraft('does-not-exist')).toEqual({
+      status: 'missing',
+      draft: null,
+    });
+
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.corrupt',
+      '{not valid json',
+    );
+    expect(loadRemediationCreateDraft('corrupt').status).toBe('malformed');
+
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.foreign',
+      JSON.stringify({ source: 'not-remediation' }),
+    );
+    expect(loadRemediationCreateDraft('foreign').status).toBe('malformed');
+
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+    });
+    const stale = {
+      ...draft,
+      createdAt: Date.now() - (REMEDIATION_DRAFT_TTL_MS + 60_000),
+    };
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.stale',
+      JSON.stringify(stale),
+    );
+    const expired = loadRemediationCreateDraft('stale');
+    expect(expired.status).toBe('expired');
+    expect(expired.draft).toBeNull();
+    // Expired drafts are removed on read so they cannot be reapplied.
+    expect(
+      window.sessionStorage.getItem('moonmind.remediation-create-draft.stale'),
+    ).toBeNull();
+    expect(readRemediationCreateDraft('stale')).toBeNull();
   });
 
   it('recovers the immutable selection from execution input parameters', () => {

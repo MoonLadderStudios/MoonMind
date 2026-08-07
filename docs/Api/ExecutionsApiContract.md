@@ -54,6 +54,11 @@ This document does **not** define:
 - `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
 - This contract should remain stable even if backing reads move closer to Temporal Visibility.
+- Remediation-specific `/api/executions/{workflowId}/remediation…` routes (create,
+  reverse lookup, and the approval decision endpoint
+  `POST /api/executions/{workflowId}/remediation/approvals/{requestId}`) are
+  defined in `docs/Workflows/WorkflowRemediation.md` §8, alongside the
+  `task.remediation` create contract they build on.
 
 ### 2.4 Current implementation note
 

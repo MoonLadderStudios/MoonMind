@@ -4323,6 +4323,21 @@ form {
   border: 0;
 }
 
+/* Remediation draft groups (pinned target vs editable repair intent) reuse the
+   fieldset/legend semantics for grouping without the default browser chrome. */
+.queue-remediation-pinned-target,
+.queue-remediation-repair-intent {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.queue-remediation-pinned-target > legend,
+.queue-remediation-repair-intent > legend {
+  padding: 0;
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
