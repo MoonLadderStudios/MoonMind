@@ -11788,6 +11788,8 @@ export interface components {
             mode: string;
             /** Latestactionsummary */
             latestActionSummary?: string | null;
+            /** Deliverystatus */
+            deliveryStatus?: string | null;
             /** Resolution */
             resolution?: string | null;
             /**
@@ -11828,6 +11830,8 @@ export interface components {
             activeLockHolder?: string | null;
             /** Latestactionsummary */
             latestActionSummary?: string | null;
+            /** Deliverystatus */
+            deliveryStatus?: string | null;
             /** Resolution */
             resolution?: string | null;
             /** Contextartifactref */

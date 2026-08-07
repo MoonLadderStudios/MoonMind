@@ -147,6 +147,10 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLiveFollowResult,
     RemediationLogReadResult,
 )
+from moonmind.workflows.temporal.remediation_verification import (
+    RemediationVerificationPhase,
+    TargetEvidenceSnapshot,
+)
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 def _valid_user_workflow_parameters() -> dict[str, object]:
@@ -1183,6 +1187,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         decision="attempted",
         decision_reason="fresh_target_health_and_policy_allowed",
         repair_outcome="repaired",
+        verification_outcome="verified_resolved",
         fresh_target_health_ref="art_health",
         authority_decision_ref="art_authority",
         guard_decision_ref="art_guard",
@@ -1219,6 +1224,7 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
             "verification": "art_verification",
         },
         "repairOutcome": "repaired",
+        "verificationOutcome": "verified_resolved",
         "metadata": {"safe": "value"},
     }
 
@@ -1474,6 +1480,39 @@ def test_remediation_lifecycle_contract_rejects_invalid_or_incomplete_values():
             repair_outcome="repaired",
             action_request_ref="art_request",
             action_result_ref="art_result",
+        )
+
+    # A delivered action may not be labeled repaired without a trusted
+    # verified_resolved verification outcome (issue #3622).
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_repair_decision(
+            target_workflow_id="target-workflow",
+            pinned_run_id="target-run",
+            decision="attempted",
+            decision_reason="fresh",
+            repair_outcome="repaired",
+            action_request_ref="art_request",
+            action_result_ref="art_result",
+            verification_ref="art_verification",
+            verification_outcome="still_failed",
+        )
+
+    with pytest.raises(ValueError, match="verified_resolved"):
+        build_remediation_final_summary(
+            summary=build_remediation_summary_block(
+                target_workflow_id="target-workflow",
+                target_run_id="target-run",
+                phase="resolved",
+                mode="snapshot_then_follow",
+                authority_mode="admin_auto",
+            ),
+            repair={"decision": "attempted", "repairOutcome": "repaired"},
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            lock_release="released",
         )
 
     with pytest.raises(ValueError, match="pullRequestUrl"):
@@ -1848,10 +1887,6 @@ class RecordingActionExecutor:
             "beforeStateRef": "artifact://before-state",
             "afterStateRef": "artifact://after-state",
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {
-                "status": "verified",
-                "targetWorkflowId": target_health.workflow_id,
-            },
         }
 
 
@@ -1876,7 +1911,6 @@ class SensitiveHintActionExecutor:
                 "with token=raw-secret-token"
             ),
             "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
-            "verification": {"status": "verified"},
         }
 
 
@@ -1897,7 +1931,6 @@ class StatusOnlyActionExecutor:
             "status": self.status,
             "message": f"returned {self.status}",
             "sideEffects": [],
-            "verification": {"status": "not_verified"},
         }
 
 async def _read_artifact_json(artifact_service, artifact_id: str):
@@ -3780,3 +3813,406 @@ async def test_remediation_mutation_guard_serialization_redacts_sensitive_values
         assert "secret-token-value" not in serialized
         assert "/work/agent_jobs" not in serialized
         assert "X-Amz-Signature" not in serialized
+
+
+class _ScriptedVerificationReader:
+    """Deterministic fresh-evidence reader for verification-phase wiring tests."""
+
+    def __init__(self, *, before, after_sequence):
+        self._before = before
+        self._after = list(after_sequence)
+        self._index = -1
+
+    async def read_target_evidence(
+        self, *, contract, workflow_id, stage, pinned_run_id=None
+    ):
+        if stage == "before":
+            return self._before
+        self._index += 1
+        idx = min(self._index, len(self._after) - 1)
+        return self._after[idx]
+
+
+async def _noop_verification_sleep(_seconds):
+    return None
+
+
+def _verification_snapshot(stage, *, state, close_status=None, run_id="target-run", paused=None):
+    return TargetEvidenceSnapshot(
+        stage=stage,
+        available=True,
+        workflow_id="wf",
+        run_id=run_id,
+        state=state,
+        close_status=close_status,
+        paused=paused,
+    )
+
+
+async def _run_verified_cancel(session, tmp_path, mock_client_adapter, *, after_sequence):
+    """Drive execute_action for execution.cancel with a scripted verifier."""
+
+    target, remediation = await _create_target_and_remediation(
+        session,
+        mock_client_adapter,
+        authority_mode="admin_auto",
+    )
+    artifact_service = TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+    )
+    await RemediationContextBuilder(
+        session=session,
+        artifact_service=artifact_service,
+    ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key="verify-cancel-1",
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key="verify-cancel-1",
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+
+    before = _verification_snapshot("before", state="executing")
+    phase = RemediationVerificationPhase(
+        reader=_ScriptedVerificationReader(before=before, after_sequence=after_sequence),
+        sleep=_noop_verification_sleep,
+        is_canceled=lambda: False,
+    )
+    executor = RecordingActionExecutor()
+    tools = RemediationEvidenceToolService(
+        session=session,
+        artifact_service=artifact_service,
+        action_executor=executor,
+        verification_phase=phase,
+    )
+    result = await tools.execute_action(
+        remediation_workflow_id=remediation.workflow_id,
+        authority_result=authority.to_dict(),
+        guard_result=guard.to_dict(),
+        principal="service:test",
+    )
+    link = await session.get(TemporalExecutionRemediationLink, remediation.workflow_id)
+    verification_payload = await _read_artifact_json(
+        artifact_service, result["artifactRefs"]["verification"]
+    )
+    return result, link, verification_payload, artifact_service
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_phase_reports_verified_resolved(
+    tmp_path, mock_client_adapter
+):
+    """A cancel that reaches a terminal state is verified as resolved, and the
+    repair outcome is recorded separately from the delivery status."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"  # delivery
+        assert result["verification"]["outcome"] == "verified_resolved"  # repair
+        assert result["verification"]["deliveryStatus"] == "applied"
+        assert verification_payload["status"] == "verified_resolved"
+        assert verification_payload["outcome"] == "verified_resolved"
+        assert verification_payload["deliveryStatus"] == "applied"
+        assert "before" in verification_payload["targetStates"]
+        assert "immediateAfter" in verification_payload["targetStates"]
+        # Delivery and repair are separate durable projections.
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_delivered_but_target_still_failed_is_not_repaired(
+    tmp_path, mock_client_adapter
+):
+    """A delivered action must not relabel a still-failing target as repaired."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot("immediate_after", state="executing"),
+            _verification_snapshot("stabilized", state="executing"),
+        ]
+        result, link, verification_payload, _svc = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+
+        assert result["status"] == "applied"
+        assert result["verification"]["outcome"] == "still_failed"
+        assert verification_payload["outcome"] == "still_failed"
+        assert link.outcome == "applied"
+        assert link.verification_outcome == "still_failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_verification_artifact_metadata_carries_classification(
+    tmp_path, mock_client_adapter
+):
+    """The verification artifact metadata exposes the classification for the UI."""
+
+    async with temporal_db(tmp_path) as session:
+        after = [
+            _verification_snapshot(
+                "immediate_after", state="canceled", close_status="canceled"
+            )
+        ]
+        result, _link, _payload, artifact_service = await _run_verified_cancel(
+            session, tmp_path, mock_client_adapter, after_sequence=after
+        )
+        artifact, _payload_bytes = await artifact_service.read(
+            artifact_id=result["artifactRefs"]["verification"],
+            principal="service:test",
+        )
+        assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
+        assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"
+
+
+async def _cancel_authority_and_guard(
+    session, target, remediation, *, idempotency_key
+):
+    action_kind = "execution.cancel"
+    parameters = {"reason": "cancel target"}
+    authority = await RemediationActionAuthorityService(
+        session=session
+    ).evaluate_action_request(
+        remediation_workflow_id=remediation.workflow_id,
+        action_kind=action_kind,
+        parameters=parameters,
+        dry_run=False,
+        idempotency_key=idempotency_key,
+        requesting_principal="workflow:remediator",
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+    )
+    guard = await RemediationMutationGuardService(session=session).evaluate(
+        remediation_workflow_id=remediation.workflow_id,
+        remediation_run_id=remediation.run_id,
+        target_workflow_id=target.workflow_id,
+        target_run_id=target.run_id,
+        action_kind=action_kind,
+        idempotency_key=idempotency_key,
+        parameters=parameters,
+        policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+        now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+    )
+    return authority, guard
+
+
+@pytest.mark.asyncio
+async def test_execute_action_reuses_persisted_verification_on_retry_dedup(
+    tmp_path, mock_client_adapter
+):
+    """A retry after the verification artifact was published must reuse the
+    persisted authoritative outcome, not a freshly recomputed one (issue #3622)."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+
+        # First attempt: fresh evidence shows a terminal (canceled) state, so the
+        # verification artifact is published as verified_resolved.
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        first_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+        assert first_result["verification"]["outcome"] == "verified_resolved"
+
+        # Retry with the same action identity but evidence that would recompute
+        # still_failed. The verification artifact dedups to the persisted one, so
+        # projections and the response must reflect the persisted outcome.
+        authority2, guard2 = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="verify-cancel-retry"
+        )
+        retry_result = await RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot("immediate_after", state="executing"),
+                        _verification_snapshot("stabilized", state="executing"),
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        ).execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority2.to_dict(),
+            guard_result=guard2.to_dict(),
+            principal="service:test",
+        )
+
+        assert (
+            retry_result["artifactRefs"]["verification"]
+            == first_result["artifactRefs"]["verification"]
+        )
+        assert retry_result["verification"]["outcome"] == "verified_resolved"
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.verification_outcome == "verified_resolved"
+        verification_payload = await _read_artifact_json(
+            artifact_service, retry_result["artifactRefs"]["verification"]
+        )
+        assert verification_payload["outcome"] == "verified_resolved"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
+    tmp_path, mock_client_adapter
+):
+    """The lifecycle resolution is stored distinctly from the delivery status
+    (issue #3622); it must not overwrite link.outcome."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifact_service
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        before = _verification_snapshot("before", state="executing")
+        authority, guard = await _cancel_authority_and_guard(
+            session, target, remediation, idempotency_key="lifecycle-delivery"
+        )
+        service = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+            verification_phase=RemediationVerificationPhase(
+                reader=_ScriptedVerificationReader(
+                    before=before,
+                    after_sequence=[
+                        _verification_snapshot(
+                            "immediate_after",
+                            state="canceled",
+                            close_status="canceled",
+                        )
+                    ],
+                ),
+                sleep=_noop_verification_sleep,
+                is_canceled=lambda: False,
+            ),
+        )
+        await service.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link.outcome == "applied"
+        assert link.resolution is None
+
+        summary_block = build_remediation_summary_block(
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            phase="resolved",
+            mode="snapshot_then_follow",
+            authority_mode="admin_auto",
+            resolution="resolved_after_action",
+        )
+        await service.publish_lifecycle_summary(
+            remediation_workflow_id=remediation.workflow_id,
+            summary=summary_block,
+            repair=build_remediation_repair_decision(
+                target_workflow_id=target.workflow_id,
+                pinned_run_id=target.run_id,
+                decision="skipped",
+                decision_reason="target_already_healthy",
+                repair_outcome="not_attempted",
+            ),
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            decision_log_entries=(
+                {
+                    "timestamp": "2026-04-23T00:00:00Z",
+                    "phase": "resolved",
+                    "decisionType": "lifecycle_summary",
+                    "decision": "skipped",
+                    "reason": "target_already_healthy",
+                    "actor": "service:test",
+                    "targetWorkflowId": target.workflow_id,
+                    "targetRunId": target.run_id,
+                },
+            ),
+            lock_release="released",
+        )
+
+        await session.refresh(link)
+        # Delivery status is preserved; resolution is recorded separately.
+        assert link.outcome == "applied"
+        assert link.resolution == "resolved_after_action"

@@ -338,6 +338,19 @@ Keep support for immediate verification inside a remediation attempt, but model 
 
 Examples include provider-profile slot changes, container/session/liveness operations, destructive actions, migrations, branch promotion, publish actions, and environmental repairs whose result determines the next safe remediation decision.
 
+For the cross-workflow administrative action path specifically, every
+side-effecting action enters a trusted post-action verification phase that
+re-reads fresh canonical evidence and classifies the repair outcome separately
+from the action delivery status. See
+`docs/Workflows/WorkflowRemediation.md` §11.6.1. The action verification artifact
+uses a normalized outcome vocabulary — `verified_resolved`, `verified_no_change`,
+`still_failed`, `regressed`, `evidence_unavailable`, `approval_required`,
+`verification_failed`, `canceled` — and records the target state before,
+immediately after, and after bounded stabilization. An action verification is a
+targeted action-verification artifact, not a full completion verifier pass, and
+an action that is only *delivered* (including a persisted Checkpoint Branch) is
+never reported as a repaired target.
+
 ---
 
 ## 15. Dashboard and API projection
