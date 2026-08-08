@@ -42,6 +42,42 @@ def test_worker_auth() -> _WorkerRequestAuth:
         capabilities=(),
     )
 
+def _make_receipt_store_override():
+    """Async dependency override yielding a sqlite-backed receipt store.
+
+    Issue MoonLadderStudios/MoonMind#3636: the control route persists a durable
+    receipt before dispatch. Tests override the receipt-store dependency with an
+    isolated in-memory store instead of the production Postgres engine. The store
+    (and its schema) are created lazily inside the request event loop and cached,
+    so one store is shared across a test's requests and idempotency dedup holds.
+    """
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.control_receipts import OmnigentControlReceiptStore
+
+    cache: dict[str, OmnigentControlReceiptStore] = {}
+
+    async def _override() -> OmnigentControlReceiptStore:
+        if "store" not in cache:
+            engine = create_async_engine(
+                "sqlite+aiosqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            cache["store"] = OmnigentControlReceiptStore(
+                sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            )
+        return cache["store"]
+
+    return _override
+
+
 @pytest.fixture
 def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
@@ -51,6 +87,9 @@ def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tu
     app.dependency_overrides[get_current_user()] = lambda: test_user
     app.dependency_overrides[_require_worker_auth] = lambda: test_worker_auth
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[agent_runs_router._get_control_receipt_store] = (
+        _make_receipt_store_override()
+    )
 
     with TestClient(app) as test_client:
         yield test_client, artifact_service
@@ -3621,6 +3660,48 @@ def test_post_agent_run_artifact_session_control_rejects_false_capability(
     assert response.status_code == 409
     assert "interrupt_turn" in response.json()["detail"]
     client_adapter.update_workflow.assert_not_awaited()
+
+
+def test_post_agent_run_artifact_session_control_is_idempotent_on_duplicate(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A duplicate control request returns the prior result without a second
+    provider side effect (MoonLadderStudios/MoonMind#3636 AC8)."""
+
+    test_client, artifact_service = client
+    record = _build_session_record()
+    artifact_service.get_metadata.side_effect = lambda **kwargs: _build_artifact(
+        kwargs["artifact_id"], "session.summary", label="summary"
+    )
+    client_adapter = AsyncMock()
+    client_adapter.update_workflow.return_value = {"accepted": True}
+
+    body = {
+        "schemaVersion": 1,
+        "controlRequestId": "control-dup-1",
+        "idempotencyKey": "control-dup-1",
+        "expectedSessionEpoch": 2,
+        "action": "continue_same_session",
+        "message": "Continue reusing the current session.",
+    }
+    with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.agent_runs.get_temporal_client_adapter", return_value=client_adapter):
+            first = test_client.post(
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json=body,
+            )
+            second = test_client.post(
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json=body,
+            )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["status"] == "completed"
+    assert second.json()["status"] == "completed"
+    # The provider side effect ran exactly once across both requests.
+    client_adapter.update_workflow.assert_awaited_once()
+
 
 def test_post_agent_run_artifact_session_control_rejects_blank_follow_up_message(
     client: tuple[TestClient, AsyncMock],

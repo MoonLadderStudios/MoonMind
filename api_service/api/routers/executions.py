@@ -209,6 +209,10 @@ from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     OmnigentBridgeSessionStore,
 )
+from moonmind.omnigent.capability_resolver import (
+    CAPABILITY_SCHEMA_VERSION,
+    CallerAuthority,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -14691,6 +14695,11 @@ class WorkflowChatBinding(BaseModel):
     state: Literal["starting", "available", "ended", "unavailable"]
     read_only: bool
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    # Stable per-capability reason for every denied control, so the native UI
+    # can explain the restriction instead of showing an undifferentiated
+    # ``false`` (MoonLadderStudios/MoonMind#3636 AC3).
+    disabled_reasons: dict[str, str] = Field(default_factory=dict)
+    capability_schema_version: int = CAPABILITY_SCHEMA_VERSION
     unavailable_reason: str | None = None
 
 
@@ -14726,10 +14735,21 @@ async def resolve_workflow_chat_binding(
             canonical_identifier=canonical_workflow_id,
         )
 
+    # The Workflow ownership check above admits only the owner or an execution
+    # administrator, both of whom carry full native-chat authority. The resolver
+    # still gates the manifest on this authority so transcript visibility never
+    # implies mutation/approval/lifecycle authority (#3636 AC6); a future shared
+    # read-only viewer surface would pass a narrower CallerAuthority here.
+    caller = (
+        CallerAuthority.administrator()
+        if _is_execution_admin(user)
+        else CallerAuthority.owner()
+    )
     store = OmnigentBridgeSessionStore(async_session_maker)
     try:
         resolution = await store.resolve_chat_binding(
-            workflow_id=canonical_workflow_id
+            workflow_id=canonical_workflow_id,
+            caller=caller,
         )
     except BridgeChatBindingAmbiguousError as exc:
         raise HTTPException(
@@ -14765,6 +14785,8 @@ async def resolve_workflow_chat_binding(
         state=resolution.state,
         read_only=resolution.read_only,
         capabilities=resolution.capabilities,
+        disabled_reasons=resolution.disabled_reasons,
+        capability_schema_version=resolution.capability_schema_version,
         unavailable_reason=resolution.unavailable_reason,
     )
 

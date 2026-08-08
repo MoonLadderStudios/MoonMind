@@ -30,6 +30,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_events import bounded_deduplication_key
+from moonmind.omnigent.capability_resolver import (
+    CAPABILITY_SCHEMA_VERSION,
+    CallerAuthority,
+    EffectiveCapabilities,
+    ImmutableExecutionAuthority,
+    SessionRuntimeState,
+    UpstreamCapabilityEvidence,
+    resolve_effective_capabilities,
+)
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
@@ -212,6 +221,76 @@ def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
     text = str(value or "").strip()
     return text or None
 
+
+def _row_immutable_authority(
+    row: OmnigentBridgeSession,
+) -> ImmutableExecutionAuthority | None:
+    """Build execution-bound immutable authority from the durable row.
+
+    Uses only the exact persisted effective launch snapshot (its content
+    digest), the Provider Profile generation, and the recorded Agent Profile
+    digest/version (MoonLadderStudios/MoonMind#3636). Returns ``None`` when the
+    launch snapshot / policy digest is absent so the resolver fails closed.
+    """
+
+    metadata = getattr(row, "metadata_", None)
+    agent_profile = None
+    if isinstance(metadata, dict):
+        candidate = metadata.get("agentProfile")
+        if isinstance(candidate, dict):
+            agent_profile = candidate
+    return ImmutableExecutionAuthority.from_evidence(
+        launch_snapshot=getattr(row, "effective_launch_snapshot_json", None),
+        provider_profile_id=getattr(row, "provider_profile_id", None),
+        provider_profile_generation=getattr(row, "credential_generation", None),
+        agent_profile=agent_profile,
+    )
+
+
+def _row_session_state(
+    row: OmnigentBridgeSession, *, terminal: bool
+) -> SessionRuntimeState:
+    metadata = getattr(row, "metadata_", None)
+    active_turn_id = None
+    elicitation_pending = False
+    if isinstance(metadata, dict):
+        active_turn_id = str(metadata.get("activeTurnId") or "").strip() or None
+        elicitation_pending = bool(
+            metadata.get("elicitationPending")
+            or str(metadata.get("pendingElicitationId") or "").strip()
+        )
+    return SessionRuntimeState(
+        provider_bound=_is_provider_bound(row),
+        terminal=terminal,
+        starting=False,
+        active_turn_id=active_turn_id,
+        elicitation_pending=elicitation_pending,
+    )
+
+
+def resolve_row_capabilities(
+    row: OmnigentBridgeSession,
+    *,
+    caller: CallerAuthority,
+    terminal: bool,
+) -> EffectiveCapabilities:
+    """Resolve the one effective capability set for a bound bridge session.
+
+    This is the single projection used for both the browser manifest and any
+    server-side per-request decision on the native chat surface
+    (MoonLadderStudios/MoonMind#3636). It fails closed when the row lacks
+    immutable execution-bound authority.
+    """
+
+    return resolve_effective_capabilities(
+        immutable=_row_immutable_authority(row),
+        session=_row_session_state(row, terminal=terminal),
+        caller=caller,
+        upstream=UpstreamCapabilityEvidence.from_mapping(
+            _chat_binding_capabilities(row)
+        ),
+    )
+
 # Bridge lifecycle states owned by the bridge before the provider reports a
 # normalized status (§7.1). ``active`` is the coalesced non-terminal value.
 STATUS_DECLARED = "declared"
@@ -326,9 +405,17 @@ class BridgeChatBindingAmbiguousError(RuntimeError):
 class ChatBindingResolution(NamedTuple):
     """Trusted, browser-safe resolution of one Workflow Chat binding.
 
-    MoonLadderStudios/MoonMind#3633. Carries only server-owned, browser-safe
-    values; the provider session id, bridge session id, endpoint, host, runner,
-    credential, profile, policy, and workspace identities stay server-side.
+    MoonLadderStudios/MoonMind#3633 / MoonLadderStudios/MoonMind#3636. Carries
+    only server-owned, browser-safe values; the provider session id, bridge
+    session id, endpoint, host, runner, credential, profile, policy, and
+    workspace identities stay server-side.
+
+    ``capabilities`` and ``disabled_reasons`` are the filtered manifest produced
+    by the single :mod:`moonmind.omnigent.capability_resolver` from immutable
+    execution-bound authority, current session state, verified upstream support,
+    and caller permission. ``disabled_reasons`` gives the native UI a stable
+    reason per denied control (#3636 AC3) rather than one undifferentiated
+    ``false``.
     """
 
     state: str
@@ -339,6 +426,8 @@ class ChatBindingResolution(NamedTuple):
     step_execution_id: str | None
     logical_step_id: str | None
     capabilities: dict[str, bool]
+    disabled_reasons: dict[str, str]
+    capability_schema_version: int
     unavailable_reason: str | None
 
 
@@ -1740,6 +1829,7 @@ class OmnigentBridgeSessionStore:
         *,
         workflow_id: str,
         run_id: str | None = None,
+        caller: CallerAuthority | None = None,
     ) -> ChatBindingResolution:
         """Resolve the authoritative browser-safe Workflow Chat binding (§15).
 
@@ -1754,8 +1844,15 @@ class OmnigentBridgeSessionStore:
         Ambiguous active candidates are rejected rather than selecting the
         newest arbitrary provider session; unsupported runtimes and cleaned-up
         sessions return stable unavailable reasons instead of falling through.
+
+        ``caller`` is the caller's MoonMind capability/approval authority; it
+        gates the projected capability manifest (MoonLadderStudios/MoonMind#3636)
+        so transcript visibility never implies mutation/approval/lifecycle
+        authority. The route resolves ownership before calling, so an omitted
+        ``caller`` defaults to full owner authority.
         """
 
+        effective_caller = caller or CallerAuthority.owner()
         workflow = (workflow_id or "").strip()
         if not workflow:
             return self._unavailable_binding(workflow, None, "no_session")
@@ -1790,7 +1887,7 @@ class OmnigentBridgeSessionStore:
             )
         if active_capable:
             return await self._live_binding(
-                active_capable[0], workflow, run, terminal=False
+                active_capable[0], workflow, run, terminal=False, caller=effective_caller
             )
         if active:
             # A launch that has not yet attached a provider session is still
@@ -1823,7 +1920,7 @@ class OmnigentBridgeSessionStore:
         ):
             return self._unavailable_binding(workflow, run, "session_cleaned_up")
         return await self._live_binding(
-            latest_terminal, workflow, run, terminal=True
+            latest_terminal, workflow, run, terminal=True, caller=effective_caller
         )
 
     async def _live_binding(
@@ -1833,30 +1930,31 @@ class OmnigentBridgeSessionStore:
         run: str | None,
         *,
         terminal: bool,
+        caller: CallerAuthority,
     ) -> ChatBindingResolution:
         chat_binding_id = await self.ensure_chat_binding_id(row.bridge_session_id)
-        capabilities = _chat_binding_capabilities(row)
-        # Read-only posture is driven by the bound session and its effective
-        # capabilities, never by Workflow terminality alone: a terminal session
-        # is always read-only, and a live session is writable only when its
-        # capability projection affirmatively grants ``sendMessage``. Fail closed
-        # when the capability is missing (historical rows and compatibility paths
-        # persist no snapshot) so the browser is never told sending is allowed
-        # without affirmative evidence (MoonLadderStudios/MoonMind#3633).
-        read_only = terminal or capabilities.get("sendMessage") is not True
+        # One resolver produces the filtered browser manifest and any server
+        # decision (MoonLadderStudios/MoonMind#3636). It intersects verified
+        # upstream support, the immutable execution-bound launch/policy snapshot,
+        # session state, and caller authority, and fails closed (empty manifest)
+        # when immutable authority is missing. Read-only posture follows the
+        # resolved ``sendMessage`` decision, never Workflow terminality alone.
+        effective = resolve_row_capabilities(row, caller=caller, terminal=terminal)
         return ChatBindingResolution(
             state=(
                 CHAT_BINDING_STATE_ENDED
                 if terminal
                 else CHAT_BINDING_STATE_AVAILABLE
             ),
-            read_only=read_only,
+            read_only=effective.read_only,
             chat_binding_id=chat_binding_id,
             workflow_id=workflow,
             run_id=(row.moonmind_run_id or run),
             step_execution_id=row.step_execution_id,
             logical_step_id=_chat_binding_logical_step_id(row),
-            capabilities=capabilities,
+            capabilities=effective.manifest(),
+            disabled_reasons=effective.disabled_reasons(),
+            capability_schema_version=effective.version,
             unavailable_reason=None,
         )
 
@@ -1875,6 +1973,8 @@ class OmnigentBridgeSessionStore:
             step_execution_id=row.step_execution_id,
             logical_step_id=_chat_binding_logical_step_id(row),
             capabilities={},
+            disabled_reasons={},
+            capability_schema_version=CAPABILITY_SCHEMA_VERSION,
             unavailable_reason=None,
         )
 
@@ -1893,6 +1993,8 @@ class OmnigentBridgeSessionStore:
             step_execution_id=None,
             logical_step_id=None,
             capabilities={},
+            disabled_reasons={},
+            capability_schema_version=CAPABILITY_SCHEMA_VERSION,
             unavailable_reason=reason,
         )
 

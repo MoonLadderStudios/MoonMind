@@ -32,6 +32,12 @@ from moonmind.schemas.temporal_artifact_models import (
     SessionResourceModel,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.omnigent.control_receipts import (
+    RECEIPT_STATUS_COMPLETED,
+    RECEIPT_STATUS_REJECTED,
+    ControlReceiptIntent,
+    OmnigentControlReceiptStore,
+)
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
@@ -632,6 +638,36 @@ def _require_session_control_capability(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Session control action {action} is not currently supported by this managed session.",
         )
+
+
+def _get_control_receipt_store() -> OmnigentControlReceiptStore:
+    """Return the durable control-receipt store (MoonLadderStudios/MoonMind#3636)."""
+
+    from api_service.db.base import async_session_maker
+
+    return OmnigentControlReceiptStore(async_session_maker)
+
+
+def _control_rejection_reason_code(exc: HTTPException) -> str:
+    """Derive a stable reason code for a rejected control request.
+
+    Prefers the structured ``detail={"code": ...}`` used by the compare-and-set
+    guards; otherwise maps the well-known rejection cases to stable codes so the
+    durable receipt records a consistent reason (issue #3636 AC9).
+    """
+
+    detail = exc.detail
+    if isinstance(detail, dict) and detail.get("code"):
+        return str(detail["code"])
+    if exc.status_code == status.HTTP_400_BAD_REQUEST:
+        return "unsupported_control_action"
+    text = str(detail or "")
+    if "not available for control actions" in text:
+        return "session_terminal"
+    if "not currently supported" in text:
+        return "capability_unavailable"
+    return "control_rejected"
+
 
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
@@ -1579,6 +1615,7 @@ async def control_agent_run_artifact_session(
     payload: ArtifactSessionControlRequest,
     _user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    receipt_store: OmnigentControlReceiptStore = Depends(_get_control_receipt_store),
 ) -> ArtifactSessionControlResponse:
     await _require_agent_run_access(agent_run_id, _user)
     store = ManagedSessionStore(_get_managed_session_store_root())
@@ -1588,30 +1625,82 @@ async def control_agent_run_artifact_session(
         record = None
     if record is None or record.agent_run_id != agent_run_id:
         _session_projection_not_found()
-    capabilities = _build_intervention_capabilities(record)
-    _require_session_control_capability(
-        action=payload.action,
-        capabilities=capabilities,
+
+    # Persist pending intent under the MoonMind idempotency key BEFORE any
+    # provider side effect (MoonLadderStudios/MoonMind#3636 §5). A duplicate
+    # request returns the prior normalized result and never re-dispatches the
+    # control, so an ambiguous retry cannot duplicate the mutation.
+    intent = ControlReceiptIntent(
+        actor_principal=f"user:{_user.id}",
+        control_type=payload.action,
+        request_id=payload.control_request_id,
+        idempotency_key=payload.idempotency_key,
+        agent_run_id=agent_run_id,
+        provider_session_id=session_id,
+        expected_session_epoch=payload.expected_session_epoch,
+        expected_turn_id=payload.expected_turn_id,
     )
-    if payload.expected_session_epoch != record.session_epoch:
+    receipt, is_new = await receipt_store.begin(intent)
+    if not is_new:
+        if receipt.is_terminal:
+            projection = await _build_agent_run_artifact_session_projection(
+                agent_run_id=agent_run_id,
+                session_id=session_id,
+                service=artifact_service,
+            )
+            if projection is None:
+                _session_projection_not_found()
+            return ArtifactSessionControlResponse(
+                action=payload.action,
+                controlRequestId=payload.control_request_id,
+                status=receipt.status,
+                stableReasonCode=receipt.stable_reason_code,
+                controlEventRef=receipt.result.get("controlEventRef"),
+                completedAt=receipt.completed_at,
+                projection=projection,
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "stale_session_state"},
-        )
-    if (
-        payload.expected_turn_id is not None
-        and payload.expected_turn_id != record.active_turn_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "active_turn_mismatch"},
-        )
-    if record.status in _MANAGED_SESSION_TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This managed session is not available for control actions.",
+            detail={"code": "control_in_flight"},
         )
 
+    # Recompute the server-side capability + expected-state decision on every
+    # request; a hidden or disabled native control that is invoked directly
+    # still fails closed here (#3636 AC4). A rejection records a durable receipt
+    # carrying its stable reason before the HTTP error is surfaced (AC9).
+    try:
+        capabilities = _build_intervention_capabilities(record)
+        _require_session_control_capability(
+            action=payload.action,
+            capabilities=capabilities,
+        )
+        if payload.expected_session_epoch != record.session_epoch:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "stale_session_state"},
+            )
+        if (
+            payload.expected_turn_id is not None
+            and payload.expected_turn_id != record.active_turn_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "active_turn_mismatch"},
+            )
+        if record.status in _MANAGED_SESSION_TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This managed session is not available for control actions.",
+            )
+    except HTTPException as exc:
+        await receipt_store.finalize(
+            receipt.receipt_id,
+            status=RECEIPT_STATUS_REJECTED,
+            stable_reason_code=_control_rejection_reason_code(exc),
+        )
+        raise
+
+    await receipt_store.mark_dispatched(receipt.receipt_id)
     client = get_temporal_client_adapter()
     workflow_id = _agent_run_session_workflow_id(
         agent_run_id=agent_run_id,
@@ -1668,13 +1757,24 @@ async def control_agent_run_artifact_session(
     )
     if projection is None:
         _session_projection_not_found()
+    control_event_ref = record.latest_control_event_ref if record else None
+    completed_at = datetime.now(UTC)
+    # Record the normalized terminal outcome so a duplicate returns this exact
+    # result and the control cannot be re-dispatched (#3636 §5/AC8).
+    await receipt_store.finalize(
+        receipt.receipt_id,
+        status=RECEIPT_STATUS_COMPLETED,
+        upstream_correlation=payload.control_request_id,
+        result={"controlEventRef": control_event_ref},
+        completed_at=completed_at,
+    )
     return ArtifactSessionControlResponse(
         action=payload.action,
         controlRequestId=payload.control_request_id,
         status="completed",
         stableReasonCode=None,
-        controlEventRef=(record.latest_control_event_ref if record else None),
-        completedAt=datetime.now(UTC),
+        controlEventRef=control_event_ref,
+        completedAt=completed_at,
         projection=projection,
     )
 

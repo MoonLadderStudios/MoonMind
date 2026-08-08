@@ -12,6 +12,7 @@ from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_se
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.omnigent.control_receipts import OmnigentControlReceiptStore
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.schemas.temporal_artifact_models import ArtifactSessionControlRequest
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
@@ -258,6 +259,9 @@ async def post_session_event(
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
+    receipt_store: OmnigentControlReceiptStore = Depends(
+        agent_runs_router._get_control_receipt_store
+    ),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     event_type = str(payload.get("type") or "").strip()
@@ -316,6 +320,7 @@ async def post_session_event(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
+        receipt_store=receipt_store,
     )
     return {
         "type": event_type,
@@ -332,6 +337,9 @@ async def resolve_session_elicitation(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    receipt_store: OmnigentControlReceiptStore = Depends(
+        agent_runs_router._get_control_receipt_store
+    ),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     decision = _elicitation_resolution_decision(payload)
@@ -365,6 +373,7 @@ async def resolve_session_elicitation(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
+        receipt_store=receipt_store,
     )
     return {
         "type": "elicitation_resolution",

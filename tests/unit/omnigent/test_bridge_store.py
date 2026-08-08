@@ -1189,6 +1189,25 @@ async def test_record_session_created_persists_across_get_or_create(store):
 # --- opaque chat-binding identity + resolution (MoonLadderStudios/MoonMind#3633)
 
 
+def _chat_launch_snapshot() -> dict:
+    """A valid execution-bound immutable authority for the capability resolver.
+
+    MoonLadderStudios/MoonMind#3636: the resolver fails closed without a launch
+    snapshot carrying a content ``snapshotRef`` and a ``policyAuthority`` digest,
+    so seeded chat sessions attach one by default.
+    """
+
+    return {
+        "snapshotRef": "omnigent-launch:sha256:seed",
+        "launchPolicyRef": "lp-seed",
+        "providerProfileId": "pp-seed",
+        "policyAuthority": {"policyDigest": "sha256:policy-seed"},
+        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
+        "repositoryMutation": True,
+        "followUpRetrieval": {"enabled": True},
+    }
+
+
 async def _seed_chat_session(
     store,
     *,
@@ -1199,6 +1218,7 @@ async def _seed_chat_session(
     capabilities: dict | None = None,
     terminal_status: str | None = None,
     delete_session: bool = False,
+    attach_authority: bool = True,
 ):
     """Create a bridge row and drive it to the requested lifecycle state."""
 
@@ -1211,6 +1231,21 @@ async def _seed_chat_session(
         workflow_id=workflow_id,
         agent_run_id=agent_run_id,
     )
+    if attach_authority:
+        row = await store.get_existing(key)
+        async with store._session_factory() as session:
+            db_row = await session.get(
+                OmnigentBridgeSession, row.bridge_session_id
+            )
+            db_row.effective_launch_snapshot_json = _chat_launch_snapshot()
+            metadata = dict(db_row.metadata_ or {})
+            metadata["agentProfile"] = {
+                "profileId": "ap-seed",
+                "version": 1,
+                "digest": "sha256:agent-seed",
+            }
+            db_row.metadata_ = metadata
+            await session.commit()
     if session_id is not None:
         await store.attach_session(key, session_id)
         await store.record_session_created(
@@ -1292,7 +1327,11 @@ async def test_resolve_chat_binding_active_available(store):
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
     assert resolution.read_only is False
     assert resolution.chat_binding_id
-    assert resolution.capabilities == {"viewTranscript": True, "sendMessage": True}
+    # The resolver projects the full native capability matrix; the seeded
+    # upstream support + immutable authority + owner caller grants send/view.
+    assert resolution.capabilities["viewTranscript"] is True
+    assert resolution.capabilities["sendMessage"] is True
+    assert resolution.capability_schema_version >= 1
 
 
 @pytest.mark.asyncio
@@ -1406,10 +1445,10 @@ async def test_resolve_chat_binding_prefers_active_over_terminal(store):
 
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_read_only_without_capability_snapshot(store):
-    """Fail closed when no capability snapshot exists (MoonLadderStudios/MoonMind#3633)."""
+    """Fail closed when no upstream capability snapshot exists (#3633/#3636)."""
 
-    # Historical rows and compatibility paths persist no ``interventionCapabilities``
-    # snapshot; the binding must be read-only rather than advertising send.
+    # A session with immutable authority but no upstream ``interventionCapabilities``
+    # snapshot must not advertise send: sendMessage is denied as unsupported.
     await _seed_chat_session(
         store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
         session_id="sess-1", capabilities=None,
@@ -1417,7 +1456,47 @@ async def test_resolve_chat_binding_read_only_without_capability_snapshot(store)
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
     assert resolution.read_only is True
-    assert resolution.capabilities == {}
+    assert resolution.capabilities["sendMessage"] is False
+    assert resolution.disabled_reasons["sendMessage"] == "unsupported_upstream"
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_fails_closed_without_immutable_authority(store):
+    """A row lacking an execution-bound launch snapshot fails closed (#3636 AC2)."""
+
+    await _seed_chat_session(
+        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        attach_authority=False,
+    )
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.read_only is True
+    # Even with upstream advertising send, missing immutable authority denies all.
+    assert resolution.capabilities["sendMessage"] is False
+    assert resolution.capabilities["viewTranscript"] is False
+    assert resolution.disabled_reasons["sendMessage"] == "missing_immutable_authority"
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_read_only_viewer_cannot_send(store):
+    """Transcript visibility never implies mutation authority (#3636 AC6)."""
+
+    from moonmind.omnigent.capability_resolver import CallerAuthority
+
+    await _seed_chat_session(
+        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+    )
+    resolution = await store.resolve_chat_binding(
+        workflow_id="mm:wf-1", caller=CallerAuthority.read_only_viewer()
+    )
+    assert resolution.read_only is True
+    assert resolution.capabilities["viewTranscript"] is True
+    assert resolution.capabilities["sendMessage"] is False
+    assert resolution.disabled_reasons["sendMessage"] == "requires_mutate_authority"
 
 
 @pytest.mark.asyncio

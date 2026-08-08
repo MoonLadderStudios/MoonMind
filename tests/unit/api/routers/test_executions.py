@@ -15868,6 +15868,8 @@ _CHAT_BINDING_ALLOWED_KEYS = {
     "state",
     "readOnly",
     "capabilities",
+    "disabledReasons",
+    "capabilitySchemaVersion",
     "unavailableReason",
 }
 
@@ -15907,7 +15909,7 @@ class _FakeChatBindingStore:
         self._resolution = resolution
         self._error = error
 
-    async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+    async def resolve_chat_binding(self, *, workflow_id, run_id=None, caller=None):
         if self._error is not None:
             raise self._error
         return self._resolution
@@ -15931,6 +15933,8 @@ def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
         step_execution_id="mm:wf-1:run-2:implement:execution:1",
         logical_step_id="implement",
         capabilities={"viewTranscript": True, "sendMessage": True},
+        disabled_reasons={},
+        capability_schema_version=1,
         unavailable_reason=None,
     )
     app, _service = _chat_binding_app()
@@ -15963,6 +15967,8 @@ def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
         step_execution_id=None,
         logical_step_id=None,
         capabilities={"viewTranscript": True},
+        disabled_reasons={"sendMessage": "session_terminal"},
+        capability_schema_version=1,
         unavailable_reason=None,
     )
     app, _service = _chat_binding_app()
@@ -15989,6 +15995,8 @@ def test_chat_binding_unavailable_has_no_scoped_urls(monkeypatch) -> None:
         step_execution_id=None,
         logical_step_id=None,
         capabilities={},
+        disabled_reasons={},
+        capability_schema_version=1,
         unavailable_reason="no_session",
     )
     app, _service = _chat_binding_app()

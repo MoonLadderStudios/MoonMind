@@ -591,6 +591,110 @@ class OmnigentBridgeSessionEvent(Base):
     )
 
 
+class OmnigentControlReceipt(Base):
+    """Durable per-mutation receipt for native Omnigent chat/control requests.
+
+    Source design: docs/Omnigent/OmnigentBridge.md §7.3 and
+    docs/UI/WorkflowChatPanel.md §7 (MoonLadderStudios/MoonMind#3636). One row
+    is persisted for every mutating message/control/approval/terminal/workspace
+    request *before* the provider side effect, keyed by the MoonMind idempotency
+    key. A duplicate request returns the stored result rather than duplicating
+    the provider side effect; ``delivery_unknown`` outcomes are reconciled onto
+    the same row without a second mutation.
+
+    A normalized provider event without a corresponding receipt may be shown
+    diagnostically but is never authoritative approval/control evidence.
+    """
+
+    __tablename__ = "omnigent_control_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_control_receipts_idempotency_key"
+        ),
+        Index("ix_omnigent_control_receipts_workflow", "workflow_id"),
+        Index("ix_omnigent_control_receipts_bridge_session", "bridge_session_id"),
+        Index("ix_omnigent_control_receipts_agent_run", "agent_run_id"),
+    )
+
+    receipt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+
+    # Actor + operation.
+    actor_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    control_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    # Server-side MoonMind + provider identity.
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bridge_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    # Compare-and-set / expected-state evidence.
+    expected_session_epoch: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    expected_turn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expected_elicitation_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    # Immutable-policy refs/digests.
+    agent_profile_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    provider_profile_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    launch_policy_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    launch_snapshot_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    policy_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Outcome.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    stable_reason_code: Mapped[Optional[str]] = mapped_column(String(96), nullable=True)
+    upstream_correlation: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    result_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    audit_artifact_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    # Timings.
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class WorkflowCheckpointBranch(Base):
     """Product-level checkpoint branch persisted separately from git refs."""
 
