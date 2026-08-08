@@ -90,6 +90,14 @@ from moonmind.omnigent.host_auth_profile import (
     resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
+from moonmind.omnigent.native_ui_compat import (
+    CODE_COMPAT_REVIEW_REQUIRED,
+    CODE_TRANSPORT_UNSUPPORTED,
+    CODE_WS_SUBPROTOCOL_REJECTED,
+    NativeUiCompatibilityError,
+    classify_native_ui_websocket,
+    negotiate_ws_subprotocol,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -3774,6 +3782,213 @@ def _strict_query_cursor(value: Any, field: str) -> int | None:
             code=CODE_MALFORMED_PAYLOAD,
         )
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Binding-scoped Workflow Chat WebSocket facade (MoonLadderStudios/MoonMind#3635)
+#
+# The native Omnigent UI also drives live surfaces over WebSocket: session
+# control/event channels, terminal/PTY streams, execution logs, browser panes,
+# sub-agent/task trees, and reconnect/wake flows. Leaving any of them pointed at
+# the upstream server would bypass the scoped HTTP facade, so every WebSocket
+# connection *and every reconnect* independently authenticates the caller,
+# resolves the durable binding, authorizes against the bound Workflow Execution,
+# rejects caller-supplied identity, recomputes capabilities from trusted state,
+# validates the requested transport against the versioned native-UI
+# compatibility map, and negotiates only an allowlisted subprotocol — all
+# *before* the socket is accepted. A successful earlier HTTP bootstrap never
+# authorizes a later WebSocket (this handler reauthorizes from scratch).
+#
+# Upstream WebSocket route rewriting per compatibility profile is an open design
+# question (OB §21 Q1): the pinned ``omnigent.server.v1`` profile therefore marks
+# every recognized native-UI WebSocket class as ``compatibility_review_required``
+# and this handler fails closed with an explicit compatibility diagnostic rather
+# than generically proxying the browser to the upstream server. Unknown/changed
+# transports fail closed the same way (issue §1, acceptance criteria 2-8, 10).
+# ---------------------------------------------------------------------------
+
+# Application-defined WebSocket close codes (4000-4999 private range), mirroring
+# the host/runner tunnel convention above. The close ``reason`` carries the
+# stable, non-enumerating diagnostic code.
+WS_CLOSE_BINDING_UNKNOWN = 4404
+WS_CLOSE_CAPABILITY_DENIED = 4403
+WS_CLOSE_IDENTITY_SUBSTITUTION = 4403
+WS_CLOSE_READ_ONLY = 4410
+WS_CLOSE_SESSION_NOT_READY = 4409
+WS_CLOSE_SUBPROTOCOL_REJECTED = 4406
+WS_CLOSE_TRANSPORT_UNSUPPORTED = 4400
+WS_CLOSE_COMPAT_REVIEW = 4451
+
+
+def _facade_reconnect_state(row: Any) -> str:
+    """Return a truthful native reconnect/liveness state (OB §17, brief §5).
+
+    The browser never selects a host, runner, endpoint, profile, or credential
+    generation; the state is derived only from the durable binding so the native
+    UI can distinguish a still-starting session from a terminal one and from one
+    that has no live provider session to reconnect to.
+    """
+
+    status_value = str(getattr(row, "status", "") or "").strip().lower()
+    if is_read_only(status_value):
+        return "terminal"
+    if not str(getattr(row, "omnigent_session_id", "") or "").strip():
+        return "starting"
+    return "available"
+
+
+async def workflow_chat_binding_facade_ws(
+    websocket: WebSocket,
+    chat_binding_id: str,
+    omnigent_path: str,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> None:
+    """Authenticate, authorize, and validate a native-UI WebSocket before upgrade.
+
+    Fails closed with a specific, non-enumerating close code for every rejection
+    path; recognized-but-unreviewed transports are closed with the compatibility
+    diagnostic instead of being proxied. The socket is only ever accepted after
+    the full per-connection authorization succeeds.
+    """
+
+    match = classify_native_ui_websocket(omnigent_path)
+    operation = match.route.name if match else "unknown"
+
+    # 1. Authenticate (dependency) + resolve/authorize the durable binding. An
+    #    unknown binding and an unauthorized caller collapse to one close code so
+    #    the browser cannot enumerate which bindings exist.
+    try:
+        row = await _resolve_and_authorize_chat_binding(
+            chat_binding_id=chat_binding_id,
+            operation=operation,
+            user=user,
+            service=service,
+            store=store,
+        )
+    except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+        await websocket.close(
+            code=WS_CLOSE_BINDING_UNKNOWN, reason=CODE_BINDING_UNKNOWN
+        )
+        return
+
+    # 2. Reject any caller-supplied server-owned identity in the path or query
+    #    (the only session id the browser may name is the bound chatBindingId).
+    try:
+        assert_no_identity_substitution(
+            chat_binding_id=chat_binding_id,
+            path_session_id=(match.params.get("session_id") if match else None),
+            query=dict(websocket.query_params),
+            headers=websocket.headers,
+        )
+    except WorkflowChatFacadeError as exc:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="identity_substitution",
+        )
+        await websocket.close(
+            code=WS_CLOSE_IDENTITY_SUBSTITUTION, reason=exc.code
+        )
+        return
+
+    # 3. Unknown transport class fails closed with a compatibility diagnostic;
+    #    it is never generically proxied (issue §1, acceptance criterion 8).
+    if match is None:
+        _audit_facade(
+            outcome="denied",
+            operation="unknown",
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="transport_unsupported",
+        )
+        await websocket.close(
+            code=WS_CLOSE_TRANSPORT_UNSUPPORTED, reason=CODE_TRANSPORT_UNSUPPORTED
+        )
+        return
+    route = match.route
+
+    # 4. A terminal/revoked binding cannot open a new live transport; close it
+    #    rather than letting a WebSocket outlive terminal authority (criterion 10).
+    session_status = str(getattr(row, "status", "") or "")
+    if is_read_only(session_status):
+        await websocket.close(code=WS_CLOSE_READ_ONLY, reason=CODE_SESSION_READ_ONLY)
+        return
+
+    # 5. Capability gate from recomputed trusted state intersected with policy.
+    #    Terminal create/attach/input/resize/close and browser-pane control
+    #    require capabilities the facade never grants, so a read-only viewer or a
+    #    nonowner is denied here before the transport is opened (criteria 4, 5).
+    capabilities = recompute_capabilities(
+        session_status, policy_capabilities=_projection_capabilities(row)
+    )
+    if route.capability and not capabilities.get(route.capability, False):
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="capability_denied",
+        )
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
+        )
+        return
+
+    # 6. Negotiate only an allowlisted subprotocol before upgrade.
+    offered = [
+        part.strip()
+        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if part.strip()
+    ]
+    try:
+        negotiate_ws_subprotocol(offered, route=route)
+    except NativeUiCompatibilityError:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="subprotocol_rejected",
+        )
+        await websocket.close(
+            code=WS_CLOSE_SUBPROTOCOL_REJECTED, reason=CODE_WS_SUBPROTOCOL_REJECTED
+        )
+        return
+
+    # 7. A live provider session must exist before any live transport (the
+    #    reconnect probe is exempt: it truthfully reports a still-starting state).
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
+    if not provider_session_id and route.operation_class != "reconnect":
+        await websocket.close(
+            code=WS_CLOSE_SESSION_NOT_READY, reason=CODE_SESSION_NOT_READY
+        )
+        return
+
+    # 8. Recognized transport, fully authorized — but upstream WebSocket rewrite
+    #    for this compatibility profile is unreviewed (OB §21 Q1). Fail closed
+    #    with the explicit compatibility diagnostic instead of blindly bridging
+    #    the browser to the upstream server.
+    _audit_facade(
+        outcome="compat_review",
+        operation=f"{operation}:{_facade_reconnect_state(row)}",
+        chat_binding_id=chat_binding_id,
+        user=user,
+        reason="compatibility_review_required",
+    )
+    await websocket.close(
+        code=WS_CLOSE_COMPAT_REVIEW, reason=CODE_COMPAT_REVIEW_REQUIRED
+    )
+
+
+workflow_chat_router.add_api_websocket_route(
+    "/{chat_binding_id}/omnigent/{omnigent_path:path}",
+    workflow_chat_binding_facade_ws,
+)
 
 
 __all__ = [
