@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -141,20 +142,64 @@ def _call(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _idempotency_key(prefix: str) -> str:
-    raw = f"{prefix}:{_required_env('MOONMIND_AGENT_RUN_ID')}:{uuid.uuid4().hex}"
+def _idempotency_key(prefix: str, request_id: str | None = None) -> str:
+    normalized_request_id = str(request_id or uuid.uuid4().hex).strip()
+    if not normalized_request_id:
+        raise CliError("container job request id must not be empty")
+    raw = (
+        f"{prefix}:{_required_env('MOONMIND_AGENT_RUN_ID')}:"
+        f"{normalized_request_id}"
+    )
     if len(raw) <= 255:
         return raw
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return raw[: 255 - len(digest) - 1] + ":" + digest
 
 
-def _run(spec: dict[str, Any], *, timeout_seconds: int, prefix: str) -> int:
+def _read_log_tail(
+    job_id: str,
+    *,
+    max_pages: int = 100,
+    max_lines: int = 250,
+) -> tuple[str, ...]:
+    """Read all bounded log pages while retaining the terminal tail."""
+
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    lines: deque[str] = deque(maxlen=max_lines)
+    for _page in range(max_pages):
+        arguments: dict[str, Any] = {"jobId": job_id, "limit": 500}
+        if cursor:
+            arguments["cursor"] = cursor
+        payload = _call("container.logs", arguments)
+        for entry in payload.get("entries") or []:
+            if not isinstance(entry, dict):
+                continue
+            entry_text = str(entry.get("text") or entry.get("message") or "")
+            if entry_text:
+                lines.append(entry_text)
+        next_cursor = str(payload.get("nextCursor") or "").strip()
+        if not next_cursor:
+            return tuple(lines)
+        if next_cursor in seen_cursors:
+            raise CliError("container.logs returned a repeated cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    raise CliError(f"container.logs exceeded {max_pages} pages")
+
+
+def _run(
+    spec: dict[str, Any],
+    *,
+    timeout_seconds: int,
+    prefix: str,
+    request_id: str | None = None,
+) -> int:
     spec = dict(spec)
     spec["workspaceRef"] = _workspace()
     submission = {
         "contractVersion": "v1",
-        "idempotencyKey": _idempotency_key(prefix),
+        "idempotencyKey": _idempotency_key(prefix, request_id),
         "source": _source(),
         "spec": spec,
     }
@@ -174,13 +219,8 @@ def _run(spec: dict[str, Any], *, timeout_seconds: int, prefix: str) -> int:
         raise CliError(f"container job {job_id} did not reach a terminal state")
 
     try:
-        logs = _call("container.logs", {"jobId": job_id, "limit": 100})
-        for entry in logs.get("entries") or []:
-            if not isinstance(entry, dict):
-                continue
-            text = str(entry.get("message") or entry.get("text") or "")
-            if text:
-                print(text)
+        for line in _read_log_tail(job_id):
+            print(line)
     except CliError as exc:
         print(f"Warning: terminal logs could not be read: {exc}", file=sys.stderr)
 
@@ -253,7 +293,8 @@ def main() -> int:
         return _run(
             payload,
             timeout_seconds=timeout_seconds,
-            prefix=str(args.request_id or "container-run"),
+            prefix="container-run",
+            request_id=args.request_id,
         )
     except (CliError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -15,6 +15,8 @@ def _token(*, now: int = 100) -> str:
         secret="test-secret",
         owner=OwnerIdentity(principalId="user-1", principalType="user"),
         agent_run_id="run-1",
+        workflow_id="workflow-1",
+        step_id="step-1",
         session_id="session-1",
         runtime_id="codex_cli",
         lifetime_seconds=60,
@@ -31,6 +33,8 @@ def test_capability_round_trips_scoped_owner_and_session() -> None:
         principalId="user-1", principalType="user"
     )
     assert capability.agent_run_id == "run-1"
+    assert capability.workflow_id == "workflow-1"
+    assert capability.step_id == "step-1"
     assert capability.session_id == "session-1"
     assert capability.runtime_id == "codex_cli"
     assert capability.source_kind == "managed_session"
@@ -45,6 +49,8 @@ def test_capability_round_trips_omnigent_sandbox_authority() -> None:
         secret="test-secret",
         owner=OwnerIdentity(principalId="run-2", principalType="service"),
         agent_run_id="run-2",
+        workflow_id="workflow-2",
+        step_id="step-2",
         session_id="host-lease-2",
         runtime_id="codex_cli",
         source_kind="omnigent",
@@ -60,6 +66,8 @@ def test_capability_round_trips_omnigent_sandbox_authority() -> None:
     )
 
     assert capability.source_kind == "omnigent"
+    assert capability.workflow_id == "workflow-2"
+    assert capability.step_id == "step-2"
     assert capability.workspace_kind == "sandbox"
     assert capability.workspace_id == "sandbox-2"
     assert capability.workspace_relative_path == "."

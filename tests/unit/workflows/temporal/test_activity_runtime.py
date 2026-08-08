@@ -6251,6 +6251,23 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                 for link in brief_links
             )
 
+            brief_path.write_text("not-json", encoding="utf-8")
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="issue brief artifact could not be read as JSON",
+            ):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Completed with malformed required brief.",
+                        metadata={
+                            "agentRunId": "assess-run-1",
+                            "brief_artifact_path": (
+                                "artifacts/jira-implement-brief.json"
+                            ),
+                        },
+                    )
+                )
+
 
 async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspace(
     tmp_path: Path,

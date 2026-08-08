@@ -1490,6 +1490,8 @@ class OmnigentOAuthHostRuntime:
                 principalType="service",
             ),
             agent_run_id=agent_run_id,
+            workflow_id=current_workflow_id,
+            step_id=current_step_execution_id,
             session_id=session_scope,
             runtime_id=runtime_id,
             source_kind="omnigent",

@@ -708,7 +708,11 @@ def _enforce_container_capability_scope(
             },
         )
     source = submission.source
-    source_matches = bool(source.agent_run_id == capability.agent_run_id)
+    source_matches = bool(
+        source.agent_run_id == capability.agent_run_id
+        and source.workflow_id == capability.workflow_id
+        and source.step_id == capability.step_id
+    )
     if capability.source_kind == "managed_session":
         source_matches = bool(
             source_matches

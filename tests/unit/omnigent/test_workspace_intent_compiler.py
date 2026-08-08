@@ -261,3 +261,15 @@ def test_extraction_helpers_match_compiled_record() -> None:
     request = _request()
     assert authored_required_capabilities(request) == ("gh", "git")
     assert authored_repository_mutation_required(request) is True
+
+
+def test_write_operation_requires_mutation_without_publication() -> None:
+    request = _request(
+        parameters={
+            "repository": "https://github.com/acme/widgets.git",
+            "repositoryOperation": "write",
+            "publishMode": "none",
+        }
+    )
+
+    assert authored_repository_mutation_required(request) is True

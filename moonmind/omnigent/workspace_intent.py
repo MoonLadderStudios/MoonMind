@@ -163,6 +163,8 @@ def authored_repository_mutation_required(request: AgentExecutionRequest) -> boo
     parameters = _parameters(request)
     if bool(parameters.get("repositoryMutationRequired")):
         return True
+    if str(parameters.get("repositoryOperation") or "").strip().lower() == "write":
+        return True
     if authored_publish_mode(request) not in {"", "none"}:
         return True
     skill = parameters.get("skill")

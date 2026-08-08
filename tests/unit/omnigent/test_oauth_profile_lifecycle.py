@@ -3364,11 +3364,13 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None
             },
             request_parameters={
                 "repositoryOutcomePolicy": {
-                    "schemaVersion": "repository-outcome-policy/v1",
+                    "schemaVersion": "repository-outcome-policy/v2",
                     "allowNoCommit": True,
                     "authority": "trusted_assessment",
                     "assessmentVerdict": "FULLY_IMPLEMENTED",
                     "assessmentArtifactRef": "art_assessment_1",
+                    "assessedRepository": "owner/repo",
+                    "assessedBranch": "main",
                 }
             },
         )
@@ -3391,6 +3393,43 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None
         "authority": "omnigent.profile_bound_execution",
     }
     assert authority_metadata[0]["terminal"]["harvestState"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rejects_no_commit_policy_for_another_repository() -> None:
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="issue is already implemented",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    _ordered, _authority_metadata, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            publication={
+                "push_status": "no_commits",
+                "push_branch": "main",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 0,
+                "remote_verified": True,
+            },
+            request_parameters={
+                "repositoryOutcomePolicy": {
+                    "schemaVersion": "repository-outcome-policy/v2",
+                    "allowNoCommit": True,
+                    "authority": "trusted_assessment",
+                    "assessmentVerdict": "FULLY_IMPLEMENTED",
+                    "assessmentArtifactRef": "art_assessment_1",
+                    "assessedRepository": "another/repository",
+                    "assessedBranch": "main",
+                }
+            },
+        )
+    )
+
+    assert result.provider_error_code == "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
+    assert metadata["repositoryContinuationCount"] == 8
 
 
 @pytest.mark.asyncio

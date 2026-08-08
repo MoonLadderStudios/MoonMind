@@ -239,6 +239,10 @@ managed runtime a private daemon. Authentication, authorization, logical
 workspace resolution, resource ceilings, registry credentials, labels, cleanup,
 and durable evidence remain MoonMind-owned.
 
+Each short-lived bearer capability is bound to the exact workflow, optional
+step, agent run, session, runtime, and logical workspace named by the submitted
+job. A caller cannot replay it against another workflow step or workspace.
+
 ---
 
 ## 7. Session lifecycle

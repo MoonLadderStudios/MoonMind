@@ -13,7 +13,7 @@ from typing import Any, Literal
 from moonmind.schemas.container_job_models import OwnerIdentity
 
 _AUDIENCE = "moonmind-container-jobs"
-_VERSION = 1
+_VERSION = 2
 
 
 class ContainerJobCapabilityError(ValueError):
@@ -26,6 +26,8 @@ class ContainerJobSessionCapability:
 
     owner: OwnerIdentity
     agent_run_id: str
+    workflow_id: str
+    step_id: str | None
     session_id: str
     runtime_id: str
     source_kind: Literal["managed_session", "omnigent"]
@@ -61,8 +63,10 @@ def mint_container_job_session_capability(
     secret: str,
     owner: OwnerIdentity,
     agent_run_id: str,
+    workflow_id: str,
     session_id: str,
     runtime_id: str,
+    step_id: str | None = None,
     source_kind: Literal["managed_session", "omnigent"] = "managed_session",
     workspace_kind: Literal["managed_runtime", "sandbox"] = "managed_runtime",
     workspace_id: str | None = None,
@@ -95,6 +99,8 @@ def mint_container_job_session_capability(
         "v": _VERSION,
         "owner": owner.model_dump(mode="json", by_alias=True),
         "agentRunId": _required_text(agent_run_id, field="agentRunId"),
+        "workflowId": _required_text(workflow_id, field="workflowId"),
+        "stepId": str(step_id or "").strip() or None,
         "sessionId": _required_text(session_id, field="sessionId"),
         "runtimeId": _required_text(runtime_id, field="runtimeId"),
         "sourceKind": source_kind,
@@ -154,8 +160,8 @@ def verify_container_job_session_capability(
     current_time = int(time.time() if now is None else now)
     if expires_at <= current_time:
         raise ContainerJobCapabilityError("expired container-job capability")
-    source_kind = payload.get("sourceKind") or "managed_session"
-    workspace_kind = payload.get("workspaceKind") or "managed_runtime"
+    source_kind = payload.get("sourceKind")
+    workspace_kind = payload.get("workspaceKind")
     if source_kind not in {"managed_session", "omnigent"}:
         raise ContainerJobCapabilityError("invalid container-job capability")
     if workspace_kind not in {"managed_runtime", "sandbox"}:
@@ -163,19 +169,18 @@ def verify_container_job_session_capability(
     return ContainerJobSessionCapability(
         owner=owner,
         agent_run_id=_required_text(payload.get("agentRunId"), field="agentRunId"),
+        workflow_id=_required_text(payload.get("workflowId"), field="workflowId"),
+        step_id=str(payload.get("stepId") or "").strip() or None,
         session_id=_required_text(payload.get("sessionId"), field="sessionId"),
         runtime_id=_required_text(payload.get("runtimeId"), field="runtimeId"),
-        # Tokens minted before sandbox-scoped Omnigent container jobs existed
-        # remain valid for their original managed-runtime authority until their
-        # already-bounded expiry. New tokens always carry the fields explicitly.
         source_kind=source_kind,
         workspace_kind=workspace_kind,
         workspace_id=_required_text(
-            payload.get("workspaceId") or payload.get("agentRunId"),
+            payload.get("workspaceId"),
             field="workspaceId",
         ),
         workspace_relative_path=_required_text(
-            payload.get("workspaceRelativePath") or "repo",
+            payload.get("workspaceRelativePath"),
             field="workspaceRelativePath",
         ),
         expires_at=expires_at,

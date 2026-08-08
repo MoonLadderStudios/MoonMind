@@ -44,6 +44,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
@@ -3606,6 +3607,33 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
         self.assertEqual(merged["assessmentVerdict"], "FULLY_IMPLEMENTED")
         self.assertEqual(merged["summary"], "classification done")
 
+    def test_assessment_context_binds_assessed_workspace_identity(self) -> None:
+        wf = MoonMindRunWorkflow()
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="workflow-1",
+            idempotencyKey="assessment-1",
+            workspaceSpec={
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+            },
+        )
+
+        wf._record_assessment_context(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+            },
+            request=request,
+        )
+
+        self.assertEqual(
+            wf._assessment_context["assessedRepository"],
+            "MoonLadderStudios/MoonMind",
+        )
+        self.assertEqual(wf._assessment_context["assessedBranch"], "main")
+
     def test_assessment_context_is_included_for_agent_handoff(self) -> None:
         context = MoonMindRunWorkflow._trusted_previous_outputs_context(
             {
@@ -3828,12 +3856,116 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             {
                 "assessmentArtifactRef": "art_assessment_1",
                 "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessedRepository": "MoonLadderStudios/MoonMind",
+                "assessedBranch": "main",
             }
         )
         info = SimpleNamespace(
             namespace="default",
             workflow_id="mm:trusted-no-commit",
             run_id="run-trusted-no-commit",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id
+                    in {
+                        RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH,
+                        RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+                    }
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                    # Authored inputs cannot replace this reserved policy.
+                    "repositoryOutcomePolicy": {
+                        "allowNoCommit": False,
+                        "authority": "user",
+                    },
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(
+            request.parameters["repositoryOutcomePolicy"],
+            {
+                "schemaVersion": "repository-outcome-policy/v2",
+                "allowNoCommit": True,
+                "authority": "trusted_assessment",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessedRepository": "MoonLadderStudios/MoonMind",
+                "assessedBranch": "main",
+            },
+        )
+
+    def test_assessment_for_another_repository_does_not_authorize_no_commit(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessedRepository": "another/repository",
+                "assessedBranch": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:repository-bound-assessment",
+            run_id="run-repository-bound-assessment",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertNotIn("repositoryOutcomePolicy", request.parameters)
+
+    def test_replay_preserves_pre_binding_no_commit_request_shape(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:replay-no-commit-v1",
+            run_id="run-replay-no-commit-v1",
             parent=None,
         )
         with (
@@ -3854,11 +3986,6 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
                     "repository": "MoonLadderStudios/MoonMind",
                     "repositoryOperation": "write",
                     "publishMode": "pr",
-                    # Authored inputs cannot replace this reserved policy.
-                    "repositoryOutcomePolicy": {
-                        "allowNoCommit": False,
-                        "authority": "user",
-                    },
                 },
                 node_id="implement",
                 tool_name="omnigent",

@@ -150,9 +150,14 @@ def _trusted_no_commit_repository_policy(
     if not isinstance(raw_policy, Mapping):
         return None
     try:
-        return RepositoryOutcomePolicy.model_validate(raw_policy)
+        policy = RepositoryOutcomePolicy.model_validate(raw_policy)
     except (TypeError, ValueError):
         return None
+    if policy.assessed_repository != authored_repository_source(request):
+        return None
+    if policy.assessed_branch != authored_starting_branch(request):
+        return None
+    return policy
 
 
 def _prepare_host_failure_stage(exc: Exception) -> str | None:

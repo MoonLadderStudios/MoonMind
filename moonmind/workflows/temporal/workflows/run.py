@@ -26,6 +26,10 @@ with workflow.unsafe.imports_passed_through():
         CLAUDE_STOCK_AGENT_NAME,
         CODEX_STOCK_AGENT_NAME,
     )
+    from moonmind.omnigent.workspace_intent import (
+        authored_repository_source,
+        authored_starting_branch,
+    )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
@@ -596,6 +600,9 @@ RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
 )
 RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH = (
     "run-trusted-no-commit-repository-outcome-v1"
+)
+RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH = (
+    "run-repository-bound-no-commit-outcome-v1"
 )
 RUN_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-published-branch-handoff-v1"
 # Assert the producing Step Execution reached the `accepted` terminal
@@ -9332,7 +9339,12 @@ class MoonMindRunWorkflow:
                 return False
             raise
 
-    def _record_assessment_context(self, outputs: Mapping[str, Any]) -> None:
+    def _record_assessment_context(
+        self,
+        outputs: Mapping[str, Any],
+        *,
+        request: AgentExecutionRequest | None = None,
+    ) -> None:
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
         )
@@ -9351,6 +9363,24 @@ class MoonMindRunWorkflow:
                 else:
                     self._assessment_context[key] = value
                 break
+        assessment_present = any(
+            outputs.get(key) not in (None, "", {}, [])
+            for key in (
+                "assessmentArtifactRef",
+                "assessment_artifact_ref",
+                "assessmentVerdict",
+                "assessment_verdict",
+            )
+        )
+        if assessment_present and request is not None:
+            repository = authored_repository_source(request)
+            branch = authored_starting_branch(request)
+            if repository and branch:
+                self._assessment_context["assessedRepository"] = repository
+                self._assessment_context["assessedBranch"] = branch
+            else:
+                self._assessment_context.pop("assessedRepository", None)
+                self._assessment_context.pop("assessedBranch", None)
 
     def _merge_assessment_context_into_result(self, execution_result: Any) -> Any:
         if not self._assessment_context:
@@ -11459,6 +11489,7 @@ class MoonMindRunWorkflow:
             step_failure_summary: str | None = None
             blocked_outcome_wait_skipped = False
             current_review_attempt = 1
+            agent_request_for_context: AgentExecutionRequest | None = None
 
             while current_review_attempt <= (max_review_attempts + 1):
                 await self._wait_if_paused_at_safe_boundary()
@@ -11707,6 +11738,7 @@ class MoonMindRunWorkflow:
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
+                            agent_request_for_context = request
                             if (
                                 node_id == self._recovery_failed_step_id
                                 and self._checkpoint_recovery_state is not None
@@ -13455,7 +13487,10 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
-                self._record_assessment_context(outputs_for_story_output)
+                self._record_assessment_context(
+                    outputs_for_story_output,
+                    request=agent_request_for_context,
+                )
                 self._record_trusted_issue_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
@@ -14609,7 +14644,7 @@ class MoonMindRunWorkflow:
         if preserve_assessment_context:
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping):
-                self._record_assessment_context(outputs)
+                self._record_assessment_context(outputs, request=agent_request)
         while self._jira_blocker_waitable_result(
             current_result,
             tool_type=tool_type,
@@ -14784,7 +14819,7 @@ class MoonMindRunWorkflow:
                 )
                 outputs = self._get_from_result(current_result, "outputs")
                 if isinstance(outputs, Mapping):
-                    self._record_assessment_context(outputs)
+                    self._record_assessment_context(outputs, request=agent_request)
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
@@ -18975,6 +19010,8 @@ class MoonMindRunWorkflow:
                 # projecting the read-only operation into publishMode. Omnigent
                 # derives repository/GitHub mutation authority from this value.
                 parameters["publishMode"] = "none"
+            else:
+                parameters["repositoryMutationRequired"] = True
         publish_mode = str(parameters.get("publishMode") or "").strip().lower()
         assessment_verdict = str(
             self._assessment_context.get("assessmentVerdict")
@@ -18986,7 +19023,26 @@ class MoonMindRunWorkflow:
             or self._assessment_context.get("assessment_artifact_ref")
             or ""
         ).strip()
-        if (
+        assessed_repository = str(
+            self._assessment_context.get("assessedRepository") or ""
+        ).strip()
+        assessed_branch = str(
+            self._assessment_context.get("assessedBranch") or ""
+        ).strip()
+        identity_request = AgentExecutionRequest(
+            agentKind=agent_kind,
+            agentId=agent_id,
+            correlationId=correlation_id,
+            idempotencyKey=idempotency_key,
+            workspaceSpec=workspace_spec,
+            parameters=parameters,
+        )
+        current_repository = authored_repository_source(identity_request)
+        current_branch = authored_starting_branch(identity_request)
+        repository_bound_policy = self._workflow_patch_enabled(
+            RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
+        )
+        trusted_no_commit_candidate = (
             agent_kind == "external"
             and agent_id == "omnigent"
             and publish_mode in {"branch", "pr"}
@@ -18996,16 +19052,38 @@ class MoonMindRunWorkflow:
             and self._workflow_patch_enabled(
                 RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
             )
+        )
+        if trusted_no_commit_candidate and (
+            not repository_bound_policy
+            or (
+                assessed_repository == current_repository
+                and assessed_branch == current_branch
+            )
         ):
             # This reserved parameter is derived exclusively from durable
             # workflow state. It is deliberately absent from ``parameter_keys``
             # so authored node/workflow inputs cannot grant no-commit authority.
-            parameters["repositoryOutcomePolicy"] = RepositoryOutcomePolicy(
-                allowNoCommit=True,
-                authority="trusted_assessment",
-                assessmentVerdict="FULLY_IMPLEMENTED",
-                assessmentArtifactRef=assessment_artifact_ref,
-            ).model_dump(mode="json", by_alias=True)
+            if repository_bound_policy:
+                parameters["repositoryOutcomePolicy"] = RepositoryOutcomePolicy(
+                    allowNoCommit=True,
+                    authority="trusted_assessment",
+                    assessmentVerdict="FULLY_IMPLEMENTED",
+                    assessmentArtifactRef=assessment_artifact_ref,
+                    assessedRepository=assessed_repository,
+                    assessedBranch=assessed_branch,
+                ).model_dump(mode="json", by_alias=True)
+            else:
+                # Replay-only shape for histories that recorded the original
+                # policy before repository identity became mandatory. Current
+                # workers reject it at execution rather than granting unbound
+                # no-commit authority.
+                parameters["repositoryOutcomePolicy"] = {
+                    "schemaVersion": "repository-outcome-policy/v1",
+                    "allowNoCommit": True,
+                    "authority": "trusted_assessment",
+                    "assessmentVerdict": "FULLY_IMPLEMENTED",
+                    "assessmentArtifactRef": assessment_artifact_ref,
+                }
         if self._workflow_patch_enabled(
             RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
         ):

@@ -627,8 +627,8 @@ class RepositoryOutcomePolicy(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    schema_version: Literal["repository-outcome-policy/v1"] = Field(
-        "repository-outcome-policy/v1", alias="schemaVersion"
+    schema_version: Literal["repository-outcome-policy/v2"] = Field(
+        "repository-outcome-policy/v2", alias="schemaVersion"
     )
     allow_no_commit: Literal[True] = Field(alias="allowNoCommit")
     authority: Literal["trusted_assessment"]
@@ -638,6 +638,8 @@ class RepositoryOutcomePolicy(BaseModel):
     assessment_artifact_ref: str = Field(
         alias="assessmentArtifactRef", min_length=1
     )
+    assessed_repository: str = Field(alias="assessedRepository", min_length=1)
+    assessed_branch: str = Field(alias="assessedBranch", min_length=1)
 
     @field_validator("assessment_artifact_ref")
     @classmethod
@@ -645,6 +647,14 @@ class RepositoryOutcomePolicy(BaseModel):
         return require_non_blank(
             value,
             field_name="repositoryOutcomePolicy.assessmentArtifactRef",
+        )
+
+    @field_validator("assessed_repository", "assessed_branch")
+    @classmethod
+    def _normalize_assessed_identity(cls, value: str, info: Any) -> str:
+        return require_non_blank(
+            value,
+            field_name=f"repositoryOutcomePolicy.{info.field_name}",
         )
 
 

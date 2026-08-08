@@ -9776,19 +9776,16 @@ class TemporalAgentRuntimeActivities:
                 )
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                logger.warning(
-                    "Issue brief artifact could not be read as JSON: %s",
-                    brief_path,
-                    exc_info=True,
-                )
-                return {}
+            except (OSError, json.JSONDecodeError) as exc:
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact could not be read as JSON: "
+                    f"{brief_path}"
+                ) from exc
             if not isinstance(payload, Mapping):
-                logger.warning(
-                    "Issue brief artifact payload must be a JSON object: %s",
-                    brief_path,
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact payload must be a JSON object: "
+                    f"{brief_path}"
                 )
-                return {}
             brief_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",

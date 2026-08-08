@@ -75,19 +75,24 @@ def _managed_container_capability() -> str:
         secret="test-container-capability-secret",
         owner=OwnerIdentity(principalId="user-1", principalType="user"),
         agent_run_id="run-1",
+        workflow_id="workflow-1",
         session_id="session-1",
         runtime_id="codex_cli",
         lifetime_seconds=300,
     )
 
 
-def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, Any]:
+def _managed_container_submission(
+    *,
+    agent_run_id: str = "run-1",
+    workflow_id: str = "workflow-1",
+) -> dict[str, Any]:
     return {
         "contractVersion": "v1",
         "idempotencyKey": "container-run:run-1:test",
         "source": {
             "source": "managed_session",
-            "workflowId": "workflow-1",
+            "workflowId": workflow_id,
             "managedSessionId": "session-1",
             "agentRunId": agent_run_id,
         },
@@ -105,11 +110,20 @@ def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, A
     }
 
 
+def _managed_submission_with_step(**kwargs: Any) -> dict[str, Any]:
+    step_id = kwargs.pop("step_id", None)
+    submission = _managed_container_submission(**kwargs)
+    if step_id is not None:
+        submission["source"]["stepId"] = step_id
+    return submission
+
+
 def _omnigent_container_capability() -> str:
     return mint_container_job_session_capability(
         secret="test-container-capability-secret",
         owner=OwnerIdentity(principalId="run-2", principalType="service"),
         agent_run_id="run-2",
+        workflow_id="workflow-2",
         session_id="host-lease-2",
         runtime_id="codex_cli",
         source_kind="omnigent",
@@ -212,6 +226,38 @@ async def test_scoped_container_endpoint_rejects_workspace_identity_mismatch(
     assert response.json()["detail"]["code"] == (
         "container_capability_scope_mismatch"
     )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        _managed_container_submission(workflow_id="different-workflow"),
+        _managed_submission_with_step(step_id="different-step"),
+    ],
+)
+async def test_scoped_container_endpoint_rejects_workflow_or_step_mismatch(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_managed_container_capability()}"},
+            json={"tool": "container.submit", "arguments": arguments},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "container_capability_scope_mismatch"
 
 
 async def test_scoped_container_endpoint_accepts_omnigent_sandbox_authority(
