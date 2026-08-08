@@ -56,8 +56,13 @@ from api_service.api.routers.executions import (
     router,
     update_execution as update_execution_route,
 )
+from api_service.api.routers import executions as executions_module
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    ChatBindingResolution,
+)
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
@@ -15847,3 +15852,207 @@ def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     assert payload.status == "canceled"
     assert payload.dashboard_status == "canceled"
     assert payload.temporal_status == "canceled"
+
+
+# --- native Workflow Chat binding API (MoonLadderStudios/MoonMind#3633) -------
+
+
+_CHAT_BINDING_ALLOWED_KEYS = {
+    "chatBindingId",
+    "workflowId",
+    "runId",
+    "logicalStepId",
+    "stepExecutionId",
+    "chatUrl",
+    "apiBase",
+    "state",
+    "readOnly",
+    "capabilities",
+    "unavailableReason",
+}
+
+# Identities that must never appear in the ordinary browser-safe response.
+_CHAT_BINDING_FORBIDDEN_KEYS = {
+    "providerSessionId",
+    "bridgeSessionId",
+    "agentRunId",
+    "omnigentSessionId",
+    "endpoint",
+    "endpointRef",
+    "omnigentEndpointRef",
+    "hostId",
+    "hostBindingRef",
+    "runnerId",
+    "omnigentRunnerRef",
+    "credentialGeneration",
+    "providerProfileId",
+    "agentProfileSnapshotRef",
+    "launchPolicyRef",
+    "policyId",
+    "workspace",
+}
+
+
+def _chat_binding_app(resolution=None, *, error=None, owner_id="user-123"):
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.return_value = _build_execution_record(owner_id=owner_id)
+    app.dependency_overrides[_get_service] = lambda: service
+    return app, service
+
+
+class _FakeChatBindingStore:
+    def __init__(self, resolution=None, error=None):
+        self._resolution = resolution
+        self._error = error
+
+    async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+        if self._error is not None:
+            raise self._error
+        return self._resolution
+
+
+def _install_fake_store(monkeypatch, resolution=None, error=None):
+    monkeypatch.setattr(
+        executions_module,
+        "OmnigentBridgeSessionStore",
+        lambda *_a, **_k: _FakeChatBindingStore(resolution=resolution, error=error),
+    )
+
+
+def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=False,
+        chat_binding_id="chatb_opaque123",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id="mm:wf-1:run-2:implement:execution:1",
+        logical_step_id="implement",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) <= _CHAT_BINDING_ALLOWED_KEYS
+    assert not (_CHAT_BINDING_FORBIDDEN_KEYS & set(body.keys()))
+    assert body["chatBindingId"] == "chatb_opaque123"
+    assert body["state"] == "available"
+    assert body["readOnly"] is False
+    # Server-generated, binding-scoped navigation targets.
+    assert body["chatUrl"] == "/omnigent-ui/workflow-chat/chatb_opaque123?embedded=1"
+    assert body["apiBase"] == "/api/workflow-chat-bindings/chatb_opaque123/omnigent"
+    assert body["capabilities"] == {"viewTranscript": True, "sendMessage": True}
+
+
+def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
+    resolution = ChatBindingResolution(
+        state="ended",
+        read_only=True,
+        chat_binding_id="chatb_terminal",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={"viewTranscript": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "ended"
+    assert body["readOnly"] is True
+    assert body["chatUrl"].startswith("/omnigent-ui/workflow-chat/chatb_terminal")
+
+
+def test_chat_binding_unavailable_has_no_scoped_urls(monkeypatch) -> None:
+    resolution = ChatBindingResolution(
+        state="unavailable",
+        read_only=True,
+        chat_binding_id=None,
+        workflow_id="mm:wf-1",
+        run_id=None,
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={},
+        unavailable_reason="no_session",
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "unavailable"
+    assert body["unavailableReason"] == "no_session"
+    assert body["chatBindingId"] == ""
+    assert body["chatUrl"] == ""
+    assert body["apiBase"] == ""
+
+
+def test_chat_binding_ambiguous_returns_409(monkeypatch) -> None:
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, error=BridgeChatBindingAmbiguousError("ambiguous"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_binding_ambiguous"
+
+
+def test_chat_binding_unauthorized_workflow_returns_404(monkeypatch) -> None:
+    # A non-admin caller who does not own the workflow is rejected before any
+    # binding information is resolved.
+    app, _service = _chat_binding_app(owner_id="another-user")
+    _override_user_dependencies(app, is_superuser=False)
+    resolved = {"called": False}
+
+    class _GuardStore:
+        def __init__(self, *_a, **_k):
+            pass
+
+        async def resolve_chat_binding(self, *, workflow_id, run_id=None):
+            resolved["called"] = True
+            raise AssertionError("resolution must not run for an unauthorized caller")
+
+    monkeypatch.setattr(executions_module, "OmnigentBridgeSessionStore", _GuardStore)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 404
+    assert resolved["called"] is False
+
+
+def test_chat_binding_unknown_workflow_returns_404(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.side_effect = TemporalExecutionNotFoundError("missing")
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=None)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-unknown/chat-binding")
+
+    assert response.status_code == 404

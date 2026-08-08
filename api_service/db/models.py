@@ -397,9 +397,20 @@ class OmnigentBridgeSession(Base):
         Index("ix_omnigent_bridge_sessions_session", "omnigent_session_id"),
         Index("ix_omnigent_bridge_sessions_workflow", "moonmind_workflow_id"),
         Index("ix_omnigent_bridge_sessions_status", "status"),
+        # MoonLadderStudios/MoonMind#3633: opaque, unguessable browser-safe
+        # Workflow Chat binding handle. Unique so one logical binding maps to one
+        # id; nullable so historical rows and not-yet-bound sessions carry NULL
+        # until allocation (NULLs are distinct under both SQLite and Postgres
+        # unique indexes, so they never collide).
+        Index(
+            "uq_omnigent_bridge_sessions_chat_binding",
+            "chat_binding_id",
+            unique=True,
+        ),
     )
 
     bridge_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    chat_binding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     compatibility_profile: Mapped[str] = mapped_column(String(128), nullable=False)
     moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)

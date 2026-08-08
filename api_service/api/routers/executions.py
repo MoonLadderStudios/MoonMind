@@ -40,7 +40,7 @@ from temporalio.service import RPCError
 from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.auth_providers import get_current_user
 from api_service.core import sync as execution_sync
-from api_service.db.base import get_async_session
+from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import (
     AgentSkillDefinition,
     ManagedAgentProviderProfile,
@@ -205,6 +205,10 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 from moonmind.omnigent.cutover import effective_phase, select_runtime
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    OmnigentBridgeSessionStore,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -14655,6 +14659,114 @@ async def describe_execution(
         if agent_run_id:
             execution = execution.model_copy(update={"agent_run_id": agent_run_id})
     return execution
+
+
+def _chat_binding_alias(value: str) -> str:
+    parts = value.split("_")
+    return parts[0] + "".join(part.title() for part in parts[1:])
+
+
+class WorkflowChatBinding(BaseModel):
+    """Browser-safe native Workflow Chat binding (MoonLadderStudios/MoonMind#3633).
+
+    Maps one visible Workflow Execution to one server-owned Omnigent session
+    through the opaque ``chatBindingId``. Provider session, bridge session,
+    endpoint, host, runner, credential, profile, policy, and workspace
+    identities are deliberately absent: they stay server-side and are only
+    exposed through separately authorized diagnostic routes
+    (docs/UI/WorkflowChatPanel.md §5, OmnigentBridge.md §15).
+    """
+
+    model_config = ConfigDict(
+        alias_generator=_chat_binding_alias, populate_by_name=True
+    )
+
+    chat_binding_id: str = ""
+    workflow_id: str
+    run_id: str | None = None
+    logical_step_id: str | None = None
+    step_execution_id: str | None = None
+    chat_url: str = ""
+    api_base: str = ""
+    state: Literal["starting", "available", "ended", "unavailable"]
+    read_only: bool
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    unavailable_reason: str | None = None
+
+
+@router.get("/{workflow_id}/chat-binding", response_model=WorkflowChatBinding)
+async def resolve_workflow_chat_binding(
+    workflow_id: str,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> WorkflowChatBinding:
+    """Resolve the authorized, browser-safe native Workflow Chat binding.
+
+    MoonLadderStudios/MoonMind#3633. The caller is authorized against the
+    Workflow *before* any binding information is returned; possession of a
+    binding id is never treated as authorization. The server generates the
+    binding-scoped ``chatUrl`` and ``apiBase`` — the browser must not author an
+    upstream route, provider session id, or endpoint.
+    """
+
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    # Authorize against the Workflow first (OmnigentBridge.md §16 rule 1); an
+    # unknown/deleted/unauthorized Workflow fails here without revealing whether
+    # any provider session exists.
+    await _get_owned_execution(
+        service=service,
+        workflow_id=canonical_workflow_id,
+        user=user,
+    )
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+
+    store = OmnigentBridgeSessionStore(async_session_maker)
+    try:
+        resolution = await store.resolve_chat_binding(
+            workflow_id=canonical_workflow_id
+        )
+    except BridgeChatBindingAmbiguousError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_chat_binding_ambiguous",
+                "message": (
+                    "The Workflow has multiple active chat-capable sessions."
+                ),
+            },
+        ) from exc
+
+    chat_url = ""
+    api_base = ""
+    if resolution.chat_binding_id:
+        # Server-owned, binding-scoped navigation targets. The browser never
+        # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
+        chat_url = (
+            f"/omnigent-ui/workflow-chat/{resolution.chat_binding_id}?embedded=1"
+        )
+        api_base = (
+            f"/api/workflow-chat-bindings/{resolution.chat_binding_id}/omnigent"
+        )
+
+    return WorkflowChatBinding(
+        chat_binding_id=resolution.chat_binding_id or "",
+        workflow_id=canonical_workflow_id,
+        run_id=resolution.run_id,
+        logical_step_id=resolution.logical_step_id,
+        step_execution_id=resolution.step_execution_id,
+        chat_url=chat_url,
+        api_base=api_base,
+        state=resolution.state,
+        read_only=resolution.read_only,
+        capabilities=resolution.capabilities,
+        unavailable_reason=resolution.unavailable_reason,
+    )
 
 
 class ContinueRemediationBudgetProposal(BaseModel):

@@ -2296,6 +2296,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/chat-binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Workflow Chat Binding
+         * @description Resolve the authorized, browser-safe native Workflow Chat binding.
+         *
+         *     MoonLadderStudios/MoonMind#3633. The caller is authorized against the
+         *     Workflow *before* any binding information is returned; possession of a
+         *     binding id is never treated as authorization. The server generates the
+         *     binding-scoped ``chatUrl`` and ``apiBase`` — the browser must not author an
+         *     upstream route, provider session id, or endpoint.
+         */
+        get: operations["resolve_workflow_chat_binding_api_executions__workflow_id__chat_binding_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/actions/continue-remediation": {
         parameters: {
             query?: never;
@@ -13536,6 +13562,55 @@ export interface components {
             signalStatus?: string | null;
         };
         /**
+         * WorkflowChatBinding
+         * @description Browser-safe native Workflow Chat binding (MoonLadderStudios/MoonMind#3633).
+         *
+         *     Maps one visible Workflow Execution to one server-owned Omnigent session
+         *     through the opaque ``chatBindingId``. Provider session, bridge session,
+         *     endpoint, host, runner, credential, profile, policy, and workspace
+         *     identities are deliberately absent: they stay server-side and are only
+         *     exposed through separately authorized diagnostic routes
+         *     (docs/UI/WorkflowChatPanel.md §5, OmnigentBridge.md §15).
+         */
+        WorkflowChatBinding: {
+            /**
+             * Chatbindingid
+             * @default
+             */
+            chatBindingId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Stepexecutionid */
+            stepExecutionId?: string | null;
+            /**
+             * Chaturl
+             * @default
+             */
+            chatUrl: string;
+            /**
+             * Apibase
+             * @default
+             */
+            apiBase: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "starting" | "available" | "ended" | "unavailable";
+            /** Readonly */
+            readOnly: boolean;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: boolean;
+            };
+            /** Unavailablereason */
+            unavailableReason?: string | null;
+        };
+        /**
          * WorkflowInputSnapshotDescriptorModel
          * @description Compact pointer to the authoritative original task input snapshot.
          */
@@ -18669,6 +18744,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_workflow_chat_binding_api_executions__workflow_id__chat_binding_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowChatBinding"];
                 };
             };
             /** @description Validation Error */
