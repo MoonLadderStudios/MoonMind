@@ -13,8 +13,6 @@ from moonmind.mcp.skills_on_demand_registry import (
     SkillsOnDemandToolRegistry,
 )
 from moonmind.mcp.tool_registry import (
-    QueueToolExecutionContext,
-    QueueToolRegistry,
     ResourceListResponse,
     ResourceMetadata,
     ToolArgumentsValidationError,
@@ -30,8 +28,6 @@ __all__ = [
     "JiraToolRegistry",
     "JulesToolExecutionContext",
     "JulesToolRegistry",
-    "QueueToolExecutionContext",
-    "QueueToolRegistry",
     "SkillsOnDemandToolExecutionContext",
     "SkillsOnDemandToolRegistry",
     "ResourceListResponse",

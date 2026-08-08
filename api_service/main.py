@@ -29,13 +29,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
-from api_service.api.routers import (
-    summarization as summarization_router,  # Added import for summarization router
-)
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
 from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
 from api_service.api.routers.chat import responses_router, router as chat_router
-from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
@@ -50,7 +46,6 @@ from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
-from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
 from api_service.api.routers.automation import router as automation_router
@@ -569,15 +564,6 @@ app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
 app.include_router(responses_router, prefix="/v1", tags=["Responses"])
 app.include_router(models_router, prefix="/v1/models", tags=["Models"])
 app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
-app.include_router(
-    summarization_router.router,
-    prefix="/summarization",
-    tags=["Summarization"],
-)  # Added summarization router
-app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
-app.include_router(
-    context_protocol_router, tags=["Context Protocol"]
-)  # Removed prefix="/context"
 app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
