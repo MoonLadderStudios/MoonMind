@@ -15,7 +15,7 @@ from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
 from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
-from moonmind.mcp.tool_registry import QueueToolRegistry, ResourceListResponse
+from moonmind.mcp.tool_registry import ResourceListResponse
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
@@ -48,7 +48,6 @@ def router_app(
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
-    monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
     monkeypatch.setattr(
         mcp_tools_router,
         "_execution_tool_registry",
@@ -562,15 +561,7 @@ async def test_list_resources_returns_mcp_resource_catalog(
     resources = {
         resource["name"]: resource for resource in response.json()["resources"]
     }
-    assert resources["context-completion"] == {
-        "uri": "moonmind://context",
-        "name": "context-completion",
-        "description": (
-            "Chat-style context completion endpoint with optional RAG, available "
-            "through POST /context."
-        ),
-        "mimeType": "application/json",
-    }
+    assert set(resources) == {"tool-catalog"}
     assert resources["tool-catalog"]["uri"] == "moonmind://mcp/tools"
     assert resources["tool-catalog"]["mimeType"] == "application/json"
 

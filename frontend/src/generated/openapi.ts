@@ -132,88 +132,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/summarization/repository": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Summarize Repository
-         * @description Summarizes a code repository.
-         *     Currently supports generating a README.md file.
-         */
-        post: operations["summarize_repository_summarization_repository_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/planning/jira": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Plan Jira Stories
-         * @description Generate Jira stories from plan text using the JiraStoryPlanner.
-         */
-        post: operations["plan_jira_stories_v1_planning_jira_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/planning/jira/ui": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Jira Planner Ui
-         * @description Render the Jira planning form.
-         */
-        get: operations["jira_planner_ui_v1_planning_jira_ui_get"];
-        put?: never;
-        /**
-         * Jira Planner Submit
-         * @description Handle Jira planning form submission.
-         */
-        post: operations["jira_planner_submit_v1_planning_jira_ui_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/context": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Process Context */
-        post: operations["process_context_context_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/retrieval/health": {
         parameters: {
             query?: never;
@@ -6842,53 +6760,6 @@ export interface components {
             source: components["schemas"]["SourceCorrelation"];
             spec: components["schemas"]["ContainerJobSpec"];
         };
-        /** ContextMessage */
-        ContextMessage: {
-            /** Role */
-            role: string;
-            /** Content */
-            content: string;
-            /** Name */
-            name?: string | null;
-        };
-        /** ContextRequest */
-        ContextRequest: {
-            /** Messages */
-            messages: components["schemas"]["ContextMessage"][];
-            /** Model */
-            model: string;
-            /** Max Tokens */
-            max_tokens?: number | null;
-            /**
-             * Temperature
-             * @default 0.7
-             */
-            temperature: number | null;
-            /**
-             * Stream
-             * @default false
-             */
-            stream: boolean | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** ContextResponse */
-        ContextResponse: {
-            /** Id */
-            id: string;
-            /** Content */
-            content: string;
-            /** Model */
-            model: string;
-            /** Created At */
-            created_at: number;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
-        };
         /** ContinuationDefaults */
         ContinuationDefaults: {
             /**
@@ -9434,25 +9305,6 @@ export interface components {
             items: components["schemas"]["JiraProject"][];
             /** Projectkey */
             projectKey?: string | null;
-        };
-        /** JiraPlanRequest */
-        JiraPlanRequest: {
-            /**
-             * Plan Text
-             * @description Description of the work to plan
-             */
-            plan_text: string;
-            /**
-             * Jira Project Key
-             * @description Jira project key
-             */
-            jira_project_key: string;
-            /**
-             * Dry Run
-             * @description If true, do not create issues
-             * @default true
-             */
-            dry_run: boolean;
         };
         /** JiraProject */
         JiraProject: {
@@ -12031,30 +11883,6 @@ export interface components {
             /** Autonomous */
             autonomous: boolean;
         };
-        /** RepositorySummarizationRequest */
-        RepositorySummarizationRequest: {
-            /**
-             * Repo Url
-             * Format: uri
-             */
-            repo_url: string;
-            /**
-             * @description The type of summary to generate.
-             * @default readme
-             */
-            summary_type: components["schemas"]["SummaryType"];
-            /**
-             * Model
-             * @description The language model to use for generation.
-             */
-            model?: string | null;
-        };
-        /** RepositorySummarizationResponse */
-        RepositorySummarizationResponse: {
-            /** Summary Content */
-            summary_content: string;
-            summary_type: components["schemas"]["SummaryType"];
-        };
         /**
          * RequestedByModel
          * @description Immutable requested-by identity propagated through manifest ingest.
@@ -13209,44 +13037,6 @@ export interface components {
              */
             preserved: boolean;
         };
-        /** StoryDraft */
-        StoryDraft: {
-            /**
-             * Summary
-             * @description Short summary of the story
-             */
-            summary: string;
-            /**
-             * Description
-             * @description Detailed description
-             */
-            description: string;
-            /**
-             * Issue Type
-             * @description Jira issue type
-             */
-            issue_type: string;
-            /**
-             * Story Points
-             * @description Story points estimate
-             */
-            story_points?: number | null;
-            /**
-             * Labels
-             * @description Labels to apply
-             */
-            labels?: string[];
-            /**
-             * Key
-             * @description Created Jira issue key
-             */
-            key?: string | null;
-        };
-        /**
-         * SummaryType
-         * @enum {string}
-         */
-        SummaryType: "readme";
         /**
          * TemporalArtifactEncryption
          * @description Encryption mode metadata recorded for each artifact.
@@ -14352,145 +14142,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    summarize_repository_summarization_repository_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RepositorySummarizationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RepositorySummarizationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    plan_jira_stories_v1_planning_jira_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["JiraPlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoryDraft"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    jira_planner_ui_v1_planning_jira_ui_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    jira_planner_submit_v1_planning_jira_ui_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    process_context_context_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContextResponse"];
                 };
             };
             /** @description Validation Error */

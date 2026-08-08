@@ -65,6 +65,7 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -3008,35 +3009,6 @@ async function resolveBridgeSessionProjection({
   };
 }
 
-async function postBridgeSessionControl(
-  apiBase: string,
-  providerSessionRef: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  const resp = await fetch(joinApiBasePath(apiBase, `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/events`), {
-    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  });
-  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
-}
-
-async function resolveBridgeElicitation(
-  apiBase: string,
-  providerSessionRef: string,
-  elicitationId: string,
-  decision: 'approved' | 'rejected',
-): Promise<void> {
-  const resp = await fetch(joinApiBasePath(
-    apiBase,
-    `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/elicitations/${encodeURIComponent(elicitationId)}/resolve`,
-  ), {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision }),
-  });
-  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
-}
-
 async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
@@ -4535,7 +4507,6 @@ function StepObservabilityGroup({
   workflowId: string;
   routes: AgentRunRouteTemplates;
 }) {
-  const [bridgeOptimisticMessages, setBridgeOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const agentRunId = row.refs.agentRunId;
   const explicitBridgeSessionId =
     row.refs.bridgeSessionId ||
@@ -4586,8 +4557,6 @@ function StepObservabilityGroup({
           bridgeSessionId={bridgeSessionId}
           isTerminal={stepTerminal(row.status)}
           projection={bridgeResolutionQuery.data ?? { bridgeSessionId, capabilities: {} }}
-          optimisticMessages={bridgeOptimisticMessages}
-          setOptimisticMessages={setBridgeOptimisticMessages}
         />
       );
     }
@@ -6257,36 +6226,38 @@ function LiveLogsPanel({
   );
 }
 
+/**
+ * Read-only bridge-event diagnostic projection (MoonLadderStudios/MoonMind#3640).
+ *
+ * The native Omnigent application is the only interactive Workflow Chat surface.
+ * This panel projects durable evidence only — the normalized chat view, the Raw
+ * Timeline escape hatch, runtime identity, compatibility/launch diagnostics,
+ * terminal evidence, and harvested resource groups. It carries no composer,
+ * approval cards, or interrupt/stop/clear/cancel/harvest/remove controls, so no
+ * legacy bridge-control endpoint remains an easier policy bypass around the
+ * scoped native path.
+ */
 function BridgeSessionLogsPanel({
   apiBase,
   bridgeSessionId,
   isTerminal,
   projection,
-  optimisticMessages,
-  setOptimisticMessages,
-  actionsEnabled = false,
 }: {
   apiBase: string;
   bridgeSessionId: string;
   isTerminal: boolean;
   projection: BridgeSessionProjection;
-  optimisticMessages: OptimisticChatSessionMessage[];
-  setOptimisticMessages: Dispatch<SetStateAction<OptimisticChatSessionMessage[]>>;
-  actionsEnabled?: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [wrapLines, setWrapLines] = useState(true);
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
-  const [message, setMessage] = useState('');
-  const [controlError, setControlError] = useState<string | null>(null);
-  const [controlBusy, setControlBusy] = useState(false);
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isVisible = usePageVisibility();
   const chatBlocks = useMemo(
-    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId, optimisticMessages),
-    [bridgeSessionId, logContent, optimisticMessages],
+    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId, []),
+    [bridgeSessionId, logContent],
   );
 
   const eventsQuery = useQuery({
@@ -6464,103 +6435,6 @@ function BridgeSessionLogsPanel({
     if (logContent.length === 0) return;
     copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
-  const canSend = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.sendFollowUp && !isTerminal);
-  const canInterrupt = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
-  const canClear = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
-  const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
-  const canHarvest = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.harvestResources && !isTerminal);
-  const canStop = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.stop && !isTerminal);
-  const canRemove = Boolean(
-    actionsEnabled
-      && projection.providerSessionRef
-      && (
-        projection.capabilities.terminalCleanup
-        || (isTerminal && projection.compatibilityProfile === 'omnigent.embedded.v1')
-      ),
-  );
-  const canResolveElicitation = Boolean(
-    actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
-  );
-  const pendingElicitations = useMemo(() => {
-    if (!canResolveElicitation) return [];
-    const resolvedIds = new Set(logContent
-      .filter((row) => ['approval_resolved', 'approval_granted', 'approval_denied', 'intervention_resolved'].includes(row.kind ?? ''))
-      .map((row) => String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim())
-      .filter(Boolean));
-    const pending = new Map<string, string>();
-    for (const row of logContent) {
-      if (!['approval_requested', 'intervention_requested'].includes(row.kind ?? '')) continue;
-      const id = String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim();
-      if (id && !resolvedIds.has(id)) pending.set(id, row.text || 'Operator decision requested.');
-    }
-    return Array.from(pending, ([id, text]) => ({ id, text }));
-  }, [canResolveElicitation, logContent]);
-  const submitMessage = async () => {
-    const text = message.trim();
-    if (!text || !projection.providerSessionRef || !canSend) return;
-    const clientEventKey = crypto.randomUUID();
-    const optimistic: OptimisticChatSessionMessage = {
-      type: 'chat_session.message_submitted', clientEventKey, sessionId: bridgeSessionId,
-      sessionEpoch: 0, message: text, status: 'pending',
-    };
-    setOptimisticMessages((items) => [...items, optimistic]);
-    setMessage(''); setControlError(null); setControlBusy(true);
-    try {
-      await postBridgeSessionControl(apiBase, projection.providerSessionRef, {
-        type: 'message', message: text, clientEventKey,
-      });
-      setOptimisticMessages((items) => items.map((item) => item.clientEventKey === clientEventKey
-        ? { ...item, status: 'delivery_unknown' } : item));
-    } catch (error) {
-      const detail = (error as Error).message;
-      setControlError(detail);
-      setOptimisticMessages((items) => items.map((item) => item.clientEventKey === clientEventKey
-        ? { ...item, status: 'failed', error: detail } : item));
-    } finally { setControlBusy(false); }
-  };
-  const interrupt = async () => {
-    if (!projection.providerSessionRef || !canInterrupt) return;
-    setControlError(null); setControlBusy(true);
-    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, { type: 'session.interrupt' }); }
-    catch (error) { setControlError((error as Error).message); }
-    finally { setControlBusy(false); }
-  };
-  const runControl = async (payload: Record<string, unknown>) => {
-    if (!projection.providerSessionRef) return;
-    setControlError(null); setControlBusy(true);
-    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, payload); }
-    catch (error) { setControlError((error as Error).message); }
-    finally { setControlBusy(false); }
-  };
-  const durableControlPayload = (type: 'stop_session' | 'cleanup_session') => ({
-    type,
-    clientEventKey: crypto.randomUUID(),
-    idempotencyKey: crypto.randomUUID(),
-    expectedWorkflowId: projection.workflowId,
-    expectedRunId: projection.runId,
-    expectedStepExecutionId: projection.stepExecutionId,
-    expectedAgentRunId: projection.agentRunId,
-    expectedBridgeSessionId: projection.bridgeSessionId,
-    expectedSessionId: projection.providerSessionRef,
-    expectedHostId: projection.omnigentHostRef,
-    expectedRunnerId: projection.omnigentRunnerRef,
-    expectedTurnState: projection.firstMessageState,
-    expectedTerminalState: projection.status,
-  });
-  const removeSession = async () => {
-    if (!projection.providerSessionRef || !canRemove) return;
-    setControlError(null); setControlBusy(true);
-    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, durableControlPayload('cleanup_session')); }
-    catch (error) { setControlError((error as Error).message); }
-    finally { setControlBusy(false); }
-  };
-  const resolveElicitation = async (elicitationId: string, decision: 'approved' | 'rejected') => {
-    if (!projection.providerSessionRef || !canResolveElicitation) return;
-    setControlError(null); setControlBusy(true);
-    try { await resolveBridgeElicitation(apiBase, projection.providerSessionRef, elicitationId, decision); }
-    catch (error) { setControlError((error as Error).message); }
-    finally { setControlBusy(false); }
-  };
 
   return (
     <div className="stack live-logs-panel">
@@ -6711,34 +6585,6 @@ function BridgeSessionLogsPanel({
           </div>
         )}
       </div>
-      {(canSend || canInterrupt || canClear || canCancel || canHarvest || canStop || canRemove || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
-        <section className="stack chat-session-controls" aria-label="Bridge session controls">
-          <h3>Session Controls</h3>
-          {controlError ? <div className="notice error">{controlError}</div> : null}
-          {optimisticMessages.map((item) => (
-            <div key={item.clientEventKey} role="status" className={`chat-session-message chat-session-message-${item.status}`}>
-              Operator message · {item.status === 'pending' ? 'Sending' : item.status === 'failed' ? 'Failed' : 'Delivery confirmation pending'}
-              {item.error ? `: ${item.error}` : null}
-            </div>
-          ))}
-          {canSend ? <><label htmlFor="bridge-follow-up">Follow-up message</label><textarea id="bridge-follow-up" value={message} onChange={(event) => setMessage(event.target.value)} disabled={controlBusy} rows={3} /><button type="button" onClick={() => void submitMessage()} disabled={controlBusy || !message.trim()}>Send follow-up</button></> : null}
-          {pendingElicitations.map((elicitation) => (
-            <section key={elicitation.id} className="stack" aria-label={`Pending operator request ${elicitation.id}`}>
-              <p>{elicitation.text}</p>
-              <div className="button-group">
-                <button type="button" onClick={() => void resolveElicitation(elicitation.id, 'approved')} disabled={controlBusy}>Approve</button>
-                <button type="button" className="secondary" onClick={() => void resolveElicitation(elicitation.id, 'rejected')} disabled={controlBusy}>Reject</button>
-              </div>
-            </section>
-          ))}
-          {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
-          {canHarvest ? <button type="button" className="secondary" onClick={() => void runControl({ type: 'harvest_session', clientEventKey: crypto.randomUUID() }).then(() => resourcesQuery.refetch())} disabled={controlBusy}>Harvest evidence</button> : null}
-          {canStop ? <button type="button" className="danger" onClick={() => { if (window.confirm('Stop this Omnigent session?')) void runControl(durableControlPayload('stop_session')); }} disabled={controlBusy}>Stop session</button> : null}
-          {canClear ? <button type="button" className="secondary" onClick={() => { if (window.confirm('Clear this bridge session?')) void runControl({ type: 'clear_session' }); }} disabled={controlBusy}>Clear session</button> : null}
-          {canCancel ? <button type="button" className="danger" onClick={() => { if (window.confirm('Cancel this bridge session?')) void runControl({ type: 'session.cancel' }); }} disabled={controlBusy}>Cancel session</button> : null}
-          {canRemove ? <button type="button" className="danger" onClick={() => { if (window.confirm('Remove the owned Omnigent session after evidence harvest?')) void removeSession(); }} disabled={controlBusy}>Remove owned session</button> : null}
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -8461,6 +8307,101 @@ function RunComparisonPanel({
   );
 }
 
+/**
+ * Read-only bridge-event diagnostic and compatibility fallback for the primary
+ * Workflow Chat route (MoonLadderStudios/MoonMind#3640).
+ *
+ * The native Omnigent application owns the one interactive composer and session
+ * controls; this surface only projects durable evidence — bridge events, the Raw
+ * Timeline escape hatch, resource groups, compatibility/launch diagnostics,
+ * terminal evidence, and legacy managed-run/merged-log fallback. It never mounts
+ * the custom follow-up textarea, an optimistic message lane, approval cards, or
+ * interrupt/stop/clear/cancel/harvest/remove controls: `actionsEnabled` stays
+ * false and no optimistic-message setter is wired. A clearly labeled "Diagnostic
+ * event history" heading distinguishes it from the native chat above
+ * (docs/UI/WorkflowChatPanel.md §11).
+ */
+function WorkflowChatDiagnostics({
+  apiBase,
+  logStreamingEnabled,
+  resolvedAgentRunId,
+  showAgentRunAttachNotice,
+  isTerminal,
+  routes,
+  sessionTimelineEnabled,
+  structuredHistoryEnabled,
+  resolvedBridgeSessionId,
+  bridgeProjection,
+  bridgeResolutionLoading,
+  missingAgentRunState,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  resolvedAgentRunId: string | null;
+  showAgentRunAttachNotice: boolean;
+  isTerminal: boolean;
+  routes: AgentRunRouteTemplates;
+  sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
+  resolvedBridgeSessionId: string;
+  bridgeProjection: BridgeSessionProjection;
+  bridgeResolutionLoading: boolean;
+  missingAgentRunState: MissingAgentRunState | null;
+}) {
+  return (
+    <section
+      className="stack td-chat-diagnostics"
+      aria-label="Diagnostic event history"
+      data-testid="workflow-chat-diagnostics"
+    >
+      <div>
+        <h4>Diagnostic event history</h4>
+        <p className="small">
+          Read-only bridge events, resource evidence, terminal artifacts, and merged logs for
+          this workflow. This diagnostic and compatibility surface never sends messages or controls
+          the session; use the native Omnigent chat for live interaction.
+        </p>
+      </div>
+      {logStreamingEnabled ? (
+        resolvedAgentRunId ? (
+          <>
+            {showAgentRunAttachNotice ? (
+              <p className="small">Waiting for managed runtime launch to create live logs.</p>
+            ) : null}
+            <LiveLogsPanel
+              apiBase={apiBase}
+              agentRunId={resolvedAgentRunId}
+              isTerminal={isTerminal}
+              autoExpand
+              disclosure={false}
+              routes={routes}
+              sessionTimelineEnabled={sessionTimelineEnabled}
+              structuredHistoryEnabled={structuredHistoryEnabled}
+            />
+          </>
+        ) : resolvedBridgeSessionId ? (
+          <BridgeSessionLogsPanel
+            apiBase={apiBase}
+            bridgeSessionId={resolvedBridgeSessionId}
+            isTerminal={isTerminal}
+            projection={bridgeProjection}
+          />
+        ) : bridgeResolutionLoading ? (
+          <p className="small">Checking bridge session evidence.</p>
+        ) : (
+          <p className="small">
+            {missingAgentRunState
+              ? renderMissingAgentRunCopy(missingAgentRunState)
+              : 'Waiting for managed runtime launch to create live logs.'}
+          </p>
+        )
+      ) : (
+        <p className="small">Live log streaming is disabled for this dashboard.</p>
+      )}
+    </section>
+  );
+}
+
 function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
@@ -9713,58 +9654,31 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <div>
                 <h3>Workflow Chat</h3>
                 <p className="small">
-                  Session transcript, live runtime events, and eligible operator controls for this workflow.
+                  Interactive chat is the native Omnigent application. When native chat is
+                  unavailable, a read-only diagnostic and compatibility fallback preserves the
+                  session evidence below.
                 </p>
               </div>
-              {logStreamingEnabled ? (
-                resolvedAgentRunId ? (
-                  <>
-                    {showAgentRunAttachNotice ? (
-                      <p className="small">Waiting for managed runtime launch to create live logs.</p>
-                    ) : null}
-                    <LiveLogsPanel
-                      apiBase={payload.apiBase}
-                      agentRunId={resolvedAgentRunId}
-                      isTerminal={isTerminalExecution}
-                      autoExpand
-                      disclosure={false}
-                      routes={agentRunRoutes}
-                      sessionTimelineEnabled={sessionTimelineEnabled}
-                      structuredHistoryEnabled={structuredHistoryEnabled}
-                      optimisticMessages={chatOptimisticMessages}
-                    />
-                  </>
-                ) : resolvedBridgeSessionId ? (
-                  <BridgeSessionLogsPanel
-                    apiBase={payload.apiBase}
-                    bridgeSessionId={resolvedBridgeSessionId}
-                    isTerminal={isTerminalExecution}
-                    projection={resolvedBridgeProjection}
-                    optimisticMessages={chatOptimisticMessages}
-                    setOptimisticMessages={setChatOptimisticMessages}
-                    actionsEnabled={actionsOn}
-                  />
-                ) : bridgeResolutionQuery.isLoading ? (
-                  <p className="small">Checking bridge session evidence.</p>
-                ) : (
-                  <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for managed runtime launch to create live logs.'}</p>
-                )
-              ) : (
-                <p className="small">Live log streaming is disabled for this dashboard.</p>
-              )}
-              {resolvedAgentRunId && actionsOn ? (
-                <SessionContinuityPanel
+              <WorkflowChatNative
+                apiBase={payload.apiBase}
+                workflowId={execution.workflowId || execution.taskId || ''}
+                active={chatTabActive}
+              >
+                <WorkflowChatDiagnostics
                   apiBase={payload.apiBase}
-                  agentRunId={resolvedAgentRunId}
-                  targetRuntime={execution.targetRuntime}
+                  logStreamingEnabled={logStreamingEnabled}
+                  resolvedAgentRunId={resolvedAgentRunId}
+                  showAgentRunAttachNotice={showAgentRunAttachNotice}
                   isTerminal={isTerminalExecution}
-                  invalidateWorkflowDetail={invalidate}
                   routes={agentRunRoutes}
-                  optimisticMessages={chatOptimisticMessages}
-                  setOptimisticMessages={setChatOptimisticMessages}
-                  compact
+                  sessionTimelineEnabled={sessionTimelineEnabled}
+                  structuredHistoryEnabled={structuredHistoryEnabled}
+                  resolvedBridgeSessionId={resolvedBridgeSessionId}
+                  bridgeProjection={resolvedBridgeProjection}
+                  bridgeResolutionLoading={bridgeResolutionQuery.isLoading}
+                  missingAgentRunState={missingAgentRunState}
                 />
-              ) : null}
+              </WorkflowChatNative>
             </section>
           ) : null}
 

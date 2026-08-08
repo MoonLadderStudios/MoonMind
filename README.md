@@ -101,7 +101,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 | Component | Role |
 | --- | --- |
-| **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, MCP/context surfaces, and the API-owned Docker Backend Service contract. |
+| **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, MCP tools, and the API-owned Docker Backend Service contract. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, external integrations, and durable container-job execution. |
 | **Managed Session Plane** | Workflow-scoped Codex CLI compatibility sessions and profile-bound Codex-through-Omnigent sessions. Omnigent is a normal selectable runtime; its live matrix governs staged preselected-default promotion. Container jobs remain separate from session identity. |
