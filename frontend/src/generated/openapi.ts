@@ -2240,6 +2240,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/captured-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Captured Evidence
+         * @description Return the immutable MoonMind evidence captured for a Workflow (§10, #3641).
+         *
+         *     The caller is authorized against the Workflow first; possession of a chat
+         *     binding id is never authorization. Returned refs are MoonMind artifact refs
+         *     served by the existing artifact authorization/preview/download contracts —
+         *     never provider-native paths or live upstream resource ids.
+         */
+        get: operations["get_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue In New Workflow
+         * @description Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
+         *
+         *     Reuses the ordinary create/compiler path so the continuation resolves fresh
+         *     authority (runtime, profile, credentials, policy) rather than inheriting the
+         *     source's stale credentials, capacity, or host/session identity, while pinning
+         *     the source lineage and authorized evidence refs. Idempotent on a stable
+         *     client key; duplicate requests return the same linked Workflow. The source
+         *     Workflow, its Step ledger, provider session, artifacts, and publication
+         *     result are never mutated, and no message is posted into the source session.
+         */
+        post: operations["continue_in_new_workflow_api_executions__workflow_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/continuations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Execution Continuations
+         * @description List durable linked-continuation relationships for a Workflow (#3641 §6).
+         *
+         *     ``outbound`` lists the linked continuations created *from* this Workflow (the
+         *     source-side view); ``inbound`` names the source this Workflow was continued
+         *     *from* (the continuation-side view). Both directions keep the original and
+         *     new terminal outcomes distinct and only surface relationships whose two
+         *     executions remain visible to the caller.
+         */
+        get: operations["list_execution_continuations_api_executions__workflow_id__continuations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/actions/continue-remediation": {
         parameters: {
             query?: never;
@@ -5831,6 +5910,36 @@ export interface components {
              */
             evidenceCompleteness: "required" | "best_effort";
         };
+        /**
+         * CapturedEvidenceItemModel
+         * @description One authorized MoonMind evidence artifact ref (browser-safe).
+         */
+        CapturedEvidenceItemModel: {
+            /** Label */
+            label: string;
+            /** Kind */
+            kind: string;
+            /** Artifactref */
+            artifactRef: string;
+        };
+        /**
+         * CapturedEvidenceModel
+         * @description Immutable MoonMind-captured evidence for **View captured evidence**.
+         */
+        CapturedEvidenceModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Available */
+            available: boolean;
+            /** Items */
+            items?: components["schemas"]["CapturedEvidenceItemModel"][];
+            /** Summary */
+            summary?: string | null;
+            /** Unavailablereason */
+            unavailableReason?: string | null;
+        };
         /** ChatCompletionRequest */
         ChatCompletionRequest: {
             /**
@@ -6777,6 +6886,52 @@ export interface components {
              * @default true
              */
             remediation: boolean;
+        };
+        /**
+         * ContinueInNewWorkflowRequest
+         * @description Authored intent + selected source evidence for a linked continuation.
+         *
+         *     The browser authors only new intent and bounded choices appropriate to
+         *     normal Workflow creation, plus which *already-authorized* source artifact
+         *     refs to carry. It never authors the source run, provider session, host,
+         *     profile, credential, workspace path, or evidence ownership — the server pins
+         *     all of that from the terminal source (issue §3).
+         */
+        ContinueInNewWorkflowRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Title */
+            title?: string | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Initialparameters */
+            initialParameters?: {
+                [key: string]: unknown;
+            };
+            /** Selectedsourceartifactrefs */
+            selectedSourceArtifactRefs?: string[];
+            /** Boundedpurpose */
+            boundedPurpose?: string | null;
+        };
+        /**
+         * ContinueInNewWorkflowResponse
+         * @description Stable linked destination for both first and duplicate submissions.
+         */
+        ContinueInNewWorkflowResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Relationshiptype */
+            relationshipType: string;
+            /** Created */
+            created: boolean;
+            /** Pinnedsourcerefs */
+            pinnedSourceRefs?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * ContinueRemediationBudgetProposal
@@ -9351,6 +9506,42 @@ export interface components {
             created_by_activity_type?: string | null;
             /** Created By Worker */
             created_by_worker?: string | null;
+        };
+        /** LinkedContinuationLinksResponseModel */
+        LinkedContinuationLinksResponseModel: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "inbound" | "outbound";
+            /** Items */
+            items?: components["schemas"]["LinkedContinuationSummaryModel"][];
+        };
+        /**
+         * LinkedContinuationSummaryModel
+         * @description One durable linked-continuation relationship for source/target display.
+         */
+        LinkedContinuationSummaryModel: {
+            /** Relationshiptype */
+            relationshipType: string;
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Destinationrunid */
+            destinationRunId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Createdby */
+            createdBy?: string | null;
+            /** Boundedpurpose */
+            boundedPurpose?: string | null;
+            /** Createdat */
+            createdAt?: string | null;
         };
         /**
          * ManagedAgentRateLimitPolicy
@@ -18462,6 +18653,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowChatBinding"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapturedEvidenceModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_in_new_workflow_api_executions__workflow_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueInNewWorkflowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueInNewWorkflowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_execution_continuations_api_executions__workflow_id__continuations_get: {
+        parameters: {
+            query?: {
+                direction?: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedContinuationLinksResponseModel"];
                 };
             };
             /** @description Validation Error */

@@ -1683,6 +1683,87 @@ class ControlStopContinuationRecord(Base):
         onupdate=func.now(),
     )
 
+class WorkflowLinkedContinuationRecord(Base):
+    """Durable, idempotent linked-continuation lineage (MoonLadderStudios/MoonMind#3641).
+
+    Records the explicit **Continue in a new workflow** action taken from a
+    *terminal* source Workflow Execution: it pins the exact source workflow/run
+    (and Step lineage where relevant) plus the authorized MoonMind evidence refs
+    the continuation carried, and binds one client idempotency key to exactly one
+    destination Workflow Execution. Duplicate submissions of the same key resolve
+    to the same destination rather than creating two linked workflows.
+
+    This is distinct from ``ControlStopContinuationRecord`` (control-stop
+    remediation), remediation links, and checkpoint branches: it is the terminal
+    "linked continuation" relationship (``relationship_type='linked_continuation'``)
+    presented bidirectionally on both source and continuation Workflows. The
+    source Workflow, its run, Step ledger, provider session, artifacts, and
+    publication result are never mutated by creating this record.
+    """
+
+    __tablename__ = "workflow_linked_continuations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_workflow_id",
+            "source_run_id",
+            "idempotency_key",
+            name="uq_workflow_linked_continuations_source_key",
+        ),
+        UniqueConstraint(
+            "destination_workflow_id",
+            name="uq_workflow_linked_continuations_destination",
+        ),
+        Index(
+            "ix_workflow_linked_continuations_source_workflow",
+            "source_workflow_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    source_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    relationship_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="linked_continuation",
+        server_default=text("'linked_continuation'"),
+    )
+    source_logical_step_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    source_step_execution_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    # Bounded, browser-safe pinned source identity/evidence refs (finish summary,
+    # final snapshot, capture manifest, selected artifact refs). MoonMind artifact
+    # refs only; never a provider-native path, host/runner id, or credential.
+    pinned_source_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bounded_purpose: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    destination_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    destination_run_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    reserved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class WorkflowCheckpointBranchOperation(Base):
     """Idempotency ledger for branch side-effecting operations."""
 
