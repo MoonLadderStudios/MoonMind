@@ -98,10 +98,20 @@ from moonmind.omnigent.settings import (
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
+from moonmind.omnigent.native_outbound_scan import (
+    NativeScanBlockedError,
+    NativeScanEnforcementError,
+    NativeScanEvidence,
+    NativeScanSurface,
+    canonical_payload_digest,
+    scan_native_outbound,
+)
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_RESOLVE_ELICITATION,
     CODE_BINDING_UNKNOWN,
     CODE_CONTENT_BLOCKED,
+    CODE_ENFORCEMENT_UNAVAILABLE,
+    CODE_IDEMPOTENCY_CONFLICT,
     CODE_MALFORMED_PAYLOAD,
     CODE_OPERATION_DENIED,
     CODE_PAYLOAD_TOO_LARGE,
@@ -115,11 +125,6 @@ from moonmind.omnigent.workflow_chat_facade import (
     match_facade_operation,
     recompute_capabilities,
     required_capability_for_event,
-)
-from moonmind.security import (
-    OutboundBundleItem,
-    resolve_high_security_mode,
-    scan_outbound_bundle,
 )
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -708,13 +713,20 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     status_code = exc.status_code or _FAILURE_CLASS_STATUS.get(
         exc.failure_class, status.HTTP_500_INTERNAL_SERVER_ERROR
     )
+    detail: dict[str, Any] = {
+        "code": exc.code,
+        "failureClass": exc.failure_class,
+        "message": str(exc),
+    }
+    # Facade errors may carry bounded, already-redacted public metadata (for
+    # example a blocked scan's finding categories and safe locations). It never
+    # contains a detected value or a raw message body.
+    public_details = getattr(exc, "public_details", None)
+    if isinstance(public_details, dict) and public_details:
+        detail.update(public_details)
     return HTTPException(
         status_code=status_code,
-        detail={
-            "code": exc.code,
-            "failureClass": exc.failure_class,
-            "message": str(exc),
-        },
+        detail=detail,
     )
 
 
@@ -2708,21 +2720,44 @@ def _audit_facade(
     chat_binding_id: str,
     user: Any,
     reason: str | None = None,
+    scan_evidence: NativeScanEvidence | None = None,
 ) -> None:
     """Record bounded, non-disclosing audit evidence for the facade boundary.
 
     Security-relevant denials and mutations are logged server-side with the
     binding id and caller only. The record never states whether an alternate
     provider session exists, matching the non-enumerating browser contract.
+
+    When an outbound scan produced a decision, its bounded evidence (scanner
+    policy ref, payload digest, outcome, and redacted finding categories/safe
+    locations) is recorded too — never the detected value or the message body.
     """
 
+    scan_suffix = ""
+    if scan_evidence is not None:
+        parts = [
+            f"scanOutcome={scan_evidence.outcome}",
+            f"scannerPolicyRef={scan_evidence.scanner_policy_ref}",
+            f"payloadDigest={scan_evidence.payload_digest}",
+        ]
+        if scan_evidence.findings:
+            categories = sorted(
+                {finding.category for finding in scan_evidence.findings}
+            )
+            parts.append(f"findingCategories={','.join(categories)}")
+            parts.append(
+                "findingLocations="
+                + ",".join(finding.location for finding in scan_evidence.findings)
+            )
+        scan_suffix = " " + " ".join(parts)
     logger.info(
-        "omnigent.workflow_chat_facade outcome=%s operation=%s binding=%s caller=%s%s",
+        "omnigent.workflow_chat_facade outcome=%s operation=%s binding=%s caller=%s%s%s",
         outcome,
         operation,
         chat_binding_id,
         getattr(user, "id", None),
         f" reason={reason}" if reason else "",
+        scan_suffix,
     )
 
 
@@ -2953,47 +2988,72 @@ def _facade_idempotency_key(request: Request) -> str | None:
     return raw[:255] or None
 
 
-def _collect_text_fields(value: Any, *, prefix: str = "body") -> list[tuple[str, str]]:
-    """Recursively collect ``(location, text)`` pairs from a JSON-shaped body."""
+def _enforce_native_outbound_scan(
+    *,
+    surface: NativeScanSurface,
+    body: dict[str, Any] | None,
+    idempotency_key: str | None,
+    chat_binding_id: str,
+    user: Any,
+    operation: str,
+) -> NativeScanEvidence:
+    """Preserve the high-security outbound-scan guarantee at the native boundary.
 
-    collected: list[tuple[str, str]] = []
-    if isinstance(value, str):
-        collected.append((prefix, value))
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            collected.extend(_collect_text_fields(item, prefix=f"{prefix}.{key}"))
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            collected.extend(_collect_text_fields(item, prefix=f"{prefix}[{index}]"))
-    return collected
-
-
-def _scan_native_event_before_forward(*, body: dict[str, Any] | None) -> None:
-    """Fail closed on secret-bearing native content in high-security mode.
-
-    The repository's fail-closed security mode must apply on the browser
-    composer path too: a native message carrying a credential or another blocked
-    secret must not reach ``_apply_owned_session_control`` and be posted
-    upstream. Every text-bearing field at any depth is scanned; a non-mapping
-    (uninspectable) body was already rejected by :func:`_read_facade_json_body`.
+    Runs the versioned native-scan contract (MoonLadderStudios/MoonMind#3637)
+    before any provider forward and returns bounded, digest-bound evidence. A
+    secret-like finding is rejected with a distinct content-blocked error that
+    surfaces only the redacted finding category/location; an enforcement failure
+    (unknown/uninspectable shape, undecodable field, binary part, or a scanner
+    error) fails closed with a *separate* enforcement-unavailable error so the
+    two conditions are never conflated. High-security mode disabled returns an
+    allow result and the original payload is forwarded unchanged. The raised
+    error and the audit record never echo the detected value or the message
+    body.
     """
 
-    if not resolve_high_security_mode():
-        return
-    items = [
-        OutboundBundleItem(location=location, content=text)
-        for location, text in _collect_text_fields(body or {})
-    ]
-    if not items:
-        return
-    result = scan_outbound_bundle(items, high_security_mode=True)
-    if not result.allowed:
+    try:
+        evidence = scan_native_outbound(
+            surface=surface,
+            body=body or {},
+            idempotency_key=idempotency_key,
+        )
+    except NativeScanBlockedError as exc:
+        _audit_facade(
+            outcome="content_blocked",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="content_blocked",
+            scan_evidence=exc.evidence,
+        )
         raise WorkflowChatFacadeError(
             "The message contains content blocked by the security policy.",
             failure_class="user_error",
             status_code=status.HTTP_403_FORBIDDEN,
             code=CODE_CONTENT_BLOCKED,
+            public_details={
+                "findings": [
+                    {"category": finding.category, "location": finding.location}
+                    for finding in exc.evidence.findings
+                ],
+            },
+        ) from exc
+    except NativeScanEnforcementError as exc:
+        _audit_facade(
+            outcome="enforcement_unavailable",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason=exc.evidence.reason,
+            scan_evidence=exc.evidence,
         )
+        raise WorkflowChatFacadeError(
+            "The security scan required for this request is unavailable.",
+            failure_class="system_error",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code=CODE_ENFORCEMENT_UNAVAILABLE,
+        ) from exc
+    return evidence
 
 
 async def _revalidate_binding_before_mutation(
@@ -3045,28 +3105,56 @@ async def _claim_facade_message(
     event_type: str,
     actor: str,
     idempotency_key: str,
+    payload_digest: str,
 ) -> bool:
     """Atomically claim a native message submission for exactly-once forwarding.
 
     Persists a durable, secret-safe control record keyed by the caller's
     idempotency key. Returns ``True`` for the one claimant that may forward the
-    provider POST and ``False`` on a replay (browser retry or double-submit), so
-    the facade never issues a duplicate provider turn or duplicate billing.
+    provider POST and ``False`` on a genuine replay (browser retry or
+    double-submit) of the *same* payload, so the facade never issues a duplicate
+    provider turn or duplicate billing. The scanned payload digest is recorded so
+    the claim durably names the exact payload that passed the outbound scan.
+
+    A repeated idempotency key bound to a *different* scanned payload digest is
+    not a benign replay: reporting it as a successful deduplication would
+    silently drop the changed message. Such a conflict fails closed with a
+    distinct, redacted error rather than returning ``False``.
     """
 
-    return await store.claim_lifecycle_event(
+    event_identity = f"workflow-chat-message:{idempotency_key}"
+    claimed = await store.claim_lifecycle_event(
         row.idempotency_key,
         event_type="workflow_chat_message",
-        event_identity=f"workflow-chat-message:{idempotency_key}",
+        event_identity=event_identity,
         summary=f"native chat {event_type}",
         metadata={
             "actor": actor,
             "controlType": event_type,
             "controlOutcome": "posting",
             "controlIdempotencyKey": idempotency_key,
+            "scannedPayloadDigest": payload_digest,
             "sourceMode": "workflow_chat_facade",
         },
     )
+    if claimed:
+        return True
+
+    # An existing claim for this key: reconcile against the digest it was first
+    # bound to. A matching digest is a true replay; a different digest means the
+    # same key was reused for changed content and must fail closed.
+    existing = await store.get_lifecycle_event_metadata(
+        row.idempotency_key, event_identity=event_identity
+    )
+    prior_digest = str((existing or {}).get("scannedPayloadDigest") or "")
+    if prior_digest and prior_digest != payload_digest:
+        raise WorkflowChatFacadeError(
+            "This Idempotency-Key was already used for a different message.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_IDEMPOTENCY_CONFLICT,
+        )
+    return False
 
 
 async def _record_facade_mutation_audit(
@@ -3077,12 +3165,18 @@ async def _record_facade_mutation_audit(
     outcome: str,
     actor: str,
     idempotency_key: str | None = None,
+    scan_evidence: NativeScanEvidence | None = None,
 ) -> None:
     """Persist durable, secret-safe evidence of a facade mutation (OB-§19).
 
     A rotating process log is not durable evidence, so mutation outcomes are
     recorded in the binding's durable control/event ledger with the actor,
-    control type, normalized outcome, and (when present) idempotency key.
+    control type, normalized outcome, and (when present) idempotency key. When
+    the mutation ran the native outbound scan, the bounded, non-disclosing scan
+    evidence (contract version, surface, effective mode, scanner policy ref,
+    payload digest, and allow/block outcome) is persisted too so the durable
+    record proves the exact payload was scanned even after process logs rotate —
+    for message *and* elicitation/approval mutations alike.
     """
 
     metadata: dict[str, Any] = {
@@ -3093,6 +3187,8 @@ async def _record_facade_mutation_audit(
     }
     if idempotency_key:
         metadata["controlIdempotencyKey"] = idempotency_key
+    if scan_evidence is not None:
+        metadata.update(scan_evidence.audit_metadata())
     identity_suffix = idempotency_key or actor
     try:
         await store.record_lifecycle_event(
@@ -3549,18 +3645,25 @@ async def _dispatch_workflow_chat_facade(
                 code=CODE_OPERATION_DENIED,
             )
 
-        # Fail-closed outbound secret scan before any provider forward.
-        try:
-            _scan_native_event_before_forward(body=body)
-        except WorkflowChatFacadeError:
-            _audit_facade(
-                outcome="denied",
-                operation="post_event",
-                chat_binding_id=chat_binding_id,
-                user=user,
-                reason="content_blocked",
-            )
-            raise
+        # Idempotent submission: a caller-supplied ``Idempotency-Key`` makes a
+        # browser retry or double-submit resolve to exactly one provider turn.
+        # Resolved before the scan so the scan evidence binds the decision to
+        # both the canonical payload digest and the idempotency key.
+        client_key = _facade_idempotency_key(request)
+        effective_key = client_key or f"mm-{uuid4().hex}"
+
+        # Fail-closed outbound secret scan before any provider forward. The
+        # digest-bound evidence proves which exact payload was scanned, so a
+        # retry, queued flush, steer, reconnect replay, or reconciliation cannot
+        # reuse an allow result after the content changes.
+        scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.MESSAGE,
+            body=body,
+            idempotency_key=effective_key,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            operation="post_event",
+        )
 
         # Revalidate the binding/session state at the mutation handoff (CAS):
         # the row was loaded before the body was buffered and scanned.
@@ -3586,16 +3689,24 @@ async def _dispatch_workflow_chat_facade(
                 code=CODE_OPERATION_DENIED,
             )
 
-        # Idempotent submission: a caller-supplied ``Idempotency-Key`` makes a
-        # browser retry or double-submit resolve to exactly one provider turn.
-        client_key = _facade_idempotency_key(request)
-        effective_key = client_key or f"mm-{uuid4().hex}"
+        # The provider forward must carry the exact payload that was scanned. A
+        # digest mismatch here means the payload changed after the scan (an
+        # unscanned-forward attempt) and fails closed rather than forwarding.
+        if canonical_payload_digest(body or {}) != scan_evidence.payload_digest:
+            raise WorkflowChatFacadeError(
+                "The security scan required for this request is unavailable.",
+                failure_class="system_error",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=CODE_ENFORCEMENT_UNAVAILABLE,
+            )
+
         claimed = await _claim_facade_message(
             store=store,
             row=fresh_row,
             event_type=event.type,
             actor=str(user.id),
             idempotency_key=effective_key,
+            payload_digest=scan_evidence.payload_digest,
         )
         if not claimed:
             # Replay of a previously accepted key: reconcile without re-posting.
@@ -3630,6 +3741,7 @@ async def _dispatch_workflow_chat_facade(
             outcome="posted",
             actor=str(user.id),
             idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
         )
         _audit_facade(
             outcome="mutation",
@@ -3669,6 +3781,19 @@ async def _dispatch_workflow_chat_facade(
                 status_code=status.HTTP_403_FORBIDDEN,
                 code=CODE_OPERATION_DENIED,
             )
+
+        # Fail-closed outbound secret scan of the operator-authored approval
+        # response text before any provider forward, on the same contract as the
+        # message path (brief §1: elicitation/approval response text is a
+        # supported text-bearing native surface).
+        elicitation_scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.ELICITATION_RESPONSE,
+            body=body,
+            idempotency_key=_facade_idempotency_key(request),
+            chat_binding_id=chat_binding_id,
+            user=user,
+            operation="resolve_elicitation",
+        )
 
         # Revalidate the binding/session state at the mutation handoff so a
         # revoked policy or replaced session cannot be resolved with stale
@@ -3713,6 +3838,7 @@ async def _dispatch_workflow_chat_facade(
             outcome="posted",
             actor=str(user.id),
             idempotency_key=_facade_idempotency_key(request),
+            scan_evidence=elicitation_scan_evidence,
         )
         _audit_facade(
             outcome="mutation",

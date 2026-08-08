@@ -1310,6 +1310,41 @@ class OmnigentBridgeSessionStore:
         )
         return created
 
+    async def get_lifecycle_event_metadata(
+        self,
+        idempotency_key: str,
+        *,
+        event_identity: str,
+    ) -> dict[str, Any] | None:
+        """Return the persisted metadata for a claimed lifecycle event, if any.
+
+        Reads the immutable durable event created by
+        :meth:`claim_lifecycle_event` so a later claimant can reconcile against
+        the exact payload the first claimant bound — for example comparing a
+        scanned payload digest before treating a repeated idempotency key as a
+        benign replay. Returns ``None`` when no row or no such event exists.
+        """
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .limit(1)
+            )
+            bridge_session_id = result.scalars().first()
+            if bridge_session_id is None:
+                return None
+            stable_event_id = (
+                "bse_"
+                + uuid5(NAMESPACE_URL, f"{bridge_session_id}:{event_identity}").hex
+            )
+            existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
+            if existing is None:
+                return None
+            stored = existing.metadata_ or {}
+            inner = stored.get("metadata")
+            return dict(inner) if isinstance(inner, dict) else {}
+
     async def _record_lifecycle_event(
         self,
         idempotency_key: str,
@@ -1410,6 +1445,23 @@ class OmnigentBridgeSessionStore:
                         "controlOutcome",
                         "controlId",
                         "controlIdempotencyKey",
+                        # Bounded, non-disclosing native outbound-scan evidence
+                        # (MoonLadderStudios/MoonMind#3637). Persisted so a
+                        # posted mutation durably proves the exact payload was
+                        # scanned and a reused idempotency key can be reconciled
+                        # against the digest it was first bound to. None of these
+                        # carry a detected value or message body.
+                        "scannedPayloadDigest",
+                        "scanContractVersion",
+                        "scanSurface",
+                        "highSecurityMode",
+                        "scannerPolicyRef",
+                        "payloadDigest",
+                        "scanOutcome",
+                        "scanUnavailableReason",
+                        "findingCategories",
+                        "findingLocations",
+                        "idempotencyKey",
                         "expectedSessionId",
                         "expectedHostId",
                         "expectedRunnerId",
