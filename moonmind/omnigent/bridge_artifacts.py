@@ -205,24 +205,22 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             return self._readable_refs[artifact_ref]
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
-            # The ref's relative component may be attacker-influenced. Refs are
-            # written from sanitized segments that never contain ".." or an
-            # absolute root, so reject any traversal marker outright, then confirm
-            # containment (realpath prefix check) before any read.
             relative = artifact_ref[len(prefix) :]
-            if ".." in relative or os.path.isabs(relative):
+            # Normalize the attacker-influenced ref, then require the result to
+            # stay under the artifact root before any read (path-traversal guard).
+            base = os.path.realpath(self._root)
+            fullpath = os.path.realpath(os.path.join(base, relative))
+            if not fullpath.startswith(base):
                 raise OmnigentArtifactError(
                     f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
                 )
-            root = os.path.realpath(self._root)
-            resolved = os.path.realpath(os.path.join(root, relative))
-            if resolved != root and not resolved.startswith(root + os.sep):
+            if fullpath != base and not fullpath.startswith(base + os.sep):
                 raise OmnigentArtifactError(
                     f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
                 )
-            path = Path(resolved)
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
+            if os.path.isfile(fullpath):
+                with open(fullpath, encoding="utf-8") as handle:
+                    return handle.read()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
     async def read_bytes(self, artifact_ref: str) -> bytes:
@@ -230,24 +228,22 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             return self._readable_refs[artifact_ref].encode("utf-8")
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
-            # The ref's relative component may be attacker-influenced. Refs are
-            # written from sanitized segments that never contain ".." or an
-            # absolute root, so reject any traversal marker outright, then confirm
-            # containment (realpath prefix check) before any read.
             relative = artifact_ref[len(prefix) :]
-            if ".." in relative or os.path.isabs(relative):
+            # Normalize the attacker-influenced ref, then require the result to
+            # stay under the artifact root before any read (path-traversal guard).
+            base = os.path.realpath(self._root)
+            fullpath = os.path.realpath(os.path.join(base, relative))
+            if not fullpath.startswith(base):
                 raise OmnigentArtifactError(
                     f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
                 )
-            root = os.path.realpath(self._root)
-            resolved = os.path.realpath(os.path.join(root, relative))
-            if resolved != root and not resolved.startswith(root + os.sep):
+            if fullpath != base and not fullpath.startswith(base + os.sep):
                 raise OmnigentArtifactError(
                     f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
                 )
-            path = Path(resolved)
-            if path.is_file():
-                return path.read_bytes()
+            if os.path.isfile(fullpath):
+                with open(fullpath, "rb") as handle:
+                    return handle.read()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
 
