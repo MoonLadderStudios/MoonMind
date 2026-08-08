@@ -19,6 +19,7 @@ import logging
 import os
 from datetime import timedelta
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import (
     APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
@@ -89,13 +90,49 @@ from moonmind.omnigent.host_auth_profile import (
     resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
+from moonmind.omnigent.native_ui import (
+    NATIVE_UI_MOUNT_PREFIX,
+    NATIVE_UI_ROUTE_FEATURE_VERSION,
+    evaluate_native_ui_compatibility,
+    scoped_api_base,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_native_ui_serving_enabled,
+    resolved_native_ui_version,
     resolved_proxy_forward_headers,
     resolved_server_url,
+)
+from moonmind.omnigent.native_outbound_scan import (
+    NativeScanBlockedError,
+    NativeScanEnforcementError,
+    NativeScanEvidence,
+    NativeScanSurface,
+    canonical_payload_digest,
+    scan_native_outbound,
+)
+from moonmind.omnigent.workflow_chat_facade import (
+    CAP_RESOLVE_ELICITATION,
+    CODE_BINDING_UNKNOWN,
+    CODE_CONTENT_BLOCKED,
+    CODE_ENFORCEMENT_UNAVAILABLE,
+    CODE_IDEMPOTENCY_CONFLICT,
+    CODE_MALFORMED_PAYLOAD,
+    CODE_OPERATION_DENIED,
+    CODE_PAYLOAD_TOO_LARGE,
+    CODE_ROUTE_NOT_ALLOWLISTED,
+    CODE_SESSION_NOT_READY,
+    CODE_SESSION_READ_ONLY,
+    CODE_UNSUPPORTED_MEDIA_TYPE,
+    WorkflowChatFacadeError,
+    assert_no_identity_substitution,
+    is_read_only,
+    match_facade_operation,
+    recompute_capabilities,
+    required_capability_for_event,
 )
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -409,7 +446,48 @@ def _compatibility_diagnostics(
             "hostArchitecture",
         )
     }
+    projection["nativeUi"] = _native_ui_diagnostics(config=config)
     return projection
+
+
+def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
+    """Report native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
+
+    Operators need a bounded, non-secret projection of whether the native
+    Workflow Chat UI is served through MoonMind: UI-asset serving, the
+    compatibility version gate, the scoped HTTP/SSE route surface, and
+    credential separation. It reveals no upstream URL, credential, or provider
+    session identity. A WebSocket route is intentionally absent from
+    ``scopedRoutes`` until a binding-authorized WebSocket handler exists, so the
+    diagnostics never advertise a socket the facade cannot accept.
+    """
+
+    serving_enabled = resolved_native_ui_serving_enabled()
+    compatibility = evaluate_native_ui_compatibility(
+        resolved_native_ui_version(),
+        enabled=bool(config.enabled) and serving_enabled,
+    )
+    scoped_api = scoped_api_base("{chatBindingId}")
+    return {
+        "servingEnabled": serving_enabled,
+        "ready": compatibility.ready,
+        "reason": compatibility.reason,
+        "assetsServedThroughMoonMind": serving_enabled,
+        "compatibilityVersion": NATIVE_UI_ROUTE_FEATURE_VERSION,
+        "reportedVersion": compatibility.reported_version,
+        "supportedVersions": list(compatibility.supported_versions),
+        "scopedRoutes": {
+            "uiMountPath": f"{NATIVE_UI_MOUNT_PREFIX}/{{chatBindingId}}",
+            "apiBase": scoped_api,
+            "http": scoped_api,
+            "sse": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
+        },
+        # MoonMind strips its own credentials before forwarding upstream and
+        # virtualizes the provider session id, so neither the upstream credential
+        # nor the raw provider session id reaches the browser.
+        "credentialSeparation": True,
+        "directUpstreamBrowserExposure": False,
+    }
 
 
 _EMBEDDED_EVIDENCE_SLOTS = {
@@ -684,13 +762,20 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     status_code = exc.status_code or _FAILURE_CLASS_STATUS.get(
         exc.failure_class, status.HTTP_500_INTERNAL_SERVER_ERROR
     )
+    detail: dict[str, Any] = {
+        "code": exc.code,
+        "failureClass": exc.failure_class,
+        "message": str(exc),
+    }
+    # Facade errors may carry bounded, already-redacted public metadata (for
+    # example a blocked scan's finding categories and safe locations). It never
+    # contains a detected value or a raw message body.
+    public_details = getattr(exc, "public_details", None)
+    if isinstance(public_details, dict) and public_details:
+        detail.update(public_details)
     return HTTPException(
         status_code=status_code,
-        detail={
-            "code": exc.code,
-            "failureClass": exc.failure_class,
-            "message": str(exc),
-        },
+        detail=detail,
     )
 
 
@@ -1792,87 +1877,124 @@ async def post_omnigent_session_event(
         proxy=control_facade,
     )
     try:
-        if payload.type in {"clear_session", "reset_session"}:
-            # Embedded mode rejects clear/reset without replacing or stopping the
-            # session, so revoking first would permanently disable retrieval for
-            # a session that keeps running.  Reject before mutating authority.
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-                raise OmnigentBridgeError(
-                    "Embedded clear/reset requires a new session and idempotency key.",
-                    failure_class="user_error",
-                    status_code=status.HTTP_409_CONFLICT,
-                    code="omnigent_embedded_new_session_required",
-                )
-            await _revoke_session_retrieval_authority(
-                session_id=session_id,
-                registry=registry,
-                store=store,
-                reason="session_replaced",
-            )
-        if payload.type in {"stop", "session.stop", "stop_session"}:
-            await _revoke_session_retrieval_authority(
-                session_id=session_id,
-                registry=registry,
-                store=store,
-                reason="session_stopped",
-            )
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-                assert embedded_facade is not None
-                return await embedded_facade.stop_session(
-                    session_id,
-                    payload=payload.model_dump(by_alias=True, exclude_none=True),
-                    actor=str(user.id),
-                )
-            return await control_facade.stop_session(session_id)
-        if payload.type in {"cleanup_session", "terminal_cleanup"}:
-            if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
-                raise OmnigentBridgeError(
-                    "Typed owned-resource cleanup is unavailable in this mode.",
-                    failure_class="user_error", status_code=501,
-                    code="omnigent_bridge_capability_unavailable",
-                )
-            assert embedded_facade is not None
-            await _revoke_session_retrieval_authority(
-                session_id=session_id,
-                registry=registry,
-                store=store,
-                reason="session_cleanup",
-            )
-            return await embedded_facade.cleanup_session(
-                session_id,
-                payload=payload.model_dump(by_alias=True, exclude_none=True),
-                actor=str(user.id),
-            )
-        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-            assert embedded_facade is not None
-            if payload.type == "harvest_session":
-                return await embedded_facade.harvest_session(
-                    session_id,
-                    payload=payload.model_dump(by_alias=True, exclude_none=True),
-                    actor=str(user.id),
-                )
-            if payload.type == "interrupt":
-                raise OmnigentBridgeError(
-                    "Embedded interrupt is not supported by the pinned host "
-                    "protocol; use stop when terminating the runner is intended.",
-                    failure_class="user_error",
-                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    code="omnigent_embedded_control_unsupported",
-                )
-            if payload.type not in {"message", "user.message"}:
-                raise OmnigentBridgeError(
-                    f"Embedded control {payload.type!r} is not supported.",
-                    failure_class="user_error",
-                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    code="omnigent_embedded_control_unsupported",
-                )
-            return await embedded_facade.post_event(
-                session_id=session_id, event=payload, actor=str(user.id)
-            )
-        assert proxy is not None
-        return await proxy.post_event(session_id=session_id, event=payload)
+        return await _apply_owned_session_control(
+            control_facade=control_facade,
+            session_id=session_id,
+            payload=payload,
+            config=config,
+            actor=str(user.id),
+            proxy=proxy,
+            embedded_facade=embedded_facade,
+            registry=registry,
+            store=store,
+        )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+async def _apply_owned_session_control(
+    *,
+    control_facade: Any,
+    session_id: str,
+    payload: BridgeSessionEventRequest,
+    config: OmnigentBridgeConfig,
+    actor: str,
+    proxy: OmnigentBridgeSessionProxy | None,
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
+    registry: RetrievalCapabilityRegistry,
+    store: OmnigentBridgeSessionStore,
+) -> dict[str, Any]:
+    """Apply an Omnigent control event to an already-authorized provider session.
+
+    Shared canonical control path for both the provider-session control route
+    (``post_omnigent_session_event``) and the binding-scoped Workflow Chat
+    facade. Callers authorize the session first (by provider-session owner or by
+    durable ``chatBindingId`` binding) and pass the resolved ``session_id``;
+    this helper owns the harvest/clear/stop/cleanup policy, embedded/proxy
+    branching, and retrieval-authority revocation so neither surface reimplements
+    control semantics. Raises :class:`OmnigentBridgeError`; callers map it to a
+    redacted HTTP error.
+    """
+
+    if payload.type in {"clear_session", "reset_session"}:
+        # Embedded mode rejects clear/reset without replacing or stopping the
+        # session, so revoking first would permanently disable retrieval for
+        # a session that keeps running.  Reject before mutating authority.
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            raise OmnigentBridgeError(
+                "Embedded clear/reset requires a new session and idempotency key.",
+                failure_class="user_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code="omnigent_embedded_new_session_required",
+            )
+        await _revoke_session_retrieval_authority(
+            session_id=session_id,
+            registry=registry,
+            store=store,
+            reason="session_replaced",
+        )
+    if payload.type in {"stop", "session.stop", "stop_session"}:
+        await _revoke_session_retrieval_authority(
+            session_id=session_id,
+            registry=registry,
+            store=store,
+            reason="session_stopped",
+        )
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            assert embedded_facade is not None
+            return await embedded_facade.stop_session(
+                session_id,
+                payload=payload.model_dump(by_alias=True, exclude_none=True),
+                actor=actor,
+            )
+        return await control_facade.stop_session(session_id)
+    if payload.type in {"cleanup_session", "terminal_cleanup"}:
+        if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+            raise OmnigentBridgeError(
+                "Typed owned-resource cleanup is unavailable in this mode.",
+                failure_class="user_error", status_code=501,
+                code="omnigent_bridge_capability_unavailable",
+            )
+        assert embedded_facade is not None
+        await _revoke_session_retrieval_authority(
+            session_id=session_id,
+            registry=registry,
+            store=store,
+            reason="session_cleanup",
+        )
+        return await embedded_facade.cleanup_session(
+            session_id,
+            payload=payload.model_dump(by_alias=True, exclude_none=True),
+            actor=actor,
+        )
+    if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        assert embedded_facade is not None
+        if payload.type == "harvest_session":
+            return await embedded_facade.harvest_session(
+                session_id,
+                payload=payload.model_dump(by_alias=True, exclude_none=True),
+                actor=actor,
+            )
+        if payload.type == "interrupt":
+            raise OmnigentBridgeError(
+                "Embedded interrupt is not supported by the pinned host "
+                "protocol; use stop when terminating the runner is intended.",
+                failure_class="user_error",
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                code="omnigent_embedded_control_unsupported",
+            )
+        if payload.type not in {"message", "user.message"}:
+            raise OmnigentBridgeError(
+                f"Embedded control {payload.type!r} is not supported.",
+                failure_class="user_error",
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                code="omnigent_embedded_control_unsupported",
+            )
+        return await embedded_facade.post_event(
+            session_id=session_id, event=payload, actor=actor
+        )
+    assert proxy is not None
+    return await proxy.post_event(session_id=session_id, event=payload)
 
 
 @router.post(
@@ -2591,7 +2713,1247 @@ async def ingest_embedded_omnigent_host_event(
         raise _http_error_from_bridge(exc) from exc
 
 
+# ---------------------------------------------------------------------------
+# Binding-scoped Workflow Chat facade (MoonLadderStudios/MoonMind#3634)
+#
+# The native Omnigent web application drives one binding-scoped surface keyed by
+# an opaque ``chatBindingId`` (docs/Omnigent/OmnigentBridge.md §4.2, §5.2):
+#
+#   /api/workflow-chat-bindings/{chatBindingId}/omnigent/{path}
+#
+# Every request (and every SSE reconnect) independently authenticates the
+# MoonMind caller, resolves the durable binding, authorizes the caller against
+# the bound Workflow Execution and requested operation, verifies session
+# references map to the one bound provider session, recomputes capabilities from
+# trusted state, strips MoonMind credentials, injects server-side upstream
+# authority, and fails closed before any unauthorized upstream access.
+#
+# Binding resolution seam: allocation of the dedicated opaque ``chat_binding_id``
+# column (§7.1) is MoonLadderStudios/MoonMind#3633. Until it lands, the facade
+# resolves ``chatBindingId`` through the durable bridge session — the existing
+# opaque, server-owned MoonMind key. The provider session id and upstream
+# endpoint stay server-side, so the browser contract is unchanged when a
+# dedicated lookup is introduced (swap ``_resolve_chat_binding_row`` only).
+# ---------------------------------------------------------------------------
+
+WORKFLOW_CHAT_BINDINGS_MOUNT_PATH = "/api/workflow-chat-bindings"
+
+workflow_chat_router = APIRouter(tags=["Omnigent Workflow Chat"])
+
+_FACADE_MAX_BODY_BYTES = 1 * 1024 * 1024
+# Full caller reauthorization cadence while a stream is open. Each new SSE
+# connection (including every EventSource reconnect) is fully authorized by the
+# route dependencies; a long-lived open stream additionally re-verifies binding
+# authority on this cadence so it cannot silently outlive revoked authority.
+_FACADE_STREAM_REAUTH_EVERY_POLLS = 15
+
+
+async def _resolve_chat_binding_row(
+    *, chat_binding_id: str, store: OmnigentBridgeSessionStore
+) -> Any | None:
+    """Resolve the durable binding row for an opaque ``chatBindingId``.
+
+    Single resolution seam (see module note). MoonLadderStudios/MoonMind#3633
+    added the dedicated opaque ``chat_binding_id`` column, so the browser-facing
+    id is resolved by that column. The resolved row's server-owned
+    ``bridge_session_id`` is what journal and terminal lookups use.
+    """
+
+    return await store.get_session_by_chat_binding_id(chat_binding_id)
+
+
+def _audit_facade(
+    *,
+    outcome: str,
+    operation: str,
+    chat_binding_id: str,
+    user: Any,
+    reason: str | None = None,
+    scan_evidence: NativeScanEvidence | None = None,
+) -> None:
+    """Record bounded, non-disclosing audit evidence for the facade boundary.
+
+    Security-relevant denials and mutations are logged server-side with the
+    binding id and caller only. The record never states whether an alternate
+    provider session exists, matching the non-enumerating browser contract.
+
+    When an outbound scan produced a decision, its bounded evidence (scanner
+    policy ref, payload digest, outcome, and redacted finding categories/safe
+    locations) is recorded too — never the detected value or the message body.
+    """
+
+    scan_suffix = ""
+    if scan_evidence is not None:
+        parts = [
+            f"scanOutcome={scan_evidence.outcome}",
+            f"scannerPolicyRef={scan_evidence.scanner_policy_ref}",
+            f"payloadDigest={scan_evidence.payload_digest}",
+        ]
+        if scan_evidence.findings:
+            categories = sorted(
+                {finding.category for finding in scan_evidence.findings}
+            )
+            parts.append(f"findingCategories={','.join(categories)}")
+            parts.append(
+                "findingLocations="
+                + ",".join(finding.location for finding in scan_evidence.findings)
+            )
+        scan_suffix = " " + " ".join(parts)
+    logger.info(
+        "omnigent.workflow_chat_facade outcome=%s operation=%s binding=%s caller=%s%s%s",
+        outcome,
+        operation,
+        chat_binding_id,
+        getattr(user, "id", None),
+        f" reason={reason}" if reason else "",
+        scan_suffix,
+    )
+
+
+def _binding_unknown_error() -> WorkflowChatFacadeError:
+    """One non-enumerating error shared by unknown-binding and unauthorized-caller.
+
+    Returning the same typed 404 for a missing binding and for a caller that does
+    not own an existing binding prevents enumerating which binding ids exist and
+    never reveals whether an alternate provider session exists (OB-§4.2).
+    """
+
+    return WorkflowChatFacadeError(
+        "No Workflow Chat binding resolves the requested id.",
+        failure_class="user_error",
+        status_code=status.HTTP_404_NOT_FOUND,
+        code=CODE_BINDING_UNKNOWN,
+    )
+
+
+async def _resolve_and_authorize_chat_binding(
+    *,
+    chat_binding_id: str,
+    operation: str,
+    user: User,
+    service: Any,
+    store: OmnigentBridgeSessionStore,
+) -> Any:
+    """Resolve the durable binding and authorize the caller, failing closed.
+
+    Implements OB-§4.2 steps 1-3 for one request: authenticate (already enforced
+    by the route dependency), resolve the durable binding, and authorize the
+    caller against the bound Workflow Execution. Unknown binding and unauthorized
+    caller collapse to one non-enumerating response; the audit record carries the
+    precise reason.
+    """
+
+    row = await _resolve_chat_binding_row(chat_binding_id=chat_binding_id, store=store)
+    if row is None:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="binding_unknown",
+        )
+        raise _binding_unknown_error()
+    workflow_id = str(getattr(row, "moonmind_workflow_id", "") or "").strip()
+    agent_run_id = str(getattr(row, "moonmind_agent_run_id", "") or "").strip() or None
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        workflow_id_header=workflow_id,
+        agent_run_id_header=agent_run_id,
+    )
+    if not principal.workflow_id:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="caller_unauthorized",
+        )
+        raise _binding_unknown_error()
+    return row
+
+
+# Upstream/topology keys that must never reach the browser, at any nesting
+# depth. Dropped from every mapping in a virtualized response — not only the
+# root — so a list result (e.g. ``GET v1/agents``) or a nested snapshot/resource
+# object cannot preserve ``endpoint``, ``host_id``, ``runner_id``, or MoonMind
+# binding metadata (OB-§4.2: provider topology stays server-side).
+_FACADE_TOPOLOGY_KEYS: frozenset[str] = frozenset(
+    {
+        "moonmind",
+        "host_id",
+        "hostId",
+        "runner_id",
+        "runnerId",
+        "endpoint",
+        "endpoint_ref",
+        "endpointRef",
+        "base_url",
+        "baseUrl",
+        "upstream_url",
+        "upstreamUrl",
+    }
+)
+
+
+def _virtualize_facade_payload(
+    payload: Any, *, provider_session_id: str, chat_binding_id: str
+) -> Any:
+    """Rewrite a response so no server-side identity reaches the browser.
+
+    Exact-match occurrences of the provider session id are replaced by the
+    virtual ``chatBindingId`` at any nesting depth, and upstream topology fields
+    (endpoint, host, runner, and MoonMind binding metadata) are dropped from
+    every mapping regardless of response shape. Provider session id and upstream
+    endpoint never leave the server (``exposeProviderSessionId: false``).
+    """
+
+    def _rewrite(value: Any) -> Any:
+        if isinstance(value, str):
+            if provider_session_id and value == provider_session_id:
+                return chat_binding_id
+            return value
+        if isinstance(value, dict):
+            return {
+                key: _rewrite(item)
+                for key, item in value.items()
+                if key not in _FACADE_TOPOLOGY_KEYS
+            }
+        if isinstance(value, list):
+            return [_rewrite(item) for item in value]
+        return value
+
+    rewritten = _rewrite(payload)
+    if isinstance(rewritten, dict):
+        if "id" in rewritten or "session_id" in rewritten or "sessionId" in rewritten:
+            rewritten["id"] = chat_binding_id
+    return rewritten
+
+
+async def _read_facade_json_body(request: Request) -> dict[str, Any]:
+    """Read a bounded JSON object body for a facade mutation, or fail closed."""
+
+    content_type = str(request.headers.get("content-type") or "").split(";")[0].strip()
+    if content_type.lower() != "application/json":
+        raise WorkflowChatFacadeError(
+            "This operation requires an application/json request body.",
+            failure_class="user_error",
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code=CODE_UNSUPPORTED_MEDIA_TYPE,
+        )
+
+    def _too_large() -> WorkflowChatFacadeError:
+        return WorkflowChatFacadeError(
+            "The request body exceeds the Workflow Chat facade limit.",
+            failure_class="user_error",
+            status_code=413,
+            code=CODE_PAYLOAD_TOO_LARGE,
+        )
+
+    # Reject an oversized *declared* length before reading a single byte so an
+    # authenticated client cannot make the API buffer a very large payload just
+    # to receive the 413 (OB-§4.2 resource boundary).
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            if int(declared_length) > _FACADE_MAX_BODY_BYTES:
+                raise _too_large()
+        except ValueError as exc:
+            raise WorkflowChatFacadeError(
+                "The request declared an invalid content length.",
+                failure_class="user_error",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code=CODE_MALFORMED_PAYLOAD,
+            ) from exc
+
+    # Consume the ASGI body incrementally with a hard byte cap so a chunked or
+    # length-underdeclared upload is aborted as soon as it crosses the limit
+    # rather than after the whole payload is resident in memory.
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > _FACADE_MAX_BODY_BYTES:
+            raise _too_large()
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    try:
+        parsed = json.loads(raw or b"{}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The request body is not valid JSON.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise WorkflowChatFacadeError(
+            "The request body must be a JSON object.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+    return parsed
+
+
+def _facade_liveness_state(row: Any) -> str:
+    status_value = str(getattr(row, "status", "") or "").strip().lower()
+    if is_read_only(status_value):
+        return "ended"
+    if not str(getattr(row, "omnigent_session_id", "") or "").strip():
+        return "starting"
+    return "available"
+
+
+def _durable_terminal_snapshot(
+    row: Any, *, chat_binding_id: str, capabilities: dict[str, bool]
+) -> dict[str, Any]:
+    """Build a read-only bootstrap snapshot from the durable projection.
+
+    Used when a terminal binding's provider session was deleted after harvest:
+    the durable row still carries final snapshots, event journals, and terminal
+    refs, so the native application can display its read-only transcript without
+    a live upstream session id. No server-side identity is included.
+    """
+
+    envelope = _terminal_envelope(row)
+    snapshot: dict[str, Any] = {
+        "id": chat_binding_id,
+        "sessionId": chat_binding_id,
+        "status": str(getattr(row, "status", "") or ""),
+        "readOnly": True,
+        "capabilities": capabilities,
+        "providerSessionAvailable": False,
+    }
+    if envelope is not None:
+        snapshot["terminal"] = envelope.model_dump(by_alias=True)
+    return snapshot
+
+
+def _facade_idempotency_key(request: Request) -> str | None:
+    """Return the caller-supplied ``Idempotency-Key`` for a facade mutation."""
+
+    raw = str(request.headers.get("Idempotency-Key") or "").strip()
+    return raw[:255] or None
+
+
+def _enforce_native_outbound_scan(
+    *,
+    surface: NativeScanSurface,
+    body: dict[str, Any] | None,
+    idempotency_key: str | None,
+    chat_binding_id: str,
+    user: Any,
+    operation: str,
+) -> NativeScanEvidence:
+    """Preserve the high-security outbound-scan guarantee at the native boundary.
+
+    Runs the versioned native-scan contract (MoonLadderStudios/MoonMind#3637)
+    before any provider forward and returns bounded, digest-bound evidence. A
+    secret-like finding is rejected with a distinct content-blocked error that
+    surfaces only the redacted finding category/location; an enforcement failure
+    (unknown/uninspectable shape, undecodable field, binary part, or a scanner
+    error) fails closed with a *separate* enforcement-unavailable error so the
+    two conditions are never conflated. High-security mode disabled returns an
+    allow result and the original payload is forwarded unchanged. The raised
+    error and the audit record never echo the detected value or the message
+    body.
+    """
+
+    try:
+        evidence = scan_native_outbound(
+            surface=surface,
+            body=body or {},
+            idempotency_key=idempotency_key,
+        )
+    except NativeScanBlockedError as exc:
+        _audit_facade(
+            outcome="content_blocked",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="content_blocked",
+            scan_evidence=exc.evidence,
+        )
+        raise WorkflowChatFacadeError(
+            "The message contains content blocked by the security policy.",
+            failure_class="user_error",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=CODE_CONTENT_BLOCKED,
+            public_details={
+                "findings": [
+                    {"category": finding.category, "location": finding.location}
+                    for finding in exc.evidence.findings
+                ],
+            },
+        ) from exc
+    except NativeScanEnforcementError as exc:
+        _audit_facade(
+            outcome="enforcement_unavailable",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason=exc.evidence.reason,
+            scan_evidence=exc.evidence,
+        )
+        raise WorkflowChatFacadeError(
+            "The security scan required for this request is unavailable.",
+            failure_class="system_error",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code=CODE_ENFORCEMENT_UNAVAILABLE,
+        ) from exc
+    return evidence
+
+
+async def _revalidate_binding_before_mutation(
+    *,
+    store: OmnigentBridgeSessionStore,
+    chat_binding_id: str,
+    expected_provider_session_id: str,
+) -> tuple[Any, str, dict[str, bool]]:
+    """Re-read and compare-and-set the binding state at the mutation handoff.
+
+    The read-only decision and capabilities were computed from the row loaded at
+    the start of the request, but the provider mutation is issued later — after
+    the body is buffered and scanned. Re-resolve the durable binding immediately
+    before the side effect so a session that terminalized, was replaced, or had
+    its policy revoked mid-request cannot be mutated with stale authority. The
+    fresh provider session id and fresh capabilities are returned for the caller
+    to forward with and re-check.
+    """
+
+    fresh = await _resolve_chat_binding_row(chat_binding_id=chat_binding_id, store=store)
+    if fresh is None:
+        raise _binding_unknown_error()
+    fresh_status = str(getattr(fresh, "status", "") or "")
+    if is_read_only(fresh_status):
+        raise WorkflowChatFacadeError(
+            "This Workflow Chat session is terminal and read-only.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_READ_ONLY,
+        )
+    fresh_provider = str(getattr(fresh, "omnigent_session_id", "") or "").strip()
+    if fresh_provider != expected_provider_session_id:
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat session changed before the request completed.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_NOT_READY,
+        )
+    fresh_capabilities = recompute_capabilities(
+        fresh_status, policy_capabilities=_projection_capabilities(fresh)
+    )
+    return fresh, fresh_provider, fresh_capabilities
+
+
+async def _claim_facade_message(
+    *,
+    store: OmnigentBridgeSessionStore,
+    row: Any,
+    event_type: str,
+    actor: str,
+    idempotency_key: str,
+    payload_digest: str,
+) -> bool:
+    """Atomically claim a native message submission for exactly-once forwarding.
+
+    Persists a durable, secret-safe control record keyed by the caller's
+    idempotency key. Returns ``True`` for the one claimant that may forward the
+    provider POST and ``False`` on a genuine replay (browser retry or
+    double-submit) of the *same* payload, so the facade never issues a duplicate
+    provider turn or duplicate billing. The scanned payload digest is recorded so
+    the claim durably names the exact payload that passed the outbound scan.
+
+    A repeated idempotency key bound to a *different* scanned payload digest is
+    not a benign replay: reporting it as a successful deduplication would
+    silently drop the changed message. Such a conflict fails closed with a
+    distinct, redacted error rather than returning ``False``.
+    """
+
+    event_identity = f"workflow-chat-message:{idempotency_key}"
+    claimed = await store.claim_lifecycle_event(
+        row.idempotency_key,
+        event_type="workflow_chat_message",
+        event_identity=event_identity,
+        summary=f"native chat {event_type}",
+        metadata={
+            "actor": actor,
+            "controlType": event_type,
+            "controlOutcome": "posting",
+            "controlIdempotencyKey": idempotency_key,
+            "scannedPayloadDigest": payload_digest,
+            "sourceMode": "workflow_chat_facade",
+        },
+    )
+    if claimed:
+        return True
+
+    # An existing claim for this key: reconcile against the digest it was first
+    # bound to. A matching digest is a true replay; a different digest means the
+    # same key was reused for changed content and must fail closed.
+    existing = await store.get_lifecycle_event_metadata(
+        row.idempotency_key, event_identity=event_identity
+    )
+    prior_digest = str((existing or {}).get("scannedPayloadDigest") or "")
+    if prior_digest and prior_digest != payload_digest:
+        raise WorkflowChatFacadeError(
+            "This Idempotency-Key was already used for a different message.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_IDEMPOTENCY_CONFLICT,
+        )
+    return False
+
+
+async def _record_facade_mutation_audit(
+    *,
+    store: OmnigentBridgeSessionStore,
+    row: Any,
+    control_type: str,
+    outcome: str,
+    actor: str,
+    idempotency_key: str | None = None,
+    scan_evidence: NativeScanEvidence | None = None,
+) -> None:
+    """Persist durable, secret-safe evidence of a facade mutation (OB-§19).
+
+    A rotating process log is not durable evidence, so mutation outcomes are
+    recorded in the binding's durable control/event ledger with the actor,
+    control type, normalized outcome, and (when present) idempotency key. When
+    the mutation ran the native outbound scan, the bounded, non-disclosing scan
+    evidence (contract version, surface, effective mode, scanner policy ref,
+    payload digest, and allow/block outcome) is persisted too so the durable
+    record proves the exact payload was scanned even after process logs rotate —
+    for message *and* elicitation/approval mutations alike.
+    """
+
+    metadata: dict[str, Any] = {
+        "actor": actor,
+        "controlType": control_type,
+        "controlOutcome": outcome,
+        "sourceMode": "workflow_chat_facade",
+    }
+    if idempotency_key:
+        metadata["controlIdempotencyKey"] = idempotency_key
+    if scan_evidence is not None:
+        metadata.update(scan_evidence.audit_metadata())
+    identity_suffix = idempotency_key or actor
+    try:
+        await store.record_lifecycle_event(
+            row.idempotency_key,
+            event_type="workflow_chat_control",
+            event_identity=(
+                f"workflow-chat-control:{control_type}:{outcome}:{identity_suffix}"
+            ),
+            summary=f"workflow chat {control_type} {outcome}",
+            metadata=metadata,
+        )
+    except OmnigentIdempotencyError:
+        # The durable row lock lost a benign race with terminal processing; the
+        # authoritative terminal evidence remains, so the audit is best-effort.
+        logger.info(
+            "omnigent.workflow_chat_facade audit-skip control=%s outcome=%s",
+            control_type,
+            outcome,
+        )
+
+
+def _event_is_chat_visible(row: Any) -> bool:
+    """Return whether a journal row is meant for the browser transcript.
+
+    Bridge lifecycle/control rows explicitly set
+    ``metadata.moonmind.workflowChatVisible = False`` (they can carry internal
+    control idempotency keys, cleanup details, and host-lease references). Those
+    rows are excluded from the native SSE stream; anything without an explicit
+    ``False`` remains visible.
+    """
+
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return True
+    moonmind = metadata.get("moonmind")
+    if isinstance(moonmind, dict) and moonmind.get("workflowChatVisible") is False:
+        return False
+    return True
+
+
+async def _stream_workflow_chat_events(
+    *,
+    request: Request,
+    chat_binding_id: str,
+    bridge_session_id: str,
+    provider_session_id: str,
+    initial_cursor: int,
+    user: User,
+    service: Any,
+    store: OmnigentBridgeSessionStore,
+):
+    """Yield durable bridge-journal events with cursor + reauthorization semantics.
+
+    Authorization already ran before this generator is returned. The generator
+    additionally re-verifies binding authority on a bounded cadence so a stream
+    cannot silently outlive revoked authority, translates ``Last-Event-ID`` /
+    cursor resume, surfaces retention gaps, and only reports terminal on durable
+    terminal evidence (stream close is never treated as terminal success).
+
+    Journal reads use the resolved ``bridge_session_id`` (not the browser's
+    ``chat_binding_id``); reauthorization uses the ``chat_binding_id``. Rows the
+    durable projection marks non-visible are skipped, and every emitted event is
+    virtualized so no server-side identity reaches the browser.
+    """
+
+    last_sequence = initial_cursor
+    idle_polls = 0
+    polls_since_reauth = 0
+    while True:
+        if await request.is_disconnected():
+            return
+        polls_since_reauth += 1
+        if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
+            polls_since_reauth = 0
+            try:
+                await _resolve_and_authorize_chat_binding(
+                    chat_binding_id=chat_binding_id,
+                    operation="stream_events",
+                    user=user,
+                    service=service,
+                    store=store,
+                )
+            except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+                payload = {
+                    "code": CODE_BINDING_UNKNOWN,
+                    "message": "Workflow Chat binding authority is no longer valid.",
+                }
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                )
+                return
+        page = await store.list_event_page(
+            bridge_session_id, after=last_sequence, limit=_BRIDGE_STREAM_PAGE_SIZE
+        )
+        if (
+            page.earliest_sequence is not None
+            and last_sequence + 1 < page.earliest_sequence
+        ):
+            gap = BridgeRetentionGap(
+                requested_after=last_sequence,
+                earliest_available=page.earliest_sequence,
+            )
+            yield (
+                "event: retention_gap\n"
+                f"data: {gap.model_dump_json(by_alias=True)}\n\n"
+            )
+            return
+        for row in page.rows:
+            last_sequence = row.sequence
+            idle_polls = 0
+            if not _event_is_chat_visible(row):
+                continue
+            payload = _bridge_event_payload(row)
+            # The browser only ever sees the opaque chatBindingId; map the
+            # server-owned bridge-session identifiers to it before virtualizing
+            # away any provider session id.
+            for identity_key in ("bridgeSessionId", "sessionId", "session_id"):
+                if identity_key in payload:
+                    payload[identity_key] = chat_binding_id
+            event_payload = json.dumps(
+                _virtualize_facade_payload(
+                    payload,
+                    provider_session_id=provider_session_id,
+                    chat_binding_id=chat_binding_id,
+                ),
+                separators=(",", ":"),
+            )
+            yield f"id: {row.sequence}\nevent: bridge_event\ndata: {event_payload}\n\n"
+        session_row = await store.get_bridge_session(bridge_session_id)
+        envelope = _terminal_envelope(session_row)
+        if (
+            envelope is not None
+            and last_sequence >= page.latest_sequence
+            and not page.has_more
+        ):
+            confirmation = await store.list_event_page(
+                bridge_session_id, after=last_sequence, limit=1
+            )
+            if confirmation.rows or confirmation.latest_sequence > last_sequence:
+                continue
+            yield (
+                "event: terminal\n"
+                f"data: {envelope.model_dump_json(by_alias=True)}\n\n"
+            )
+            return
+        if page.has_more:
+            continue
+        idle_polls += 1
+        yield ": keepalive\n\n"
+        if idle_polls >= _BRIDGE_STREAM_MAX_IDLE_POLLS:
+            return
+        await asyncio.sleep(_BRIDGE_STREAM_POLL_SECONDS)
+
+
+def _initial_stream_cursor(
+    *, cursor: int | None, since: int | None, last_event_id: str | None
+) -> int:
+    header_cursor: int | None = None
+    if last_event_id:
+        try:
+            header_cursor = int(last_event_id)
+        except ValueError as exc:
+            raise WorkflowChatFacadeError(
+                "The Last-Event-ID cursor is invalid.",
+                failure_class="user_error",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code=CODE_MALFORMED_PAYLOAD,
+            ) from exc
+    return max(
+        (value for value in (cursor, header_cursor, since) if value is not None),
+        default=0,
+    )
+
+
+async def workflow_chat_binding_facade(
+    chat_binding_id: str,
+    omnigent_path: str,
+    request: Request,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
+    registry: RetrievalCapabilityRegistry = Depends(get_capability_registry),
+):
+    """Single binding-scoped entrypoint for the native Omnigent Workflow Chat UI.
+
+    Not a generic reverse proxy: every request is matched against an explicit
+    method + route allowlist, reauthorized against the durable binding, checked
+    for identity substitution, capability-gated from recomputed trusted state,
+    and forwarded only to the server-resolved provider session with MoonMind
+    credentials stripped and upstream credentials injected server-side.
+    """
+
+    try:
+        return await _dispatch_workflow_chat_facade(
+            chat_binding_id=chat_binding_id,
+            omnigent_path=omnigent_path,
+            request=request,
+            config=config,
+            user=user,
+            service=service,
+            store=store,
+            proxy=proxy,
+            embedded_facade=embedded_facade,
+            registry=registry,
+        )
+    except (WorkflowChatFacadeError, OmnigentBridgeError) as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+# Register the single binding-scoped facade handler once per HTTP method with an
+# explicit, method-suffixed operation id. A single ``api_route(methods=[...])``
+# derives its OpenAPI operation id from ``route.methods`` (a set), so the
+# exported operation id — and the frontend types generated from it — would flip
+# between ``_get`` and ``_post`` across processes with different hash seeds,
+# making the generated-contract check non-deterministic. One route per method
+# keeps the exported contract stable (matching the proxy router idiom).
+for _facade_method in ("GET", "POST"):
+    workflow_chat_router.add_api_route(
+        "/{chat_binding_id}/omnigent/{omnigent_path:path}",
+        workflow_chat_binding_facade,
+        methods=[_facade_method],
+        operation_id=f"workflow_chat_binding_facade_{_facade_method.lower()}",
+        responses=_PUBLIC_ERROR_RESPONSES,
+    )
+
+
+async def _dispatch_workflow_chat_facade(
+    *,
+    chat_binding_id: str,
+    omnigent_path: str,
+    request: Request,
+    config: OmnigentBridgeConfig,
+    user: User,
+    service: Any,
+    store: OmnigentBridgeSessionStore,
+    proxy: OmnigentBridgeSessionProxy | None,
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
+    registry: RetrievalCapabilityRegistry,
+):
+    # 1. Resolve + authorize the durable binding first, so an unauthorized
+    #    caller cannot even probe which routes exist (fully non-enumerating).
+    match = match_facade_operation(request.method, omnigent_path)
+    operation_name = match.operation.name if match else "unknown"
+    row = await _resolve_and_authorize_chat_binding(
+        chat_binding_id=chat_binding_id,
+        operation=operation_name,
+        user=user,
+        service=service,
+        store=store,
+    )
+
+    # 2. Enforce the explicit method + route allowlist.
+    if match is None:
+        _audit_facade(
+            outcome="denied",
+            operation="unknown",
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="route_not_allowlisted",
+        )
+        raise WorkflowChatFacadeError(
+            "The requested route is not available on this binding.",
+            failure_class="user_error",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=CODE_ROUTE_NOT_ALLOWLISTED,
+        )
+    operation = match.operation
+    params = match.params
+    # Journal reads use the resolved durable bridge-session key; the browser only
+    # ever names the opaque ``chat_binding_id`` (they are the same value today but
+    # diverge once #3633 adds a dedicated binding column — see module note).
+    bridge_session_id = str(getattr(row, "bridge_session_id", "") or "").strip()
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
+    session_status = str(getattr(row, "status", "") or "")
+    # Capabilities are recomputed from trusted status *and* intersected with the
+    # binding's stored policy so a disabled operation is never re-advertised or
+    # re-authorized from status alone.
+    capabilities = recompute_capabilities(
+        session_status, policy_capabilities=_projection_capabilities(row)
+    )
+
+    # 3. Read a bounded JSON body for mutations before the substitution guard.
+    body: dict[str, Any] | None = None
+    if request.method.upper() == "POST":
+        body = await _read_facade_json_body(request)
+
+    # 4. Reject any attempt to substitute a server-owned identity in the path,
+    #    query, body, or headers (session id may only echo the bound id).
+    try:
+        assert_no_identity_substitution(
+            chat_binding_id=chat_binding_id,
+            path_session_id=params.get("session_id"),
+            query=dict(request.query_params),
+            body=body,
+            headers=request.headers,
+        )
+    except WorkflowChatFacadeError:
+        _audit_facade(
+            outcome="denied",
+            operation=operation.name,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="identity_substitution",
+        )
+        raise
+
+    # 5. Liveness probe is served locally and never forwarded upstream.
+    if operation.name == "liveness":
+        return {
+            "chatBindingId": chat_binding_id,
+            "state": _facade_liveness_state(row),
+            "readOnly": is_read_only(session_status),
+            "capabilities": capabilities,
+        }
+
+    # 6. Recompute-driven capability + session-state gates.
+    #    A terminal binding deliberately survives provider cleanup with durable
+    #    final snapshots and event journals, so its read-only transcript bootstrap
+    #    (``get_session``) is served from the durable projection rather than
+    #    requiring a live upstream session id. Every other provider-session-backed
+    #    operation still fails closed until a session is attached.
+    serve_durable_terminal_snapshot = (
+        operation.name == "get_session"
+        and is_read_only(session_status)
+        and not provider_session_id
+    )
+    if (
+        operation.requires_provider_session
+        and not provider_session_id
+        and not serve_durable_terminal_snapshot
+    ):
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat binding has no active provider session yet.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_NOT_READY,
+        )
+    if operation.capability and not capabilities.get(operation.capability, False):
+        _audit_facade(
+            outcome="denied",
+            operation=operation.name,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="capability_denied",
+        )
+        raise WorkflowChatFacadeError(
+            "The requested operation is not permitted for this binding.",
+            failure_class="user_error",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=CODE_OPERATION_DENIED,
+        )
+
+    facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if operation.name != "stream_events" and facade is None:
+        raise WorkflowChatFacadeError(
+            "The Omnigent bridge host protocol mode does not support this route.",
+            failure_class="system_error",
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            code="omnigent_bridge_mode_unsupported",
+        )
+
+    # 7. Live/replay stream from the durable journal (cursor + reauth semantics).
+    if operation.name == "stream_events":
+        initial_cursor = _initial_stream_cursor(
+            cursor=_strict_query_cursor(request.query_params.get("cursor"), "cursor"),
+            since=_strict_query_cursor(request.query_params.get("since"), "since"),
+            last_event_id=request.headers.get("Last-Event-ID"),
+        )
+        return StreamingResponse(
+            _stream_workflow_chat_events(
+                request=request,
+                chat_binding_id=chat_binding_id,
+                bridge_session_id=bridge_session_id,
+                provider_session_id=provider_session_id,
+                initial_cursor=initial_cursor,
+                user=user,
+                service=service,
+                store=store,
+            ),
+            media_type="text/event-stream",
+        )
+
+    # 8. Session metadata / catalog.
+    if operation.name == "list_agents":
+        agents = await facade.list_agents()
+        return _virtualize_facade_payload(
+            agents,
+            provider_session_id=provider_session_id,
+            chat_binding_id=chat_binding_id,
+        )
+
+    # 9. Session snapshot / bootstrap / history.
+    if operation.name == "get_session":
+        if serve_durable_terminal_snapshot:
+            # Provider session was deleted after harvest; bootstrap the read-only
+            # transcript from the durable projection instead of a live upstream id.
+            return _durable_terminal_snapshot(
+                row,
+                chat_binding_id=chat_binding_id,
+                capabilities=capabilities,
+            )
+        snapshot = await facade.get_session(provider_session_id)
+        virtualized = _virtualize_facade_payload(
+            snapshot,
+            provider_session_id=provider_session_id,
+            chat_binding_id=chat_binding_id,
+        )
+        if isinstance(virtualized, dict):
+            virtualized["capabilities"] = capabilities
+            virtualized["readOnly"] = is_read_only(session_status)
+        return virtualized
+
+    # 10. Message / control events — routed through the shared control path.
+    if operation.name == "post_event":
+        try:
+            event = BridgeSessionEventRequest.model_validate(body or {})
+        except ValidationError as exc:
+            raise WorkflowChatFacadeError(
+                "The control event body is not a supported shape.",
+                failure_class="user_error",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code=CODE_MALFORMED_PAYLOAD,
+            ) from exc
+        if is_read_only(session_status):
+            raise WorkflowChatFacadeError(
+                "This Workflow Chat session is terminal and read-only.",
+                failure_class="user_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_READ_ONLY,
+            )
+        required = required_capability_for_event(event.type)
+        if not capabilities.get(required, False):
+            _audit_facade(
+                outcome="denied",
+                operation="post_event",
+                chat_binding_id=chat_binding_id,
+                user=user,
+                reason="capability_denied",
+            )
+            raise WorkflowChatFacadeError(
+                "The requested control is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=status.HTTP_403_FORBIDDEN,
+                code=CODE_OPERATION_DENIED,
+            )
+
+        # Idempotent submission: a caller-supplied ``Idempotency-Key`` makes a
+        # browser retry or double-submit resolve to exactly one provider turn.
+        # Resolved before the scan so the scan evidence binds the decision to
+        # both the canonical payload digest and the idempotency key.
+        client_key = _facade_idempotency_key(request)
+        effective_key = client_key or f"mm-{uuid4().hex}"
+
+        # Fail-closed outbound secret scan before any provider forward. The
+        # digest-bound evidence proves which exact payload was scanned, so a
+        # retry, queued flush, steer, reconnect replay, or reconciliation cannot
+        # reuse an allow result after the content changes.
+        scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.MESSAGE,
+            body=body,
+            idempotency_key=effective_key,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            operation="post_event",
+        )
+
+        # Revalidate the binding/session state at the mutation handoff (CAS):
+        # the row was loaded before the body was buffered and scanned.
+        fresh_row, fresh_provider, fresh_capabilities = (
+            await _revalidate_binding_before_mutation(
+                store=store,
+                chat_binding_id=chat_binding_id,
+                expected_provider_session_id=provider_session_id,
+            )
+        )
+        if not fresh_capabilities.get(required, False):
+            _audit_facade(
+                outcome="denied",
+                operation="post_event",
+                chat_binding_id=chat_binding_id,
+                user=user,
+                reason="capability_revoked",
+            )
+            raise WorkflowChatFacadeError(
+                "The requested control is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=status.HTTP_403_FORBIDDEN,
+                code=CODE_OPERATION_DENIED,
+            )
+
+        # The provider forward must carry the exact payload that was scanned. A
+        # digest mismatch here means the payload changed after the scan (an
+        # unscanned-forward attempt) and fails closed rather than forwarding.
+        if canonical_payload_digest(body or {}) != scan_evidence.payload_digest:
+            raise WorkflowChatFacadeError(
+                "The security scan required for this request is unavailable.",
+                failure_class="system_error",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=CODE_ENFORCEMENT_UNAVAILABLE,
+            )
+
+        claimed = await _claim_facade_message(
+            store=store,
+            row=fresh_row,
+            event_type=event.type,
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            payload_digest=scan_evidence.payload_digest,
+        )
+        if not claimed:
+            # Replay of a previously accepted key: reconcile without re-posting.
+            _audit_facade(
+                outcome="deduplicated",
+                operation=f"post_event:{event.type}",
+                chat_binding_id=chat_binding_id,
+                user=user,
+            )
+            return {
+                "ok": True,
+                "deduplicated": True,
+                "type": event.type,
+                "session_id": chat_binding_id,
+            }
+
+        result = await _apply_owned_session_control(
+            control_facade=facade,
+            session_id=fresh_provider,
+            payload=event,
+            config=config,
+            actor=str(user.id),
+            proxy=proxy,
+            embedded_facade=embedded_facade,
+            registry=registry,
+            store=store,
+        )
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=event.type,
+            outcome="posted",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+        )
+        _audit_facade(
+            outcome="mutation",
+            operation=f"post_event:{event.type}",
+            chat_binding_id=chat_binding_id,
+            user=user,
+        )
+        return _virtualize_facade_payload(
+            result,
+            provider_session_id=fresh_provider,
+            chat_binding_id=chat_binding_id,
+        )
+
+    # 11. Elicitation / approval resolution.
+    if operation.name == "resolve_elicitation":
+        if is_read_only(session_status):
+            raise WorkflowChatFacadeError(
+                "This Workflow Chat session is terminal and read-only.",
+                failure_class="user_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_READ_ONLY,
+            )
+        # Approval resolution requires its own capability (intersected with the
+        # binding policy), not merely a non-terminal session. A workflow owner
+        # whose effective policy denies approval must not resolve elicitations.
+        if not capabilities.get(CAP_RESOLVE_ELICITATION, False):
+            _audit_facade(
+                outcome="denied",
+                operation="resolve_elicitation",
+                chat_binding_id=chat_binding_id,
+                user=user,
+                reason="capability_denied",
+            )
+            raise WorkflowChatFacadeError(
+                "Approval resolution is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=status.HTTP_403_FORBIDDEN,
+                code=CODE_OPERATION_DENIED,
+            )
+
+        # Fail-closed outbound secret scan of the operator-authored approval
+        # response text before any provider forward, on the same contract as the
+        # message path (brief §1: elicitation/approval response text is a
+        # supported text-bearing native surface).
+        elicitation_scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.ELICITATION_RESPONSE,
+            body=body,
+            idempotency_key=_facade_idempotency_key(request),
+            chat_binding_id=chat_binding_id,
+            user=user,
+            operation="resolve_elicitation",
+        )
+
+        # Revalidate the binding/session state at the mutation handoff so a
+        # revoked policy or replaced session cannot be resolved with stale
+        # authority (stale/replayed resolutions are also rejected upstream by
+        # the provider's pending-elicitation check).
+        fresh_row, fresh_provider, fresh_capabilities = (
+            await _revalidate_binding_before_mutation(
+                store=store,
+                chat_binding_id=chat_binding_id,
+                expected_provider_session_id=provider_session_id,
+            )
+        )
+        if not fresh_capabilities.get(CAP_RESOLVE_ELICITATION, False):
+            _audit_facade(
+                outcome="denied",
+                operation="resolve_elicitation",
+                chat_binding_id=chat_binding_id,
+                user=user,
+                reason="capability_revoked",
+            )
+            raise WorkflowChatFacadeError(
+                "Approval resolution is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=status.HTTP_403_FORBIDDEN,
+                code=CODE_OPERATION_DENIED,
+            )
+        actor_kwargs = (
+            {"actor": str(user.id)}
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else {}
+        )
+        result = await facade.resolve_elicitation(
+            session_id=fresh_provider,
+            elicitation_id=params["elicitation_id"],
+            payload=body or {},
+            **actor_kwargs,
+        )
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type="resolve_elicitation",
+            outcome="posted",
+            actor=str(user.id),
+            idempotency_key=_facade_idempotency_key(request),
+            scan_evidence=elicitation_scan_evidence,
+        )
+        _audit_facade(
+            outcome="mutation",
+            operation="resolve_elicitation",
+            chat_binding_id=chat_binding_id,
+            user=user,
+        )
+        return _virtualize_facade_payload(
+            result,
+            provider_session_id=fresh_provider,
+            chat_binding_id=chat_binding_id,
+        )
+
+    # 12. Read-only resource indexes and content.
+    resource_value = params.get("res_path") or params.get("file_id")
+    result = await facade.get_resource(
+        operation.name, provider_session_id, resource_value
+    )
+    if operation.binary and isinstance(result, bytes):
+        media_type = (
+            "text/x-diff"
+            if operation.name == "workspace_diff"
+            else "application/octet-stream"
+        )
+        return Response(content=result, media_type=media_type)
+    return _virtualize_facade_payload(
+        result,
+        provider_session_id=provider_session_id,
+        chat_binding_id=chat_binding_id,
+    )
+
+
+def _strict_query_cursor(value: Any, field: str) -> int | None:
+    """Parse a stream ``cursor``/``since`` query value, or fail closed.
+
+    A missing value returns ``None``. Unlike a silently-coerced cursor, a
+    nonnumeric or negative value is rejected with the stable malformed-cursor
+    error rather than resuming the stream from zero and replaying the entire
+    retained journal, which would duplicate already-rendered transcript events.
+    """
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise WorkflowChatFacadeError(
+            f"The {field} cursor is invalid.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        ) from exc
+    if parsed < 0:
+        raise WorkflowChatFacadeError(
+            f"The {field} cursor is invalid.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+    return parsed
+
+
 __all__ = [
     "OMNIGENT_BRIDGE_MOUNT_PATH",
+    "WORKFLOW_CHAT_BINDINGS_MOUNT_PATH",
     "router",
+    "workflow_chat_router",
 ]

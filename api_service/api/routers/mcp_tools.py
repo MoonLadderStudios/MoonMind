@@ -56,8 +56,6 @@ from moonmind.mcp.remediation_tool_registry import (
     RemediationToolRegistry,
 )
 from moonmind.mcp.tool_registry import (
-    QueueToolExecutionContext,
-    QueueToolRegistry,
     ResourceListResponse,
     ResourceMetadata,
     ToolArgumentsValidationError,
@@ -77,7 +75,6 @@ MCP_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_MCP_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-06-18"}
 MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
 
-_queue_registry = QueueToolRegistry()
 _execution_tool_registry = ExecutableToolDiscoveryRegistry()
 _container_job_registry = ContainerJobToolRegistry()
 _skills_on_demand_registry = SkillsOnDemandToolRegistry(
@@ -90,15 +87,6 @@ _jules_registry: JulesToolRegistry | None = None
 _jules_client: JulesClient | None = None
 
 _resources = (
-    ResourceMetadata(
-        uri="moonmind://context",
-        name="context-completion",
-        description=(
-            "Chat-style context completion endpoint with optional RAG, available "
-            "through POST /context."
-        ),
-        mime_type="application/json",
-    ),
     ResourceMetadata(
         uri="moonmind://mcp/tools",
         name="tool-catalog",
@@ -181,8 +169,7 @@ def _list_container_job_tools() -> list[Any]:
 
 def _list_registered_tools() -> list[Any]:
     tools = (
-        _queue_registry.list_tools()
-        + _execution_tool_registry.list_tools()
+        _execution_tool_registry.list_tools()
         + _skills_on_demand_registry.list_tools()
         + _remediation_registry.list_tools()
         + _list_container_job_tools()
@@ -196,8 +183,7 @@ def _list_registered_tools() -> list[Any]:
 
 def _list_streamable_callable_tools() -> list[Any]:
     tools = (
-        _queue_registry.list_tools()
-        + _skills_on_demand_registry.list_tools()
+        _skills_on_demand_registry.list_tools()
         + _remediation_registry.list_tools()
         + _list_container_job_tools()
     )
@@ -339,15 +325,7 @@ async def _dispatch_tool_call(
             context=context,
         )
 
-    queue_context = QueueToolExecutionContext(
-        service=None,
-        user_id=getattr(user, "id", None),
-    )
-    return await _queue_registry.call_tool(
-        tool=payload.tool,
-        arguments=payload.arguments,
-        context=queue_context,
-    )
+    raise ToolNotFoundError(payload.tool)
 
 
 def _json_rpc_result(request_id: str | int, result: dict[str, Any]) -> dict[str, Any]:

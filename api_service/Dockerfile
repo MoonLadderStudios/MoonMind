@@ -213,9 +213,6 @@ COPY README.md /app/README.md
 COPY LICENSE /app/LICENSE
 COPY NOTICE /app/NOTICE
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
-
 # Keep the test image buildable from the shallow, submodule-free checkout used
 # by required backend CI and managed workflow workspaces. Tests execute the
 # mounted checkout via PYTHONPATH, so this stage needs locked dependencies but

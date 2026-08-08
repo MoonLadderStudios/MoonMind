@@ -1,99 +1,144 @@
 # Chat Instruction Intervention
 
-**Status:** Design Draft / normative target  
+**Document Class:** Canonical declarative  
+**Status:** Deferred optional extension  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-07-02  
+**Last updated:** 2026-08-07  
 **Audience:** backend, workflow authors, dashboard, integrations, managed-runtime, operators
 
-**Implementation tracking:** Rollout tasks and tactical sequencing belong under `docs/tmp/`, issues, pull requests, or local-only handoffs. This document defines the durable architecture and product contract.
+**Authority:** This document owns a possible future **explicit workflow-steering** capability. It does not own the ordinary Workflow Detail Chat experience, which is defined by `docs/UI/WorkflowChatPanel.md` and uses the native Omnigent session UI.
+
+**Implementation tracking:** Rollout tasks and tactical sequencing belong under `docs/tmp/`, issues, pull requests, or local-only handoffs. No implementation work is required by this document until the capability is explicitly promoted.
 
 ## 1. Purpose
 
-MoonMind is adding a chat interface to active and completed Workflow Executions. This document defines how a user chat message can safely affect Temporal-managed work without turning the API, dashboard, or projection layer into a second orchestration engine.
+This document preserves the architectural boundary for a future action that lets a user deliberately change Temporal-managed workflow behavior while a Workflow Execution is active.
 
-The preferred product term is **chat**. New public contracts should use names such as `chatInstruction`, `chatThread`, and `SubmitChatInstruction`.
+It is not a general chat contract.
 
-A chat message becomes a typed, artifact-backed workflow instruction. `MoonMind.UserWorkflow` decides whether it attaches to the active Step, queues for a safe point, triggers a plan revision, cancels and reattempts active work, creates a linked follow-up execution, or rejects the request.
+The primary product path is:
 
-## 2. Related docs
+```text
+Workflow Detail Chat -> native Omnigent UI -> native Omnigent session
+```
 
-This document is the cross-cutting owner for chat instruction intervention and should be reflected by the Temporal architecture, workflow lifecycle, signal/update, type-safety, Step ledger, run-history, artifact, API, UI, and managed-runtime docs.
+A future workflow-steering path, if promoted, would be separate:
 
-## 3. Design principles
+```text
+Explicit Steer Workflow action -> artifact-backed command -> Temporal Update
+```
 
-1. **Chat is an input surface, not an orchestrator.** The dashboard and API may classify and route a chat instruction, but they must not schedule work independently of Temporal workflow state.
-2. **Public chat mutations use Updates.** The running-workflow primitive is `SubmitChatInstruction`; internal child delivery uses a typed artifact-ref Signal rather than raw chat text.
-3. **Chat text is artifact-backed.** Workflow history, Search Attributes, Memo, and Step rows carry compact refs, summaries, hashes, and bounded metadata only.
-4. **The workflow serializes conflicting mutations.** The Update validates, dedupes, records a compact command, wakes the main loop, and returns a bounded decision. The main loop drains commands at safe points.
-5. **Closed executions are immutable.** Terminal Workflow Executions do not accept ordinary chat mutation; the API creates linked follow-up executions with pinned source refs.
-6. **Replanning creates a new plan artifact.** Chat that changes future work creates a plan revision and records superseded future Steps.
+## 2. Product boundary
 
-## 4. Public control surface
+The following rules are normative:
 
-Preferred endpoint:
+1. Ordinary messages from the native Omnigent composer do not become workflow instructions.
+2. MoonMind does not infer workflow-steering intent from message text.
+3. Native chat does not call `SubmitChatInstruction` or `/api/executions/{workflowId}/chat-instructions`.
+4. A future workflow-steering control must be separately labeled and visually distinct from the native composer.
+5. Existing Workflow actions such as **Edit Workflow**, **Rerun**, **Resume**, **Remediate**, and **Cancel** remain the primary ways to change workflow lifecycle or configuration.
+6. **Continue in a new workflow** is an explicit terminal action owned by the Workflow Chat UI contract, not an ordinary native message.
+7. The native transcript remains authoritative for interactive session history; MoonMind artifacts remain authoritative for durable workflow evidence.
+
+The previous product assumption that every Workflow Detail chat message should be classified and routed through Temporal is superseded by `docs/UI/WorkflowChatPanel.md`.
+
+## 3. Promotion criteria
+
+This deferred capability should be promoted only when all of the following are true:
+
+- observed product usage demonstrates a need to change future Workflow Steps without leaving the running execution,
+- ordinary native chat and existing Workflow actions are insufficient for that need,
+- the UI can present a clearly separate **Steer Workflow** action,
+- the workflow can enforce stale-target, side-effect, cancellation, and plan-revision policy,
+- the result can be explained with an explicit accepted or rejected decision,
+- the capability does not require replacing or intercepting the native Omnigent composer.
+
+Until those criteria are met, the simpler native-chat plan remains complete without this extension.
+
+## 4. Reserved primitive
+
+If promoted, the preferred running-workflow primitive remains a Temporal Update:
+
+```text
+MoonMind.UserWorkflow.SubmitChatInstruction
+```
+
+The dedicated API route remains reserved:
 
 ```http
 POST /api/executions/{workflowId}/chat-instructions
 ```
 
-The endpoint authenticates the caller, stores the chat message as an instruction artifact, inspects execution state, calls the `SubmitChatInstruction` Update when the execution is running, creates a linked follow-up execution when the source execution is terminal, and returns a `ChatInstructionDecision`.
+The route and Update are reserved for explicit workflow-level steering. They are not compatibility aliases for native Omnigent session messaging.
 
-The generic update endpoint may also accept `updateName = SubmitChatInstruction`, but the dedicated route is preferred because it owns artifact creation, policy checks, terminal fallback, and follow-up creation.
+## 5. Core invariants for a future implementation
 
-Existing `SendMessage` behavior is legacy active-Step addendum behavior, not a compatibility alias for the chat instruction contract. A cutover to `SubmitChatInstruction` must update callers and any durable workflow boundary explicitly rather than maintaining parallel public controls.
+A promoted implementation must retain these invariants:
 
-## 5. Boundary models
+1. **Temporal remains the orchestration authority.** The API and dashboard do not schedule, cancel, reattempt, or revise Steps independently.
+2. **Instructions are artifact-backed.** Raw instruction text is stored outside workflow history; Temporal receives compact refs and bounded metadata.
+3. **Acceptance is explicit.** The workflow validates stale run, Step, plan, and policy state before returning an accepted decision.
+4. **Conflicting changes are serialized.** The workflow owns command ordering and applies changes only at legal boundaries.
+5. **Closed executions remain immutable.** Terminal continuation creates linked work instead of mutating a closed execution.
+6. **Plan changes create new artifacts.** A future plan revision supersedes prior future work rather than editing an immutable plan in place.
+7. **Provider delivery is distinct from workflow acceptance.** An accepted workflow command does not falsely imply that a live provider session consumed it.
 
-New models should live in a domain schema module such as `moonmind/schemas/chat_instruction_models.py`.
+## 6. Reserved decision vocabulary
 
-`ChatInstructionApiRequest` is the public API request body. It accepts `instructionId`, optional `idempotencyKey`, optional `chatThreadId`, the raw `message`, `scope`, `intentHint`, a target block with `runId`, `logicalStepId`, `stepExecutionOrdinal`, `planRevision`, and `childWorkflowId`, an `observedState` block for stale-target rejection, and policy flags such as `allowCancelActiveStep`, `allowVoidFutureSteps`, and `allowCreateFollowupExecution`.
+If the capability is promoted, a bounded decision vocabulary may include:
 
-`ChatInstructionWorkflowInput` is the workflow-facing Temporal Update payload. It should include the same stable instruction, target, observed-state, and policy fields, but it receives `messageArtifactRef` and bounded `messageSummary` after the API stores the raw message as an artifact. It must not carry the full user message in workflow history.
+```text
+attached_to_active_step
+queued_for_safe_point
+queued_for_step
+active_step_cancel_requested
+step_reattempt_scheduled
+plan_revision_requested
+future_steps_superseded
+rejected_stale_target
+rejected_terminal
+rejected_policy
+rejected_invalid_payload
+rejected_unsupported_runtime
+```
 
-`ChatInstructionDecision` should include `accepted`, `instructionId`, `decision`, `workflowId`, `runId`, optional `targetLogicalStepId`, optional `childWorkflowId`, `messageArtifactRef`, optional `newPlanRef`, optional `followupWorkflowId`, and warnings.
+This vocabulary is not required for native Workflow Detail Chat and should not appear in the primary native transcript unless an explicit workflow-steering action produced the decision.
 
-Allowed decisions include `attached_to_active_step`, `queued_for_safe_point`, `queued_for_step`, `active_step_cancel_requested`, `step_reattempt_scheduled`, `plan_revision_requested`, `future_steps_superseded`, `created_followup_execution`, `rejected_stale_target`, `rejected_terminal`, `rejected_policy`, `rejected_invalid_payload`, and `rejected_unsupported_runtime`.
+## 7. Source-of-truth rules
 
-## 6. Runtime behavior
+| Concern | Authoritative source |
+| --- | --- |
+| Native session messages and transcript | Omnigent session and native UI |
+| Native session live state | Omnigent host/server session state |
+| Workflow execution and Step state | `MoonMind.UserWorkflow` and Step ledger |
+| Explicit workflow instruction text | MoonMind instruction artifact |
+| Explicit instruction acceptance | Temporal Update result |
+| Plan revision | immutable plan artifact plus workflow state |
+| Durable provider evidence | MoonMind artifact system |
+| Terminal continuation relationship | linked Workflow Execution relation |
 
-`MoonMind.UserWorkflow` evaluates chat instructions against workflow-owned state.
+No projection row or browser-local state may claim a workflow mutation that Temporal did not accept.
 
-- If an active child supports live addendum, the instruction is attached to the active Step and forwarded internally.
-- If the active child cannot safely accept a live addendum and policy permits, the parent cancels active work and schedules a new Step Execution attempt.
-- If the instruction changes future work, the workflow requests a plan revision, writes a new immutable plan artifact, and marks old future Steps superseded.
-- If the client targets a stale `runId`, Step, or plan revision, the Update rejects the instruction before applying semantic effects.
-- If the source execution is terminal, the workflow rejects mutation and the API may create a linked follow-up execution.
+## 8. Relationship to terminal continuation
 
-## 7. Plan revision and Step ledger rules
+The default terminal experience is defined by `docs/UI/WorkflowChatPanel.md`:
 
-Chat-driven plan changes do not edit a plan in place. The new plan artifact should record `planRevision`, `supersedesPlanRef`, `chatInstructionRef`, `replanBoundary`, preserved logical Step IDs, superseded logical Step IDs, and new logical Step IDs.
+- show the terminal native transcript read-only,
+- expose captured evidence,
+- offer **Continue in a new workflow** when authorized.
 
-Future work voided by chat remains in the operator-facing Step ledger status domain. Represent superseded future Steps as `status = skipped` plus `terminalDisposition = superseded_by_chat_instruction` and refs to the chat instruction and superseding plan artifact. Adding a new Step ledger status requires updating the canonical status matrix, schemas, API projections, and UI together.
+That action may reuse source workflow, run, Step, report, and snapshot refs, but it is not evidence that the deferred `SubmitChatInstruction` capability has been implemented.
 
-## 8. Terminal follow-up behavior
+## 9. Visibility and rollout posture
 
-A terminal source execution remains immutable. The API-created follow-up execution receives its own `workflowId` and `runId` and pins source `workflowId`, source `runId`, source plan refs, finish summary refs, optional Step ledger snapshot refs, and the chat instruction ref. The relationship type should be `chat_followup`.
+Do not add chat text or long summaries to Search Attributes or Memo.
 
-Follow-up execution is not failed-step recovery and not `RequestRerun` / Continue-As-New unless a future policy explicitly defines that behavior.
+Do not add workflow-chat steering flags to the primary Chat rollout. The primary flags are owned by `docs/UI/WorkflowChatPanel.md`.
 
-## 9. Source-of-truth rules
+If this extension is later promoted, it should receive its own explicit capability and rollout flag, such as:
 
-| Concern | Authoritative source | Projection role |
-| --- | --- | --- |
-| Chat text | Instruction artifact | optional preview/ref display |
-| Instruction acceptance | Workflow Update result or API follow-up creation result | cache latest decision for UI |
-| Running instruction command | `MoonMind.UserWorkflow` state/history | derived row or timeline item |
-| Active child delivery | child workflow history and runtime/provider artifacts | display delivery state |
-| Plan revision | new plan artifact + workflow state refs | display current plan revision |
-| Superseded future Steps | workflow Step ledger | optional derived step projection |
-| Follow-up relation | API-created relation plus source/target refs | related-workflows display |
+```text
+workflowSteeringInstructionEnabled
+```
 
-Projection rows must not accept chat instructions by local mutation only.
-
-## 10. Visibility, artifact, and UI posture
-
-Do not add chat text or long chat summaries to Search Attributes. `mm_updated_at` may move on accepted chat instructions. A future bounded state such as `mm_state = replanning` or a bounded pending-instruction field should be added only if list filtering requires it.
-
-Recommended content types are `application/vnd.moonmind.chat-instruction+json;version=1`, `application/vnd.moonmind.chat-instruction-decision+json;version=1`, and `application/vnd.moonmind.chat-plan-revision+json;version=1`.
-
-The workflow detail page should expose a chat panel that sends chat instructions, shows the explicit decision, displays stale-target guidance, renders superseded future Steps distinctly, and links terminal source executions to chat follow-up executions.
+The flag must not change the behavior of the native Omnigent composer.

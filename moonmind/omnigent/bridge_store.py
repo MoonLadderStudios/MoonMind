@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -101,6 +102,115 @@ EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
+
+# MoonLadderStudios/MoonMind#3633: opaque, unguessable browser-safe Workflow
+# Chat binding handle (OmnigentBridge.md §7.1/§8.2 step 7). It is an
+# authorization *lookup key*, never a bearer capability, and is kept distinct
+# from the bridge session id, idempotency key, workflow/run/agent-run ids, and
+# the provider session id.
+CHAT_BINDING_ID_PREFIX = "chatb_"
+
+# Providers whose bridge sessions can back a native Workflow Chat surface. A row
+# bound to any other provider resolves to an explicit ``unsupported_runtime``
+# unavailable reason rather than falling through to an arbitrary session.
+SUPPORTED_CHAT_BINDING_PROVIDERS = frozenset({BRIDGE_PROVIDER})
+
+# Compatibility profiles whose bridge sessions the Omnigent facade can actually
+# serve. ``provider`` alone is insufficient: cross-runtime compatibility paths
+# (for example the direct-Codex migration path) reuse the shared
+# ``provider="omnigent"`` row yet carry a distinct compatibility profile the
+# native chat surface cannot serve. Those rows resolve to ``unsupported_runtime``
+# instead of advertising an Omnigent-native binding (MoonLadderStudios/MoonMind#3633).
+SUPPORTED_CHAT_BINDING_PROFILES = frozenset({BRIDGE_COMPATIBILITY_PROFILE})
+
+# Browser-safe Workflow Chat binding states (OmnigentBridge.md §15,
+# docs/UI/WorkflowChatPanel.md §5).
+CHAT_BINDING_STATE_STARTING = "starting"
+CHAT_BINDING_STATE_AVAILABLE = "available"
+CHAT_BINDING_STATE_ENDED = "ended"
+CHAT_BINDING_STATE_UNAVAILABLE = "unavailable"
+
+
+def _generate_chat_binding_id() -> str:
+    """Return a fresh opaque, unguessable chat-binding id."""
+
+    return f"{CHAT_BINDING_ID_PREFIX}{secrets.token_urlsafe(24)}"
+
+
+def _is_terminal_bridge_status(status: str | None) -> bool:
+    return str(status or "").strip().lower() in _TERMINAL_STATUSES
+
+
+def _is_provider_bound(row: OmnigentBridgeSession) -> bool:
+    return bool(str(getattr(row, "omnigent_session_id", None) or "").strip())
+
+
+def _is_provider_session_deleted(row: OmnigentBridgeSession) -> bool:
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get(PROVIDER_SESSION_DELETED_KEY))
+
+
+def _chat_binding_compatibility_profile(row: OmnigentBridgeSession) -> str:
+    """Return the row's effective compatibility profile.
+
+    The persisted ``compatibility_profile`` column is coalesced to the Omnigent
+    server profile for every row, so a cross-runtime compatibility session
+    records its real profile in metadata instead. Prefer that metadata value and
+    fall back to the column so the discriminator reflects what the session can
+    actually serve.
+    """
+
+    metadata = getattr(row, "metadata_", None)
+    if isinstance(metadata, dict):
+        profile = str(metadata.get("compatibilityProfile") or "").strip()
+        if profile:
+            return profile
+    return str(getattr(row, "compatibility_profile", "") or "").strip()
+
+
+def _serves_native_chat(row: OmnigentBridgeSession) -> bool:
+    """Return whether the Omnigent chat facade can serve this bridge session.
+
+    A native chat binding requires both a supported provider and a supported
+    compatibility profile; a compatibility/migration session that reuses the
+    Omnigent provider row is rejected so it resolves to ``unsupported_runtime``
+    rather than advertising a binding the facade cannot serve
+    (MoonLadderStudios/MoonMind#3633).
+    """
+
+    return (
+        row.provider in SUPPORTED_CHAT_BINDING_PROVIDERS
+        and _chat_binding_compatibility_profile(row) in SUPPORTED_CHAT_BINDING_PROFILES
+    )
+
+
+def _chat_binding_capabilities(row: OmnigentBridgeSession) -> dict[str, bool]:
+    """Project the stored effective capabilities as a browser-safe bool map."""
+
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("interventionCapabilities")
+    if not isinstance(raw, dict):
+        raw = metadata.get("capabilities")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, bool)
+    }
+
+
+def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("logicalStepId")
+    text = str(value or "").strip()
+    return text or None
 
 # Bridge lifecycle states owned by the bridge before the provider reports a
 # normalized status (§7.1). ``active`` is the coalesced non-terminal value.
@@ -201,6 +311,35 @@ def _advance_embedded_lifecycle(
 
 class BridgeProjectionAmbiguousError(RuntimeError):
     """Raised when an explicitly scoped projection resolves to multiple sessions."""
+
+
+class BridgeChatBindingAmbiguousError(RuntimeError):
+    """Raised when a Workflow has multiple active chat-capable sessions.
+
+    MoonLadderStudios/MoonMind#3633: an active Workflow must resolve the *exact*
+    active chat-capable session. Two or more concurrent active bindings are
+    rejected rather than silently selecting the newest arbitrary provider
+    session (OmnigentBridge.md §15/§17).
+    """
+
+
+class ChatBindingResolution(NamedTuple):
+    """Trusted, browser-safe resolution of one Workflow Chat binding.
+
+    MoonLadderStudios/MoonMind#3633. Carries only server-owned, browser-safe
+    values; the provider session id, bridge session id, endpoint, host, runner,
+    credential, profile, policy, and workspace identities stay server-side.
+    """
+
+    state: str
+    read_only: bool
+    chat_binding_id: str | None
+    workflow_id: str
+    run_id: str | None
+    step_execution_id: str | None
+    logical_step_id: str | None
+    capabilities: dict[str, bool]
+    unavailable_reason: str | None
 
 
 class BridgeEventPage(NamedTuple):
@@ -584,6 +723,13 @@ class OmnigentBridgeSessionStore:
         """
 
         metadata = dict(target_metadata or {})
+        # Persist the request's logical step so the chat-binding projection can
+        # label and validate the Chat context. The row only carries the physical
+        # ``step_execution_id`` column; the logical id lives in metadata
+        # (MoonLadderStudios/MoonMind#3633).
+        logical_step_id = _logical_step_id(request)
+        if logical_step_id and "logicalStepId" not in metadata:
+            metadata["logicalStepId"] = logical_step_id
         resolved_workflow_id = (workflow_id or "").strip() or _workflow_id(request)
         resolved_agent_run_id = (agent_run_id or "").strip() or _agent_run_id(request)
         async with self._session_factory() as session:
@@ -1164,6 +1310,41 @@ class OmnigentBridgeSessionStore:
         )
         return created
 
+    async def get_lifecycle_event_metadata(
+        self,
+        idempotency_key: str,
+        *,
+        event_identity: str,
+    ) -> dict[str, Any] | None:
+        """Return the persisted metadata for a claimed lifecycle event, if any.
+
+        Reads the immutable durable event created by
+        :meth:`claim_lifecycle_event` so a later claimant can reconcile against
+        the exact payload the first claimant bound — for example comparing a
+        scanned payload digest before treating a repeated idempotency key as a
+        benign replay. Returns ``None`` when no row or no such event exists.
+        """
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .limit(1)
+            )
+            bridge_session_id = result.scalars().first()
+            if bridge_session_id is None:
+                return None
+            stable_event_id = (
+                "bse_"
+                + uuid5(NAMESPACE_URL, f"{bridge_session_id}:{event_identity}").hex
+            )
+            existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
+            if existing is None:
+                return None
+            stored = existing.metadata_ or {}
+            inner = stored.get("metadata")
+            return dict(inner) if isinstance(inner, dict) else {}
+
     async def _record_lifecycle_event(
         self,
         idempotency_key: str,
@@ -1264,6 +1445,23 @@ class OmnigentBridgeSessionStore:
                         "controlOutcome",
                         "controlId",
                         "controlIdempotencyKey",
+                        # Bounded, non-disclosing native outbound-scan evidence
+                        # (MoonLadderStudios/MoonMind#3637). Persisted so a
+                        # posted mutation durably proves the exact payload was
+                        # scanned and a reused idempotency key can be reconciled
+                        # against the digest it was first bound to. None of these
+                        # carry a detected value or message body.
+                        "scannedPayloadDigest",
+                        "scanContractVersion",
+                        "scanSurface",
+                        "highSecurityMode",
+                        "scannerPolicyRef",
+                        "payloadDigest",
+                        "scanOutcome",
+                        "scanUnavailableReason",
+                        "findingCategories",
+                        "findingLocations",
+                        "idempotencyKey",
                         "expectedSessionId",
                         "expectedHostId",
                         "expectedRunnerId",
@@ -1469,6 +1667,31 @@ class OmnigentBridgeSessionStore:
                 return None
             return _detached(session, row)
 
+    async def get_session_by_chat_binding_id(
+        self, chat_binding_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Return one bridge session by its opaque, browser-facing ``chat_binding_id``.
+
+        MoonLadderStudios/MoonMind#3633: the dedicated ``chat_binding_id`` column
+        is the only identity the browser names on the binding-scoped facade. It is
+        distinct from the server-owned ``bridge_session_id`` (used for journal and
+        terminal lookups), so the facade resolves the durable row by this column.
+        """
+
+        key = (chat_binding_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.chat_binding_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return _detached(session, row)
+
     async def resolve_projection_session(
         self,
         *,
@@ -1548,6 +1771,208 @@ class OmnigentBridgeSessionStore:
                 return None
             return _detached(session, row)
 
+    async def ensure_chat_binding_id(self, bridge_session_id: str) -> str | None:
+        """Return the opaque chat-binding id for a row, allocating it if missing.
+
+        MoonLadderStudios/MoonMind#3633. Idempotent and retry-safe: allocation
+        only happens once the durable Workflow-to-provider session binding
+        exists (an ``omnigent_session_id`` is attached), and a guarded
+        ``UPDATE ... WHERE chat_binding_id IS NULL`` makes concurrent callers
+        converge on the single winning id. Historical rows created before this
+        column are backfilled deterministically on their first resolution.
+        """
+
+        key = (bridge_session_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            row = await session.get(OmnigentBridgeSession, key)
+            if row is None:
+                return None
+            if row.chat_binding_id:
+                return row.chat_binding_id
+            if not str(row.omnigent_session_id or "").strip():
+                return None
+            candidate = _generate_chat_binding_id()
+            await session.execute(
+                update(OmnigentBridgeSession)
+                .where(
+                    OmnigentBridgeSession.bridge_session_id == key,
+                    OmnigentBridgeSession.chat_binding_id.is_(None),
+                )
+                .values(chat_binding_id=candidate)
+            )
+            await session.commit()
+            # ``async_session_maker`` uses ``expire_on_commit=False`` and the
+            # guarded UPDATE ran through Core, so the identity-mapped ``row`` (and
+            # a plain ``session.get``) still carries the pre-update ``None``.
+            # Force a reload so the losing side of a concurrent first-time
+            # allocation returns the *persisted* winning id instead of its own
+            # unpersisted candidate, which would generate URLs that never resolve.
+            await session.refresh(row)
+            return row.chat_binding_id
+
+    async def resolve_chat_binding(
+        self,
+        *,
+        workflow_id: str,
+        run_id: str | None = None,
+    ) -> ChatBindingResolution:
+        """Resolve the authoritative browser-safe Workflow Chat binding (§15).
+
+        MoonLadderStudios/MoonMind#3633. Resolution order:
+
+        1. the exact active chat-capable session for the Workflow/run;
+        2. an active session still starting (no durable binding yet);
+        3. the last authoritative chat-capable session for a terminal Workflow,
+           returned read-only;
+        4. an explicit unavailable state with a stable reason.
+
+        Ambiguous active candidates are rejected rather than selecting the
+        newest arbitrary provider session; unsupported runtimes and cleaned-up
+        sessions return stable unavailable reasons instead of falling through.
+        """
+
+        workflow = (workflow_id or "").strip()
+        if not workflow:
+            return self._unavailable_binding(workflow, None, "no_session")
+        run = (run_id or "").strip() or None
+        async with self._session_factory() as session:
+            statement = select(OmnigentBridgeSession).where(
+                OmnigentBridgeSession.moonmind_workflow_id == workflow
+            )
+            if run:
+                statement = statement.where(
+                    OmnigentBridgeSession.moonmind_run_id == run
+                )
+            statement = statement.order_by(
+                OmnigentBridgeSession.updated_at.desc(),
+                OmnigentBridgeSession.created_at.desc(),
+                OmnigentBridgeSession.bridge_session_id.desc(),
+            )
+            result = await session.execute(statement)
+            rows = [_detached(session, row) for row in result.scalars().all()]
+
+        if not rows:
+            return self._unavailable_binding(workflow, run, "no_session")
+        supported = [row for row in rows if _serves_native_chat(row)]
+        if not supported:
+            return self._unavailable_binding(workflow, run, "unsupported_runtime")
+
+        active = [row for row in supported if not _is_terminal_bridge_status(row.status)]
+        active_capable = [row for row in active if _is_provider_bound(row)]
+        if len(active_capable) > 1:
+            raise BridgeChatBindingAmbiguousError(
+                "Workflow has multiple active chat-capable Omnigent sessions"
+            )
+        if active_capable:
+            return await self._live_binding(
+                active_capable[0], workflow, run, terminal=False
+            )
+        if active:
+            # A launch that has not yet attached a provider session is still
+            # starting; there is no durable binding to allocate yet.
+            return self._starting_binding(active[0], workflow, run)
+
+        # Identify the *authoritative* latest terminal session before selecting a
+        # transcript. ``rows`` is ordered newest-first, and a cleaned-up session
+        # keeps its deleted marker even though the delete cleared its provider
+        # binding, so a terminal row that ever had a provider session is a
+        # candidate. Decide against that newest candidate: if its provider
+        # transcript was cleaned up, fail closed with ``session_cleaned_up``
+        # rather than silently replaying an older run's or step's stale transcript
+        # (MoonLadderStudios/MoonMind#3633).
+        latest_terminal = next(
+            (
+                row
+                for row in supported
+                if _is_terminal_bridge_status(row.status)
+                and (_is_provider_bound(row) or _is_provider_session_deleted(row))
+            ),
+            None,
+        )
+        if latest_terminal is None:
+            # No terminal session ever bound a provider session, so there is no
+            # native transcript to replay.
+            return self._unavailable_binding(workflow, run, "session_cleaned_up")
+        if _is_provider_session_deleted(latest_terminal) or not _is_provider_bound(
+            latest_terminal
+        ):
+            return self._unavailable_binding(workflow, run, "session_cleaned_up")
+        return await self._live_binding(
+            latest_terminal, workflow, run, terminal=True
+        )
+
+    async def _live_binding(
+        self,
+        row: OmnigentBridgeSession,
+        workflow: str,
+        run: str | None,
+        *,
+        terminal: bool,
+    ) -> ChatBindingResolution:
+        chat_binding_id = await self.ensure_chat_binding_id(row.bridge_session_id)
+        capabilities = _chat_binding_capabilities(row)
+        # Read-only posture is driven by the bound session and its effective
+        # capabilities, never by Workflow terminality alone: a terminal session
+        # is always read-only, and a live session is writable only when its
+        # capability projection affirmatively grants ``sendMessage``. Fail closed
+        # when the capability is missing (historical rows and compatibility paths
+        # persist no snapshot) so the browser is never told sending is allowed
+        # without affirmative evidence (MoonLadderStudios/MoonMind#3633).
+        read_only = terminal or capabilities.get("sendMessage") is not True
+        return ChatBindingResolution(
+            state=(
+                CHAT_BINDING_STATE_ENDED
+                if terminal
+                else CHAT_BINDING_STATE_AVAILABLE
+            ),
+            read_only=read_only,
+            chat_binding_id=chat_binding_id,
+            workflow_id=workflow,
+            run_id=(row.moonmind_run_id or run),
+            step_execution_id=row.step_execution_id,
+            logical_step_id=_chat_binding_logical_step_id(row),
+            capabilities=capabilities,
+            unavailable_reason=None,
+        )
+
+    def _starting_binding(
+        self,
+        row: OmnigentBridgeSession,
+        workflow: str,
+        run: str | None,
+    ) -> ChatBindingResolution:
+        return ChatBindingResolution(
+            state=CHAT_BINDING_STATE_STARTING,
+            read_only=True,
+            chat_binding_id=None,
+            workflow_id=workflow,
+            run_id=(row.moonmind_run_id or run),
+            step_execution_id=row.step_execution_id,
+            logical_step_id=_chat_binding_logical_step_id(row),
+            capabilities={},
+            unavailable_reason=None,
+        )
+
+    def _unavailable_binding(
+        self,
+        workflow: str,
+        run: str | None,
+        reason: str,
+    ) -> ChatBindingResolution:
+        return ChatBindingResolution(
+            state=CHAT_BINDING_STATE_UNAVAILABLE,
+            read_only=True,
+            chat_binding_id=None,
+            workflow_id=workflow,
+            run_id=run,
+            step_execution_id=None,
+            logical_step_id=None,
+            capabilities={},
+            unavailable_reason=reason,
+        )
+
     async def attach_session(
         self, idempotency_key: str, session_id: str
     ) -> OmnigentBridgeSession:
@@ -1605,6 +2030,15 @@ class OmnigentBridgeSessionStore:
                 entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
             )
             changed = False
+            # MoonLadderStudios/MoonMind#3633: allocate the opaque chat-binding
+            # id only after the durable Workflow-to-provider session binding
+            # exists (§8.2 step 7). ``session.created`` runs on both the create
+            # and reuse paths after the provider session id is attached, so this
+            # is the retry-safe, idempotent allocation point: it fires once and a
+            # replayed create/attach under the same key reuses the existing id.
+            if session_id and not row.chat_binding_id:
+                row.chat_binding_id = _generate_chat_binding_id()
+                changed = True
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
                 changed = True
@@ -2225,6 +2659,12 @@ def _agent_run_id(request: AgentExecutionRequest) -> str:
 def _step_execution_id(request: AgentExecutionRequest) -> str | None:
     if request.step_execution is not None:
         return _string_or_none(request.step_execution.step_execution_id)
+    return None
+
+
+def _logical_step_id(request: AgentExecutionRequest) -> str | None:
+    if request.step_execution is not None:
+        return _string_or_none(request.step_execution.logical_step_id)
     return None
 
 

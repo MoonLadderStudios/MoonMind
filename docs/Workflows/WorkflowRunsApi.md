@@ -2,142 +2,179 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-07-02
+Last Updated: 2026-08-07
 
 ## 1. Purpose
 
-Define the REST API surfaces used to create, monitor, steer, and observe MoonMind Workflow runs in the Temporal-first architecture.
+Define the REST API surfaces used to create, monitor, control, and observe MoonMind Workflow Executions in the Temporal-first architecture.
 
-MoonMind now splits this responsibility across:
+MoonMind splits this responsibility across:
 
-- **`/api/executions`** for Temporal-backed execution lifecycle operations
-- **`/api/agent-runs`** for managed-run observability (logs, diagnostics, live follow)
+- **`/api/executions`** for Temporal-backed execution lifecycle operations,
+- **`/api/agent-runs`** for artifact-backed managed-run observability,
+- **the Omnigent Bridge** for authorized native-session, event, stream, resource, and control traffic.
 
-The planned `/api/executions/{workflowId}/chat-instructions` route is the target surface for chat-based workflow steering, active-Step addenda, plan-revision requests, and terminal follow-up starts once the router is implemented.
+The Workflow Detail **Chat** product surface is defined by `docs/UI/WorkflowChatPanel.md`. Ordinary chat uses the native Omnigent composer through a workflow-bound MoonMind bridge. It does not use the reserved chat-instruction endpoint or a Temporal Update.
 
-The dashboard still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
+The dashboard presents executions as **Workflows** in product UI, but the lifecycle API remains execution-oriented.
 
 The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="/agent-runs"`, which FastAPI mounts under the app-level `/api` prefix.
 
-## 2. API Surface
+## 2. API surface
 
-Workflow runs are served by two active router families:
-
-- **`/api/executions`** — Execution lifecycle for Temporal-backed work.
-- **`/api/agent-runs`** — Artifact-backed managed-run observability.
-
-### 2.1 Execution Lifecycle (`/api/executions`)
+### 2.1 Execution lifecycle (`/api/executions`)
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/executions` | Create/start a Temporal-backed execution |
-| `GET`  | `/api/executions` | List executions visible to the caller |
-| `GET`  | `/api/executions/{workflowId}` | Get execution detail |
-| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, `RequestRerun`, or the compatibility form of `SubmitChatInstruction` |
-| `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve |
-| `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution |
+|---|---|---|
+| `POST` | `/api/executions` | Create/start a Temporal-backed execution. |
+| `GET` | `/api/executions` | List executions visible to the caller. |
+| `GET` | `/api/executions/{workflowId}` | Get execution detail. |
+| `POST` | `/api/executions/{workflowId}/update` | Apply an enabled in-place workflow update such as `UpdateInputs`, `SetTitle`, or `RequestRerun`. The deferred `SubmitChatInstruction` update is not an ordinary chat compatibility form. |
+| `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve. |
+| `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution. |
 
-### 2.2 Auxiliary Execution Routes (`/api/executions`)
-
-These routes extend the main lifecycle surface for specific execution types:
+### 2.2 Auxiliary execution routes (`/api/executions`)
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/executions/{workflowId}/manifest-status` | Fetch manifest-run status summary |
-| `GET` | `/api/executions/{workflowId}/manifest-nodes` | Page manifest node state |
-| `GET` | `/api/executions/{workflowId}/steps` | Fetch the latest/current run step ledger |
-| `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state |
-| `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
-| `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
-| `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId` |
-| `POST` | `/api/executions/{workflowId}/recover-from-failed-step` | Create a linked recovery execution that resumes from the last failed step using durable checkpoint evidence |
-| `POST` | `/api/executions/{workflowId}/recover-from-selected-step` | Create a linked recovery execution that resumes from an operator-selected eligible step using pinned source `workflowId`/`runId` and checkpoint evidence |
+|---|---|---|
+| `GET` | `/api/executions/{workflowId}/manifest-status` | Fetch manifest-run status summary. |
+| `GET` | `/api/executions/{workflowId}/manifest-nodes` | Page manifest node state. |
+| `GET` | `/api/executions/{workflowId}/steps` | Fetch the latest/current run Step ledger. |
+| `GET` | `/api/executions/{workflowId}/chat-binding` | Resolve the browser-safe, caller-authorized native Workflow Chat binding. |
+| `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state. |
+| `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results. |
+| `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution. |
+| `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId`. |
+| `POST` | `/api/executions/{workflowId}/recover-from-failed-step` | Create a linked recovery execution that resumes from the last failed Step using durable checkpoint evidence. |
+| `POST` | `/api/executions/{workflowId}/recover-from-selected-step` | Create a linked recovery execution from an operator-selected eligible Step using pinned source identity and checkpoint evidence. |
+| `POST` | `/api/executions/{workflowId}/continue` | Create an authorized linked continuation from terminal source evidence when the product exposes **Continue in a new workflow**. |
 
-### 2.3 Managed-Run Observability (`/api/agent-runs`)
+The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not failed-Step recovery, and not proof that the deferred chat-instruction feature is enabled.
+
+### 2.3 Workflow-bound native Chat facade
+
+The browser-facing native application uses an opaque `chatBindingId`, not a caller-selected provider session id or endpoint.
+
+Canonical surfaces:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/omnigent-ui/workflow-chat/{chatBindingId}` | Serve the authorized native Omnigent Chat application in embedded or full-page form. |
+| `*` | `/api/workflow-chat-bindings/{chatBindingId}/omnigent/{path}` | Binding-scoped Omnigent-compatible HTTP, SSE, WebSocket, resource, and control facade. |
+
+Every request to the scoped facade independently authenticates the caller, resolves the durable binding, authorizes the requested operation against the Workflow Execution, validates expected session state, recomputes effective capabilities, applies required outbound security scans, records mutation audit evidence, strips MoonMind credentials, and forwards only to the server-resolved upstream target.
+
+A browser cannot gain authority by replacing `chatBindingId`, inserting another provider session id in `{path}`, changing an upstream URL, or invoking a native control that the UI hid. The server rejects any request that does not map exactly to the authorized binding and capability set.
+
+### 2.4 Managed-run observability (`/api/agent-runs`)
 
 These endpoints expose artifact-backed observability for managed runs. The legacy `/live-session*` family is not part of the active API.
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/agent-runs/{agentRunId}/observability-summary` | Get observability metadata and artifact refs |
-| `GET` | `/api/agent-runs/{agentRunId}/logs/stream` | Stream active live logs over SSE when supported |
-| `GET` | `/api/agent-runs/{agentRunId}/logs/stdout` | Read the stdout log artifact |
-| `GET` | `/api/agent-runs/{agentRunId}/logs/stderr` | Read the stderr log artifact |
-| `GET` | `/api/agent-runs/{agentRunId}/logs/merged` | Read the merged log view or synthesized fallback |
-| `GET` | `/api/agent-runs/{agentRunId}/diagnostics` | Read the diagnostics artifact |
+|---|---|---|
+| `GET` | `/api/agent-runs/{agentRunId}/observability-summary` | Get observability metadata and artifact refs. |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stream` | Stream active live logs over SSE when supported. |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stdout` | Read the stdout log artifact. |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/stderr` | Read the stderr log artifact. |
+| `GET` | `/api/agent-runs/{agentRunId}/logs/merged` | Read the merged log view or synthesized fallback. |
+| `GET` | `/api/agent-runs/{agentRunId}/diagnostics` | Read the diagnostics artifact. |
 
-## 3. Identity Model
+## 3. Identity model
 
-MoonMind currently uses three related identifiers around Workflow runs:
+MoonMind uses related but distinct identifiers around Workflow Executions:
 
-- **`workflowId`** — the canonical durable execution identifier for `/api/executions`
-- **`taskId`** — the legacy product identifier (renames in the hard switch); for Temporal-backed work, `taskId == workflowId`
-- **`agentRunId`** — the managed-run observability record identifier used by `/api/agent-runs` (the wire key keeps its legacy name until the MoonMind.UserWorkflow v2 cutover); it may appear on top-level execution detail and on individual step rows
+- **`workflowId`** — canonical durable execution identity and `/api/executions` route key,
+- **`runId`** — current/latest Temporal run identity,
+- **`agentRunId`** — managed/external run observability identity,
+- **`chatBindingId`** — opaque browser-safe authorization handle for one Workflow-to-native-session binding.
+
+Provider session, bridge session, host, runner, endpoint, credential, and immutable profile-snapshot identities remain server-side unless an authorized diagnostic contract exposes bounded safe refs.
 
 The normal control-plane flow is:
 
-1. Create or list work through `/api/executions`
-2. Use `workflowId` for lifecycle actions and detail fetches
-3. Read the step ledger from `/api/executions/{workflowId}/steps`
-4. Resolve the relevant step's `agentRunId` when managed-run observability is available
-5. Use `/api/agent-runs/{agentRunId}` for logs, diagnostics, and live follow
+1. create or list work through `/api/executions`,
+2. use `workflowId` for lifecycle actions and detail fetches,
+3. read the Step ledger from `/api/executions/{workflowId}/steps`,
+4. resolve managed-run observability through the relevant `agentRunId`,
+5. resolve native Chat only through `/api/executions/{workflowId}/chat-binding`,
+6. use the returned scoped `chatUrl` and API base without authoring provider identity.
 
-## 4. Observability Behavior
+## 4. Observability behavior
 
-These routes are artifact-first:
+The observability routes are artifact-first:
 
-- `observability-summary` reports whether live follow is appropriate for the current run.
-- `logs/stream` is the SSE live-follow endpoint for active runs only.
-- `logs/stdout`, `logs/stderr`, and `logs/merged` remain available for historical and terminal runs.
-- `diagnostics` exposes the persisted supervision payload for postmortem inspection.
+- `observability-summary` reports whether live follow is appropriate,
+- `logs/stream` is the active-run SSE live-follow endpoint,
+- `logs/stdout`, `logs/stderr`, and `logs/merged` remain available historically,
+- `diagnostics` exposes persisted supervision evidence.
 
-Full log bodies and diagnostics come from managed-run artifact storage and spool files, not from workflow history or raw Temporal event history.
+Full log bodies and diagnostics come from managed-run artifact storage and spool files, not workflow history or raw Temporal event history.
 
-## 4.1 Recovery Behavior
+The Omnigent Bridge separately retains raw and normalized event journals, snapshots, resources, manifests, diagnostics, mutation audit refs, and terminal evidence. The native Chat application presents live state; MoonMind artifacts remain durable workflow evidence.
 
-Failed `MoonMind.Run` executions may expose failed-step recovery when the source run has an original task input snapshot, recovery checkpoint ref, plan identity, workspace checkpoint evidence, and completed prior-step output refs.
+## 4.1 Recovery behavior
 
-The default `recover-from-failed-step` route preserves the original task input and starts new execution at the recorded failed step. The `recover-from-selected-step` route is for intentional earlier recovery: the request must include the source `workflowId`, source `runId`, and `selectedStartStepId`. The service validates those values against the canonical source execution and checkpoint payload before creating the follow-up execution. Steps before the selected start step are preserved from checkpoint evidence; the selected step and downstream steps execute again.
+Failed `MoonMind.UserWorkflow` executions may expose failed-Step recovery when the source run has an original input snapshot, recovery checkpoint ref, plan identity, workspace checkpoint evidence, and completed prior-Step output refs.
 
-Recovery routes do not accept edited task instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators must use edit/rerun flows for those behaviors.
+The default `recover-from-failed-step` route preserves the original input and starts new execution at the recorded failed Step. The `recover-from-selected-step` route is for intentional earlier recovery: the request includes the source `workflowId`, source `runId`, and `selectedStartStepId`. The service validates those values against canonical source execution and checkpoint evidence before creating linked work.
 
-## 4.2 Chat Instruction Behavior
+Recovery routes do not accept edited instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators use edit/rerun flows for those behaviors.
 
-Chat instructions are not recovery and are not ordinary projection-side edits. The planned chat instruction route stores the chat text as an artifact, then either:
+## 4.2 Workflow Chat behavior
 
-- sends a typed `SubmitChatInstruction` Update to a running `MoonMind.UserWorkflow`, or
-- creates a linked `chat_followup` execution when the source execution is terminal and policy permits follow-up creation.
+The ordinary active-session path is:
 
-Running-workflow decisions are returned as `ChatInstructionDecision` values such as `attached_to_active_step`, `queued_for_safe_point`, `plan_revision_requested`, `future_steps_superseded`, or a typed rejection. Terminal source executions remain immutable; `created_followup_execution` belongs only to the terminal API follow-up path.
+```text
+native Omnigent composer
+  -> binding-scoped MoonMind facade
+  -> authorized provider session event
+```
 
-## 5. Request Model Posture
+The facade enforces:
 
-`POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize legacy `task`-typed payloads into the same Temporal-backed execution contract.
+- per-request Workflow and binding authorization,
+- session-id and upstream-target non-substitution,
+- immutable Agent Profile, Provider Profile, launch-policy, workflow-state, and caller-permission capabilities,
+- actor, idempotency, expected-state, outcome, and durable audit requirements for mutations,
+- `MOONMIND_HIGH_SECURITY_MODE` outbound scans before forwarding text-bearing events,
+- redaction and credential separation.
 
-Execution requests ultimately dispatch into `MoonMind.UserWorkflow` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
+Ordinary native chat does not call `SubmitChatInstruction`, revise plans, supersede Steps, create Step Execution attempts, or create follow-up Workflow Executions.
+
+The optional `/api/executions/{workflowId}/chat-instructions` contract and `SubmitChatInstruction` Temporal Update are reserved for a future separately labeled **Steer Workflow** action. They are deferred and are not compatibility aliases for the native message path.
+
+For terminal work, **Continue in a new workflow** uses the explicit linked-continuation route and authorized source evidence. A terminal transcript remains read-only.
+
+## 5. Request model posture
+
+`POST /api/executions` is the active create surface. It accepts the execution-oriented request model and may normalize legacy task-shaped payloads only where the repository's explicit migration contract still requires it.
+
+Execution requests dispatch into `MoonMind.UserWorkflow` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
 
 | Fleet | Task Queue | Capabilities | Purpose |
-|-------|-----------|--------------|---------|
-| `workflow` | `mm.workflow` | Workflow orchestration | Workflow code only; no side effects |
-| `artifacts` | `mm.activity.artifacts` | Artifact I/O, provider profiles | IO-bound artifact storage and metadata |
-| `llm` | `mm.activity.llm` | LLM calls, plan generation, proposals | Rate-limited by provider quotas |
-| `sandbox` | `mm.activity.sandbox` | Repo checkout, patch, tests, commands | CPU/memory heavy; strict concurrency limits |
-| `integrations` | `mm.activity.integrations` | External provider calls (Jules) | Protected with rate limiting and circuit breakers |
-| `agent_runtime` | `mm.activity.agent_runtime` | Supervised agent execution, artifact publish | Long-lived runtime executions |
+|---|---|---|---|
+| `workflow` | `mm.workflow` | Workflow orchestration | Workflow code only; no side effects. |
+| `artifacts` | `mm.activity.artifacts` | Artifact I/O, provider profiles | I/O-bound artifact storage and metadata. |
+| `llm` | `mm.activity.llm` | LLM calls, plan generation, proposals | Rate-limited by provider quotas. |
+| `sandbox` | `mm.activity.sandbox` | Repo checkout, patch, tests, commands | CPU/memory heavy; strict concurrency limits. |
+| `integrations` | `mm.activity.integrations` | External provider calls | Protected with rate limiting and circuit breakers. |
+| `agent_runtime` | `mm.activity.agent_runtime` | Supervised agent execution, artifact publish | Long-lived runtime executions. |
 
-The `activity_catalog.py` module defines the full routing contract including per-activity timeout and retry policies.
+`activity_catalog.py` defines the full routing contract including per-activity timeout and retry policies.
 
-## 6. Legacy Queue Posture
+## 6. Legacy queue posture
 
-The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback routes are historical migration references only. They are not the active Workflow-run lifecycle API, and the execution router explicitly rejects falling back to the old queue substrate when Temporal submission is disabled.
+The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback routes are historical migration references only. They are not the active Workflow Execution lifecycle API, and the execution router rejects fallback to the old queue substrate when Temporal submission is disabled.
 
-## 7. Related Documentation
+## 7. Related documentation
 
-- [ChatInstructionIntervention.md](ChatInstructionIntervention.md) — Chat instruction steering, active-Step addendum, plan revision, and terminal follow-up design
-- [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
-- [WorkflowArchitecture.md](WorkflowArchitecture.md) — Overall Workflow system design
+- [../UI/WorkflowChatPanel.md](../UI/WorkflowChatPanel.md) — native-primary Workflow Detail Chat and its binding/security contract
+- [../Omnigent/OmnigentBridge.md](../Omnigent/OmnigentBridge.md) — session/event/resource facade, evidence, and request authority
+- [ChatInstructionIntervention.md](ChatInstructionIntervention.md) — deferred explicit workflow-steering extension
+- [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — direct execution lifecycle contract
+- [WorkflowArchitecture.md](WorkflowArchitecture.md) — overall Workflow system design
 - [../UI/WorkflowConsoleArchitecture.md](../UI/WorkflowConsoleArchitecture.md) — Workflow-oriented UI over execution APIs
 - [WorkflowProposalSystem.md](WorkflowProposalSystem.md) — Workflow proposal generation
-- [WorkflowCancellation.md](WorkflowCancellation.md) — Cancellation flow
-- [../ManagedAgents/LiveLogs.md](../ManagedAgents/LiveLogs.md) — Managed-run log and observability design
+- [WorkflowCancellation.md](WorkflowCancellation.md) — cancellation flow
+- [../Observability/LiveLogs.md](../Observability/LiveLogs.md) — managed-run log and observability design
 - [../Temporal/TemporalArchitecture.md](../Temporal/TemporalArchitecture.md) — Temporal infrastructure

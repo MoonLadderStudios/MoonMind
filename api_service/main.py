@@ -29,13 +29,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from api_service.api.routers import retrieval_gateway as retrieval_router
-from api_service.api.routers import (
-    summarization as summarization_router,  # Added import for summarization router
-)
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
 from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
 from api_service.api.routers.chat import responses_router, router as chat_router
-from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
@@ -50,7 +46,6 @@ from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
-from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
 from api_service.api.routers.automation import router as automation_router
@@ -65,7 +60,13 @@ from api_service.api.routers.agent_runs import sessions_router as session_resour
 from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
+    WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
     router as omnigent_bridge_router,
+    workflow_chat_router as omnigent_workflow_chat_router,
+)
+from api_service.api.routers.omnigent_native_ui import (
+    NATIVE_UI_MOUNT_PATH,
+    native_ui_router,
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
@@ -567,15 +568,6 @@ app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
 app.include_router(responses_router, prefix="/v1", tags=["Responses"])
 app.include_router(models_router, prefix="/v1/models", tags=["Models"])
 app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
-app.include_router(
-    summarization_router.router,
-    prefix="/summarization",
-    tags=["Summarization"],
-)  # Added summarization router
-app.include_router(planning_router, prefix="/v1/planning", tags=["Planning"])
-app.include_router(
-    context_protocol_router, tags=["Context Protocol"]
-)  # Removed prefix="/context"
 app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
@@ -603,6 +595,13 @@ app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
 app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+app.include_router(
+    omnigent_workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
+)
+# Serve the native Omnigent web app through MoonMind-scoped routes
+# (MoonLadderStudios/MoonMind#3638). The browser loads native UI assets and all
+# application traffic exclusively through this binding-scoped mount.
+app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
 app.include_router(workflow_console_router)
