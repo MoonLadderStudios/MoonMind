@@ -131,10 +131,12 @@ describe('WorkflowChatNative', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('does not show terminal actions for a live (writeable) session', async () => {
-    mockFetch(bindingResponse({ readOnly: false }));
+  it('does not show terminal actions for a non-terminal workflow even when read-only', async () => {
+    // A binding can be read-only while its workflow is still live; terminal
+    // actions are gated on the workflow being terminal, not on write capability.
+    mockFetch(bindingResponse({ readOnly: true }));
     const { getByTestId, queryByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal={false} />,
     );
     await waitFor(() => getByTestId('workflow-native-chat-frame'));
     expect(queryByTestId('workflow-native-chat-continue')).toBeNull();
@@ -180,52 +182,103 @@ function mockFetchByUrl(handlers: {
 }
 
 describe('capturedEvidenceHref', () => {
-  it('builds a MoonMind artifact download href from a plain ref', () => {
-    expect(capturedEvidenceHref('/api', 'art_final')).toBe(
-      '/api/artifacts/art_final/download',
+  it('routes a plain ref through the workflow-scoped evidence download endpoint', () => {
+    expect(capturedEvidenceHref('/api', WORKFLOW_ID, 'art_final')).toBe(
+      '/api/executions/mm%3Aw1/captured-evidence/download?ref=art_final',
     );
   });
 
-  it('strips the artifact:// scheme before building the href', () => {
-    expect(capturedEvidenceHref('/api', 'artifact://art_manifest')).toBe(
-      '/api/artifacts/art_manifest/download',
+  it('carries an Omnigent gateway ref (scheme + slashes) intact as a query param', () => {
+    // The generic /artifacts/{id}/download route cannot serve these; the ref is
+    // encoded so its scheme and nested path survive to the gateway-aware route.
+    expect(
+      capturedEvidenceHref('/api', WORKFLOW_ID, 'artifact://omnigent/corr-1/final.json'),
+    ).toBe(
+      '/api/executions/mm%3Aw1/captured-evidence/download?ref=artifact%3A%2F%2Fomnigent%2Fcorr-1%2Ffinal.json',
     );
   });
 
   it('passes a full same-origin URL through and never fabricates a link from empty', () => {
-    expect(capturedEvidenceHref('/api', 'https://mm/x')).toBe('https://mm/x');
-    expect(capturedEvidenceHref('/api', '   ')).toBeNull();
+    expect(capturedEvidenceHref('/api', WORKFLOW_ID, 'https://mm/x')).toBe('https://mm/x');
+    expect(capturedEvidenceHref('/api', WORKFLOW_ID, '   ')).toBeNull();
+    expect(capturedEvidenceHref('/api', '', 'art_final')).toBeNull();
   });
 });
 
 describe('WorkflowChatNative terminal actions (#3641)', () => {
-  it('shows View captured evidence and Continue for a read-only session', async () => {
-    mockFetchByUrl({ binding: bindingResponse({ readOnly: true }) });
+  it('shows View captured evidence and Continue for a terminal workflow', async () => {
+    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }) });
     const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
     );
     await waitFor(() => getByTestId('workflow-native-chat-frame'));
     expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
     expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
   });
 
-  it('opens captured evidence as authorized MoonMind artifact links', async () => {
-    mockFetchByUrl({ binding: bindingResponse({ readOnly: true }), evidence: EVIDENCE });
+  it('keeps terminal workflow actions available when the native iframe is unavailable', async () => {
+    // Terminal binding returned as state='unavailable' (native UI disabled / upstream
+    // unavailable): the workflow-level actions must still render in the fallback.
+    mockFetchByUrl({
+      binding: bindingResponse({
+        state: 'unavailable',
+        unavailableReason: 'native_ui_serving_disabled',
+        chatUrl: '',
+      }),
+    });
+    const { getByTestId, queryByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+    await waitFor(() => getByTestId('workflow-native-chat-unavailable'));
+    expect(getByTestId('workflow-native-chat-evidence-toggle')).toBeTruthy();
+    expect(getByTestId('workflow-native-chat-continue')).toBeTruthy();
+    // No live iframe in the fallback.
+    expect(queryByTestId('workflow-native-chat-frame')).toBeNull();
+  });
+
+  it('opens captured evidence as authorized MoonMind download links', async () => {
+    mockFetchByUrl({ binding: bindingResponse({ state: 'ended', readOnly: true }), evidence: EVIDENCE });
     const { getByTestId, findAllByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
     );
     await waitFor(() => getByTestId('workflow-native-chat-evidence-toggle'));
 
     fireEvent.click(getByTestId('workflow-native-chat-evidence-toggle'));
     const links = await findAllByTestId('workflow-native-chat-evidence-link');
     expect(links).toHaveLength(2);
-    expect(links[0]!.getAttribute('href')).toBe('/api/artifacts/art_final/download');
-    expect(links[1]!.getAttribute('href')).toBe('/api/artifacts/art_manifest/download');
+    expect(links[0]!.getAttribute('href')).toBe(
+      '/api/executions/mm%3Aw1/captured-evidence/download?ref=art_final',
+    );
+    expect(links[1]!.getAttribute('href')).toBe(
+      '/api/executions/mm%3Aw1/captured-evidence/download?ref=artifact%3A%2F%2Fart_manifest',
+    );
   });
 
-  it('continues into the linked workflow and navigates to it', async () => {
+  it('requires authored intent before launching a continuation', async () => {
     const fetchMock = mockFetchByUrl({
-      binding: bindingResponse({ readOnly: true }),
+      binding: bindingResponse({ state: 'ended', readOnly: true }),
+      continue: CONTINUE_RESULT,
+    });
+    const { getByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
+    );
+    await waitFor(() => getByTestId('workflow-native-chat-continue'));
+
+    // Opening the action reveals an authoring form; it does not launch anything.
+    fireEvent.click(getByTestId('workflow-native-chat-continue'));
+    const submit = getByTestId('workflow-native-chat-continue-submit') as HTMLButtonElement;
+    // Submit is disabled until new instructions are authored (no accidental rerun).
+    expect(submit.disabled).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes('/continue')),
+    ).toBe(false);
+  });
+
+  it('continues into the linked workflow with authored intent and navigates to it', async () => {
+    const fetchMock = mockFetchByUrl({
+      binding: bindingResponse({ state: 'ended', readOnly: true }),
       continue: CONTINUE_RESULT,
     });
     const assign = vi.fn();
@@ -235,11 +288,15 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     });
 
     const { getByTestId } = renderWithClient(
-      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active terminal />,
     );
     await waitFor(() => getByTestId('workflow-native-chat-continue'));
 
     fireEvent.click(getByTestId('workflow-native-chat-continue'));
+    fireEvent.change(getByTestId('workflow-native-chat-continue-instructions'), {
+      target: { value: 'Do the follow-up work' },
+    });
+    fireEvent.submit(getByTestId('workflow-native-chat-continue-form'));
 
     await waitFor(() =>
       expect(assign).toHaveBeenCalledWith(
@@ -253,7 +310,11 @@ describe('WorkflowChatNative terminal actions (#3641)', () => {
     expect(String(continueCall?.[0])).toContain(
       `/executions/${encodeURIComponent(WORKFLOW_ID)}/continue`,
     );
-    // The continuation is a POST Workflow action, not a native composer message.
+    // The continuation is a POST Workflow action carrying the authored intent,
+    // not a native composer message.
     expect(continueCall?.[1]?.method).toBe('POST');
+    const body = JSON.parse(String(continueCall?.[1]?.body));
+    expect(body.instructions).toBe('Do the follow-up work');
+    expect(typeof body.idempotencyKey).toBe('string');
   });
 });

@@ -107,6 +107,8 @@ def _patch_collaborators(
     *,
     source_status: str = "completed",
     evidence: ex._SourceCapturedEvidence | None = None,
+    materialized_attachments: list[dict] | None = None,
+    attach_calls: list[list[dict]] | None = None,
 ) -> None:
     async def _owned(*, service, workflow_id, user):  # noqa: ANN001
         return SimpleNamespace(
@@ -119,12 +121,27 @@ def _patch_collaborators(
     async def _snapshot(**kwargs):  # noqa: ANN001
         return "art_snapshot"
 
+    async def _materialize(*, session, user, refs):  # noqa: ANN001
+        return list(materialized_attachments or [])
+
+    async def _attach(*, session, record, attachment_refs):  # noqa: ANN001
+        if attach_calls is not None:
+            attach_calls.append(list(attachment_refs))
+
     monkeypatch.setattr(ex, "_get_owned_execution", _owned)
     monkeypatch.setattr(ex, "_resolve_source_captured_evidence", _resolve)
     monkeypatch.setattr(
         ex,
         "_persist_original_workflow_input_snapshot_from_parameters",
         _snapshot,
+    )
+    # Keep the artifact-store-backed materialization out of the hermetic router
+    # tests by default; the materialization logic is covered separately.
+    monkeypatch.setattr(
+        ex, "_materialize_continuation_source_attachments", _materialize
+    )
+    monkeypatch.setattr(
+        ex, "_attach_input_attachment_artifacts_to_execution", _attach
     )
 
 
@@ -174,7 +191,23 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
     assert len(service.create_calls) == 1
     call = service.create_calls[0]
     assert call["_workflow_id"] == result.destination_workflow_id
-    assert call["idempotency_key"] == "continue:mm:source:ck-1"
+    # The create idempotency key is scoped to (source_workflow_id, source_run_id,
+    # idempotency_key) like the relationship reservation, and derived as a bounded
+    # digest so it fits the String(128) column even for a 512-char client key.
+    expected_create_key = "continue:" + ex.compute_request_digest(
+        {
+            "sourceWorkflowId": "mm:source",
+            "sourceRunId": "run-1",
+            "idempotencyKey": "ck-1",
+        }
+    )
+    assert call["idempotency_key"] == expected_create_key
+    assert len(call["idempotency_key"]) <= 128
+    # The source plan/manifest are regenerated for the authored continuation
+    # intent rather than pinned (a pinned plan short-circuits compilation, so the
+    # continuation would run the source's old nodes).
+    assert call["plan_artifact_ref"] is None
+    assert call["manifest_artifact_ref"] is None
     params = call["initial_parameters"]
     assert params["continuationSource"]["relationshipType"] == "linked_continuation"
     assert params["workflow"]["instructions"] == "continue the work"
@@ -485,6 +518,208 @@ async def test_append_linked_continuations_surfaces_source_side_view(
     assert hydrated[0].relationship == "Continued in a new workflow"
     assert hydrated[0].status == "completed"
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continue_conflicts_on_changed_bounded_purpose(monkeypatch) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+
+    async with sessions() as session:
+        await ex.continue_in_new_workflow(
+            workflow_id="mm:source",
+            payload=_payload(boundedPurpose="first purpose"),
+            service=service,  # type: ignore[arg-type]
+            session=session,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    # Reusing the key with an edited boundedPurpose is a materially changed
+    # request — it must conflict, not silently return the first destination.
+    with pytest.raises(HTTPException) as excinfo:
+        async with sessions() as session:
+            await ex.continue_in_new_workflow(
+                workflow_id="mm:source",
+                payload=_payload(boundedPurpose="edited purpose"),
+                service=service,  # type: ignore[arg-type]
+                session=session,
+                user=user,
+                _submit_enabled=None,
+            )
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == "continuation_idempotency_conflict"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continue_create_key_is_bounded_for_long_client_key(monkeypatch) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+
+    long_key = "k" * 512
+    async with sessions() as session:
+        await ex.continue_in_new_workflow(
+            workflow_id="mm:source",
+            payload=_payload(idempotencyKey=long_key),
+            service=service,  # type: ignore[arg-type]
+            session=session,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    # A 512-char client key must not overflow the String(128) create key column.
+    call = service.create_calls[0]
+    assert call["idempotency_key"].startswith("continue:")
+    assert len(call["idempotency_key"]) <= 128
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continue_injects_and_links_materialized_attachments(monkeypatch) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    attach_calls: list[list[dict]] = []
+    attachment = {
+        "artifactId": "art_copy_1",
+        "filename": "final.json",
+        "contentType": "application/json",
+        "sizeBytes": 12,
+    }
+    _patch_collaborators(
+        monkeypatch,
+        materialized_attachments=[attachment],
+        attach_calls=attach_calls,
+    )
+    service = _FakeService()
+
+    async with sessions() as session:
+        result = await ex.continue_in_new_workflow(
+            workflow_id="mm:source",
+            payload=_payload(
+                instructions="continue",
+                selectedSourceArtifactRefs=["art_final"],
+            ),
+            service=service,  # type: ignore[arg-type]
+            session=session,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    assert result.created is True
+    # The materialized evidence is attached under the workflow payload's
+    # inputAttachments (the ordinary prepared-input shape) ...
+    call = service.create_calls[0]
+    attachments = call["initial_parameters"]["workflow"]["inputAttachments"]
+    assert attachment in attachments
+    # ... and linked to the destination workflow after it is created.
+    assert attach_calls == [[attachment]]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_evidence_populates_logical_step(monkeypatch) -> None:
+    row = SimpleNamespace(
+        metadata_={"logicalStepId": "step-42"},
+        terminal_refs={"outputRefs": [], "summary": "done"},
+        step_execution_id="se-1",
+        final_snapshot_ref="art_final",
+        initial_snapshot_ref=None,
+        capture_manifest_ref="art_manifest",
+        diagnostics_ref=None,
+        raw_events_ref=None,
+        normalized_events_ref=None,
+        external_state_ref=None,
+    )
+
+    class _FakeStore:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        async def resolve_projection_session(self, *, workflow_id, run_id):  # noqa: ANN001
+            return row
+
+    monkeypatch.setattr(ex, "OmnigentBridgeSessionStore", _FakeStore)
+
+    evidence = await ex._resolve_source_captured_evidence(
+        workflow_id="mm:source", run_id="run-1"
+    )
+    # The logical step id is read from the bridge projection metadata rather than
+    # hard-coded to None, so the continuation preserves the Step lineage.
+    assert evidence.logical_step_id == "step-42"
+    assert evidence.step_execution_id == "se-1"
+
+
+class _FakeArtifactService:
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, int]] = []
+        self._counter = 0
+
+    async def read(self, *, artifact_id, principal, allow_restricted_raw=False):  # noqa: ANN001
+        return SimpleNamespace(artifact_id=artifact_id), b'{"k":"v"}'
+
+    async def create(self, *, principal, content_type, size_bytes, retention_class, metadata_json=None, **kwargs):  # noqa: ANN001
+        self._counter += 1
+        art = SimpleNamespace(artifact_id=f"art_new_{self._counter}")
+        return art, SimpleNamespace()
+
+    async def write_complete(self, *, artifact_id, principal, payload, content_type):  # noqa: ANN001
+        self.writes.append((artifact_id, len(payload)))
+        return SimpleNamespace(artifact_id=artifact_id)
+
+
+@pytest.mark.asyncio
+async def test_materialize_source_attachments_copies_durable_refs(monkeypatch) -> None:
+    fake = _FakeArtifactService()
+    monkeypatch.setattr(ex, "get_temporal_artifact_service", lambda session: fake)
+
+    result = await ex._materialize_continuation_source_attachments(
+        session=SimpleNamespace(),
+        user=SimpleNamespace(id=uuid4()),
+        refs=["art_final", "art_manifest"],
+    )
+
+    assert [a["artifactId"] for a in result] == ["art_new_1", "art_new_2"]
+    assert all(
+        {"artifactId", "filename", "contentType", "sizeBytes"} <= set(a)
+        for a in result
+    )
+    assert len(fake.writes) == 2
+
+
+@pytest.mark.asyncio
+async def test_materialize_source_attachments_reads_omnigent_and_skips_oversized(
+    monkeypatch,
+) -> None:
+    fake = _FakeArtifactService()
+    monkeypatch.setattr(ex, "get_temporal_artifact_service", lambda session: fake)
+
+    import moonmind.omnigent.bridge_artifacts as bridge_artifacts
+
+    class _FakeGateway:
+        async def read_bytes(self, ref):  # noqa: ANN001
+            return b"x" * 50
+
+    monkeypatch.setattr(bridge_artifacts, "LocalOmnigentArtifactGateway", _FakeGateway)
+    # Force the size guard: the omnigent ref's 50 bytes exceeds the cap and is
+    # skipped rather than failing the continuation.
+    monkeypatch.setattr(ex, "_CONTINUATION_EVIDENCE_MAX_BYTES", 10)
+
+    result = await ex._materialize_continuation_source_attachments(
+        session=SimpleNamespace(),
+        user=SimpleNamespace(id=uuid4()),
+        refs=["artifact://omnigent/corr/final.json"],
+    )
+
+    assert result == []
+    assert fake.writes == []
 
 
 def test_build_related_runs_surfaces_continuation_source() -> None:

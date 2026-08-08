@@ -8732,6 +8732,29 @@ button.workflow-workspace-sidebar-row:active {
   text-align: right;
 }
 
+.td-native-chat-terminal-actions {
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form {
+  border: 1px solid var(--mm-border, #e2e8f0);
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface-muted, #f8fafc);
+  padding: 0.75rem;
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.td-native-chat-continue-form input,
+.td-native-chat-continue-form textarea {
+  width: 100%;
+}
+
 .td-facts-region,
 .td-run-summary-region,
 .td-steps-region,

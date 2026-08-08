@@ -7,14 +7,14 @@ evidence refs, and exposes a durable bidirectional ``linked_continuation``
 relationship. Distinct from control-stop continuations, remediation links, and
 checkpoint branches.
 
-Revision ID: 354_workflow_linked_continuations
+Revision ID: 354_workflow_linked_continuation
 Revises: 353_omnigent_chat_binding
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "354_workflow_linked_continuations"
+revision = "354_workflow_linked_continuation"
 down_revision = "353_omnigent_chat_binding"
 branch_labels = None
 depends_on = None

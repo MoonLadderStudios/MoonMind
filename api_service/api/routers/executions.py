@@ -185,6 +185,7 @@ from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactNotFoundError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -210,6 +211,7 @@ from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    _chat_binding_logical_step_id,
 )
 from api_service.services.linked_continuation import (
     LinkedContinuationConflict,
@@ -15042,7 +15044,11 @@ async def _resolve_source_captured_evidence(
         final_snapshot_ref=named_refs.get("finalSnapshotRef"),
         capture_manifest_ref=named_refs.get("captureManifestRef"),
         summary=summary,
-        logical_step_id=None,
+        # Preserve the exact Step lineage for step-bound sessions: the logical
+        # step id lives on the bridge projection's ``metadata_`` and is read by
+        # the same resolver the chat binding uses, so continuations carry
+        # ``sourceLogicalStepId`` instead of silently dropping it (#3641 §6).
+        logical_step_id=_chat_binding_logical_step_id(row),
         step_execution_id=(
             str(getattr(row, "step_execution_id", "") or "").strip() or None
         ),
@@ -15141,6 +15147,222 @@ async def get_workflow_captured_evidence(
         summary=evidence.summary,
         unavailable_reason=evidence.incomplete_reason,
     )
+
+
+def _evidence_download_filename(artifact_ref: str) -> str:
+    """A browser-safe download filename derived from an evidence ref."""
+
+    tail = artifact_ref.rstrip("/").rsplit("/", 1)[-1]
+    tail = tail.removeprefix("artifact://").strip()
+    return tail or "captured-evidence"
+
+
+@router.get("/{workflow_id}/captured-evidence/download")
+async def download_workflow_captured_evidence(
+    workflow_id: str,
+    ref: str = Query(..., alias="ref"),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+
+    Production Omnigent evidence refs are gateway refs
+    (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
+    artifact download route cannot serve — the nested path never routes and no
+    ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
+    workflow-scoped route authorizes the caller against the Workflow, confirms
+    the requested ref is one of that Workflow's authorized evidence refs
+    (possession of a ref is never authorization), then reads it through the same
+    scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
+    ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
+    An unauthorized ref returns 404 without revealing whether it exists.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    requested = (ref or "").strip()
+    if not requested or requested not in evidence.authorized_refs:
+        # Non-enumerating: an unauthorized or unknown ref is indistinguishable
+        # from a missing one, so a caller cannot probe for hidden artifacts.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "captured_evidence_not_found",
+                "message": "No such captured evidence for this workflow.",
+            },
+        )
+
+    filename = _evidence_download_filename(requested)
+    if requested.startswith("artifact://omnigent/"):
+        # MoonMind-owned gateway ref: read the bytes through the same gateway the
+        # activity runtime uses (moonmind.workflows...activity_runtime._read_bytes)
+        # rather than the Temporal-artifact route, which has no row for it.
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            payload = await LocalOmnigentArtifactGateway().read_bytes(requested)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+    else:
+        artifact_id = _artifact_id_from_ref(requested)
+        if not artifact_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            )
+        artifact_service = get_temporal_artifact_service(session)
+        try:
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_id,
+                principal=str(getattr(user, "id", "") or "system"),
+                allow_restricted_raw=True,
+            )
+        except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+            # The Workflow-level authorization above already gated access; a
+            # store-level denial still fails closed as not-found (non-enumerating).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+        except TemporalArtifactNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"content-disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Durable single-put limit; a source evidence artifact larger than this cannot be
+# copied into a durable Temporal artifact via write_complete, so it is skipped.
+_CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+_CONTINUATION_EVIDENCE_LINK_TYPE = "input.attachment"
+
+
+def _evidence_attachment_content_type(filename: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".json"):
+        return "application/json"
+    if lowered.endswith((".txt", ".md", ".log")):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+async def _read_continuation_evidence_bytes(
+    *, artifact_service: Any, principal: str, ref: str
+) -> bytes | None:
+    """Read one authorized source evidence ref's bytes, scheme-aware.
+
+    Mirrors the runtime's scheme dispatch: the Omnigent artifact gateway serves
+    ``artifact://omnigent/`` refs; the Temporal artifact service serves durable
+    ``art_`` refs. Returns ``None`` (skip) when the ref cannot be read.
+    """
+
+    if ref.startswith("artifact://omnigent/"):
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            return await LocalOmnigentArtifactGateway().read_bytes(ref)
+        except FileNotFoundError:
+            return None
+    artifact_id = _artifact_id_from_ref(ref)
+    if not artifact_id:
+        return None
+    try:
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        return body
+    except (
+        PermissionError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactNotFoundError,
+    ):
+        return None
+
+
+async def _materialize_continuation_source_attachments(
+    *, session: AsyncSession, user: User, refs: list[str]
+) -> list[dict[str, Any]]:
+    """Copy authorized source evidence refs into durable input attachments.
+
+    The pinned source evidence refs (production Omnigent gateway refs, in
+    particular) are not readable by the destination agent's prepared-input
+    boundary, which materializes only durable Temporal artifacts linked to the
+    destination workflow (#3641 §6, review "inject selected continuation
+    evidence into execution context"). Copy each authorized selected ref into a
+    durable ``LONG`` artifact and return ``inputAttachments`` entries; the caller
+    injects them into the destination's ``workflow`` payload (the same shape the
+    ordinary create path uses) and links them to the destination workflow after
+    it is created. Unreadable or oversized refs are skipped rather than failing
+    the whole continuation — they remain pinned for display.
+    """
+
+    if not refs:
+        return []
+    artifact_service = get_temporal_artifact_service(session)
+    principal = str(getattr(user, "id", "") or "system")
+    attachments: list[dict[str, Any]] = []
+    for ref in refs:
+        body = await _read_continuation_evidence_bytes(
+            artifact_service=artifact_service, principal=principal, ref=ref
+        )
+        if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
+            continue
+        filename = _evidence_download_filename(ref)
+        content_type = _evidence_attachment_content_type(filename)
+        artifact, _upload = await artifact_service.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(body),
+            retention_class=TemporalArtifactRetentionClass.LONG,
+            metadata_json={
+                "artifact_class": "linked_continuation_source_evidence",
+                "source_ref": ref,
+            },
+        )
+        completed = await artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=body,
+            content_type=content_type,
+        )
+        attachments.append(
+            {
+                "artifactId": completed.artifact_id,
+                "filename": filename,
+                "contentType": content_type,
+                "sizeBytes": len(body),
+            }
+        )
+    return attachments
 
 
 class ContinueInNewWorkflowRequest(BaseModel):
@@ -15322,6 +15544,11 @@ async def continue_in_new_workflow(
             "selectedSourceArtifactRefs": sorted(
                 set(payload.selected_source_artifact_refs)
             ),
+            # ``boundedPurpose`` is authored request data persisted and displayed
+            # on the relationship, so a reused key with an edited purpose must be
+            # treated as a materially changed request (idempotency conflict)
+            # rather than silently returning the first destination (#3641 §5).
+            "boundedPurpose": payload.bounded_purpose,
         }
     )
 
@@ -15388,7 +15615,48 @@ async def continue_in_new_workflow(
             )
     initial_params["continuationSource"] = pinned
 
+    # Materialize the authorized selected source evidence into durable input
+    # attachments so the destination agent can actually read it. Storing the refs
+    # only under ``continuationSource`` is not enough — no runtime consumer reads
+    # that key, and the prepared-input boundary materializes only durable
+    # Temporal artifacts linked to the destination workflow. Attach them under the
+    # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
+    # create path uses) and link them to the destination workflow after it is
+    # created (#3641 §6).
+    source_attachments = await _materialize_continuation_source_attachments(
+        session=session, user=user, refs=payload.selected_source_artifact_refs
+    )
+    if source_attachments:
+        workflow_payload = initial_params.get("workflow")
+        if not isinstance(workflow_payload, dict):
+            workflow_payload = {}
+        existing_attachments = workflow_payload.get("inputAttachments")
+        merged_attachments = (
+            list(existing_attachments)
+            if isinstance(existing_attachments, list)
+            else []
+        )
+        merged_attachments.extend(source_attachments)
+        workflow_payload["inputAttachments"] = merged_attachments
+        initial_params["workflow"] = workflow_payload
+        initial_params.pop("task", None)
+
     reserved_workflow_id = reservation.destination_workflow_id
+    # Scope the ordinary create idempotency key to the same authority boundary as
+    # the relationship reservation — (source_workflow_id, source_run_id,
+    # idempotency_key) — so a later terminal run of the same source that reuses a
+    # client key cannot collide with an earlier run's create reservation. The raw
+    # ``continue:{workflow}:{run}:{key}`` join can exceed the ``String(128)``
+    # ``create_idempotency_key`` column (the request key alone is up to 512
+    # chars), which would raise a truncation error *after* the reservation is
+    # committed, so derive a bounded, deterministic digest instead (#3641 §5, §7).
+    create_idempotency_key = "continue:" + compute_request_digest(
+        {
+            "sourceWorkflowId": source.workflow_id,
+            "sourceRunId": source_run_id,
+            "idempotencyKey": payload.idempotency_key,
+        }
+    )
     try:
         record = await service.create_execution(
             workflow_type=canonical.workflow_type.value,
@@ -15397,11 +15665,11 @@ async def continue_in_new_workflow(
             title=payload.title
             or (canonical.memo.get("title") if canonical.memo else None),
             input_artifact_ref=canonical.input_ref,
-            plan_artifact_ref=canonical.plan_ref,
-            manifest_artifact_ref=canonical.manifest_ref,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters=initial_params,
-            idempotency_key=f"continue:{source.workflow_id}:{payload.idempotency_key}",
+            idempotency_key=create_idempotency_key,
             repository=None,
             integration=None,
             _workflow_id=reserved_workflow_id,
@@ -15419,6 +15687,16 @@ async def continue_in_new_workflow(
         reservation.record,
         destination_run_id=str(getattr(record, "run_id", "") or "").strip() or None,
     )
+    # Link the materialized evidence attachments to the destination workflow now
+    # that it exists, so the agent's prepared-input authorization gate (which
+    # requires an ``input.attachment`` link matching the running workflow id)
+    # accepts them (#3641 §6).
+    if source_attachments:
+        await _attach_input_attachment_artifacts_to_execution(
+            session=session,
+            record=record,
+            attachment_refs=source_attachments,
+        )
     await _persist_original_workflow_input_snapshot_from_parameters(
         session=session,
         record=record,
