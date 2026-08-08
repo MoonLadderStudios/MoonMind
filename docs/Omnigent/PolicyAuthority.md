@@ -60,6 +60,15 @@ and stale versions.
 
 Actions resolve under the bound snapshot to `allow`, `approval_required`, or
 `deny`. Approval-required rules name an approval class and reviewer rule.
+
+MoonMind persists the reviewer decision on the owning remediation link and
+resolves its opaque `approvalRef` at the trusted dispatch boundary. A caller
+string or structurally valid binding is insufficient. The stored action and
+parameter digests, target run/state, security profile and immutable policy
+authority must still match; denied, expired, consumed, or stale records fail
+closed before Omnigent or another owning adapter runs. High-risk reviewer rules
+are evaluated against the authenticated reviewer, separately from the action
+requester.
 Requests bind policy ref/digest, target expected state, and snapshot ref. Policy
 changes do not authorize pending requests; mismatch fails stale and is
 re-evaluated.

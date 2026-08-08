@@ -837,6 +837,13 @@ Purpose:
 
 - deliver a human or policy approval signal.
 
+Remediation approvals are read from the `approvalState` projection returned with
+both remediation and target execution links. `POST
+/api/executions/{workflowId}/remediation/approvals/{requestId}` records an
+authenticated `approved` or `rejected` decision idempotently. The request id
+must name the currently pending durable record; expired, terminal, self-approved,
+or reviewer-rule-ineligible mutations return a bounded validation error.
+
 Required payload fields:
 
 - `approval_type`

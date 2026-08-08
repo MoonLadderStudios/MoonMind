@@ -6526,7 +6526,15 @@ describe('Workflow Detail Entrypoint', () => {
                     },
                   },
                 ],
-                approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
+                approvalState: {
+                  requestId: 'approval-1',
+                  decision: 'pending',
+                  canDecide: true,
+                  requestingActor: 'operator:requester-3620',
+                  expectedTargetState: 'awaiting external session',
+                  checkpointRef: 'artifact://checkpoint/approval-3620',
+                  policyRef: 'omnigent-policy-3620@7',
+                },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
               },
@@ -6621,6 +6629,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('2 / 3')).toBeTruthy();
     expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
     expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
+    expect(screen.getByText('operator:requester-3620')).toBeTruthy();
+    expect(screen.getByText('awaiting external session')).toBeTruthy();
+    expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
+    expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
@@ -8539,8 +8551,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByTestId('chat-session-blocks')).toBeTruthy();
   });
 
-  it('uses advertised bridge capabilities and exposes delivery-unknown messages', async () => {
-    window.history.pushState({}, 'Bridge Controls Test', '/workflows/test-123/chat?source=temporal');
+  it('demotes the bridge projection to a read-only diagnostic surface with no composer or session controls on the primary Chat route (MoonLadderStudios/MoonMind#3640)', async () => {
+    window.history.pushState({}, 'Bridge Read-Only Test', '/workflows/test-123/chat?source=temporal');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = {
@@ -8552,61 +8564,54 @@ describe('Workflow Detail Entrypoint', () => {
       const url = String(input);
       if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
         bridgeSessionId: 'brs-controls', status: 'running', providerSessionRef: 'provider-session',
-        capabilities: { sendFollowUp: true, interruptTurn: true },
+        capabilities: { sendFollowUp: true, interruptTurn: true, clearSession: true, cancelSession: true, stop: true, resolveElicitation: true, terminalCleanup: true },
       }) } as Response);
       if (url.includes('/omnigent/bridge-sessions/brs-controls/events')) return Promise.resolve({ ok: true, json: async () => ({
-        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-controls', items: [],
-        after: 0, nextCursor: null, hasMore: false, terminal: false, latestSequence: 0,
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-controls',
+        items: [
+          { sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'stdout', text: 'Bridge assistant output', kind: 'assistant_message', sessionId: 'brs-controls', metadata: { responseId: 'resp-1' } },
+          { sequence: 2, timestamp: '2026-07-09T00:00:02Z', stream: 'session', kind: 'approval_requested', text: 'Allow the provider action?', metadata: { elicitationId: 'el-pending' } },
+        ],
+        after: 0, nextCursor: '2', hasMore: false, terminal: false, latestSequence: 2,
       }) } as Response);
-      if (url.includes('/omnigent/v1/sessions/provider-session/events')) return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
       if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
 
     try {
+      // Even with a fully advertised capability set and actions enabled, the primary
+      // Chat route mounts only the read-only diagnostic surface. The native Omnigent
+      // application owns the single interactive composer and session controls.
       renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-      const input = await screen.findByLabelText('Follow-up message');
-      fireEvent.change(input, { target: { value: 'Continue with the fix.' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
-      await waitFor(() => expect(screen.getByText(/Delivery confirmation pending/)).toBeTruthy());
-      expect(screen.getByRole('button', { name: 'Interrupt turn' })).toBeTruthy();
-      expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).includes('/omnigent/v1/sessions/provider-session/events') &&
-        String((init as RequestInit | undefined)?.body).includes('clientEventKey'))).toBe(true);
-    } finally {
-      window.EventSource = priorEventSource;
-    }
-  });
 
-  it('shows failed bridge delivery and denies controls not advertised by the server', async () => {
-    window.history.pushState({}, 'Bridge Failed Controls Test', '/workflows/test-123/chat?source=temporal');
-    const priorEventSource = window.EventSource;
-    window.EventSource = MockEventSource as unknown as typeof EventSource;
-    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge controls', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-fail', status: 'running', providerSessionRef: 'provider-session', capabilities: { sendFollowUp: true, interruptTurn: false } }) } as Response);
-      if (url.includes('/bridge-sessions/brs-fail/events')) return Promise.resolve({ ok: true, json: async () => ({ schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-fail', items: [], after: 0, nextCursor: null, hasMore: false, terminal: false, latestSequence: 0 }) } as Response);
-      if (url.includes('/omnigent/v1/sessions/provider-session/events')) return Promise.resolve({ ok: false, status: 403, json: async () => ({ detail: 'not authorized' }) } as Response);
-      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-    try {
-      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-      fireEvent.change(await screen.findByLabelText('Follow-up message'), { target: { value: 'Continue.' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
-      await waitFor(() => expect(screen.getByText(/Operator message · Failed/)).toBeTruthy());
+      // Durable evidence still renders under the clearly labeled diagnostic surface.
+      expect(await screen.findByTestId('workflow-chat-diagnostics')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Diagnostic event history' })).toBeTruthy();
+      expect((await screen.findAllByText('Bridge assistant output')).length).toBeGreaterThan(0);
+
+      // None of the demoted mutation affordances mount on the primary Chat route.
+      expect(screen.queryByLabelText('Follow-up message')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Send follow-up' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Interrupt turn' })).toBeNull();
-      expect(screen.getByRole('region', { name: 'Bridge session controls' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Bridge session controls' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Pending operator request el-pending' })).toBeNull();
+
+      // The demoted custom composer never posts to the legacy bridge-control endpoint.
+      expect(fetchSpy.mock.calls.some(([url]) =>
+        String(url).includes('/omnigent/v1/sessions/provider-session/events'))).toBe(false);
     } finally {
       window.EventSource = priorEventSource;
     }
   });
 
-  it('executes advertised bridge elicitation, clear, and cancel controls and preserves durable outcomes', async () => {
+  it('preserves bridge runtime identity, compatibility diagnostics, and resolved-approval evidence read-only without exposing session controls (MoonLadderStudios/MoonMind#3640)', async () => {
     window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/chat?source=temporal');
     const priorEventSource = window.EventSource;
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
@@ -8643,7 +8648,9 @@ describe('Workflow Detail Entrypoint', () => {
     });
     try {
       renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-      expect(await screen.findByRole('region', { name: 'Pending operator request el-pending' })).toBeTruthy();
+      // Read-only runtime identity and compatibility diagnostics are preserved under
+      // the demoted diagnostic surface. Wait on durable event content before asserting.
+      expect((await screen.findAllByText('Previously approved by operator.')).length).toBeGreaterThan(0);
       const identity = screen.getByRole('region', { name: 'Omnigent runtime identity' });
       expect(identity.textContent).toContain('Codex via Omnigent');
       expect(identity.textContent).toContain('codex-profile');
@@ -8651,35 +8658,20 @@ describe('Workflow Detail Entrypoint', () => {
       const compatibility = screen.getByRole('region', { name: 'Omnigent compatibility diagnostics' });
       expect(compatibility.textContent).toContain('embedded_omnigent_compatible_server');
       expect(compatibility.textContent).toContain('artifact://embedded-mode-row');
-      expect(screen.getAllByText('Previously approved by operator.').length).toBeGreaterThan(0);
-      expect(screen.queryByRole('region', { name: 'Pending operator request el-resolved' })).toBeNull();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
-      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session/elicitations/el-pending/resolve') &&
-        JSON.parse(String((init as RequestInit).body)).decision === 'approved')).toBe(true));
-      fireEvent.click(screen.getByRole('button', { name: 'Clear session' }));
-      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
-        JSON.parse(String((init as RequestInit).body)).type === 'clear_session')).toBe(true));
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
-      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
-        JSON.parse(String((init as RequestInit).body)).type === 'session.cancel')).toBe(true));
-      fireEvent.click(screen.getByRole('button', { name: 'Stop session' }));
-      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
-        JSON.parse(String((init as RequestInit).body)).type === 'stop_session' &&
-        JSON.parse(String((init as RequestInit).body)).expectedBridgeSessionId === 'brs-interventions' &&
-        JSON.parse(String((init as RequestInit).body)).expectedRunnerId === 'runner-1' &&
-        typeof JSON.parse(String((init as RequestInit).body)).idempotencyKey === 'string')).toBe(true));
-      fireEvent.click(screen.getByRole('button', { name: 'Remove owned session' }));
-      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
-        JSON.parse(String((init as RequestInit).body)).type === 'cleanup_session' &&
-        JSON.parse(String((init as RequestInit).body)).expectedWorkflowId === 'test-123')).toBe(true));
+      // Even with a fully advertised capability set, no interactive session controls or
+      // pending-approval affordances mount on the primary Chat route.
+      expect(screen.queryByRole('region', { name: 'Pending operator request el-pending' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
+
+      // No control request reaches the legacy bridge-control endpoints.
+      expect(fetchSpy.mock.calls.some(([url]) =>
+        String(url).includes('/omnigent/v1/sessions/provider-session/'))).toBe(false);
     } finally {
-      confirmSpy.mockRestore();
       window.EventSource = priorEventSource;
     }
   });
@@ -10159,149 +10151,6 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
-  });
-
-  it('handles Escape as a supported stop action and exposes disabled reasons for compact chat controls', async () => {
-    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
-    const codexPayload: BootPayload = {
-      ...mockPayload,
-      initialData: {
-        dashboardConfig: {
-          features: {
-            temporalDashboard: { actionsEnabled: true },
-            logStreamingEnabled: true,
-            liveLogsSessionTimelineEnabled: true,
-          },
-        },
-      },
-    };
-    const mockExecution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      title: 'Codex session task',
-      summary: 'Session-backed work',
-      status: 'running',
-      state: 'executing',
-      rawState: 'executing',
-      targetRuntime: 'codex_cli',
-      agentRunId: 'wf-task-1',
-      createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
-      actions: {},
-    };
-    let capabilities = {
-      sendFollowUp: false,
-      clearSession: false,
-      interruptTurn: true,
-      cancelSession: true,
-    };
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/observability-summary')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            summary: {
-              status: 'running',
-              supportsLiveStreaming: false,
-              liveStreamStatus: 'unavailable',
-              sessionSnapshot: {
-                sessionId: 'sess:wf-task-1:codex_cli',
-                sessionEpoch: 1,
-                containerId: 'ctr-1',
-                threadId: 'thread-1',
-                activeTurnId: 'turn-1',
-              },
-              interventionCapabilities: capabilities,
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/observability/events')) {
-        return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
-      }
-      if (url.includes('/logs/merged')) {
-        return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
-      }
-      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            action: JSON.parse(String(init?.body || '{}')).action,
-            projection: {
-              agent_run_id: 'wf-task-1',
-              session_id: 'sess:wf-task-1:codex_cli',
-              session_epoch: 1,
-              grouped_artifacts: [],
-              latest_summary_ref: null,
-              latest_checkpoint_ref: null,
-              latest_control_event_ref: { artifact_id: 'art-control' },
-              latest_reset_boundary_ref: null,
-            },
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            agent_run_id: 'wf-task-1',
-            session_id: 'sess:wf-task-1:codex_cli',
-            session_epoch: 1,
-            grouped_artifacts: [],
-            latest_summary_ref: null,
-            latest_checkpoint_ref: null,
-            latest_control_event_ref: null,
-            latest_reset_boundary_ref: null,
-          }),
-        } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
-
-    const followUp = await screen.findByLabelText('Follow-up message');
-    expect((screen.getByRole('button', { name: 'Continue session' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
-    expect((screen.getByRole('button', { name: 'Clear / Reset' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Clear / Reset is not supported for this session.')).toBeTruthy();
-
-    fireEvent.keyDown(followUp, { key: 'Escape' });
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
-        expect.objectContaining({
-          method: 'POST',
-          body: expect.stringContaining('"action":"interrupt_turn"'),
-        }),
-      );
-    });
-
-    fetchSpy.mockClear();
-    capabilities = {
-      sendFollowUp: false,
-      clearSession: false,
-      interruptTurn: false,
-      cancelSession: false,
-    };
-    cleanup();
-    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
-    fireEvent.keyDown(await screen.findByLabelText('Follow-up message'), { key: 'Escape' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/control'))).toBe(false);
-    expect((screen.getByRole('button', { name: 'Interrupt turn' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Interrupt turn is not supported for this session.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Cancel session' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Cancel session is not supported for this session.')).toBeTruthy();
   });
 
   it('keeps polling session continuity until a projection or terminal state exists', () => {

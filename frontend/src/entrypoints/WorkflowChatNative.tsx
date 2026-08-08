@@ -126,27 +126,55 @@ export function WorkflowChatNative({
     );
   }
 
-  // Native UI is unavailable for this workflow: surface the stable reason and an
-  // authorized full-page escape hatch when one exists, then fall back to the
-  // legacy read-only compatibility projection (docs/UI/WorkflowChatPanel.md §11).
-  const unavailableReason = binding?.unavailableReason;
+  // Native UI is unavailable for this workflow: surface the stable reason, a
+  // Retry when the condition is retryable, and an authorized full-page escape
+  // hatch when one exists, then fall back to the read-only diagnostic and
+  // compatibility projection (docs/UI/WorkflowChatPanel.md §11,
+  // MoonLadderStudios/MoonMind#3640).
+  //
+  // The fallback never becomes a behaviorally different interactive chat: the
+  // `children` projection is read-only, so native failure does not silently swap
+  // in a second composer.
+  const unavailableReason = query.isError
+    ? 'native_chat_binding_unreachable'
+    : binding?.unavailableReason
+      ?? (binding?.state === 'starting' ? 'native_chat_session_starting' : undefined);
+  const retryable =
+    query.isError || binding?.state === 'starting' || binding?.state === 'unavailable';
   const escapeHatch =
     binding && binding.chatUrl ? fullPageChatUrl(binding.chatUrl) : null;
   return (
     <>
-      {unavailableReason ? (
+      {unavailableReason || retryable ? (
         <div className="td-native-chat-unavailable" data-testid="workflow-native-chat-unavailable">
-          <p className="small">Native chat is unavailable: {unavailableReason}</p>
-          {escapeHatch ? (
-            <a
-              className="button secondary"
-              href={escapeHatch}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open in Omnigent
-            </a>
-          ) : null}
+          <p className="small">
+            Native chat is unavailable{unavailableReason ? `: ${unavailableReason}` : '.'}
+          </p>
+          <div className="button-group td-native-chat-actions">
+            {retryable ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  void query.refetch();
+                }}
+                data-testid="workflow-native-chat-retry"
+              >
+                Retry
+              </button>
+            ) : null}
+            {escapeHatch ? (
+              <a
+                className="button secondary"
+                href={escapeHatch}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="workflow-native-chat-open"
+              >
+                Open in Omnigent
+              </a>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {children}
