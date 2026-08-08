@@ -230,6 +230,15 @@ For every HTML/bootstrap, HTTP, SSE, WebSocket, resource, message, approval, ter
 
 The full-page **Open in Omnigent** experience uses this same scoped facade. It must not navigate directly to an upstream server and bypass MoonMind authority.
 
+#### Versioned native-UI compatibility map (MoonLadderStudios/MoonMind#3635)
+
+The native UI is more than an HTTP transcript: it opens WebSockets and drives terminal/PTY, execution-log, browser-pane, sub-agent/task, and reconnect/wake surfaces. Transport and route coverage for that surface is a single **versioned compatibility map** pinned to the `omnigent.server.v1` profile (`moonmind/omnigent/native_ui_compat.py`). Each recognized route/transport declares one of two dispositions:
+
+- **served** — the HTTP + SSE surface the scoped facade actively serves (§4.2 step list), single-sourced from the facade route allowlist so there is no second source of truth;
+- **compatibility_review_required** — a recognized WebSocket/terminal transport class whose upstream rewrite is not yet reviewed. The WebSocket facade authenticates, resolves the durable binding, authorizes the caller, rejects caller-supplied identity, recomputes capabilities, negotiates only an allowlisted subprotocol, and validates binding state **before upgrade**, then fails closed with an explicit compatibility diagnostic instead of bridging the browser to the upstream server. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
+
+Terminal create/attach/input/resize/close and browser-pane control require capabilities the facade never grants, so a nonowner or read-only viewer is denied before any transport opens; terminal viewing/execution-log inspection is a distinct read capability. Unknown or changed transports fail closed with a non-enumerating diagnostic rather than being generically proxied, and a terminal/revoked binding cannot open a new live transport.
+
 ### 4.3 Host/runner channel
 
 The host/runner channel is the persistent bidirectional control and event channel used by a host to register, advertise capabilities, heartbeat, and deliver runtime events.
@@ -1044,7 +1053,7 @@ Verify host registration, heartbeat/capabilities, session creation, harness laun
 
 ## 21. Open questions
 
-1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile?
+1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile? *(Partially resolved by MoonLadderStudios/MoonMind#3635: the native-UI WebSocket/terminal transport classes are now inventoried in the versioned compatibility map (§4.2) and fail closed with a compatibility diagnostic until each profile's upstream rewrite is reviewed.)*
 2. Which upstream host auth modes are supported in embedded mode?
 3. Which binary attachment types are allowed under high-security mode when their content cannot be text-scanned?
 4. What is the minimum stock-host conformance suite before embedded mode is enabled?
