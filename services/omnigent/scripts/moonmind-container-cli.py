@@ -119,6 +119,8 @@ def _call(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
                         raw_detail.get("message") or raw_detail.get("code") or ""
                     )
             except (UnicodeDecodeError, json.JSONDecodeError):
+                # The HTTP status remains authoritative when an intermediary
+                # returns a non-JSON or undecodable diagnostic body.
                 pass
             suffix = f": {detail}" if detail else ""
             raise CliError(
