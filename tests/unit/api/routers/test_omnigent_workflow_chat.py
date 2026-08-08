@@ -138,12 +138,19 @@ class _FakeStore:
         self.claimed: set[str] = set()
         self.event_query_keys: list[str] = []
 
-    async def get_bridge_session(self, bridge_session_id: str):
+    def _next_row(self):
         if self._rows_by_call is not None:
             index = min(self._get_calls, len(self._rows_by_call) - 1)
             self._get_calls += 1
             return self._rows_by_call[index]
         return self._row
+
+    async def get_bridge_session(self, bridge_session_id: str):
+        return self._next_row()
+
+    async def get_session_by_chat_binding_id(self, chat_binding_id: str):
+        # #3633 dedicated-column resolution seam used by the facade.
+        return self._next_row()
 
     async def get_session_by_provider_session_id(self, session_id: str):
         if self._row and getattr(self._row, "omnigent_session_id", None) == session_id:
@@ -1172,6 +1179,21 @@ def test_stream_uses_resolved_bridge_session_key() -> None:
     # The browser transcript exposes only the opaque chatBindingId.
     assert _BRIDGE_SESSION_ID not in response.text
     assert _CHAT_BINDING_ID in response.text
+
+
+def test_facade_resolves_via_chat_binding_column() -> None:
+    # #3633: the browser id is the dedicated chat_binding_id column, distinct
+    # from bridge_session_id. Resolving it as a bridge_session_id must not work.
+    class _ColumnOnlyStore(_FakeStore):
+        async def get_bridge_session(self, bridge_session_id: str):
+            return None
+
+    client, _proxy, _store = _build(store=_ColumnOnlyStore())
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
+
+    assert response.status_code == 200
+    assert response.json()["id"] == _CHAT_BINDING_ID
 
 
 def test_stream_excludes_non_visible_lifecycle_rows() -> None:

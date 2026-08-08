@@ -2692,12 +2692,13 @@ async def _resolve_chat_binding_row(
 ) -> Any | None:
     """Resolve the durable binding row for an opaque ``chatBindingId``.
 
-    Single resolution seam (see module note). Today the ``chatBindingId`` is the
-    durable ``bridge_session_id``; when #3633 adds a dedicated ``chat_binding_id``
-    column, only this function changes.
+    Single resolution seam (see module note). MoonLadderStudios/MoonMind#3633
+    added the dedicated opaque ``chat_binding_id`` column, so the browser-facing
+    id is resolved by that column. The resolved row's server-owned
+    ``bridge_session_id`` is what journal and terminal lookups use.
     """
 
-    return await store.get_bridge_session(chat_binding_id)
+    return await store.get_session_by_chat_binding_id(chat_binding_id)
 
 
 def _audit_facade(
