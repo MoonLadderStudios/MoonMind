@@ -5,7 +5,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -1372,11 +1372,20 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         )
         assert link is not None
         link.status = "awaiting_approval"
+        request_id = f"{remediation.workflow_id}:approval:request"
+        link.approval_state = {
+            "requestId": request_id,
+            "approvalRef": f"approval://remediation/{request_id}",
+            "status": "pending",
+            "reviewerRule": "operator",
+            "requestingActor": "service:remediation",
+            "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        }
         await session.commit()
 
         result = await service.record_remediation_approval_decision(
             remediation_workflow_id=remediation.workflow_id,
-            request_id=f"{remediation.workflow_id}:approval",
+            request_id=request_id,
             decision="approved",
             comment="Reviewed blast radius.",
             actor="ops@example.com",
@@ -1385,7 +1394,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert result == {
             "accepted": True,
             "workflowId": remediation.workflow_id,
-            "requestId": f"{remediation.workflow_id}:approval",
+            "requestId": request_id,
             "decision": "approved",
         }
         record = await service.describe_execution(remediation.workflow_id)
@@ -1393,7 +1402,32 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["action"] == "remediation_approval_approved"
         assert audit[-1]["transport"] == "api"
         assert audit[-1]["summary"] == "Remediation approval approved."
-        assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
+        assert request_id in audit[-1]["detail"]
+        await session.refresh(link)
+        assert link.approval_state["status"] == "approved"
+        assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["artifactRefs"]["approvalDecision"]
+        decision_artifact = await session.get(
+            TemporalArtifact,
+            link.approval_state["artifactRefs"]["approvalDecision"],
+        )
+        assert decision_artifact is not None
+        assert decision_artifact.metadata_json["artifact_type"] == (
+            "remediation.approval_decision"
+        )
+        decision_ref = link.approval_state["artifactRefs"]["approvalDecision"]
+        replayed = await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=request_id,
+            decision="approved",
+            comment="Reviewed blast radius.",
+            actor="ops@example.com",
+        )
+        assert replayed["accepted"] is True
+        await session.refresh(link)
+        assert link.approval_state["artifactRefs"]["approvalDecision"] == decision_ref
         assert "ops@example.com" in audit[-1]["detail"]
 
 @pytest.mark.asyncio
