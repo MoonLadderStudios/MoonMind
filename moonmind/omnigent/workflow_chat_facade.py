@@ -57,6 +57,7 @@ CODE_SESSION_READ_ONLY = "omnigent_chat_session_read_only"
 CODE_UNSUPPORTED_MEDIA_TYPE = "omnigent_chat_unsupported_media_type"
 CODE_PAYLOAD_TOO_LARGE = "omnigent_chat_payload_too_large"
 CODE_MALFORMED_PAYLOAD = "omnigent_chat_malformed_payload"
+CODE_CONTENT_BLOCKED = "omnigent_chat_content_blocked"
 
 
 class WorkflowChatFacadeError(OmnigentBridgeError):
@@ -90,22 +91,46 @@ _ALWAYS_DENIED_CAPABILITIES: tuple[str, ...] = (
 )
 
 
-def recompute_capabilities(status: str | None) -> dict[str, bool]:
+def recompute_capabilities(
+    status: str | None,
+    *,
+    policy_capabilities: Mapping[str, Any] | None = None,
+) -> dict[str, bool]:
     """Recompute effective capabilities from trusted session state (OB-§4.2 step 6).
 
     Capabilities are never trusted from mutable browser state; they are derived
     from the durable binding's coarse status on every request. A terminal
     session is read-only: transcript and resource reads remain, all mutations
     are denied.
+
+    The status-derived result is *intersected* with the binding's stored policy
+    (``policy_capabilities``, e.g. the durable projection's
+    ``interventionCapabilities``). A capability is granted only when both the
+    trusted session state permits it and the stored policy does not explicitly
+    disable it, so a profile/launch policy that turns off ``sendMessage`` is
+    never re-advertised or re-authorized from status alone. Capabilities the
+    policy does not mention keep their status-derived value; the policy can
+    remove authority but never grant authority the facade withholds.
     """
 
-    read_only = str(status or "").strip().lower() in TERMINAL_SESSION_STATUSES
+    read_only = is_read_only(status)
+    policy = policy_capabilities or {}
+
+    def _grant(capability: str, status_allows: bool) -> bool:
+        if not status_allows:
+            return False
+        # A stored policy value only ever removes authority. Any non-``True``
+        # value (explicit ``False``, or a non-bool) fails closed.
+        if capability in policy and policy.get(capability) is not True:
+            return False
+        return True
+
     capabilities = {
-        CAP_VIEW_TRANSCRIPT: True,
-        CAP_READ_RESOURCES: True,
-        CAP_SEND_MESSAGE: not read_only,
-        CAP_INTERRUPT_TURN: not read_only,
-        CAP_RESOLVE_ELICITATION: not read_only,
+        CAP_VIEW_TRANSCRIPT: _grant(CAP_VIEW_TRANSCRIPT, True),
+        CAP_READ_RESOURCES: _grant(CAP_READ_RESOURCES, True),
+        CAP_SEND_MESSAGE: _grant(CAP_SEND_MESSAGE, not read_only),
+        CAP_INTERRUPT_TURN: _grant(CAP_INTERRUPT_TURN, not read_only),
+        CAP_RESOLVE_ELICITATION: _grant(CAP_RESOLVE_ELICITATION, not read_only),
     }
     for denied in _ALWAYS_DENIED_CAPABILITIES:
         capabilities[denied] = False
@@ -269,15 +294,39 @@ def match_facade_operation(method: str, path: str) -> FacadeMatch | None:
     return None
 
 
+# Sentinel capability the facade never grants. Any composer/control event that
+# is not on the supported allowlist maps here and is therefore denied: the
+# browser facade only carries message and interrupt authority, never the
+# distinct stop, reset, harvest, or cleanup authority those controls require.
+CAP_CONTROL_UNSUPPORTED = "controlUnsupported"
+
+# Composer/control events the binding-scoped facade supports, mapped to the one
+# capability each requires. ``stop_session``, ``clear_session``,
+# ``reset_session``, ``cleanup_session``, ``terminal_cleanup``,
+# ``harvest_session``, and any future control are intentionally absent: they
+# stop, reset, harvest, or destroy owned runtime resources and need their own
+# authority, which the browser facade does not carry (OB-§4.2, §16).
+_SUPPORTED_COMPOSER_EVENTS: dict[str, str] = {
+    "message": CAP_SEND_MESSAGE,
+    "user.message": CAP_SEND_MESSAGE,
+    "interrupt": CAP_INTERRUPT_TURN,
+}
+
+
 def required_capability_for_event(event_type: str | None) -> str:
-    """Map a composer/control event type to the capability it requires."""
+    """Map a supported composer event type to the capability it requires.
+
+    Only ``message``/``user.message`` (``sendMessage``) and ``interrupt``
+    (``interruptTurn``) are supported through the browser facade. Every other
+    event type — including ``stop_session``, ``clear_session``,
+    ``cleanup_session``, and ``terminal_cleanup`` — maps to
+    :data:`CAP_CONTROL_UNSUPPORTED`, a capability the facade never grants, so a
+    caller holding only ``sendMessage`` cannot reach a destructive control by
+    naming an off-allowlist event type.
+    """
 
     raw = str(event_type or "").strip().lower()
-    if raw == "interrupt":
-        return CAP_INTERRUPT_TURN
-    # message, stop, clear/reset, cleanup, and other controls the composer
-    # offers are gated by sendMessage authority.
-    return CAP_SEND_MESSAGE
+    return _SUPPORTED_COMPOSER_EVENTS.get(raw, CAP_CONTROL_UNSUPPORTED)
 
 
 # --- Identity-substitution guard (OB-§4.2 steps 4-5, brief §3) ----------------
@@ -376,23 +425,35 @@ def _reject_identity(message: str, *, code: str = CODE_IDENTITY_SUBSTITUTION) ->
     )
 
 
-def _scan_mapping_for_identity(
-    mapping: Mapping[str, Any], *, chat_binding_id: str
-) -> None:
-    for raw_key, raw_value in mapping.items():
-        normalized = _normalize_key(raw_key)
-        if normalized in _SESSION_ID_KEYS:
-            value = str(raw_value or "").strip()
-            if value and value != chat_binding_id:
+def _scan_value_for_identity(value: Any, *, chat_binding_id: str) -> None:
+    """Recursively fail closed on any server-owned identity at any depth.
+
+    ``BridgeSessionEventRequest`` permits arbitrary extra nested data and
+    forwards it unchanged, so a forbidden identity or a mismatched session id
+    could otherwise hide inside nested event ``data``/content envelopes,
+    metadata, or list items. Every mapping and list is inspected, not just the
+    body root and one ``metadata`` mapping.
+    """
+
+    if isinstance(value, Mapping):
+        for raw_key, raw_value in value.items():
+            normalized = _normalize_key(raw_key)
+            if normalized in _SESSION_ID_KEYS:
+                session_value = str(raw_value or "").strip()
+                if session_value and session_value != chat_binding_id:
+                    _reject_identity(
+                        "A session reference does not map to the bound session.",
+                        code=CODE_SESSION_SUBSTITUTION,
+                    )
+                continue
+            if normalized in _FORBIDDEN_IDENTITY_KEYS:
                 _reject_identity(
-                    "A session reference does not map to the bound session.",
-                    code=CODE_SESSION_SUBSTITUTION,
+                    "The request attempts to supply a server-owned identity."
                 )
-            continue
-        if normalized in _FORBIDDEN_IDENTITY_KEYS:
-            _reject_identity(
-                "The request attempts to supply a server-owned identity."
-            )
+            _scan_value_for_identity(raw_value, chat_binding_id=chat_binding_id)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _scan_value_for_identity(item, chat_binding_id=chat_binding_id)
 
 
 def assert_no_identity_substitution(
@@ -420,7 +481,7 @@ def assert_no_identity_substitution(
         )
 
     if query:
-        _scan_mapping_for_identity(query, chat_binding_id=chat_binding_id)
+        _scan_value_for_identity(query, chat_binding_id=chat_binding_id)
 
     if headers:
         for raw_name in headers.keys():
@@ -429,14 +490,12 @@ def assert_no_identity_substitution(
                     "The request attempts to supply a server-owned identity header."
                 )
 
-    if isinstance(body, Mapping):
-        _scan_mapping_for_identity(body, chat_binding_id=chat_binding_id)
-        metadata = body.get("metadata")
-        if isinstance(metadata, Mapping):
-            _scan_mapping_for_identity(metadata, chat_binding_id=chat_binding_id)
+    if body is not None:
+        _scan_value_for_identity(body, chat_binding_id=chat_binding_id)
 
 
 __all__ = [
+    "CAP_CONTROL_UNSUPPORTED",
     "CAP_INTERRUPT_TURN",
     "CAP_READ_RESOURCES",
     "CAP_RESOLVE_ELICITATION",
@@ -444,6 +503,7 @@ __all__ = [
     "CAP_VIEW_TRANSCRIPT",
     "CODE_BINDING_UNKNOWN",
     "CODE_CALLER_UNAUTHORIZED",
+    "CODE_CONTENT_BLOCKED",
     "CODE_IDENTITY_SUBSTITUTION",
     "CODE_MALFORMED_PAYLOAD",
     "CODE_OPERATION_DENIED",
