@@ -139,9 +139,17 @@ async def test_read_bytes_roundtrips_written_artifact(tmp_path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reader", ["read_text", "read_bytes"])
-async def test_read_rejects_refs_escaping_artifact_root(tmp_path, reader) -> None:
+@pytest.mark.parametrize(
+    "escaping_ref",
+    [
+        "artifact://omnigent/../../etc/passwd",
+        "artifact://omnigent//etc/passwd",
+    ],
+)
+async def test_read_rejects_refs_escaping_artifact_root(
+    tmp_path, reader, escaping_ref
+) -> None:
     gateway = LocalOmnigentArtifactGateway(root=tmp_path / "root")
-    escaping_ref = "artifact://omnigent/../../etc/passwd"
 
     with pytest.raises(OmnigentArtifactError, match="escapes artifact root"):
         await getattr(gateway, reader)(escaping_ref)

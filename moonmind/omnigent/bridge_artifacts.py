@@ -205,10 +205,15 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             return self._readable_refs[artifact_ref]
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
-            # The ref's relative component may be attacker-influenced, so enforce
-            # containment inline (realpath + prefix check, a recognized
-            # path-traversal barrier) before any read.
+            # The ref's relative component may be attacker-influenced. Refs are
+            # written from sanitized segments that never contain ".." or an
+            # absolute root, so reject any traversal marker outright, then confirm
+            # containment (realpath prefix check) before any read.
             relative = artifact_ref[len(prefix) :]
+            if ".." in relative or os.path.isabs(relative):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
             root = os.path.realpath(self._root)
             resolved = os.path.realpath(os.path.join(root, relative))
             if resolved != root and not resolved.startswith(root + os.sep):
@@ -225,10 +230,15 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             return self._readable_refs[artifact_ref].encode("utf-8")
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
-            # The ref's relative component may be attacker-influenced, so enforce
-            # containment inline (realpath + prefix check, a recognized
-            # path-traversal barrier) before any read.
+            # The ref's relative component may be attacker-influenced. Refs are
+            # written from sanitized segments that never contain ".." or an
+            # absolute root, so reject any traversal marker outright, then confirm
+            # containment (realpath prefix check) before any read.
             relative = artifact_ref[len(prefix) :]
+            if ".." in relative or os.path.isabs(relative):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
             root = os.path.realpath(self._root)
             resolved = os.path.realpath(os.path.join(root, relative))
             if resolved != root and not resolved.startswith(root + os.sep):
