@@ -14,10 +14,12 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import api_service.api.routers.omnigent_native_ui as native_ui_mod
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_execution_service,
@@ -25,11 +27,15 @@ from api_service.api.routers.omnigent_bridge import (
 )
 from api_service.api.routers.omnigent_native_ui import (
     NATIVE_UI_MOUNT_PATH,
+    NativeUiUpstream,
+    NativeUiUpstreamError,
     NativeUiUpstreamResponse,
+    _rewrite_upstream_location,
     get_native_ui_upstream,
     native_ui_router,
 )
 from api_service.auth_providers import get_current_user
+from moonmind.omnigent.native_ui import scoped_ui_base
 
 _USER_ID = uuid4()
 _CHAT_BINDING_ID = "chatb_opaque123"
@@ -312,3 +318,90 @@ def test_upstream_error_serves_unavailable_document() -> None:
 
     assert response.status_code == 503
     assert 'data-reason="native_ui_upstream_unavailable"' in response.text
+
+
+def test_relative_redirect_traversal_fails_closed_to_scope() -> None:
+    base = scoped_ui_base(_CHAT_BINDING_ID)
+    # A relative redirect that walks above the binding mount must not be emitted
+    # verbatim (the browser would normalize it to an out-of-scope same-origin
+    # path); it collapses to the scoped root instead.
+    assert (
+        _rewrite_upstream_location(
+            "../../../../api/executions", scoped_base=base
+        )
+        == base + "/"
+    )
+    # A benign relative redirect stays under the scoped base.
+    assert (
+        _rewrite_upstream_location("dashboard/panel", scoped_base=base)
+        == f"{base}/dashboard/panel"
+    )
+    # Query/fragment are preserved when the target stays in scope.
+    assert (
+        _rewrite_upstream_location("/login?next=%2Fhome", scoped_base=base)
+        == f"{base}/login?next=%2Fhome"
+    )
+
+
+def test_relative_redirect_traversal_kept_in_scope_via_router() -> None:
+    upstream = _FakeUpstream(
+        {
+            "/": NativeUiUpstreamResponse(
+                status_code=302,
+                content=b"",
+                media_type="text/html",
+                location="../../../../api/executions",
+            )
+        }
+    )
+    client, _upstream = _build(upstream=upstream)
+
+    response = client.get(_url(), params={"embedded": "1"}, follow_redirects=False)
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location == f"{NATIVE_UI_MOUNT_PATH}/{_CHAT_BINDING_ID}/"
+    assert "/api/executions" not in location
+
+
+@pytest.mark.asyncio
+async def test_fetch_aborts_when_asset_exceeds_limit(monkeypatch) -> None:
+    # The limit is enforced while streaming, so a large/compressed upstream
+    # response cannot buffer unbounded bytes into API-service memory.
+    monkeypatch.setattr(native_ui_mod, "_NATIVE_UI_MAX_ASSET_BYTES", 8)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"x" * 4096,
+            headers={"content-type": "application/javascript"},
+        )
+
+    upstream = NativeUiUpstream(
+        base_url="https://omnigent.internal:8000",
+        transport=httpx.MockTransport(_handler),
+    )
+
+    with pytest.raises(NativeUiUpstreamError):
+        await upstream.fetch("/assets/too-big.js")
+
+
+@pytest.mark.asyncio
+async def test_fetch_returns_asset_under_limit() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"console.log('ok');",
+            headers={"content-type": "application/javascript"},
+        )
+
+    upstream = NativeUiUpstream(
+        base_url="https://omnigent.internal:8000",
+        transport=httpx.MockTransport(_handler),
+    )
+
+    result = await upstream.fetch("/assets/index-abc.js")
+
+    assert result.status_code == 200
+    assert result.content == b"console.log('ok');"
+    assert result.media_type == "application/javascript"

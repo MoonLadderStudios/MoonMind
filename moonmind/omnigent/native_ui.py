@@ -186,9 +186,14 @@ def build_chat_bootstrap(
     """Build the browser-safe native application bootstrap object (issue §2).
 
     The native application receives only browser-safe information: the opaque
-    ``chatBindingId``, the scoped API/WebSocket base paths, the presentation
-    mode, read-only state, the filtered effective capability manifest with
-    disabled reasons, safe display labels, and a stable compatibility version.
+    ``chatBindingId``, the scoped API base path, the presentation mode,
+    read-only state, the filtered effective capability manifest with disabled
+    reasons, safe display labels, and a stable compatibility version.
+
+    ``wsBase`` is deliberately not advertised: the binding-scoped facade
+    currently exposes only HTTP/SSE routes, so the bootstrap does not promise a
+    WebSocket base until a binding-authorized WebSocket handler exists
+    (MoonLadderStudios/MoonMind#3638).
 
     It deliberately never carries a raw provider session id, upstream endpoint,
     host, runner, credential, profile, launch policy, or workspace authority —
@@ -210,7 +215,6 @@ def build_chat_bootstrap(
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
         "apiBase": scoped_api_base(chat_binding_id),
-        "wsBase": scoped_api_base(chat_binding_id),
         "mode": mode,
         "embedded": mode == "embedded",
         "readOnly": bool(read_only),
@@ -255,11 +259,13 @@ def native_ui_security_headers(
 
     headers: dict[str, str] = {
         # Restrict framing and neutralize base-tag/redirect escapes to unscoped
-        # upstream routes; ``connect-src 'self'`` keeps API/SSE/WebSocket traffic
-        # on the MoonMind origin (the scoped facade), never the upstream server.
+        # upstream routes; ``connect-src 'self'`` keeps API/SSE traffic on the
+        # MoonMind origin (the scoped facade), never the upstream server, so
+        # provider JavaScript cannot open a fetch/XHR/EventSource/WebSocket
+        # connection to an absolute upstream or external URL.
         "Content-Security-Policy": (
             f"frame-ancestors {frame_ancestors}; base-uri 'self'; "
-            "form-action 'self'"
+            "form-action 'self'; connect-src 'self'"
         ),
         "X-Frame-Options": x_frame_options,
         "X-Content-Type-Options": "nosniff",

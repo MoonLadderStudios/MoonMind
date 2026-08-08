@@ -30,6 +30,7 @@ mechanics live in :mod:`moonmind.omnigent.native_ui`.
 from __future__ import annotations
 
 import logging
+import posixpath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -157,19 +158,34 @@ class NativeUiUpstream:
                 timeout=_NATIVE_UI_UPSTREAM_TIMEOUT,
                 follow_redirects=False,
             ) as client:
-                response = await client.get(url, headers=self._headers())
+                # Stream the (decoded) body and abort as soon as the cumulative
+                # decoded size exceeds the limit, so a very large or highly
+                # compressed upstream response cannot buffer unbounded bytes into
+                # API-service memory before the length check runs.
+                async with client.stream(
+                    "GET", url, headers=self._headers()
+                ) as response:
+                    location = response.headers.get("location")
+                    media_type = (
+                        response.headers.get(
+                            "content-type", "application/octet-stream"
+                        )
+                        .split(";")[0]
+                        .strip()
+                        or "application/octet-stream"
+                    )
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > _NATIVE_UI_MAX_ASSET_BYTES:
+                            raise NativeUiUpstreamError(
+                                "Upstream native UI asset exceeds the limit."
+                            )
+                        chunks.append(chunk)
+                    content = b"".join(chunks)
         except httpx.HTTPError as exc:  # noqa: BLE001 - one bounded failure surface
             raise NativeUiUpstreamError(str(exc)) from exc
-        location = response.headers.get("location")
-        media_type = (
-            response.headers.get("content-type", "application/octet-stream")
-            .split(";")[0]
-            .strip()
-            or "application/octet-stream"
-        )
-        content = response.content or b""
-        if len(content) > _NATIVE_UI_MAX_ASSET_BYTES:
-            raise NativeUiUpstreamError("Upstream native UI asset exceeds the limit.")
         return NativeUiUpstreamResponse(
             status_code=response.status_code,
             content=content,
@@ -226,6 +242,13 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     absolute upstream URL collapses to the scoped root, so a redirect can never
     escape to an unscoped upstream session route or reveal upstream topology
     (issue #3638 requirement 5).
+
+    Relative redirects (including ones with ``..`` parent segments such as
+    ``../../../../api/executions``) are resolved against the scoped base and then
+    normalized; if the normalized target would walk above the binding mount — a
+    path the browser would otherwise collapse outside the scoped route — the
+    rewrite fails closed to the scoped root instead of emitting the escaping
+    segments verbatim.
     """
 
     base = scoped_base.rstrip("/")
@@ -233,17 +256,28 @@ def _rewrite_upstream_location(location: str, *, scoped_base: str) -> str:
     if not target:
         return base + "/"
     split = urlsplit(target)
+    suffix = ""
+    if split.query:
+        suffix += "?" + split.query
+    if split.fragment:
+        suffix += "#" + split.fragment
     if split.scheme or split.netloc:
         # Absolute (possibly upstream-host) URL: keep only the path, scoped.
-        path = split.path or "/"
-    elif target.startswith("//"):
-        path = "/" + target.lstrip("/")
-    elif target.startswith("/"):
-        path = target
+        raw = split.path or "/"
+        combined = base + (raw if raw.startswith("/") else "/" + raw)
+    elif split.path.startswith("/"):
+        # Root-absolute upstream path re-based onto the scoped route.
+        combined = base + split.path
     else:
-        # Relative redirect: preserve it under the scoped base.
-        return f"{base}/{target.lstrip('/')}"
-    return f"{base}{path}"
+        # Relative redirect: resolve against the scoped base so parent segments
+        # cannot walk above the binding mount.
+        combined = f"{base}/{split.path}"
+    normalized = posixpath.normpath(combined)
+    if normalized != base and not normalized.startswith(base + "/"):
+        # Traversal escaped the binding mount: never emit an out-of-scope
+        # Location the browser would normalize to an arbitrary same-origin path.
+        return base + "/"
+    return normalized + suffix
 
 
 async def _serve_native_ui(
