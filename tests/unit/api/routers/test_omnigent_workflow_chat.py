@@ -38,7 +38,6 @@ from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
     CAP_INTERRUPT_TURN,
-    CAP_RESOLVE_ELICITATION,
     CAP_SEND_MESSAGE,
     CAP_VIEW_TRANSCRIPT,
     WorkflowChatFacadeError,
