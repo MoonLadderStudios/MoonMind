@@ -221,7 +221,11 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
             path = (self._root / relative).resolve()
-            if path.is_relative_to(self._root) and path.is_file():
+            if not path.is_relative_to(self._root):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
+            if path.is_file():
                 return path.read_bytes()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
