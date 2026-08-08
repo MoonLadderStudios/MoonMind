@@ -64,6 +64,16 @@ Requests bind policy ref/digest, target expected state, and snapshot ref. Policy
 changes do not authorize pending requests; mismatch fails stale and is
 re-evaluated.
 
+The canonical decision owner is the `remediation_approvals` store. Each request
+persists the policy and security-profile authority together with action and
+redacted-parameter digests, target run/state and relevant checkpoint,
+bridge/session/host/lease and credential-generation identities. Decisions are
+actor-attributed and expiring. At action dispatch MoonMind row-locks the record,
+requires `approved`, compares every stored binding to freshly resolved authority,
+and consumes it for the exact action id before adapter invocation. Replaying the
+same action id observes the same consumption; a different action, caller-provided
+opaque reference, denial, expiration, or stale binding fails closed.
+
 ## Bootstrap migration
 
 Startup seeds `omnigent-codex@1`, `codex-static@1`, and

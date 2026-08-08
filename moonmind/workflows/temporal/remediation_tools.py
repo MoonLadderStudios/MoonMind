@@ -20,6 +20,7 @@ from sqlalchemy import select
 from api_service.db import models as db_models
 from moonmind.omnigent.policies import (
     policy_authority_evidence,
+    resolve_action,
     validate_policy_authority_evidence,
 )
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
@@ -39,6 +40,11 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationPermissionSet,
     RemediationSecurityProfile,
     remediation_changes_require_checkpoint_branch,
+)
+from moonmind.workflows.temporal.remediation_approvals import (
+    RemediationApprovalError,
+    RemediationApprovalService,
+    approval_to_dict,
 )
 from moonmind.workflows.temporal.remediation_verification import (
     CanonicalRecordEvidenceReader,
@@ -891,6 +897,7 @@ class RemediationEvidenceToolService:
         # from tool arguments. Re-resolve the persisted version immediately
         # before dispatch so disabled, invalid, or digest-conflicting policy
         # versions fail before an owning adapter can run.
+        policy_snapshot: Mapping[str, Any] | None = None
         if isinstance(
             self._action_executor, MoonMindControlPlaneRemediationActionExecutor
         ):
@@ -915,6 +922,58 @@ class RemediationEvidenceToolService:
                 action_request["approvalRef"] = _required_string(
                     approval_ref, "approvalRef"
                 )
+        resolved_approval: dict[str, Any] | None = None
+        resolved_approval_row: db_models.RemediationApproval | None = None
+        if approval_ref is not None:
+            # Reconstruct current authority only from trusted reads and the
+            # already validated authority result. Never compare the stored row
+            # to caller-supplied approvalBinding, which would make stale values
+            # self-attesting.
+            current_binding: dict[str, Any] = {
+                "targetRunId": preparation.target.current_run_id,
+                "targetExpectedState": preparation.target.state,
+            }
+            security_profile_ref = authority_result.get("securityProfileRef")
+            if security_profile_ref is not None:
+                current_binding["securityProfileRef"] = security_profile_ref
+            if policy_snapshot is not None:
+                for key in ("policyRef", "policyDigest", "snapshotRef"):
+                    value = policy_snapshot.get(key)
+                    if value is not None:
+                        current_binding[key] = value
+                policy_action = resolve_action(policy_snapshot, action_kind)
+                if policy_action.get("decision") == "approval_required":
+                    current_binding["approvalClass"] = policy_action.get(
+                        "approvalClass"
+                    )
+                    current_binding["reviewerRule"] = policy_action.get(
+                        "reviewerRule"
+                    )
+            try:
+                approval = await RemediationApprovalService(
+                    self._session
+                ).resolve_and_consume(
+                    approval_id=approval_ref,
+                    action_id=_required_string(
+                        action_request.get("actionId"), "actionId"
+                    ),
+                    action_kind=action_kind,
+                    risk_tier=_required_string(
+                        action_request.get("riskTier") or authority_result.get("risk"),
+                        "riskTier",
+                    ),
+                    redacted_parameters=(
+                        action_request.get("params")
+                        if isinstance(action_request.get("params"), Mapping)
+                        else {}
+                    ),
+                    current_binding=current_binding,
+                )
+            except RemediationApprovalError as exc:
+                raise RemediationEvidenceToolError(exc.code) from exc
+            resolved_approval = approval_to_dict(approval)
+            resolved_approval_row = approval
+            action_request["resolvedApproval"] = resolved_approval
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_request",
@@ -924,6 +983,7 @@ class RemediationEvidenceToolService:
                     **dict(action_request),
                     "authority": dict(authority_result),
                     "guard": dict(guard_result),
+                    "approval": resolved_approval,
                 }
             ),
             target_workflow_id=link.target_workflow_id,
@@ -973,6 +1033,7 @@ class RemediationEvidenceToolService:
             applied_at = datetime.now(timezone.utc).isoformat()
         result_payload = {
             "schemaVersion": "v1",
+            "approval": resolved_approval,
             "actionKind": action_kind,
             "actionId": action_request["actionId"],
             "status": status,
@@ -1027,7 +1088,12 @@ class RemediationEvidenceToolService:
             before_snapshot=before_snapshot,
             action_result=raw_result,
         )
-        verification_payload = _redact_payload_value(verification_result.to_payload())
+        verification_payload = _redact_payload_value(
+            {
+                **verification_result.to_payload(),
+                "approval": resolved_approval,
+            }
+        )
         verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.verification",
@@ -1089,6 +1155,7 @@ class RemediationEvidenceToolService:
                 "idempotencyKey": action_request["actionId"],
                 "verificationRequired": verification_required,
                 "verificationOutcome": verification_outcome,
+                "approvalRef": approval_ref,
             },
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
@@ -1143,6 +1210,12 @@ class RemediationEvidenceToolService:
         # relabels the target as repaired.
         link.outcome = status
         link.verification_outcome = verification_outcome
+        if resolved_approval_row is not None:
+            resolved_approval_row.action_artifact_ref = request_artifact.artifact_id
+            resolved_approval_row.audit_artifact_ref = audit_artifact.artifact_id
+            resolved_approval_row.verification_artifact_ref = (
+                verification_artifact.artifact_id
+            )
         await self._session.commit()
         response = {
             "schemaVersion": "v1",

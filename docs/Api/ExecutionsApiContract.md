@@ -1041,6 +1041,25 @@ The current list endpoint uses the domain error code `invalid_pagination_token` 
 
 ---
 
+### 17.5 Remediation approval authority
+
+`POST /api/executions/{workflowId}/remediation/approvals` creates or returns an
+idempotent approval request for an already authority-evaluated action. Its body
+contains the action and risk, redacted parameters, exact authority binding,
+approval class, reviewer rule, TTL, and an idempotency key. Reusing that key
+with a different request digest is rejected.
+
+`POST /api/executions/{workflowId}/remediation/approvals/{approvalId}` records
+an `approved` or `rejected` reviewer decision. The authenticated server identity
+is the decision actor; caller prose and opaque identifiers provide no authority.
+Workflow Detail remediation reads include the stored pending or terminal state.
+
+At dispatch, `approvalId` is resolved from the database and row-locked. Only an
+approved, unexpired approval whose action, parameter, target, checkpoint,
+runtime-host/session/lease, credential-generation, policy, and security-profile
+bindings match current authority can be consumed. Reuse by the same action id
+is idempotent; other reuse and all stale states fail closed.
+
 ## 18. Change rules
 
 Any future change to this contract must explicitly call out whether it is:

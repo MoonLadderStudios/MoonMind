@@ -542,6 +542,23 @@ class RemediationApprovalStateModel(BaseModel):
     canDecide: bool = False
     auditRef: str | None = None
 
+
+class RemediationApprovalRequestModel(BaseModel):
+    idempotencyKey: str
+    actionKind: str
+    riskTier: str
+    redactedParameters: dict[str, Any] = Field(default_factory=dict)
+    authorityBinding: dict[str, Any]
+    approvalClass: str
+    reviewerRule: str
+    ttlSeconds: int = Field(default=3600, ge=1, le=86400)
+
+
+class RemediationApprovalRecordModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    approvalId: str
+    status: str
+
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
     label: str | None = None
@@ -11455,6 +11472,38 @@ async def _resolve_schedule_routing(
     return _ScheduleRouteResult()
 
 @router.post(
+    "/{workflow_id}/remediation/approvals",
+    response_model=RemediationApprovalRecordModel,
+)
+async def request_remediation_approval(
+    workflow_id: str,
+    payload: RemediationApprovalRequestModel,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationApprovalRecordModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    try:
+        result = await service.request_remediation_approval(
+            remediation_workflow_id=workflow_id,
+            idempotency_key=payload.idempotencyKey,
+            action_kind=payload.actionKind,
+            risk_tier=payload.riskTier,
+            redacted_parameters=payload.redactedParameters,
+            authority_binding=payload.authorityBinding,
+            approval_class=payload.approvalClass,
+            reviewer_rule=payload.reviewerRule,
+            actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            ttl_seconds=payload.ttlSeconds,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": str(exc), "message": str(exc)},
+        ) from exc
+    return RemediationApprovalRecordModel.model_validate(result)
+
+
+@router.post(
     "/{workflow_id}/remediation",
     response_model=ExecutionModel | ScheduleCreatedResponse,
     status_code=status.HTTP_201_CREATED,
@@ -12114,6 +12163,8 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            reviewer_is_workflow_owner=True,
+            can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

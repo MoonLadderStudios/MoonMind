@@ -385,6 +385,16 @@ def remediation_action_kinds() -> tuple[str, ...]:
         for action_kind, metadata in _ACTION_CATALOG.items()
         if metadata.get("enabled") is True
     )
+
+
+def remediation_action_risk(action_kind: str) -> RemediationActionRisk | None:
+    """Return canonical risk for an enabled remediation action."""
+
+    metadata = _ACTION_CATALOG.get(action_kind)
+    if metadata is None or metadata.get("enabled") is not True:
+        return None
+    risk = metadata.get("risk")
+    return risk if risk in {"low", "medium", "high"} else None
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )

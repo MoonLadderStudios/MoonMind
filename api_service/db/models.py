@@ -1626,6 +1626,79 @@ class TemporalExecutionRemediationLink(Base):
         onupdate=func.now(),
     )
 
+
+class RemediationApproval(Base):
+    """Authoritative, actor-attributed approval for one exact remediation action."""
+
+    __tablename__ = "remediation_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "remediation_workflow_id",
+            "idempotency_key",
+            name="uq_remediation_approvals_workflow_idempotency",
+        ),
+        Index(
+            "ix_remediation_approvals_target",
+            "target_workflow_id",
+            "target_run_id",
+        ),
+    )
+
+    approval_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    remediation_workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey(
+            "execution_remediation_links.remediation_workflow_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    remediation_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    risk_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    redacted_parameters: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    parameter_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    authority_binding: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    approval_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer_rule: Mapped[str] = mapped_column(String(128), nullable=False)
+    requesting_actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    decision_actor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="pending"
+    )
+    action_artifact_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    audit_artifact_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    verification_artifact_ref: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    decided_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consumed_by_action_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+
 class ControlStopContinuationRecord(Base):
     """Authoritative admission and idempotency record for a control stop."""
 

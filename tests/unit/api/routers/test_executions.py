@@ -5755,6 +5755,49 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        reviewer_is_workflow_owner=True,
+        can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
+    )
+
+
+def test_request_remediation_approval_calls_trusted_service(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.request_remediation_approval.return_value = {
+        "approvalId": "approval:1",
+        "status": "pending",
+    }
+
+    response = test_client.post(
+        "/api/executions/mm:remediation-1/remediation/approvals",
+        json={
+            "idempotencyKey": "retry-action-1",
+            "actionKind": "retry_step",
+            "riskTier": "medium",
+            "redactedParameters": {"stepExecutionId": "step-1"},
+            "authorityBinding": {"targetRunId": "run-1"},
+            "approvalClass": "remediation",
+            "reviewerRule": "workflow-owner",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"approvalId": "approval:1", "status": "pending"}
+    service.request_remediation_approval.assert_awaited_once_with(
+        remediation_workflow_id="mm:remediation-1",
+        idempotency_key="retry-action-1",
+        action_kind="retry_step",
+        risk_tier="medium",
+        redacted_parameters={"stepExecutionId": "step-1"},
+        authority_binding={"targetRunId": "run-1"},
+        approval_class="remediation",
+        reviewer_rule="workflow-owner",
+        actor=user.email,
+        ttl_seconds=3600,
     )
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(

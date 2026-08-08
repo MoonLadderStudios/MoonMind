@@ -48,6 +48,10 @@ from moonmind.workflows.temporal.service import (
     _visibility_runtime_from_parameters,
     _visibility_skill_from_parameters,
 )
+from moonmind.workflows.temporal.remediation_approvals import (
+    RemediationApprovalError,
+    RemediationApprovalService,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
@@ -1374,9 +1378,20 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         link.status = "awaiting_approval"
         await session.commit()
 
+        approval = await service.request_remediation_approval(
+            remediation_workflow_id=remediation.workflow_id,
+            idempotency_key="approve-retry-action",
+            action_kind="execution.request_rerun_same_workflow",
+            risk_tier="medium",
+            redacted_parameters={"reason": "retry"},
+            authority_binding={"targetRunId": link.target_run_id},
+            approval_class="operator",
+            reviewer_rule="different_actor",
+            actor="requester@example.com",
+        )
         result = await service.record_remediation_approval_decision(
             remediation_workflow_id=remediation.workflow_id,
-            request_id=f"{remediation.workflow_id}:approval",
+            request_id=approval["approvalId"],
             decision="approved",
             comment="Reviewed blast radius.",
             actor="ops@example.com",
@@ -1385,7 +1400,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert result == {
             "accepted": True,
             "workflowId": remediation.workflow_id,
-            "requestId": f"{remediation.workflow_id}:approval",
+            "requestId": approval["approvalId"],
             "decision": "approved",
         }
         record = await service.describe_execution(remediation.workflow_id)
@@ -1393,8 +1408,60 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert audit[-1]["action"] == "remediation_approval_approved"
         assert audit[-1]["transport"] == "api"
         assert audit[-1]["summary"] == "Remediation approval approved."
-        assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
+        assert approval["approvalId"] in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
+
+        approval_service = RemediationApprovalService(session)
+        target_state = getattr(target.state, "value", target.state)
+        duplicate_decision = await approval_service.decide(
+            approval_id=approval["approvalId"],
+            decision="approved",
+            actor="ops@example.com",
+            rationale="Reviewed blast radius.",
+            reviewer_is_workflow_owner=False,
+            can_approve_high_risk=False,
+        )
+        assert duplicate_decision.status == "approved"
+
+        consumed = await approval_service.resolve_and_consume(
+            approval_id=approval["approvalId"],
+            action_id="retry-action-1",
+            action_kind="execution.request_rerun_same_workflow",
+            risk_tier="medium",
+            redacted_parameters={"reason": "retry"},
+            current_binding={
+                "targetRunId": link.target_run_id,
+                "targetExpectedState": target_state,
+            },
+        )
+        assert consumed.status == "consumed"
+        assert consumed.consumed_by_action_id == "retry-action-1"
+
+        replay = await approval_service.resolve_and_consume(
+            approval_id=approval["approvalId"],
+            action_id="retry-action-1",
+            action_kind="execution.request_rerun_same_workflow",
+            risk_tier="medium",
+            redacted_parameters={"reason": "retry"},
+            current_binding={
+                "targetRunId": link.target_run_id,
+                "targetExpectedState": target_state,
+            },
+        )
+        assert replay.approval_id == consumed.approval_id
+
+        with pytest.raises(RemediationApprovalError, match="approval_consumed"):
+            await approval_service.resolve_and_consume(
+                approval_id=approval["approvalId"],
+                action_id="different-action",
+                action_kind="execution.request_rerun_same_workflow",
+                risk_tier="medium",
+                redacted_parameters={"reason": "retry"},
+                current_binding={
+                    "targetRunId": link.target_run_id,
+                    "targetExpectedState": target_state,
+                },
+            )
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
@@ -1418,7 +1485,7 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="pending approval-gated remediation",
+            match="approval_not_found",
         ):
             await service.record_remediation_approval_decision(
                 remediation_workflow_id=execution.workflow_id,

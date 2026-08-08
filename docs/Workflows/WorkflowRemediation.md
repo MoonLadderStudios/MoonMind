@@ -198,6 +198,24 @@ The following invariants are fixed:
 12. **Failure to resolve evidence never becomes infinite wait.**
     The remediation Workflow Execution must degrade, escalate, or fail with a bounded reason.
 
+13. **Reviewer approval is a durable authority record.**
+    `remediation_approvals` owns the immutable request digest, redacted parameter
+    digest, exact target and policy/security authority binding, requester,
+    reviewer decision, expiration, and consumption state. An `approvalRef` is
+    only an identifier for resolving that row; its presence is never authority.
+
+14. **Approvals are exact and single-use.**
+    Dispatch locks and resolves the approval before invoking an owning adapter.
+    Denied, expired, consumed-by-another-action, or mismatched action, parameter,
+    target run/state, checkpoint, host/session/lease, credential generation,
+    policy, or security-profile evidence fails closed with a bounded reason.
+    Retrying the same action id is idempotent; another action cannot reuse it.
+
+15. **Requesters cannot review their own requests.**
+    Reviewer identity is server-derived. High-risk approvals additionally require
+    the trusted high-risk reviewer permission. Chat text and agent prose cannot
+    create a decision.
+
 ---
 
 ## 7. Submission contract

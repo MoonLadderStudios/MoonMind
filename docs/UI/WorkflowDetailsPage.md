@@ -587,6 +587,13 @@ Panel button destination:
 
 The remediation panel never replaces the header action buttons.
 
+Approval state in this panel is read from the canonical remediation approval
+record, not reconstructed from logs or audit prose. Pending and completed rows
+show the action, risk, expiration/decision state, and attributed reviewer. The
+approve and deny controls submit a decision for the displayed approval id;
+server-side ownership, reviewer-rule, separation-of-duty, and high-risk
+permission checks remain authoritative.
+
 ## Outputs section
 
 The outputs section is present when outputs exist.

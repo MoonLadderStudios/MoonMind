@@ -36,6 +36,7 @@ from api_service.db.models import (
     TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
     TemporalExecutionRemediationLink,
+    RemediationApproval,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
@@ -75,6 +76,11 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.remediation_approvals import (
+    RemediationApprovalError,
+    RemediationApprovalService,
+    approval_to_dict,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalogError,
     build_default_activity_catalog,
@@ -895,6 +901,7 @@ class TemporalExecutionService:
             .order_by(TemporalExecutionRemediationLink.created_at.asc())
         )
         links = await self._scalars_all(stmt)
+        await self._attach_remediation_approvals(links)
         await self._attach_remediation_checkpoint_branch_links(links)
         return links
 
@@ -905,6 +912,7 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
         )
         links = await self._scalars_all(stmt)
+        await self._attach_remediation_approvals(links)
         await self._attach_remediation_checkpoint_branch_links(links)
         return links
 
@@ -922,8 +930,53 @@ class TemporalExecutionService:
             )
         )
         links = await self._scalars_all(stmt)
+        await self._attach_remediation_approvals(links)
         await self._attach_remediation_checkpoint_branch_links(links)
         return links
+
+    async def _attach_remediation_approvals(
+        self, links: list[TemporalExecutionRemediationLink]
+    ) -> None:
+        if not links:
+            return
+        ids = [link.remediation_workflow_id for link in links]
+        rows = await self._scalars_all(
+            select(RemediationApproval)
+            .where(RemediationApproval.remediation_workflow_id.in_(ids))
+            .order_by(RemediationApproval.requested_at.desc())
+        )
+        latest: dict[str, RemediationApproval] = {}
+        now = datetime.now(UTC)
+        expired_changed = False
+        for row in rows:
+            expires_at = row.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if row.status == "pending" and expires_at <= now:
+                row.status = "expired"
+                expired_changed = True
+            latest.setdefault(row.remediation_workflow_id, row)
+        if expired_changed:
+            await self._session.commit()
+        for link in links:
+            row = latest.get(link.remediation_workflow_id)
+            if row is not None:
+                evidence = approval_to_dict(row)
+                setattr(
+                    link,
+                    "approval_state",
+                    {
+                        "requestId": row.approval_id,
+                        "actionKind": row.action_kind,
+                        "riskTier": row.risk_tier,
+                        "decision": row.status,
+                        "decisionActor": row.decision_actor,
+                        "decisionAt": row.decided_at,
+                        "canDecide": row.status == "pending",
+                        "auditRef": row.audit_artifact_ref,
+                        "evidence": evidence,
+                    },
+                )
 
     async def _attach_remediation_checkpoint_branch_links(
         self, links: list[TemporalExecutionRemediationLink]
@@ -1033,26 +1086,32 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        reviewer_is_workflow_owner: bool = False,
+        can_approve_high_risk: bool = False,
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise TemporalExecutionValidationError(
                 "decision must be 'approved' or 'rejected'."
             )
         record = await self._require_source_execution(remediation_workflow_id)
-        link = await self._session.get(
-            TemporalExecutionRemediationLink,
-            remediation_workflow_id,
-        )
-        expected_request_id = f"{remediation_workflow_id}:approval"
-        if (
-            link is None
-            or link.authority_mode != "approval_gated"
-            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
-            or request_id != expected_request_id
-        ):
-            raise TemporalExecutionValidationError(
-                "request_id must reference a pending approval-gated remediation."
+        if not actor:
+            raise TemporalExecutionValidationError("reviewer actor is required.")
+        approval_owner = await self._session.get(RemediationApproval, request_id)
+        if approval_owner is None:
+            raise TemporalExecutionValidationError("approval_not_found")
+        if approval_owner.remediation_workflow_id != remediation_workflow_id:
+            raise TemporalExecutionValidationError("approval_workflow_mismatch")
+        try:
+            approval = await RemediationApprovalService(self._session).decide(
+                approval_id=request_id,
+                decision=("denied" if decision == "rejected" else decision),
+                actor=actor,
+                rationale=comment,
+                reviewer_is_workflow_owner=reviewer_is_workflow_owner,
+                can_approve_high_risk=can_approve_high_risk,
             )
+        except RemediationApprovalError as exc:
+            raise TemporalExecutionValidationError(exc.code) from exc
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")
@@ -1074,6 +1133,29 @@ class TemporalExecutionService:
             "requestId": request_id,
             "decision": decision,
         }
+
+    async def request_remediation_approval(
+        self, *, remediation_workflow_id: str, idempotency_key: str,
+        action_kind: str, risk_tier: str, redacted_parameters: Mapping[str, Any],
+        authority_binding: Mapping[str, Any], approval_class: str,
+        reviewer_rule: str, actor: str, ttl_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        try:
+            row = await RemediationApprovalService(self._session).request(
+                remediation_workflow_id=remediation_workflow_id,
+                idempotency_key=idempotency_key,
+                action_kind=action_kind,
+                risk_tier=risk_tier,
+                redacted_parameters=redacted_parameters,
+                authority_binding=authority_binding,
+                approval_class=approval_class,
+                reviewer_rule=reviewer_rule,
+                requesting_actor=actor,
+                ttl_seconds=ttl_seconds,
+            )
+        except RemediationApprovalError as exc:
+            raise TemporalExecutionValidationError(exc.code) from exc
+        return approval_to_dict(row)
 
     async def list_prerequisites(
         self, dependent_workflow_id: str
