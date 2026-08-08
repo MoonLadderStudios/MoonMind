@@ -97,7 +97,13 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     session.execute.return_value = MagicMock(
         scalar_one_or_none=MagicMock(return_value=None)
     )
-    service = RemediationActionAuthorityService(session=session)
+    publisher = AsyncMock()
+    publisher.publish_json_artifact.return_value = SimpleNamespace(
+        artifact_id="artifact-approval-request"
+    )
+    service = RemediationActionAuthorityService(
+        session=session, lifecycle_publisher=publisher
+    )
     kwargs = dict(
         remediation_workflow_id="remediation-1",
         action_kind="host.restart",
@@ -125,14 +131,32 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     assert link.approval_state["requestDigest"]
     assert link.approval_state["expectedTargetState"] == "failed"
     assert link.approval_state["parameterDigest"]
-    session.commit.assert_awaited_once()
+    assert link.approval_state["artifactRefs"] == {
+        "approvalRequest": "artifact-approval-request"
+    }
+    assert publisher.publish_json_artifact.await_args.kwargs["artifact_type"] == (
+        "remediation.approval_request"
+    )
+
+    # A new service instance models worker restart / Workflow replay. The
+    # persisted request is reused and publication is deduplicated by its stable
+    # artifact label instead of creating another logical request.
+    restarted = RemediationActionAuthorityService(
+        session=session, lifecycle_publisher=publisher
+    )
+    replayed = await restarted.evaluate_action_request(**kwargs)
+    assert replayed.decision == "approval_required"
+    assert link.approval_state["requestId"] == (
+        "remediation-1:approval:" + link.approval_state["requestDigest"][:24]
+    )
+    assert publisher.publish_json_artifact.await_count == 2
 
     link.approval_state.update(
         status="approved",
         decisionActor="operator:reviewer",
         expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
     )
-    allowed = await service.evaluate_action_request(
+    allowed = await restarted.evaluate_action_request(
         **kwargs, approval_ref=link.approval_state["approvalRef"]
     )
     assert allowed.decision == "allowed"

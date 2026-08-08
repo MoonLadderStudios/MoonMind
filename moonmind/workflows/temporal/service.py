@@ -121,7 +121,10 @@ from moonmind.workflows.executions.title_derivation import synthesize_execution_
 from moonmind.workflows.executions.checkpoint_resume_admission import (
     AdmittedCheckpointResumeDecision,
 )
-from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
+from moonmind.workflows.temporal.remediation_context import (
+    RemediationContextBuilder,
+    RemediationLifecyclePublisher,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
@@ -1099,6 +1102,38 @@ class TemporalExecutionService:
             "decisionActor": actor,
             "rationale": (comment[:500] if comment else None),
             "decidedAt": decided_at.isoformat(),
+        }
+        decision_artifact = await RemediationLifecyclePublisher(
+            session=self._session,
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            ),
+        ).publish_json_artifact(
+            remediation_workflow_id=remediation_workflow_id,
+            artifact_type="remediation.approval_decision",
+            name=f"decisions/remediation_approval-{request_id}.json",
+            payload={
+                "schemaVersion": "v1",
+                "approvalRef": approval.get("approvalRef"),
+                "requestDigest": approval.get("requestDigest"),
+                "decision": normalized_decision,
+                "decisionActor": actor,
+                "rationale": (comment[:500] if comment else None),
+                "decidedAt": decided_at.isoformat(),
+                "approvalRequestArtifactRef": dict(
+                    approval.get("artifactRefs") or {}
+                ).get("approvalRequest"),
+            },
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal="service:remediation-approval",
+        )
+        link.approval_state = {
+            **dict(link.approval_state),
+            "artifactRefs": {
+                **dict(approval.get("artifactRefs") or {}),
+                "approvalDecision": decision_artifact.artifact_id,
+            },
         }
         detail_parts = [f"requestId={request_id}"]
         if actor:

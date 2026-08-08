@@ -1406,6 +1406,28 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         await session.refresh(link)
         assert link.approval_state["status"] == "approved"
         assert link.approval_state["decisionActor"] == "ops@example.com"
+        assert link.approval_state["artifactRefs"]["approvalDecision"]
+        decision_artifact = await session.get(
+            TemporalArtifact,
+            link.approval_state["artifactRefs"]["approvalDecision"],
+        )
+        assert decision_artifact is not None
+        assert decision_artifact.metadata_json["artifact_type"] == (
+            "remediation.approval_decision"
+        )
+        decision_ref = link.approval_state["artifactRefs"]["approvalDecision"]
+        replayed = await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=request_id,
+            decision="approved",
+            comment="Reviewed blast radius.",
+            actor="ops@example.com",
+        )
+        assert replayed["accepted"] is True
+        await session.refresh(link)
+        assert link.approval_state["artifactRefs"]["approvalDecision"] == decision_ref
         assert "ops@example.com" in audit[-1]["detail"]
 
 @pytest.mark.asyncio

@@ -1410,6 +1410,14 @@ one of `pending`, `approved`, `denied`, `expired`, `stale`, or `consumed`.
 Retries with the same request digest reuse the record; a different request under
 the same approval identity fails closed.
 
+The owner also publishes immutable `remediation.approval_request` and
+`remediation.approval_decision` artifacts. Their stable labels make publication
+idempotent across worker restart, Activity retry, and Workflow replay. The
+approval state stores both artifact references; decision evidence points back to
+the request artifact, and later action, audit, verification, and target
+annotation evidence carries the same approval reference and projected artifact
+map.
+
 An `approvalRef` is an opaque lookup key, never evidence by itself. Immediately
 before adapter dispatch MoonMind resolves it from this record, checks decision,
 expiry, single-use state, action identity, and current target authority, and

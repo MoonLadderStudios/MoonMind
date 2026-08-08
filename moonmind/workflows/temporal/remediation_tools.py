@@ -871,7 +871,8 @@ class RemediationEvidenceToolService:
             approval_ref = None
             approval_binding = None
             authority = await RemediationActionAuthorityService(
-                session=self._session
+                session=self._session,
+                lifecycle_publisher=self._lifecycle_publisher,
             ).evaluate_action_request(
             remediation_workflow_id=remediation_workflow_id,
             action_kind=normalized_action_kind,

@@ -14,13 +14,18 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.remediation_context import (
+        RemediationLifecyclePublisher,
+    )
 
 _GUARD_STATE_RETENTION_SECONDS = 24 * 60 * 60
 _MAX_GUARD_STATE_ENTRIES = 2048
@@ -647,8 +652,14 @@ class _LedgerEntry:
 class RemediationActionAuthorityService:
     """Evaluate remediation action requests against authority boundaries."""
 
-    def __init__(self, *, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        lifecycle_publisher: RemediationLifecyclePublisher | None = None,
+    ) -> None:
         self._session = session
+        self._lifecycle_publisher = lifecycle_publisher
         self._decisions: dict[tuple[str, str, str], RemediationActionAuthorityResult] = {}
         self._request_shapes: dict[tuple[str, str], str] = {}
 
@@ -842,10 +853,8 @@ class RemediationActionAuthorityService:
         request_id = f"{link.remediation_workflow_id}:approval:{request_shape_hash[:24]}"
         raw_existing = getattr(link, "approval_state", None)
         existing = raw_existing if isinstance(raw_existing, Mapping) else None
-        if existing is not None:
-            if existing.get("requestDigest") != request_shape_hash:
-                raise ValueError("approval_idempotency_conflict")
-            return
+        if existing is not None and existing.get("requestDigest") != request_shape_hash:
+            raise ValueError("approval_idempotency_conflict")
         safe_parameters = redact_sensitive_payload(dict(parameters or {}))
         target = await self._session.get(
             db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
@@ -875,43 +884,73 @@ class RemediationActionAuthorityService:
         parameter_digest = remediation_parameter_digest(
             safe_parameters if isinstance(safe_parameters, Mapping) else {}
         )
-        link.approval_state = {
-            "requestId": request_id,
-            "approvalRef": f"approval://remediation/{request_id}",
-            "requestDigest": request_shape_hash,
-            "parameterDigest": parameter_digest,
-            "remediationWorkflowId": link.remediation_workflow_id,
-            "remediationRunId": link.remediation_run_id,
-            "targetWorkflowId": link.target_workflow_id,
-            "targetRunId": link.target_run_id,
-            "actionKind": result.action_kind,
-            "riskTier": result.risk,
-            "redactedParameters": safe_parameters,
-            "expectedTargetState": target_state,
-            "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
-            "stepExecutionId": (
-                getattr(bridge, "step_execution_id", None)
-                or _authority_parameter(parameters, "stepExecutionId")
-            ),
-            "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
-            "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
-            "hostRef": getattr(bridge, "omnigent_host_id", None),
-            "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
-            "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
-            "credentialGeneration": getattr(bridge, "credential_generation", None),
-            "policyRef": policy_authority.get("policyRef"),
-            "policyDigest": policy_authority.get("policyDigest"),
-            "policySnapshotRef": policy_authority.get("snapshotRef"),
-            "securityProfileRef": getattr(security_profile, "profile_ref", None),
-            "approvalClass": "high_risk" if result.risk == "high" else "operator",
-            "reviewerRule": "high_risk_reviewer" if result.risk == "high" else "operator",
-            "requestingActor": requesting_principal,
-            "requestedAt": now.isoformat(),
-            "expiresAt": (now + timedelta(hours=1)).isoformat(),
-            "status": "pending",
-            "singleUse": True,
-        }
+        approval_state = (
+            dict(existing)
+            if existing is not None
+            else {
+                "requestId": request_id,
+                "approvalRef": f"approval://remediation/{request_id}",
+                "requestDigest": request_shape_hash,
+                "parameterDigest": parameter_digest,
+                "remediationWorkflowId": link.remediation_workflow_id,
+                "remediationRunId": link.remediation_run_id,
+                "targetWorkflowId": link.target_workflow_id,
+                "targetRunId": link.target_run_id,
+                "actionKind": result.action_kind,
+                "riskTier": result.risk,
+                "redactedParameters": safe_parameters,
+                "expectedTargetState": target_state,
+                "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
+                "stepExecutionId": (
+                    getattr(bridge, "step_execution_id", None)
+                    or _authority_parameter(parameters, "stepExecutionId")
+                ),
+                "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
+                "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
+                "hostRef": getattr(bridge, "omnigent_host_id", None),
+                "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
+                "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
+                "credentialGeneration": getattr(bridge, "credential_generation", None),
+                "policyRef": policy_authority.get("policyRef"),
+                "policyDigest": policy_authority.get("policyDigest"),
+                "policySnapshotRef": policy_authority.get("snapshotRef"),
+                "securityProfileRef": getattr(security_profile, "profile_ref", None),
+                "approvalClass": "high_risk" if result.risk == "high" else "operator",
+                "reviewerRule": (
+                    "high_risk_reviewer" if result.risk == "high" else "operator"
+                ),
+                "requestingActor": requesting_principal,
+                "requestedAt": now.isoformat(),
+                "expiresAt": (now + timedelta(hours=1)).isoformat(),
+                "status": "pending",
+                "singleUse": True,
+            }
+        )
+        link.approval_state = approval_state
         await self._session.commit()
+        if self._lifecycle_publisher is not None:
+            request_artifact = await self._lifecycle_publisher.publish_json_artifact(
+                remediation_workflow_id=link.remediation_workflow_id,
+                artifact_type="remediation.approval_request",
+                name=f"requests/remediation_approval-{request_id}.json",
+                payload={
+                    "schemaVersion": "v1",
+                    "approvalRef": approval_state["approvalRef"],
+                    "request": approval_state,
+                    "relatedArtifacts": dict(approval_state.get("artifactRefs") or {}),
+                },
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal="service:remediation-approval",
+            )
+            link.approval_state = {
+                **approval_state,
+                "artifactRefs": {
+                    **dict(approval_state.get("artifactRefs") or {}),
+                    "approvalRequest": request_artifact.artifact_id,
+                },
+            }
+            await self._session.commit()
 
     @staticmethod
     def _validate_persisted_approval(*, link: Any, approval_ref: str,

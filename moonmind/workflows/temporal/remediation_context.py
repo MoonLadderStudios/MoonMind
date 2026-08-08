@@ -35,6 +35,8 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.plan",
         "remediation.attempt",
         "remediation.decision_log",
+        "remediation.approval_request",
+        "remediation.approval_decision",
         "remediation.action_request",
         "remediation.action_result",
         "remediation.audit_event",
