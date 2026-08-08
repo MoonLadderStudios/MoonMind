@@ -15294,7 +15294,6 @@ async def download_workflow_captured_evidence(
 # Durable single-put limit; a source evidence artifact larger than this cannot be
 # copied into a durable Temporal artifact via write_complete, so it is skipped.
 _CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
-_CONTINUATION_EVIDENCE_LINK_TYPE = "input.attachment"
 
 
 def _evidence_attachment_content_type(filename: str) -> str:
