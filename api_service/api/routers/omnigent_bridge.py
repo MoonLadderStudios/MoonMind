@@ -111,6 +111,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     CODE_BINDING_UNKNOWN,
     CODE_CONTENT_BLOCKED,
     CODE_ENFORCEMENT_UNAVAILABLE,
+    CODE_IDEMPOTENCY_CONFLICT,
     CODE_MALFORMED_PAYLOAD,
     CODE_OPERATION_DENIED,
     CODE_PAYLOAD_TOO_LARGE,
@@ -3110,16 +3111,22 @@ async def _claim_facade_message(
 
     Persists a durable, secret-safe control record keyed by the caller's
     idempotency key. Returns ``True`` for the one claimant that may forward the
-    provider POST and ``False`` on a replay (browser retry or double-submit), so
-    the facade never issues a duplicate provider turn or duplicate billing. The
-    scanned payload digest is recorded so the claim durably names the exact
-    payload that passed the outbound scan.
+    provider POST and ``False`` on a genuine replay (browser retry or
+    double-submit) of the *same* payload, so the facade never issues a duplicate
+    provider turn or duplicate billing. The scanned payload digest is recorded so
+    the claim durably names the exact payload that passed the outbound scan.
+
+    A repeated idempotency key bound to a *different* scanned payload digest is
+    not a benign replay: reporting it as a successful deduplication would
+    silently drop the changed message. Such a conflict fails closed with a
+    distinct, redacted error rather than returning ``False``.
     """
 
-    return await store.claim_lifecycle_event(
+    event_identity = f"workflow-chat-message:{idempotency_key}"
+    claimed = await store.claim_lifecycle_event(
         row.idempotency_key,
         event_type="workflow_chat_message",
-        event_identity=f"workflow-chat-message:{idempotency_key}",
+        event_identity=event_identity,
         summary=f"native chat {event_type}",
         metadata={
             "actor": actor,
@@ -3130,6 +3137,24 @@ async def _claim_facade_message(
             "sourceMode": "workflow_chat_facade",
         },
     )
+    if claimed:
+        return True
+
+    # An existing claim for this key: reconcile against the digest it was first
+    # bound to. A matching digest is a true replay; a different digest means the
+    # same key was reused for changed content and must fail closed.
+    existing = await store.get_lifecycle_event_metadata(
+        row.idempotency_key, event_identity=event_identity
+    )
+    prior_digest = str((existing or {}).get("scannedPayloadDigest") or "")
+    if prior_digest and prior_digest != payload_digest:
+        raise WorkflowChatFacadeError(
+            "This Idempotency-Key was already used for a different message.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_IDEMPOTENCY_CONFLICT,
+        )
+    return False
 
 
 async def _record_facade_mutation_audit(
@@ -3140,12 +3165,18 @@ async def _record_facade_mutation_audit(
     outcome: str,
     actor: str,
     idempotency_key: str | None = None,
+    scan_evidence: NativeScanEvidence | None = None,
 ) -> None:
     """Persist durable, secret-safe evidence of a facade mutation (OB-§19).
 
     A rotating process log is not durable evidence, so mutation outcomes are
     recorded in the binding's durable control/event ledger with the actor,
-    control type, normalized outcome, and (when present) idempotency key.
+    control type, normalized outcome, and (when present) idempotency key. When
+    the mutation ran the native outbound scan, the bounded, non-disclosing scan
+    evidence (contract version, surface, effective mode, scanner policy ref,
+    payload digest, and allow/block outcome) is persisted too so the durable
+    record proves the exact payload was scanned even after process logs rotate —
+    for message *and* elicitation/approval mutations alike.
     """
 
     metadata: dict[str, Any] = {
@@ -3156,6 +3187,8 @@ async def _record_facade_mutation_audit(
     }
     if idempotency_key:
         metadata["controlIdempotencyKey"] = idempotency_key
+    if scan_evidence is not None:
+        metadata.update(scan_evidence.audit_metadata())
     identity_suffix = idempotency_key or actor
     try:
         await store.record_lifecycle_event(
@@ -3708,6 +3741,7 @@ async def _dispatch_workflow_chat_facade(
             outcome="posted",
             actor=str(user.id),
             idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
         )
         _audit_facade(
             outcome="mutation",
@@ -3752,7 +3786,7 @@ async def _dispatch_workflow_chat_facade(
         # response text before any provider forward, on the same contract as the
         # message path (brief §1: elicitation/approval response text is a
         # supported text-bearing native surface).
-        _enforce_native_outbound_scan(
+        elicitation_scan_evidence = _enforce_native_outbound_scan(
             surface=NativeScanSurface.ELICITATION_RESPONSE,
             body=body,
             idempotency_key=_facade_idempotency_key(request),
@@ -3804,6 +3838,7 @@ async def _dispatch_workflow_chat_facade(
             outcome="posted",
             actor=str(user.id),
             idempotency_key=_facade_idempotency_key(request),
+            scan_evidence=elicitation_scan_evidence,
         )
         _audit_facade(
             outcome="mutation",

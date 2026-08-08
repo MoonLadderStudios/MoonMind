@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,6 +44,7 @@ from moonmind.security import (
     resolve_high_security_mode,
     scan_outbound_bundle,
 )
+from moonmind.utils.logging import redact_sensitive_text
 
 # One canonical version for the supported native request shapes and the
 # extraction/normalization rules below. A payload whose shape this version does
@@ -89,6 +91,55 @@ _BINARY_PART_TYPES: frozenset[str] = frozenset(
 _TEXT_PART_TYPES: frozenset[str] = frozenset(
     {"text", "input_text", "output_text"}
 )
+
+# Characters permitted verbatim in an exposed finding-location path segment. A
+# caller controls object keys, so a raw key can otherwise carry a secret-like
+# value or newline/control characters into ``detail.findings`` and the durable
+# audit; anything outside this safe set is collapsed to ``_`` and the whole
+# segment is redacted + length-bounded so a location can never disclose or
+# inject content.
+_UNSAFE_LOCATION_CHARS = re.compile(r"[^A-Za-z0-9_.\-]")
+_LOCATION_SEGMENT_MAX = 64
+
+
+def _safe_location_key(key: Any) -> str:
+    """Return a bounded, non-disclosing path segment for a caller-owned key.
+
+    Object keys are attacker-controlled, so the exposed finding location must
+    never copy a raw key: a key could carry credential text or newline/control
+    characters that would leak into ``detail.findings`` or permit log injection
+    when audited. The key is first passed through the canonical secret redactor,
+    then any character outside a conservative safe set is collapsed to ``_`` and
+    the result is length-bounded.
+    """
+
+    redacted = redact_sensitive_text(str(key))
+    safe = _UNSAFE_LOCATION_CHARS.sub("_", redacted)
+    if len(safe) > _LOCATION_SEGMENT_MAX:
+        safe = safe[:_LOCATION_SEGMENT_MAX]
+    return safe or "_"
+
+
+def _composable_text_fragment(value: Any) -> str | None:
+    """Return the outbound text a content-array item contributes, or ``None``.
+
+    Used to reconstruct the semantically composed message so a credential split
+    across adjacent text parts (rich-composer segmentation around formatting or
+    mentions) cannot bypass the scanner by never appearing whole in one leaf. A
+    plain string item contributes itself; a declared text part contributes its
+    ``text`` value; every other shape (binary/opaque part, nested object)
+    contributes nothing to the composed text.
+    """
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        part_type = value.get("type")
+        if isinstance(part_type, str) and part_type.strip().lower() in _TEXT_PART_TYPES:
+            text_value = value.get("text")
+            if isinstance(text_value, str):
+                return text_value
+    return None
 
 
 class _UndecodableFieldError(Exception):
@@ -198,8 +249,14 @@ def _collect_scannable(
     Every string leaf is scanned (a safe superset that never misses operator
     text), while a content part declaring a binary/opaque ``type`` raises so the
     caller fails closed instead of forwarding an uninspectable part with a false
-    scanned claim. A content part declaring a text ``type`` whose ``text`` is not
-    a decodable string raises the undecodable-field error.
+    scanned claim. A content part declaring a text ``type`` must carry a string
+    ``text`` value; a missing or non-string ``text`` raises the undecodable-field
+    error so a malformed ``{"type": "text"}`` part cannot be forwarded with only
+    its literal type string scanned. Object keys are attacker-controlled and are
+    sanitized before they enter an exposed finding location. For content arrays,
+    an extra composed item concatenates the adjacent text fragments so a
+    credential split across part boundaries is scanned as the provider receives
+    it, in addition to the per-part locations.
     """
 
     items: list[OutboundBundleItem] = []
@@ -212,16 +269,32 @@ def _collect_scannable(
             normalized = part_type.strip().lower()
             if normalized in _BINARY_PART_TYPES:
                 raise _UninspectablePartError(prefix)
-            if normalized in _TEXT_PART_TYPES and "text" in value:
-                text_value = value.get("text")
-                if not isinstance(text_value, str):
-                    raise _UndecodableFieldError(f"{prefix}.text")
+            if normalized in _TEXT_PART_TYPES and not isinstance(
+                value.get("text"), str
+            ):
+                raise _UndecodableFieldError(f"{prefix}.text")
         for key, item in value.items():
-            items.extend(_collect_scannable(item, prefix=f"{prefix}.{key}"))
+            items.extend(
+                _collect_scannable(item, prefix=f"{prefix}.{_safe_location_key(key)}")
+            )
         return items
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        composed_fragments: list[str] = []
         for index, item in enumerate(value):
             items.extend(_collect_scannable(item, prefix=f"{prefix}[{index}]"))
+            fragment = _composable_text_fragment(item)
+            if fragment:
+                composed_fragments.append(fragment)
+        # Scan the semantically composed text when two or more adjacent parts
+        # contribute text, so a secret spanning part boundaries is caught even
+        # though no single leaf contains it whole.
+        if len(composed_fragments) > 1:
+            items.append(
+                OutboundBundleItem(
+                    location=f"{prefix}[composed]",
+                    content="".join(composed_fragments),
+                )
+            )
         return items
     if isinstance(value, (bytes, bytearray)):
         # A parsed JSON body never yields bytes; if a caller passes raw bytes the

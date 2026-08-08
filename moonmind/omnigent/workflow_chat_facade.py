@@ -62,6 +62,11 @@ CODE_CONTENT_BLOCKED = "omnigent_chat_content_blocked"
 # block so a caller can tell "your message contains a secret" apart from "the
 # security scan is unavailable", without either echoing the detected value.
 CODE_ENFORCEMENT_UNAVAILABLE = "omnigent_chat_enforcement_unavailable"
+# A caller reused an accepted ``Idempotency-Key`` for a payload whose scanned
+# digest differs from the payload the key was first bound to. The request fails
+# closed rather than being reported as a benign deduplication, so the changed
+# message is never silently dropped.
+CODE_IDEMPOTENCY_CONFLICT = "omnigent_chat_idempotency_conflict"
 
 
 class WorkflowChatFacadeError(OmnigentBridgeError):
@@ -528,6 +533,8 @@ __all__ = [
     "CODE_BINDING_UNKNOWN",
     "CODE_CALLER_UNAUTHORIZED",
     "CODE_CONTENT_BLOCKED",
+    "CODE_ENFORCEMENT_UNAVAILABLE",
+    "CODE_IDEMPOTENCY_CONFLICT",
     "CODE_IDENTITY_SUBSTITUTION",
     "CODE_MALFORMED_PAYLOAD",
     "CODE_OPERATION_DENIED",

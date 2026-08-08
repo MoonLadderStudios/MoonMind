@@ -179,3 +179,63 @@ def test_empty_text_message_is_allowed() -> None:
         high_security_mode=True,
     )
     assert evidence.allowed
+
+
+def test_text_part_missing_text_field_fails_closed() -> None:
+    # A declared text part with no ``text`` member must not be forwarded with
+    # only its literal type string scanned; it fails closed as undecodable.
+    body = {
+        "type": "message",
+        "data": {"content": [{"type": "text"}]},
+    }
+    with pytest.raises(NativeScanEnforcementError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.MESSAGE, body=body, high_security_mode=True
+        )
+    assert exc_info.value.evidence.reason == "undecodable_field"
+
+
+def test_secret_split_across_text_parts_is_blocked() -> None:
+    # A credential split across adjacent text parts never appears whole in any
+    # single leaf, but the composed message the provider receives contains it.
+    head = _SECRET_TEXT[:6]
+    tail = _SECRET_TEXT[6:]
+    body = {
+        "type": "message",
+        "data": {
+            "content": [
+                {"type": "text", "text": head},
+                {"type": "text", "text": tail},
+            ]
+        },
+    }
+    with pytest.raises(NativeScanBlockedError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.MESSAGE, body=body, high_security_mode=True
+        )
+    locations = {f.location for f in exc_info.value.evidence.findings}
+    assert "body.data.content[composed]" in locations
+    # The individual fragments alone did not trip the scanner.
+    assert "body.data.content[0].text" not in locations
+    assert "body.data.content[1].text" not in locations
+
+
+def test_caller_controlled_key_is_sanitized_in_finding_location() -> None:
+    # A caller-controlled object key carrying credential text and a newline must
+    # not be copied verbatim into an exposed/audited finding location.
+    malicious_key = "token=LEAKME\ninjected"
+    body = {
+        "type": "message",
+        "data": {malicious_key: _SECRET_TEXT},
+    }
+    with pytest.raises(NativeScanBlockedError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.MESSAGE, body=body, high_security_mode=True
+        )
+    evidence = exc_info.value.evidence
+    location = evidence.findings[0].location
+    assert "\n" not in location
+    assert "LEAKME" not in location
+    assert "token=" not in location
+    # The bounded evidence never carries the detected value either.
+    assert _SECRET_TEXT not in str(evidence.audit_metadata())
