@@ -50,6 +50,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
@@ -64,6 +65,8 @@ from moonmind.omnigent.native_ui import (
 )
 from moonmind.omnigent.settings import (
     resolved_api_token,
+    resolved_native_chat_acceptance_ref,
+    resolved_native_chat_rollout_mode,
     resolved_native_ui_serving_enabled,
     resolved_native_ui_version,
     resolved_server_url,
@@ -312,6 +315,21 @@ async def _serve_native_ui(
             is_document=document,
             reason="binding_unknown_or_unauthorized",
             status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # 1b. Rollout gate (issue #3642 §10). A rolled-back (read_only), canary
+    #     deployment without recorded acceptance evidence, or disabled posture
+    #     never serves the interactive native UI: it fails closed to the same
+    #     non-topology-revealing unavailable state the read-only diagnostics
+    #     fallback presents, rather than silently routing through a different
+    #     runtime or the legacy chat path.
+    rollout = resolve_native_chat_rollout(
+        mode=resolved_native_chat_rollout_mode(),
+        acceptance_recorded=bool(resolved_native_chat_acceptance_ref()),
+    )
+    if not rollout.serve_native_ui:
+        return _native_chat_unavailable(
+            mode=mode, is_document=document, reason=rollout.reason
         )
 
     # 2. Gate on native-UI serving being enabled and a known-compatible version.
