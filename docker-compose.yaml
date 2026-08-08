@@ -53,6 +53,14 @@ services:
       # enablement variables.
       - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
       - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
+      # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
+      # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
+      # the upstream server directly. Enabled by default; the version is pinned to
+      # the upstream build MoonMind is verified against and must pass conformance
+      # before an operator advances it.
+      - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
+      - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
       - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
@@ -1176,6 +1184,13 @@ services:
       - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
       - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
     ports:
+      # Development-only direct exposure of the stock Omnigent server. Workflow
+      # Chat never uses this published port: the browser reaches the native UI
+      # exclusively through MoonMind-scoped routes (/omnigent-ui/workflow-chat/*)
+      # and the API facade (/api/workflow-chat-bindings/*), and MoonMind reaches
+      # the server over the internal Compose network (OMNIGENT_SERVER_URL).
+      # Set OMNIGENT_PORT to an unroutable/loopback binding to disable it
+      # (MoonLadderStudios/MoonMind#3638 §7).
       - "${OMNIGENT_PORT:-8000}:8000"
     volumes:
       - omnigent-data:/data

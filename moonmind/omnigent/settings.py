@@ -94,6 +94,43 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
+def resolved_native_ui_version(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the asserted native Omnigent UI/server version for the deployment.
+
+    MoonLadderStudios/MoonMind#3638: serving the native UI is gated on a
+    known-compatible version. Operators pin the running upstream native UI/server
+    build with ``OMNIGENT_NATIVE_UI_VERSION``; when unset it defaults to the
+    single upstream source pin MoonMind is verified against
+    (``PINNED_OMNIGENT_COMMIT``) so the canonical Compose deployment serves the
+    native chat UI without extra configuration. Upgrading the image is a
+    deliberate step: an operator sets a new version that must pass conformance
+    before it is treated as supported.
+    """
+
+    from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_NATIVE_UI_VERSION")) or PINNED_OMNIGENT_COMMIT
+
+
+def resolved_native_ui_serving_enabled(
+    *, env: Mapping[str, Any] | None = None
+) -> bool:
+    """Return whether MoonMind serves the native Omnigent UI through its origin.
+
+    Defaults to enabled so the canonical deployment routes native Workflow Chat
+    through MoonMind-scoped routes (issue #3638 requirement 7). An operator may
+    set ``OMNIGENT_NATIVE_UI_ENABLED=false`` to fall back to the read-only
+    compatibility projection without disabling the rest of the bridge.
+    """
+
+    source = env if env is not None else os.environ
+    raw = _clean(source.get("OMNIGENT_NATIVE_UI_ENABLED"))
+    if not raw:
+        return True
+    return raw.lower() in _TRUE_VALUES
+
+
 def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
     """Return the embedded host/runner auth token configured service-side."""
 
@@ -128,6 +165,8 @@ __all__ = [
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",
+    "resolved_native_ui_serving_enabled",
+    "resolved_native_ui_version",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

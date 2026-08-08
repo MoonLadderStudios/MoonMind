@@ -123,6 +123,15 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
         "policySnapshotRef": "omnigent-policy:sha256:durable-snapshot",
         "validation": {"valid": True, "diagnostics": []},
     }
+    # Native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
+    native_ui = diagnostics["nativeUi"]
+    assert native_ui["servingEnabled"] is True
+    assert native_ui["ready"] is True
+    assert native_ui["credentialSeparation"] is True
+    assert native_ui["directUpstreamBrowserExposure"] is False
+    assert native_ui["scopedRoutes"]["uiMountPath"] == (
+        "/omnigent-ui/workflow-chat/{chatBindingId}"
+    )
 
 
 @pytest.mark.asyncio

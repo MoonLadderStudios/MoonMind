@@ -8679,6 +8679,39 @@ button.workflow-workspace-sidebar-row:active {
   min-width: 0;
 }
 
+/* Native Omnigent Workflow Chat surface (MoonLadderStudios/MoonMind#3638). The
+   native app is served through a MoonMind-scoped route and embedded in an
+   iframe; it fills the Workflow Detail chat content area. */
+.td-native-chat {
+  min-width: 0;
+}
+
+.td-native-chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.td-native-chat-readonly {
+  margin-right: auto;
+}
+
+.td-native-chat-frame {
+  width: 100%;
+  min-height: 640px;
+  height: 70vh;
+  border: 0;
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface, #fff);
+}
+
+.td-native-chat-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .td-facts-region,
 .td-run-summary-region,
 .td-steps-region,

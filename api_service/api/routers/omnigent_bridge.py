@@ -90,11 +90,19 @@ from moonmind.omnigent.host_auth_profile import (
     resolve_host_auth_credentials,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
+from moonmind.omnigent.native_ui import (
+    NATIVE_UI_MOUNT_PREFIX,
+    NATIVE_UI_ROUTE_FEATURE_VERSION,
+    evaluate_native_ui_compatibility,
+    scoped_api_base,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_native_ui_serving_enabled,
+    resolved_native_ui_version,
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
@@ -433,7 +441,47 @@ def _compatibility_diagnostics(
             "hostArchitecture",
         )
     }
+    projection["nativeUi"] = _native_ui_diagnostics(config=config)
     return projection
+
+
+def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
+    """Report native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
+
+    Operators need a bounded, non-secret projection of whether the native
+    Workflow Chat UI is served through MoonMind: UI-asset serving, the
+    compatibility version gate, the scoped HTTP/SSE/WebSocket route surface, and
+    credential separation. It reveals no upstream URL, credential, or provider
+    session identity.
+    """
+
+    serving_enabled = resolved_native_ui_serving_enabled()
+    compatibility = evaluate_native_ui_compatibility(
+        resolved_native_ui_version(),
+        enabled=bool(config.enabled) and serving_enabled,
+    )
+    scoped_api = scoped_api_base("{chatBindingId}")
+    return {
+        "servingEnabled": serving_enabled,
+        "ready": compatibility.ready,
+        "reason": compatibility.reason,
+        "assetsServedThroughMoonMind": serving_enabled,
+        "compatibilityVersion": NATIVE_UI_ROUTE_FEATURE_VERSION,
+        "reportedVersion": compatibility.reported_version,
+        "supportedVersions": list(compatibility.supported_versions),
+        "scopedRoutes": {
+            "uiMountPath": f"{NATIVE_UI_MOUNT_PREFIX}/{{chatBindingId}}",
+            "apiBase": scoped_api,
+            "http": scoped_api,
+            "sse": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
+            "webSocket": scoped_api,
+        },
+        # MoonMind strips its own credentials before forwarding upstream and
+        # virtualizes the provider session id, so neither the upstream credential
+        # nor the raw provider session id reaches the browser.
+        "credentialSeparation": True,
+        "directUpstreamBrowserExposure": False,
+    }
 
 
 _EMBEDDED_EVIDENCE_SLOTS = {
