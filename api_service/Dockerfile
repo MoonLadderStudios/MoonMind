@@ -213,9 +213,6 @@ COPY README.md /app/README.md
 COPY LICENSE /app/LICENSE
 COPY NOTICE /app/NOTICE
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
-
 # Keep the test image buildable from the shallow, submodule-free checkout used
 # by required backend CI and managed workflow workspaces. Tests execute the
 # mounted checkout via PYTHONPATH, so this stage needs locked dependencies but
@@ -223,11 +220,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM runtime-dependencies AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+COPY api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
+        python /tmp/cache_temporal_test_server.py; \
     fi && \
-    rm -f /tmp/requirements-tests.txt
+    rm -f /tmp/requirements-tests.txt /tmp/cache_temporal_test_server.py
 ENV HOME=/home/app
 USER app
 

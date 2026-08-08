@@ -2537,6 +2537,32 @@ def test_build_agent_execution_request_includes_bundle_metadata(
     assert moonmind_meta["bundleManifestRef"] == "artifact://bundle/1"
     assert moonmind_meta["bundleStrategy"] == "one_shot_jules"
 
+
+def test_build_agent_execution_request_enforces_read_repository_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    request = workflow._build_agent_execution_request(
+        node_inputs={
+            "instructions": "Read-only verification",
+            "repository": "org/repo",
+            "publishMode": "pr",
+            "repositoryOperation": "read",
+        },
+        node_id="verify",
+        tool_name="omnigent",
+    )
+
+    assert request.parameters["repositoryOperation"] == "read"
+    assert request.parameters["publishMode"] == "none"
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
     monkeypatch: pytest.MonkeyPatch,

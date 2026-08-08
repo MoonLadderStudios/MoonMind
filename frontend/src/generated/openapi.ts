@@ -132,88 +132,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/summarization/repository": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Summarize Repository
-         * @description Summarizes a code repository.
-         *     Currently supports generating a README.md file.
-         */
-        post: operations["summarize_repository_summarization_repository_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/planning/jira": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Plan Jira Stories
-         * @description Generate Jira stories from plan text using the JiraStoryPlanner.
-         */
-        post: operations["plan_jira_stories_v1_planning_jira_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/planning/jira/ui": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Jira Planner Ui
-         * @description Render the Jira planning form.
-         */
-        get: operations["jira_planner_ui_v1_planning_jira_ui_get"];
-        put?: never;
-        /**
-         * Jira Planner Submit
-         * @description Handle Jira planning form submission.
-         */
-        post: operations["jira_planner_submit_v1_planning_jira_ui_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/context": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Process Context */
-        post: operations["process_context_context_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/retrieval/health": {
         parameters: {
             query?: never;
@@ -2314,6 +2232,116 @@ export interface paths {
          *     upstream route, provider session id, or endpoint.
          */
         get: operations["resolve_workflow_chat_binding_api_executions__workflow_id__chat_binding_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/captured-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Captured Evidence
+         * @description Return the immutable MoonMind evidence captured for a Workflow (§10, #3641).
+         *
+         *     The caller is authorized against the Workflow first; possession of a chat
+         *     binding id is never authorization. Returned refs are MoonMind artifact refs
+         *     served by the existing artifact authorization/preview/download contracts —
+         *     never provider-native paths or live upstream resource ids.
+         */
+        get: operations["get_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/captured-evidence/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Workflow Captured Evidence
+         * @description Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+         *
+         *     Production Omnigent evidence refs are gateway refs
+         *     (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
+         *     artifact download route cannot serve — the nested path never routes and no
+         *     ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
+         *     workflow-scoped route authorizes the caller against the Workflow, confirms
+         *     the requested ref is one of that Workflow's authorized evidence refs
+         *     (possession of a ref is never authorization), then reads it through the same
+         *     scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
+         *     ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
+         *     An unauthorized ref returns 404 without revealing whether it exists.
+         */
+        get: operations["download_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue In New Workflow
+         * @description Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
+         *
+         *     Reuses the ordinary create/compiler path so the continuation resolves fresh
+         *     authority (runtime, profile, credentials, policy) rather than inheriting the
+         *     source's stale credentials, capacity, or host/session identity, while pinning
+         *     the source lineage and authorized evidence refs. Idempotent on a stable
+         *     client key; duplicate requests return the same linked Workflow. The source
+         *     Workflow, its Step ledger, provider session, artifacts, and publication
+         *     result are never mutated, and no message is posted into the source session.
+         */
+        post: operations["continue_in_new_workflow_api_executions__workflow_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/continuations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Execution Continuations
+         * @description List durable linked-continuation relationships for a Workflow (#3641 §6).
+         *
+         *     ``outbound`` lists the linked continuations created *from* this Workflow (the
+         *     source-side view); ``inbound`` names the source this Workflow was continued
+         *     *from* (the continuation-side view). Both directions keep the original and
+         *     new terminal outcomes distinct and only surface relationships whose two
+         *     executions remain visible to the caller.
+         */
+        get: operations["list_execution_continuations_api_executions__workflow_id__continuations_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5913,6 +5941,36 @@ export interface components {
              */
             evidenceCompleteness: "required" | "best_effort";
         };
+        /**
+         * CapturedEvidenceItemModel
+         * @description One authorized MoonMind evidence artifact ref (browser-safe).
+         */
+        CapturedEvidenceItemModel: {
+            /** Label */
+            label: string;
+            /** Kind */
+            kind: string;
+            /** Artifactref */
+            artifactRef: string;
+        };
+        /**
+         * CapturedEvidenceModel
+         * @description Immutable MoonMind-captured evidence for **View captured evidence**.
+         */
+        CapturedEvidenceModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Available */
+            available: boolean;
+            /** Items */
+            items?: components["schemas"]["CapturedEvidenceItemModel"][];
+            /** Summary */
+            summary?: string | null;
+            /** Unavailablereason */
+            unavailableReason?: string | null;
+        };
         /** ChatCompletionRequest */
         ChatCompletionRequest: {
             /**
@@ -6842,53 +6900,6 @@ export interface components {
             source: components["schemas"]["SourceCorrelation"];
             spec: components["schemas"]["ContainerJobSpec"];
         };
-        /** ContextMessage */
-        ContextMessage: {
-            /** Role */
-            role: string;
-            /** Content */
-            content: string;
-            /** Name */
-            name?: string | null;
-        };
-        /** ContextRequest */
-        ContextRequest: {
-            /** Messages */
-            messages: components["schemas"]["ContextMessage"][];
-            /** Model */
-            model: string;
-            /** Max Tokens */
-            max_tokens?: number | null;
-            /**
-             * Temperature
-             * @default 0.7
-             */
-            temperature: number | null;
-            /**
-             * Stream
-             * @default false
-             */
-            stream: boolean | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** ContextResponse */
-        ContextResponse: {
-            /** Id */
-            id: string;
-            /** Content */
-            content: string;
-            /** Model */
-            model: string;
-            /** Created At */
-            created_at: number;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
-        };
         /** ContinuationDefaults */
         ContinuationDefaults: {
             /**
@@ -6906,6 +6917,52 @@ export interface components {
              * @default true
              */
             remediation: boolean;
+        };
+        /**
+         * ContinueInNewWorkflowRequest
+         * @description Authored intent + selected source evidence for a linked continuation.
+         *
+         *     The browser authors only new intent and bounded choices appropriate to
+         *     normal Workflow creation, plus which *already-authorized* source artifact
+         *     refs to carry. It never authors the source run, provider session, host,
+         *     profile, credential, workspace path, or evidence ownership — the server pins
+         *     all of that from the terminal source (issue §3).
+         */
+        ContinueInNewWorkflowRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Title */
+            title?: string | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Initialparameters */
+            initialParameters?: {
+                [key: string]: unknown;
+            };
+            /** Selectedsourceartifactrefs */
+            selectedSourceArtifactRefs?: string[];
+            /** Boundedpurpose */
+            boundedPurpose?: string | null;
+        };
+        /**
+         * ContinueInNewWorkflowResponse
+         * @description Stable linked destination for both first and duplicate submissions.
+         */
+        ContinueInNewWorkflowResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Relationshiptype */
+            relationshipType: string;
+            /** Created */
+            created: boolean;
+            /** Pinnedsourcerefs */
+            pinnedSourceRefs?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * ContinueRemediationBudgetProposal
@@ -9435,25 +9492,6 @@ export interface components {
             /** Projectkey */
             projectKey?: string | null;
         };
-        /** JiraPlanRequest */
-        JiraPlanRequest: {
-            /**
-             * Plan Text
-             * @description Description of the work to plan
-             */
-            plan_text: string;
-            /**
-             * Jira Project Key
-             * @description Jira project key
-             */
-            jira_project_key: string;
-            /**
-             * Dry Run
-             * @description If true, do not create issues
-             * @default true
-             */
-            dry_run: boolean;
-        };
         /** JiraProject */
         JiraProject: {
             /** Projectkey */
@@ -9499,6 +9537,42 @@ export interface components {
             created_by_activity_type?: string | null;
             /** Created By Worker */
             created_by_worker?: string | null;
+        };
+        /** LinkedContinuationLinksResponseModel */
+        LinkedContinuationLinksResponseModel: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "inbound" | "outbound";
+            /** Items */
+            items?: components["schemas"]["LinkedContinuationSummaryModel"][];
+        };
+        /**
+         * LinkedContinuationSummaryModel
+         * @description One durable linked-continuation relationship for source/target display.
+         */
+        LinkedContinuationSummaryModel: {
+            /** Relationshiptype */
+            relationshipType: string;
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Destinationrunid */
+            destinationRunId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Createdby */
+            createdBy?: string | null;
+            /** Boundedpurpose */
+            boundedPurpose?: string | null;
+            /** Createdat */
+            createdAt?: string | null;
         };
         /**
          * ManagedAgentRateLimitPolicy
@@ -12031,30 +12105,6 @@ export interface components {
             /** Autonomous */
             autonomous: boolean;
         };
-        /** RepositorySummarizationRequest */
-        RepositorySummarizationRequest: {
-            /**
-             * Repo Url
-             * Format: uri
-             */
-            repo_url: string;
-            /**
-             * @description The type of summary to generate.
-             * @default readme
-             */
-            summary_type: components["schemas"]["SummaryType"];
-            /**
-             * Model
-             * @description The language model to use for generation.
-             */
-            model?: string | null;
-        };
-        /** RepositorySummarizationResponse */
-        RepositorySummarizationResponse: {
-            /** Summary Content */
-            summary_content: string;
-            summary_type: components["schemas"]["SummaryType"];
-        };
         /**
          * RequestedByModel
          * @description Immutable requested-by identity propagated through manifest ingest.
@@ -13209,44 +13259,6 @@ export interface components {
              */
             preserved: boolean;
         };
-        /** StoryDraft */
-        StoryDraft: {
-            /**
-             * Summary
-             * @description Short summary of the story
-             */
-            summary: string;
-            /**
-             * Description
-             * @description Detailed description
-             */
-            description: string;
-            /**
-             * Issue Type
-             * @description Jira issue type
-             */
-            issue_type: string;
-            /**
-             * Story Points
-             * @description Story points estimate
-             */
-            story_points?: number | null;
-            /**
-             * Labels
-             * @description Labels to apply
-             */
-            labels?: string[];
-            /**
-             * Key
-             * @description Created Jira issue key
-             */
-            key?: string | null;
-        };
-        /**
-         * SummaryType
-         * @enum {string}
-         */
-        SummaryType: "readme";
         /**
          * TemporalArtifactEncryption
          * @description Encryption mode metadata recorded for each artifact.
@@ -14352,145 +14364,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    summarize_repository_summarization_repository_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RepositorySummarizationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RepositorySummarizationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    plan_jira_stories_v1_planning_jira_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["JiraPlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoryDraft"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    jira_planner_ui_v1_planning_jira_ui_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    jira_planner_submit_v1_planning_jira_ui_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    process_context_context_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContextResponse"];
                 };
             };
             /** @description Validation Error */
@@ -18863,6 +18736,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowChatBinding"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapturedEvidenceModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_download_get: {
+        parameters: {
+            query: {
+                ref: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_in_new_workflow_api_executions__workflow_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueInNewWorkflowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueInNewWorkflowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_execution_continuations_api_executions__workflow_id__continuations_get: {
+        parameters: {
+            query?: {
+                direction?: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedContinuationLinksResponseModel"];
                 };
             };
             /** @description Validation Error */

@@ -1,5 +1,5 @@
 {
-  "invariant": "MoonMind runtime scripts are copied into the run-owned workspace root and rebased to the configured remote-daemon root before host creation",
-  "daemonRoot": "/var/lib/docker/volumes/agent_workspaces/_data",
-  "daemonScriptsPath": "/var/lib/docker/volumes/agent_workspaces/_data/.omnigent-runtime-scripts/5de9e0013df382bfecb790b5"
+  "invariant": "MoonMind runtime scripts are copied into the run-owned workspace root and rebased to the named volume mountpoint inspected from the selected remote daemon before host creation",
+  "daemonRoot": "/mnt/data/docker/volumes/agent_workspaces/_data",
+  "daemonScriptsPath": "/mnt/data/docker/volumes/agent_workspaces/_data/.omnigent-runtime-scripts/5de9e0013df382bfecb790b5"
 }

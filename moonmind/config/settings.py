@@ -3038,17 +3038,7 @@ class AppSettings(BaseSettings):
     # Other settings
     fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
     fernet_key: Optional[str] = Field(None, alias="FERNET_KEY")
-    hf_access_token: Optional[str] = Field(None, alias="HF_ACCESS_TOKEN")
-
-    langchain_api_key: Optional[str] = Field(None, alias="LANGCHAIN_API_KEY")
-    langchain_tracing_v2: str = Field("true", alias="LANGCHAIN_TRACING_V2")
-    langchain_project: str = Field("MoonMind", alias="LANGCHAIN_PROJECT")
-
-    model_directory: str = Field("/app/model_data", alias="MODEL_DIRECTORY")
-
     postgres_version: int = Field(14, alias="POSTGRES_VERSION")
-    rabbitmq_user: Optional[str] = Field(None, alias="RABBITMQ_USER")
-    rabbitmq_password: Optional[str] = Field(None, alias="RABBITMQ_PASSWORD")
 
     # ------------------------------------------------------------------
     # Validators

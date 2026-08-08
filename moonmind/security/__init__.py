@@ -1,6 +1,7 @@
 """Shared security contracts for MoonMind runtime code."""
 
 from moonmind.security.outbound_scan import (
+    OUTBOUND_SCAN_POLICY_REF,
     OutboundBundleItem,
     OutboundFinding,
     OutboundScanDecision,
@@ -11,6 +12,7 @@ from moonmind.security.outbound_scan import (
 )
 
 __all__ = [
+    "OUTBOUND_SCAN_POLICY_REF",
     "OutboundBundleItem",
     "OutboundFinding",
     "OutboundScanDecision",

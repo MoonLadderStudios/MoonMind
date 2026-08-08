@@ -876,6 +876,26 @@ They support diagnostics, historical fallback, evidence inspection, and runtimes
 
 For terminal work, the native transcript is read-only. MoonMind may expose **Continue in a new workflow** using pinned source identity and authorized artifact refs; this is an explicit Workflow action, not a native message or chat-instruction compatibility path.
 
+Terminal captured evidence and linked continuation are Workflow-scoped, owner-authorized routes (not binding-scoped facade routes):
+
+| Purpose | Route |
+|---|---|
+| View captured evidence | `GET /api/executions/{workflowId}/captured-evidence` |
+| Continue in a new workflow | `POST /api/executions/{workflowId}/continue` |
+| List linked continuations | `GET /api/executions/{workflowId}/continuations?direction=outbound\|inbound` |
+
+`captured-evidence` returns MoonMind artifact refs (final/initial snapshots, capture manifest, diagnostics, raw/normalized event journals, external/checkpoint state, finish summary, output artifacts) served by the existing artifact authorization/preview/download contracts — never provider-native paths or live upstream resource ids. `continue` is admitted only from a *terminal* source, requires a stable client `idempotencyKey` (a duplicate returns the same linked Workflow), pins the source Workflow/run/Step and the selected authorized evidence refs server-side under `relationshipType = linked_continuation`, reuses the ordinary create/compiler path to resolve fresh authority, and never mutates the source Workflow input, Step ledger, terminal status, provider session, artifacts, or publication result. The browser authors only new intent and which already-authorized evidence to carry; it never authors the source run, provider session, host, profile, credential, workspace path, or evidence ownership. Both source and continuation Workflows present the durable bidirectional relationship.
+
+### 15.1 Serving the native UI through MoonMind-scoped routes
+
+MoonMind serves the provider-maintained native Omnigent web application through its own origin at the binding-scoped route `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]` (and its SPA sub-paths). It reverse-proxies the stock UI assets from the upstream server, serves the SPA document with an injected browser-safe bootstrap, and never copies the native React source or lets the browser connect directly to the upstream server. The same scoped surface backs both the embedded Workflow Detail view and the full-page **Open in Omnigent** view; the full-page view drops only the `embedded` presentation flag and uses the same binding, facade, credentials, and policy.
+
+The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; the scoped API base (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full_page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. A `wsBase` is not advertised until a binding-authorized WebSocket handler exists, so the bootstrap never promises a socket the facade cannot accept. It never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Root-absolute asset URLs are rewritten onto the scoped route and a `connect-src 'self'` policy keeps every asset, API, and SSE request on the MoonMind origin.
+
+Security policy for the served responses is explicit: embedded documents allow `frame-ancestors 'self'` (`X-Frame-Options: SAMEORIGIN`); the full-page view refuses framing (`frame-ancestors 'none'` / `DENY`). Documents carry the caller's bootstrap and are never cached (`Cache-Control: no-store` + `Vary: Cookie`), so one binding's bootstrap or private session state cannot leak to another caller; hashed assets carry no binding data and are privately cacheable. Upstream redirects are re-based inside the scoped route and never expose upstream topology.
+
+Serving is gated on a known-compatible native UI/server version. An unknown or unsupported version fails with a stable, actionable `omnigent_native_chat_unavailable` state rather than partially bypassing the scoped facade. Operator configuration is namespaced and safe-by-default: `OMNIGENT_NATIVE_UI_ENABLED` (default enabled) toggles serving, and `OMNIGENT_NATIVE_UI_VERSION` pins the running upstream build (default: the single upstream source pin MoonMind is verified against). Readiness reports native-UI serving, the compatibility version, the scoped HTTP/SSE routes, and credential separation under `compatibilityDiagnostics.nativeUi`.
+
 ---
 
 ## 16. Security and authentication

@@ -7,10 +7,9 @@ single substrate migration.  The base registry types are kept for consumers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping
-from uuid import UUID
+from typing import Any, Awaitable, Callable
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 class ToolRegistryError(RuntimeError):
     """Base class for MCP tool-registry failures."""
@@ -81,89 +80,20 @@ class ResourceListResponse(BaseModel):
     resources: list[ResourceMetadata] = Field(default_factory=list, alias="resources")
 
 
-@dataclass(frozen=True, slots=True)
-class QueueToolExecutionContext:
-    """Dependencies available to tool handlers.
-
-    Stub retained for compatibility. The queue service has been removed.
-    """
-
-    service: Any
-    user_id: UUID | None
-
 ToolHandler = Callable[[BaseModel, Any], Awaitable[Any]]
+
 
 @dataclass(frozen=True, slots=True)
 class _ToolDefinition:
-    """Internal registry metadata for one tool."""
+    """Internal metadata shared by the concrete MCP tool registries."""
 
     name: str
     description: str
     argument_model: type[BaseModel]
     handler: ToolHandler
 
-class QueueToolRegistry:
-    """Registry for MCP tools.
-
-    The legacy queue tool implementations have been removed.
-    This class is kept as a stub for compatibility with test fixtures
-    and consumers that reference it.
-    """
-
-    def __init__(self) -> None:
-        self._tools: dict[str, _ToolDefinition] = {}
-
-    def list_tools(self) -> list[ToolMetadata]:
-        """Return registered tools with schemas for discovery endpoint."""
-        output: list[ToolMetadata] = []
-        for definition in sorted(self._tools.values(), key=lambda item: item.name):
-            output.append(
-                ToolMetadata(
-                    name=definition.name,
-                    description=definition.description,
-                    input_schema=definition.argument_model.model_json_schema(
-                        by_alias=True
-                    ),
-                )
-            )
-        return output
-
-    async def call_tool(
-        self,
-        *,
-        tool: str,
-        arguments: Mapping[str, Any] | None,
-        context: Any,
-    ) -> Any:
-        """Validate arguments and dispatch a tool call."""
-        definition = self._tools.get(tool)
-        if definition is None:
-            raise ToolNotFoundError(tool)
-
-        payload = dict(arguments or {})
-        try:
-            parsed_args = definition.argument_model.model_validate(payload)
-        except ValidationError as exc:
-            raise ToolArgumentsValidationError(tool, detail=str(exc)) from exc
-
-        return await definition.handler(parsed_args, context)
-
-    def _register(
-        self,
-        name: str,
-        description: str,
-        argument_model: type[BaseModel],
-        handler: ToolHandler,
-    ) -> None:
-        self._tools[name] = _ToolDefinition(
-            name=name,
-            description=description,
-            argument_model=argument_model,
-            handler=handler,
-        )
 
 __all__ = [
-    "QueueToolRegistry",
     "ResourceListResponse",
     "ResourceMetadata",
     "ToolArgumentsValidationError",

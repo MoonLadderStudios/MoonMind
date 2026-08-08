@@ -3440,6 +3440,12 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "artifacts/github-issue-implement-brief.json"
         in expanded["steps"][1]["instructions"]
     )
+    assert expanded["steps"][1]["skill"]["args"] == {
+        "brief_artifact_path": "artifacts/github-issue-implement-brief.json",
+        "assessment_artifact_path": (
+            "artifacts/github-issue-implement-assessment.json"
+        ),
+    }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"

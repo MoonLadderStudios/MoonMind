@@ -493,6 +493,8 @@ def materialize_attempt_nodes(
     )
     remediation_inputs.setdefault("selectedSkill", spec.remediation_tool.name)
     verifier_inputs.setdefault("selectedSkill", spec.verification_tool.name)
+    remediation_inputs.setdefault("repositoryOperation", "write")
+    verifier_inputs.setdefault("repositoryOperation", "read")
     remediation_inputs["runtime"] = dict(runtime_block)
     verifier_inputs["runtime"] = dict(runtime_block)
     remediation = {

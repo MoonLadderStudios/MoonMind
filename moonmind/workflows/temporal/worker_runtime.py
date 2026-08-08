@@ -917,6 +917,7 @@ _DIRECT_STORY_TOOL_CONTEXT_KEYS = (
 _AUTHORED_STEP_METADATA_KEYS = (
     "source",
     "annotations",
+    "repositoryOperation",
     "skill",
     "jiraOrchestration",
     "jira_orchestration",
@@ -2136,6 +2137,14 @@ def _build_runtime_planner():
                 if not is_agent_runtime_step:
                     step_node_inputs.pop("selectedSkill", None)
                 if is_story_output_tool:
+                    step_node_inputs["publishMode"] = "none"
+                repository_operation = str(
+                    step_node_inputs.get("repositoryOperation") or ""
+                ).strip().lower()
+                if repository_operation == "read":
+                    # A read-only repository step may still write its declared
+                    # handoff artifacts, but it cannot own repository mutation
+                    # or publication. Compile that authority away before launch.
                     step_node_inputs["publishMode"] = "none"
 
                 nodes.append({

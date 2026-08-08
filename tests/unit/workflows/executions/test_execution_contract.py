@@ -726,6 +726,27 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
 
+
+def test_task_step_spec_normalizes_repository_operation() -> None:
+    spec = WorkflowStepSpec.model_validate(
+        {
+            "id": "verify",
+            "instructions": "Inspect without changing the repository.",
+            "repositoryOperation": "READ",
+        }
+    )
+
+    assert spec.repository_operation == "read"
+
+    with pytest.raises(ValidationError, match="repositoryOperation"):
+        WorkflowStepSpec.model_validate(
+            {
+                "id": "verify",
+                "instructions": "Inspect the repository.",
+                "repositoryOperation": "inspect",
+            }
+        )
+
 def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
     payload = CanonicalWorkflowExecutionPayload.model_validate(
         {

@@ -891,6 +891,13 @@ class DockerContainerJobBackend:
         built_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         args: list[str] = [
             "build",
+            # The deployment uses a Buildx docker-container builder. Without an
+            # explicit output mode that builder can report a successful build
+            # while leaving the daemon's existing tag unchanged, so the
+            # authoritative post-build inspection correctly sees a stale image.
+            # Load the result into the selected Docker Engine before validating
+            # the freshness labels.
+            "--load",
             "--file",
             str(dockerfile),
             "--target",

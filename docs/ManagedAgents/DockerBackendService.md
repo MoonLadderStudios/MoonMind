@@ -722,6 +722,16 @@ Omnigent and MoonMind managed sessions use the same tools and job contract. An
 agent runtime does not need a Docker CLI to run repository tests and must not
 advertise a session-local `DOCKER_HOST`.
 
+The default profile-bound Omnigent host receives a host-lease-scoped bearer
+capability and a dependency-free `moonmind` CLI projection. Its capability pins
+the exact sandbox WorkspaceLocator, Step Execution owner, runtime, and host
+lease; the scoped API endpoint rejects another sandbox or correlation identity.
+The existing dual-homed egress proxy exposes exactly one control-plane route to
+the host: `POST /mcp/container/tools/call`. It rejects every other MoonMind API
+path, and the scoped endpoint then validates the bearer capability. This does
+not expose a Docker endpoint to the host: the trusted container worker remains
+the sole Docker owner.
+
 Session capability may advertise:
 
 ```yaml
@@ -761,9 +771,10 @@ expires with the bounded session lifetime, and is accepted only by
 session; submissions whose logical workspace or correlation differs from those
 claims fail before job creation.
 
-The command derives the canonical `managed_runtime` locator from the active
-session, submits durable work, polls `container.status`, and exits from the
-authoritative terminal state.
+The command derives the canonical locator from the active authority: a
+`managed_runtime` locator for a managed session or the exact `sandbox` locator
+for an isolated Omnigent host. It submits durable work, polls
+`container.status`, and exits from the authoritative terminal state.
 
 The Python-test workflow resolves the configured source before starting the test
 container:

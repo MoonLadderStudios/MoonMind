@@ -15,7 +15,7 @@ from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
 from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
-from moonmind.mcp.tool_registry import QueueToolRegistry, ResourceListResponse
+from moonmind.mcp.tool_registry import ResourceListResponse
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
@@ -48,7 +48,6 @@ def router_app(
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
-    monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
     monkeypatch.setattr(
         mcp_tools_router,
         "_execution_tool_registry",
@@ -76,19 +75,24 @@ def _managed_container_capability() -> str:
         secret="test-container-capability-secret",
         owner=OwnerIdentity(principalId="user-1", principalType="user"),
         agent_run_id="run-1",
+        workflow_id="workflow-1",
         session_id="session-1",
         runtime_id="codex_cli",
         lifetime_seconds=300,
     )
 
 
-def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, Any]:
+def _managed_container_submission(
+    *,
+    agent_run_id: str = "run-1",
+    workflow_id: str = "workflow-1",
+) -> dict[str, Any]:
     return {
         "contractVersion": "v1",
         "idempotencyKey": "container-run:run-1:test",
         "source": {
             "source": "managed_session",
-            "workflowId": "workflow-1",
+            "workflowId": workflow_id,
             "managedSessionId": "session-1",
             "agentRunId": agent_run_id,
         },
@@ -99,6 +103,53 @@ def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, A
                 "runtimeId": "codex_cli",
                 "agentRunId": agent_run_id,
                 "relativePath": "repo",
+            },
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+    }
+
+
+def _managed_submission_with_step(**kwargs: Any) -> dict[str, Any]:
+    step_id = kwargs.pop("step_id", None)
+    submission = _managed_container_submission(**kwargs)
+    if step_id is not None:
+        submission["source"]["stepId"] = step_id
+    return submission
+
+
+def _omnigent_container_capability() -> str:
+    return mint_container_job_session_capability(
+        secret="test-container-capability-secret",
+        owner=OwnerIdentity(principalId="run-2", principalType="service"),
+        agent_run_id="run-2",
+        workflow_id="workflow-2",
+        session_id="host-lease-2",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        workspace_kind="sandbox",
+        workspace_id="sandbox-2",
+        workspace_relative_path=".",
+        lifetime_seconds=300,
+    )
+
+
+def _omnigent_container_submission(*, workspace_id: str = "sandbox-2") -> dict[str, Any]:
+    return {
+        "contractVersion": "v1",
+        "idempotencyKey": "container-run:run-2:test",
+        "source": {
+            "source": "omnigent",
+            "workflowId": "workflow-2",
+            "omnigentConversationId": "host-lease-2",
+            "agentRunId": "run-2",
+        },
+        "spec": {
+            "imageSourceRef": "moonmind-python-tests",
+            "workspaceRef": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": ".",
             },
             "command": ["true"],
             "resources": {"cpuMillis": 1000, "memoryMiB": 512},
@@ -175,6 +226,96 @@ async def test_scoped_container_endpoint_rejects_workspace_identity_mismatch(
     assert response.json()["detail"]["code"] == (
         "container_capability_scope_mismatch"
     )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        _managed_container_submission(workflow_id="different-workflow"),
+        _managed_submission_with_step(step_id="different-step"),
+    ],
+)
+async def test_scoped_container_endpoint_rejects_workflow_or_step_mismatch(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_managed_container_capability()}"},
+            json={"tool": "container.submit", "arguments": arguments},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "container_capability_scope_mismatch"
+
+
+async def test_scoped_container_endpoint_accepts_omnigent_sandbox_authority(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _dispatch(payload: Any, owner: OwnerIdentity, session: Any) -> dict[str, Any]:
+        captured.update(payload=payload, owner=owner, session=session)
+        return {"jobId": "container-job:" + "2" * 32, "state": "queued"}
+
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_container_job_tool", _dispatch)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_omnigent_container_capability()}"},
+            json={"tool": "container.submit", "arguments": _omnigent_container_submission()},
+        )
+
+    assert response.status_code == 200
+    assert captured["owner"] == OwnerIdentity(
+        principalId="run-2", principalType="service"
+    )
+
+
+async def test_scoped_container_endpoint_rejects_other_omnigent_sandbox(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_omnigent_container_capability()}"},
+            json={
+                "tool": "container.submit",
+                "arguments": _omnigent_container_submission(workspace_id="sandbox-other"),
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "container_capability_scope_mismatch"
 
 
 async def test_list_tools_includes_enabled_jira_tools(
@@ -562,15 +703,7 @@ async def test_list_resources_returns_mcp_resource_catalog(
     resources = {
         resource["name"]: resource for resource in response.json()["resources"]
     }
-    assert resources["context-completion"] == {
-        "uri": "moonmind://context",
-        "name": "context-completion",
-        "description": (
-            "Chat-style context completion endpoint with optional RAG, available "
-            "through POST /context."
-        ),
-        "mimeType": "application/json",
-    }
+    assert set(resources) == {"tool-catalog"}
     assert resources["tool-catalog"]["uri"] == "moonmind://mcp/tools"
     assert resources["tool-catalog"]["mimeType"] == "application/json"
 

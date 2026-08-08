@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -184,6 +185,7 @@ from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactNotFoundError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -207,7 +209,20 @@ from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 from moonmind.omnigent.cutover import effective_phase, select_runtime
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
+    BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    _chat_binding_logical_step_id,
+)
+from api_service.services.linked_continuation import (
+    LinkedContinuationConflict,
+    RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+    SqlLinkedContinuationRepository,
+    compute_request_digest,
+)
+from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
+from moonmind.omnigent.settings import (
+    resolved_native_ui_serving_enabled,
+    resolved_native_ui_version,
 )
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
@@ -5002,6 +5017,31 @@ def _build_related_runs(
                 )
             )
 
+    # Linked "Continue in a new workflow" lineage (MoonLadderStudios/MoonMind#3641):
+    # the continuation Workflow presents the terminal source it was continued
+    # from, distinct from recovery/rerun/remediation relationships.
+    continuation_source = params.get("continuationSource")
+    if isinstance(continuation_source, Mapping):
+        source_workflow_id = str(
+            continuation_source.get("sourceWorkflowId")
+            or continuation_source.get("source_workflow_id")
+            or ""
+        ).strip()
+        if source_workflow_id:
+            source_run_id = str(
+                continuation_source.get("sourceRunId")
+                or continuation_source.get("source_run_id")
+                or ""
+            ).strip() or None
+            related_runs.append(
+                ExecutionRelatedRunModel(
+                    workflowId=source_workflow_id,
+                    runId=source_run_id,
+                    relationship="Continued from",
+                    href=_related_run_href(source_workflow_id),
+                )
+            )
+
     task_payload = _workflow_payload_from_parameters(params)
     comparison_source = task_payload.get("comparison")
     if isinstance(comparison_source, Mapping):
@@ -5095,15 +5135,88 @@ def _execution_record_visible_to_user(
     return record_owner_type == "user" and record_owner_id == _owner_id(user)
 
 
+async def _append_linked_continuations(
+    execution: ExecutionModel,
+    hydrated: list[ExecutionRelatedRunModel],
+    *,
+    session: AsyncSession,
+    user: User | None,
+) -> None:
+    """Surface the source-side view of linked continuations (#3641 §6).
+
+    A terminal source Workflow presents each linked continuation it produced
+    (distinct from the continuation-side "Continued from" relationship, which is
+    already carried on the continuation's own parameters). Only relationships
+    whose destination remains visible to the caller are shown, and the original
+    terminal outcome is left unchanged.
+    """
+
+    existing_ids = {related_run.workflow_id for related_run in hydrated}
+    repository = SqlLinkedContinuationRepository(session)
+    try:
+        # Read inside a savepoint so a failed lookup (e.g. the table is absent in
+        # a minimal test session) rolls back only this bounded enrichment and
+        # never poisons the outer describe transaction.
+        async with session.begin_nested():
+            continuations = list(
+                await repository.list_for_source(execution.workflow_id)
+            )
+    except Exception as exc:  # noqa: BLE001 - display enrichment is best-effort
+        # Never let the source-side relationship projection break describe: a
+        # transient store/session issue degrades this bounded enrichment only.
+        logger.debug(
+            "Skipping linked-continuation projection for %s: %s",
+            execution.workflow_id,
+            exc,
+        )
+        return
+    for record in continuations:
+        destination_id = str(record.destination_workflow_id or "").strip()
+        if not destination_id or destination_id in existing_ids:
+            continue
+        try:
+            destination = await session.get(TemporalExecutionRecord, destination_id)
+        except Exception:  # noqa: BLE001 - one bounded hydration failure surface
+            destination = None
+        if destination is None:
+            continue
+        if (
+            user is not None
+            and not _is_execution_admin(user)
+            and not _execution_record_visible_to_user(destination, user)
+        ):
+            continue
+        metadata = _execution_related_run_metadata(destination)
+        hydrated.append(
+            ExecutionRelatedRunModel(
+                workflowId=destination_id,
+                runId=record.destination_run_id,
+                relationship="Continued in a new workflow",
+                status=metadata.get("status"),
+                createdAt=record.created_at,
+                href=_related_run_href(destination_id),
+            )
+        )
+        existing_ids.add(destination_id)
+
+
 async def _hydrate_related_run_metadata(
     execution: ExecutionModel,
     *,
     session: AsyncSession | None,
     user: User | None = None,
 ) -> ExecutionModel:
-    if session is None or not execution.related_runs:
+    if session is None:
         return execution
-    hydrated: list[ExecutionRelatedRunModel] = []
+    if not execution.related_runs:
+        hydrated: list[ExecutionRelatedRunModel] = []
+        await _append_linked_continuations(
+            execution, hydrated, session=session, user=user
+        )
+        if not hydrated:
+            return execution
+        return execution.model_copy(update={"related_runs": hydrated})
+    hydrated = []
     for related_run in execution.related_runs:
         try:
             record = await session.get(TemporalExecutionRecord, related_run.workflow_id)
@@ -5137,6 +5250,7 @@ async def _hydrate_related_run_metadata(
                 }
             )
         )
+    await _append_linked_continuations(execution, hydrated, session=session, user=user)
     return execution.model_copy(update={"related_runs": hydrated})
 
 def _target_diagnostics_block(
@@ -7903,6 +8017,17 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 normalized_step[key] = value.strip()
         normalized_step["id"] = _task_step_id_from_payload(step_payload, index)
 
+        repository_operation = step_payload.get("repositoryOperation")
+        if repository_operation is not None:
+            if not isinstance(repository_operation, str) or (
+                normalized_repository_operation := repository_operation.strip().lower()
+            ) not in {"read", "write"}:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].repositoryOperation must be "
+                    "one of: read, write."
+                )
+            normalized_step["repositoryOperation"] = normalized_repository_operation
+
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
             field_name=f"payload.workflow.steps[{index}].skills",
@@ -8117,6 +8242,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "inputAttachments",
                 "input_attachments",
                 "runtime",
+                "repositoryOperation",
                 "diagnostics",
                 "skill",
                 "skills",
@@ -14775,9 +14901,24 @@ async def resolve_workflow_chat_binding(
             },
         ) from exc
 
+    # Project native-UI serving readiness into the binding before advertising a
+    # live ``chatUrl``. When native serving is disabled or the running version is
+    # not known-compatible, the scoped UI route fails closed to a 503, so the
+    # binding must surface ``unavailable`` (and drop ``chatUrl``) instead — that
+    # is what selects the documented read-only compatibility fallback in the
+    # browser rather than an iframe pointed at the router's 503 page
+    # (MoonLadderStudios/MoonMind#3638 requirement 7, WorkflowChatPanel.md §11).
+    serving_enabled = resolved_native_ui_serving_enabled()
+    native_ui = evaluate_native_ui_compatibility(
+        resolved_native_ui_version(),
+        enabled=serving_enabled,
+    )
+
     chat_url = ""
     api_base = ""
-    if resolution.chat_binding_id:
+    state = resolution.state
+    unavailable_reason = resolution.unavailable_reason
+    if resolution.chat_binding_id and native_ui.ready:
         # Server-owned, binding-scoped navigation targets. The browser never
         # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
         chat_url = (
@@ -14785,6 +14926,16 @@ async def resolve_workflow_chat_binding(
         )
         api_base = (
             f"/api/workflow-chat-bindings/{resolution.chat_binding_id}/omnigent"
+        )
+    elif resolution.chat_binding_id and not native_ui.ready:
+        # A binding exists but the native UI cannot be served: mark the surface
+        # unavailable so the browser shows the read-only compatibility fallback
+        # instead of an iframe pointed at the scoped route's 503 page.
+        state = "unavailable"
+        unavailable_reason = (
+            "native_ui_serving_disabled"
+            if not serving_enabled
+            else native_ui.reason or "native_ui_unavailable"
         )
 
     return WorkflowChatBinding(
@@ -14795,11 +14946,932 @@ async def resolve_workflow_chat_binding(
         step_execution_id=resolution.step_execution_id,
         chat_url=chat_url,
         api_base=api_base,
-        state=resolution.state,
+        state=state,
         read_only=resolution.read_only,
         capabilities=resolution.capabilities,
-        unavailable_reason=resolution.unavailable_reason,
+        unavailable_reason=unavailable_reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# Terminal captured evidence + linked "Continue in a new workflow"
+# (MoonLadderStudios/MoonMind#3641)
+#
+# After native Omnigent work ends, MoonMind keeps the terminal transcript
+# read-only, exposes the immutable MoonMind-captured evidence directly, and
+# offers an explicit, authorized linked continuation that creates a *new*
+# Workflow Execution through the ordinary create path — never mutating the
+# terminal source session, its Step ledger, artifacts, or publication result,
+# and never routing the intent through the native composer / SubmitChatInstruction.
+# ---------------------------------------------------------------------------
+
+# Terminal ``ExecutionModel.status`` values. A linked continuation may only be
+# authored from a terminal source (issue §7: "source is not terminal" fails
+# closed) — a still-idle or still-reachable session is never inferred writeable.
+_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
+    {"completed", "failed", "canceled"}
+)
+
+# Ordered (camelCase label, bridge-session column, kind) for the named terminal
+# evidence refs surfaced by **View captured evidence**. These are MoonMind
+# artifact refs, never provider-native paths or live upstream file ids.
+_CAPTURED_EVIDENCE_REF_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("finalSnapshotRef", "final_snapshot_ref", "final_snapshot"),
+    ("initialSnapshotRef", "initial_snapshot_ref", "initial_snapshot"),
+    ("captureManifestRef", "capture_manifest_ref", "capture_manifest"),
+    ("diagnosticsRef", "diagnostics_ref", "diagnostics"),
+    ("rawEventsRef", "raw_events_ref", "raw_event_journal"),
+    ("normalizedEventsRef", "normalized_events_ref", "normalized_event_journal"),
+    ("externalStateRef", "external_state_ref", "external_state"),
+)
+
+_CAPTURED_EVIDENCE_LABELS: dict[str, str] = {
+    "final_snapshot": "Final snapshot",
+    "initial_snapshot": "Initial snapshot",
+    "capture_manifest": "Capture manifest",
+    "diagnostics": "Diagnostics",
+    "raw_event_journal": "Raw event journal",
+    "normalized_event_journal": "Normalized event journal",
+    "external_state": "External / checkpoint state",
+    "finish_summary": "Finish summary",
+    "output_artifact": "Output artifact",
+}
+
+
+@dataclass(frozen=True)
+class _SourceCapturedEvidence:
+    """Authorized, browser-safe MoonMind evidence resolved for one Workflow.
+
+    Only MoonMind-owned artifact refs and bounded text; the provider session id,
+    host/runner id, upstream endpoint, credential, and workspace path stay
+    server-side.
+    """
+
+    available: bool
+    named_refs: dict[str, str]
+    additional_refs: list[str]
+    finish_summary_ref: str | None
+    final_snapshot_ref: str | None
+    capture_manifest_ref: str | None
+    summary: str | None
+    logical_step_id: str | None
+    step_execution_id: str | None
+    incomplete_reason: str | None
+
+    @property
+    def authorized_refs(self) -> frozenset[str]:
+        refs = set(self.named_refs.values())
+        refs.update(self.additional_refs)
+        if self.finish_summary_ref:
+            refs.add(self.finish_summary_ref)
+        return frozenset(ref for ref in refs if ref)
+
+
+def _coerce_evidence_ref(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+async def _resolve_source_captured_evidence(
+    *, workflow_id: str, run_id: str | None
+) -> _SourceCapturedEvidence:
+    """Resolve immutable MoonMind evidence captured for a terminal Workflow.
+
+    Reuses the durable Omnigent bridge projection (the canonical evidence
+    boundary): its terminal refs are MoonMind artifact refs the existing
+    artifact authorization/preview/download contracts already serve. A Workflow
+    with no bridge projection (or no terminal artifacts) resolves to an
+    ``available=False`` envelope with a stable reason rather than an error.
+    """
+
+    store = OmnigentBridgeSessionStore(async_session_maker)
+    try:
+        row = await store.resolve_projection_session(
+            workflow_id=workflow_id, run_id=(run_id or None)
+        )
+    except BridgeProjectionAmbiguousError:
+        row = None
+    if row is None:
+        return _SourceCapturedEvidence(
+            available=False,
+            named_refs={},
+            additional_refs=[],
+            finish_summary_ref=None,
+            final_snapshot_ref=None,
+            capture_manifest_ref=None,
+            summary=None,
+            logical_step_id=None,
+            step_execution_id=None,
+            incomplete_reason="no_captured_evidence",
+        )
+
+    terminal_refs = dict(getattr(row, "terminal_refs", None) or {})
+    named_refs: dict[str, str] = {}
+    for label, column, _kind in _CAPTURED_EVIDENCE_REF_FIELDS:
+        ref = _coerce_evidence_ref(getattr(row, column, None))
+        if ref:
+            named_refs[label] = ref
+
+    additional_refs: list[str] = []
+    for candidate in terminal_refs.get("outputRefs") or []:
+        ref = _coerce_evidence_ref(candidate)
+        if ref and ref not in named_refs.values():
+            additional_refs.append(ref)
+
+    finish_summary_ref = _coerce_evidence_ref(terminal_refs.get("finishSummaryRef"))
+    summary = str(terminal_refs.get("summary") or "")[:2000] or None
+    has_any = bool(named_refs or additional_refs or finish_summary_ref)
+    return _SourceCapturedEvidence(
+        available=has_any,
+        named_refs=named_refs,
+        additional_refs=additional_refs,
+        finish_summary_ref=finish_summary_ref,
+        final_snapshot_ref=named_refs.get("finalSnapshotRef"),
+        capture_manifest_ref=named_refs.get("captureManifestRef"),
+        summary=summary,
+        # Preserve the exact Step lineage for step-bound sessions: the logical
+        # step id lives on the bridge projection's ``metadata_`` and is read by
+        # the same resolver the chat binding uses, so continuations carry
+        # ``sourceLogicalStepId`` instead of silently dropping it (#3641 §6).
+        logical_step_id=_chat_binding_logical_step_id(row),
+        step_execution_id=(
+            str(getattr(row, "step_execution_id", "") or "").strip() or None
+        ),
+        incomplete_reason=None if has_any else "no_terminal_artifacts_captured",
+    )
+
+
+class CapturedEvidenceItemModel(BaseModel):
+    """One authorized MoonMind evidence artifact ref (browser-safe)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str
+    kind: str
+    artifact_ref: str = Field(alias="artifactRef")
+
+
+class CapturedEvidenceModel(BaseModel):
+    """Immutable MoonMind-captured evidence for **View captured evidence**."""
+
+    model_config = ConfigDict(
+        alias_generator=_chat_binding_alias, populate_by_name=True
+    )
+
+    workflow_id: str
+    run_id: str | None = None
+    available: bool
+    items: list[CapturedEvidenceItemModel] = Field(default_factory=list)
+    summary: str | None = None
+    unavailable_reason: str | None = None
+
+
+def _captured_evidence_items(
+    evidence: _SourceCapturedEvidence,
+) -> list[CapturedEvidenceItemModel]:
+    items: list[CapturedEvidenceItemModel] = []
+    for label, _column, kind in _CAPTURED_EVIDENCE_REF_FIELDS:
+        ref = evidence.named_refs.get(label)
+        if ref:
+            items.append(
+                CapturedEvidenceItemModel(
+                    label=_CAPTURED_EVIDENCE_LABELS.get(kind, kind),
+                    kind=kind,
+                    artifactRef=ref,
+                )
+            )
+    if evidence.finish_summary_ref:
+        items.append(
+            CapturedEvidenceItemModel(
+                label=_CAPTURED_EVIDENCE_LABELS["finish_summary"],
+                kind="finish_summary",
+                artifactRef=evidence.finish_summary_ref,
+            )
+        )
+    for ref in evidence.additional_refs:
+        items.append(
+            CapturedEvidenceItemModel(
+                label=_CAPTURED_EVIDENCE_LABELS["output_artifact"],
+                kind="output_artifact",
+                artifactRef=ref,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/{workflow_id}/captured-evidence",
+    response_model=CapturedEvidenceModel,
+    response_model_exclude_none=True,
+)
+async def get_workflow_captured_evidence(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> CapturedEvidenceModel:
+    """Return the immutable MoonMind evidence captured for a Workflow (§10, #3641).
+
+    The caller is authorized against the Workflow first; possession of a chat
+    binding id is never authorization. Returned refs are MoonMind artifact refs
+    served by the existing artifact authorization/preview/download contracts —
+    never provider-native paths or live upstream resource ids.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    return CapturedEvidenceModel(
+        workflow_id=execution.workflow_id,
+        run_id=run_id,
+        available=evidence.available,
+        items=_captured_evidence_items(evidence),
+        summary=evidence.summary,
+        unavailable_reason=evidence.incomplete_reason,
+    )
+
+
+def _evidence_download_filename(artifact_ref: str) -> str:
+    """A browser-safe download filename derived from an evidence ref."""
+
+    tail = artifact_ref.rstrip("/").rsplit("/", 1)[-1]
+    tail = tail.removeprefix("artifact://").strip()
+    return tail or "captured-evidence"
+
+
+@router.get("/{workflow_id}/captured-evidence/download")
+async def download_workflow_captured_evidence(
+    workflow_id: str,
+    ref: str = Query(..., alias="ref"),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+
+    Production Omnigent evidence refs are gateway refs
+    (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
+    artifact download route cannot serve — the nested path never routes and no
+    ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
+    workflow-scoped route authorizes the caller against the Workflow, confirms
+    the requested ref is one of that Workflow's authorized evidence refs
+    (possession of a ref is never authorization), then reads it through the same
+    scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
+    ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
+    An unauthorized ref returns 404 without revealing whether it exists.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    requested = (ref or "").strip()
+    if not requested or requested not in evidence.authorized_refs:
+        # Non-enumerating: an unauthorized or unknown ref is indistinguishable
+        # from a missing one, so a caller cannot probe for hidden artifacts.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "captured_evidence_not_found",
+                "message": "No such captured evidence for this workflow.",
+            },
+        )
+
+    filename = _evidence_download_filename(requested)
+    if requested.startswith("artifact://omnigent/"):
+        # MoonMind-owned gateway ref: read the bytes through the same gateway the
+        # activity runtime uses (moonmind.workflows...activity_runtime._read_bytes)
+        # rather than the Temporal-artifact route, which has no row for it.
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            payload = await LocalOmnigentArtifactGateway().read_bytes(requested)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+    else:
+        artifact_id = _artifact_id_from_ref(requested)
+        if not artifact_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            )
+        artifact_service = get_temporal_artifact_service(session)
+        try:
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_id,
+                principal=str(getattr(user, "id", "") or "system"),
+                allow_restricted_raw=True,
+            )
+        except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+            # The Workflow-level authorization above already gated access; a
+            # store-level denial still fails closed as not-found (non-enumerating).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+        except TemporalArtifactNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_not_found",
+                    "message": "No such captured evidence for this workflow.",
+                },
+            ) from exc
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"content-disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Durable single-put limit; a source evidence artifact larger than this cannot be
+# copied into a durable Temporal artifact via write_complete, so it is skipped.
+_CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _evidence_attachment_content_type(filename: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".json"):
+        return "application/json"
+    if lowered.endswith((".txt", ".md", ".log")):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+async def _read_continuation_evidence_bytes(
+    *, artifact_service: Any, principal: str, ref: str
+) -> bytes | None:
+    """Read one authorized source evidence ref's bytes, scheme-aware.
+
+    Mirrors the runtime's scheme dispatch: the Omnigent artifact gateway serves
+    ``artifact://omnigent/`` refs; the Temporal artifact service serves durable
+    ``art_`` refs. Returns ``None`` (skip) when the ref cannot be read.
+    """
+
+    if ref.startswith("artifact://omnigent/"):
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        try:
+            return await LocalOmnigentArtifactGateway().read_bytes(ref)
+        except FileNotFoundError:
+            return None
+    artifact_id = _artifact_id_from_ref(ref)
+    if not artifact_id:
+        return None
+    try:
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        return body
+    except (
+        PermissionError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactNotFoundError,
+    ):
+        return None
+
+
+async def _materialize_continuation_source_attachments(
+    *, session: AsyncSession, user: User, refs: list[str]
+) -> list[dict[str, Any]]:
+    """Copy authorized source evidence refs into durable input attachments.
+
+    The pinned source evidence refs (production Omnigent gateway refs, in
+    particular) are not readable by the destination agent's prepared-input
+    boundary, which materializes only durable Temporal artifacts linked to the
+    destination workflow (#3641 §6, review "inject selected continuation
+    evidence into execution context"). Copy each authorized selected ref into a
+    durable ``LONG`` artifact and return ``inputAttachments`` entries; the caller
+    injects them into the destination's ``workflow`` payload (the same shape the
+    ordinary create path uses) and links them to the destination workflow after
+    it is created. Unreadable or oversized refs are skipped rather than failing
+    the whole continuation — they remain pinned for display.
+    """
+
+    if not refs:
+        return []
+    artifact_service = get_temporal_artifact_service(session)
+    principal = str(getattr(user, "id", "") or "system")
+    attachments: list[dict[str, Any]] = []
+    for ref in refs:
+        body = await _read_continuation_evidence_bytes(
+            artifact_service=artifact_service, principal=principal, ref=ref
+        )
+        if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
+            continue
+        filename = _evidence_download_filename(ref)
+        content_type = _evidence_attachment_content_type(filename)
+        artifact, _upload = await artifact_service.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(body),
+            retention_class=TemporalArtifactRetentionClass.LONG,
+            metadata_json={
+                "artifact_class": "linked_continuation_source_evidence",
+                "source_ref": ref,
+            },
+        )
+        completed = await artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=body,
+            content_type=content_type,
+        )
+        attachments.append(
+            {
+                "artifactId": completed.artifact_id,
+                "filename": filename,
+                "contentType": content_type,
+                "sizeBytes": len(body),
+            }
+        )
+    return attachments
+
+
+class ContinueInNewWorkflowRequest(BaseModel):
+    """Authored intent + selected source evidence for a linked continuation.
+
+    The browser authors only new intent and bounded choices appropriate to
+    normal Workflow creation, plus which *already-authorized* source artifact
+    refs to carry. It never authors the source run, provider session, host,
+    profile, credential, workspace path, or evidence ownership — the server pins
+    all of that from the terminal source (issue §3).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    idempotency_key: str = Field(
+        alias="idempotencyKey", min_length=1, max_length=512
+    )
+    title: str | None = Field(None, alias="title", max_length=500)
+    instructions: str | None = Field(None, alias="instructions")
+    initial_parameters: dict[str, Any] = Field(
+        default_factory=dict, alias="initialParameters"
+    )
+    selected_source_artifact_refs: list[str] = Field(
+        default_factory=list, alias="selectedSourceArtifactRefs"
+    )
+    bounded_purpose: str | None = Field(
+        None, alias="boundedPurpose", max_length=2000
+    )
+
+
+class ContinueInNewWorkflowResponse(BaseModel):
+    """Stable linked destination for both first and duplicate submissions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    relationship_type: str = Field(alias="relationshipType")
+    created: bool
+    pinned_source_refs: dict[str, Any] = Field(
+        default_factory=dict, alias="pinnedSourceRefs"
+    )
+
+
+def _pinned_continuation_source(
+    *,
+    source_workflow_id: str,
+    source_run_id: str,
+    evidence: _SourceCapturedEvidence,
+    selected_refs: list[str],
+) -> dict[str, Any]:
+    """Build the server-pinned source lineage carried on the continuation.
+
+    Only server-owned, browser-safe identity + MoonMind evidence refs; the
+    browser never substitutes these.
+    """
+
+    pinned: dict[str, Any] = {
+        "relationshipType": RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+        "sourceWorkflowId": source_workflow_id,
+        "sourceRunId": source_run_id,
+    }
+    if evidence.logical_step_id:
+        pinned["sourceLogicalStepId"] = evidence.logical_step_id
+    if evidence.step_execution_id:
+        pinned["sourceStepExecutionId"] = evidence.step_execution_id
+    if evidence.finish_summary_ref:
+        pinned["sourceFinishSummaryRef"] = evidence.finish_summary_ref
+    if evidence.final_snapshot_ref:
+        pinned["sourceFinalSnapshotRef"] = evidence.final_snapshot_ref
+    if evidence.capture_manifest_ref:
+        pinned["sourceCaptureManifestRef"] = evidence.capture_manifest_ref
+    if selected_refs:
+        pinned["selectedSourceArtifactRefs"] = sorted(set(selected_refs))
+    return pinned
+
+
+@router.post(
+    "/{workflow_id}/continue",
+    response_model=ContinueInNewWorkflowResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def continue_in_new_workflow(
+    workflow_id: str,
+    payload: ContinueInNewWorkflowRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> ContinueInNewWorkflowResponse:
+    """Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
+
+    Reuses the ordinary create/compiler path so the continuation resolves fresh
+    authority (runtime, profile, credentials, policy) rather than inheriting the
+    source's stale credentials, capacity, or host/session identity, while pinning
+    the source lineage and authorized evidence refs. Idempotent on a stable
+    client key; duplicate requests return the same linked Workflow. The source
+    Workflow, its Step ledger, provider session, artifacts, and publication
+    result are never mutated, and no message is posted into the source session.
+    """
+
+    source = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    if str(getattr(source, "status", "") or "") not in _TERMINAL_EXECUTION_STATUSES:
+        # Never infer writeability from an idle status or a still-reachable
+        # upstream session after the MoonMind Workflow is terminal (§1, §7).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_not_terminal",
+                "message": (
+                    "A linked continuation can only be created from a terminal "
+                    "Workflow Execution."
+                ),
+            },
+        )
+    source_run_id = str(getattr(source, "run_id", "") or "").strip()
+    if not source_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_run_missing",
+                "message": "The source Workflow has no authoritative run to pin.",
+            },
+        )
+
+    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_source_unpinnable",
+                "message": (
+                    "The source Workflow could not be pinned for continuation."
+                ),
+            },
+        )
+
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=source.workflow_id, run_id=source_run_id
+    )
+    unauthorized = [
+        ref
+        for ref in payload.selected_source_artifact_refs
+        if ref not in evidence.authorized_refs
+    ]
+    if unauthorized:
+        # Non-enumerating: report the count, never which refs, so a caller cannot
+        # probe for the existence of hidden source artifacts (§7).
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "continuation_evidence_unauthorized",
+                "message": (
+                    "One or more selected source evidence refs are not authorized "
+                    "for this continuation."
+                ),
+                "unauthorizedCount": len(unauthorized),
+            },
+        )
+
+    pinned = _pinned_continuation_source(
+        source_workflow_id=source.workflow_id,
+        source_run_id=source_run_id,
+        evidence=evidence,
+        selected_refs=payload.selected_source_artifact_refs,
+    )
+
+    request_digest = compute_request_digest(
+        {
+            "sourceWorkflowId": source.workflow_id,
+            "sourceRunId": source_run_id,
+            "title": payload.title,
+            "instructions": payload.instructions,
+            "initialParameters": payload.initial_parameters,
+            "selectedSourceArtifactRefs": sorted(
+                set(payload.selected_source_artifact_refs)
+            ),
+            # ``boundedPurpose`` is authored request data persisted and displayed
+            # on the relationship, so a reused key with an edited purpose must be
+            # treated as a materially changed request (idempotency conflict)
+            # rather than silently returning the first destination (#3641 §5).
+            "boundedPurpose": payload.bounded_purpose,
+        }
+    )
+
+    repository = SqlLinkedContinuationRepository(session)
+    try:
+        reservation = await repository.reserve_or_get(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            idempotency_key=payload.idempotency_key,
+            request_digest=request_digest,
+            pinned_source_refs=pinned,
+            source_logical_step_id=evidence.logical_step_id,
+            source_step_execution_id=evidence.step_execution_id,
+            created_by=str(user.id),
+            bounded_purpose=payload.bounded_purpose,
+        )
+    except LinkedContinuationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_idempotency_conflict",
+                "message": str(exc),
+            },
+        ) from exc
+
+    if reservation.already_finalized:
+        # Duplicate request after a successful create: return the same linked
+        # Workflow rather than creating a second one (§5).
+        return ContinueInNewWorkflowResponse(
+            sourceWorkflowId=source.workflow_id,
+            sourceRunId=source_run_id,
+            destinationWorkflowId=reservation.destination_workflow_id,
+            relationshipType=RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+            created=False,
+            pinnedSourceRefs=dict(reservation.record.pinned_source_refs or {}),
+        )
+
+    # Persist the reservation (and its pinned destination id) before the external
+    # create side effect. If the create then fails or is interrupted, a retry with
+    # the same key re-drives the ordinary create path to the *same* reserved id
+    # (create idempotency reconciles it) rather than forking a second Workflow
+    # (§5, §7 "create submission fails after relationship reservation").
+    await session.commit()
+
+    # Author the destination through the ordinary create path. Inherit the
+    # source's authored choices (sanitized like a rerun), layer operator-authored
+    # overrides, then pin the source lineage so both Workflows present the linked
+    # relationship. Fresh authority (runtime/profile/credential/policy) is
+    # resolved by ``create_execution`` — nothing is silently inherited stale.
+    initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    if payload.initial_parameters:
+        initial_params.update(payload.initial_parameters)
+    if payload.instructions:
+        workflow_payload = initial_params.get("workflow")
+        if not isinstance(workflow_payload, dict):
+            workflow_payload = initial_params.get("task")
+        if isinstance(workflow_payload, dict):
+            workflow_payload["instructions"] = payload.instructions
+            initial_params["workflow"] = workflow_payload
+            initial_params.pop("task", None)
+        else:
+            initial_params.setdefault("workflow", {})["instructions"] = (
+                payload.instructions
+            )
+    initial_params["continuationSource"] = pinned
+
+    # Materialize the authorized selected source evidence into durable input
+    # attachments so the destination agent can actually read it. Storing the refs
+    # only under ``continuationSource`` is not enough — no runtime consumer reads
+    # that key, and the prepared-input boundary materializes only durable
+    # Temporal artifacts linked to the destination workflow. Attach them under the
+    # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
+    # create path uses) and link them to the destination workflow after it is
+    # created (#3641 §6).
+    source_attachments = await _materialize_continuation_source_attachments(
+        session=session, user=user, refs=payload.selected_source_artifact_refs
+    )
+    if source_attachments:
+        workflow_payload = initial_params.get("workflow")
+        if not isinstance(workflow_payload, dict):
+            workflow_payload = {}
+        existing_attachments = workflow_payload.get("inputAttachments")
+        merged_attachments = (
+            list(existing_attachments)
+            if isinstance(existing_attachments, list)
+            else []
+        )
+        merged_attachments.extend(source_attachments)
+        workflow_payload["inputAttachments"] = merged_attachments
+        initial_params["workflow"] = workflow_payload
+        initial_params.pop("task", None)
+
+    reserved_workflow_id = reservation.destination_workflow_id
+    # Scope the ordinary create idempotency key to the same authority boundary as
+    # the relationship reservation — (source_workflow_id, source_run_id,
+    # idempotency_key) — so a later terminal run of the same source that reuses a
+    # client key cannot collide with an earlier run's create reservation. The raw
+    # ``continue:{workflow}:{run}:{key}`` join can exceed the ``String(128)``
+    # ``create_idempotency_key`` column (the request key alone is up to 512
+    # chars), which would raise a truncation error *after* the reservation is
+    # committed, so derive a bounded, deterministic digest instead (#3641 §5, §7).
+    create_idempotency_key = "continue:" + compute_request_digest(
+        {
+            "sourceWorkflowId": source.workflow_id,
+            "sourceRunId": source_run_id,
+            "idempotencyKey": payload.idempotency_key,
+        }
+    )
+    try:
+        record = await service.create_execution(
+            workflow_type=canonical.workflow_type.value,
+            owner_id=canonical.owner_id or user.id,
+            owner_type=canonical.owner_type.value if canonical.owner_type else "user",
+            title=payload.title
+            or (canonical.memo.get("title") if canonical.memo else None),
+            input_artifact_ref=canonical.input_ref,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=initial_params,
+            idempotency_key=create_idempotency_key,
+            repository=None,
+            integration=None,
+            _workflow_id=reserved_workflow_id,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "continuation_validation_failed",
+                "message": str(exc),
+            },
+        ) from exc
+
+    await repository.finalize(
+        reservation.record,
+        destination_run_id=str(getattr(record, "run_id", "") or "").strip() or None,
+    )
+    # Link the materialized evidence attachments to the destination workflow now
+    # that it exists, so the agent's prepared-input authorization gate (which
+    # requires an ``input.attachment`` link matching the running workflow id)
+    # accepts them (#3641 §6).
+    if source_attachments:
+        await _attach_input_attachment_artifacts_to_execution(
+            session=session,
+            record=record,
+            attachment_refs=source_attachments,
+        )
+    await _persist_original_workflow_input_snapshot_from_parameters(
+        session=session,
+        record=record,
+        user=user,
+        parameters=dict(initial_params),
+        source_kind="linked_continuation",
+        source_workflow_id=source.workflow_id,
+        source_run_id=source_run_id,
+        input_artifact_ref=canonical.input_ref,
+    )
+    await session.commit()
+
+    return ContinueInNewWorkflowResponse(
+        sourceWorkflowId=source.workflow_id,
+        sourceRunId=source_run_id,
+        destinationWorkflowId=record.workflow_id,
+        relationshipType=RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+        created=True,
+        pinnedSourceRefs=pinned,
+    )
+
+
+class LinkedContinuationSummaryModel(BaseModel):
+    """One durable linked-continuation relationship for source/target display."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    relationship_type: str = Field(alias="relationshipType")
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    destination_run_id: str | None = Field(None, alias="destinationRunId")
+    status: str | None = None
+    title: str | None = None
+    created_by: str | None = Field(None, alias="createdBy")
+    bounded_purpose: str | None = Field(None, alias="boundedPurpose")
+    created_at: datetime | None = Field(None, alias="createdAt")
+
+
+class LinkedContinuationLinksResponseModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    direction: Literal["inbound", "outbound"]
+    items: list[LinkedContinuationSummaryModel] = Field(default_factory=list)
+
+
+@router.get(
+    "/{workflow_id}/continuations",
+    response_model=LinkedContinuationLinksResponseModel,
+)
+async def list_execution_continuations(
+    workflow_id: str,
+    direction: str = Query("outbound"),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> LinkedContinuationLinksResponseModel:
+    """List durable linked-continuation relationships for a Workflow (#3641 §6).
+
+    ``outbound`` lists the linked continuations created *from* this Workflow (the
+    source-side view); ``inbound`` names the source this Workflow was continued
+    *from* (the continuation-side view). Both directions keep the original and
+    new terminal outcomes distinct and only surface relationships whose two
+    executions remain visible to the caller.
+    """
+
+    if direction not in {"inbound", "outbound"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_continuation_direction",
+                "message": "direction must be 'inbound' or 'outbound'.",
+            },
+        )
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    repository = SqlLinkedContinuationRepository(session)
+
+    async def _visible_status(candidate_workflow_id: str) -> str | None:
+        try:
+            execution = await _get_owned_execution(
+                service=service, workflow_id=candidate_workflow_id, user=user
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                return None
+            raise
+        return str(getattr(execution, "status", "") or "") or None
+
+    items: list[LinkedContinuationSummaryModel] = []
+    if direction == "outbound":
+        for record in await repository.list_for_source(workflow_id):
+            destination_id = str(record.destination_workflow_id or "").strip()
+            if not destination_id:
+                continue
+            destination_status = await _visible_status(destination_id)
+            if destination_status is None:
+                continue
+            items.append(
+                LinkedContinuationSummaryModel(
+                    relationshipType=record.relationship_type,
+                    sourceWorkflowId=record.source_workflow_id,
+                    sourceRunId=record.source_run_id,
+                    destinationWorkflowId=destination_id,
+                    destinationRunId=record.destination_run_id,
+                    status=destination_status,
+                    createdBy=record.created_by,
+                    boundedPurpose=record.bounded_purpose,
+                    createdAt=record.created_at,
+                )
+            )
+    else:
+        record = await repository.get_for_destination(workflow_id)
+        if record is not None:
+            source_status = await _visible_status(record.source_workflow_id)
+            if source_status is not None:
+                items.append(
+                    LinkedContinuationSummaryModel(
+                        relationshipType=record.relationship_type,
+                        sourceWorkflowId=record.source_workflow_id,
+                        sourceRunId=record.source_run_id,
+                        destinationWorkflowId=str(record.destination_workflow_id or ""),
+                        destinationRunId=record.destination_run_id,
+                        status=source_status,
+                        createdBy=record.created_by,
+                        boundedPurpose=record.bounded_purpose,
+                        createdAt=record.created_at,
+                    )
+                )
+
+    return LinkedContinuationLinksResponseModel(direction=direction, items=items)
 
 
 class ContinueRemediationBudgetProposal(BaseModel):

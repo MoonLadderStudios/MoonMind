@@ -2534,6 +2534,14 @@ class DockerCodexManagedSessionController:
                 secret=str(settings.security.JWT_SECRET_KEY or ""),
                 owner=owner,
                 agent_run_id=request.agent_run_id,
+                workflow_id=str(
+                    session_environment.get("MOONMIND_TASK_WORKFLOW_ID")
+                    or request.agent_run_id
+                ),
+                step_id=(
+                    str(session_environment.get("MOONMIND_STEP_ID") or "").strip()
+                    or None
+                ),
                 session_id=request.session_id,
                 runtime_id=runtime_id,
                 lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
