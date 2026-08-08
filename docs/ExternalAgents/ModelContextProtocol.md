@@ -7,7 +7,7 @@ MoonMind exposes one canonical Model Context Protocol transport at `/mcp`, plus 
 | Surface | Method and path | Purpose |
 | --- | --- | --- |
 | MCP Streamable HTTP | `POST /mcp` | JSON-RPC 2.0 endpoint for `initialize`, `ping`, `tools/list`, and `tools/call`. |
-| MCP server stream probe | `GET /mcp` | Returns `405 Method Not Allowed`; MoonMind does not emit server-initiated SSE messages. |
+| MCP server stream probe | `GET /mcp` | Requires `Accept: text/event-stream`; returns `405 Method Not Allowed` when present or `406 Not Acceptable` when absent. MoonMind does not emit server-initiated SSE messages. |
 | Resource discovery | `GET /mcp/resources` | Lists MCP-facing resources. |
 | Tool discovery helper | `GET /mcp/tools` | Lists tool names, descriptions, and JSON Schemas. |
 | Tool invocation helper | `POST /mcp/tools/call` | Invokes one immediate-call tool with a JSON `arguments` object. |
