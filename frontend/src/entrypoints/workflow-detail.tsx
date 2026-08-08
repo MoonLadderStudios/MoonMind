@@ -65,6 +65,7 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
   DEFAULT_REMEDIATION_ACTION_POLICY,
@@ -9696,6 +9697,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   Session transcript, live runtime events, and eligible operator controls for this workflow.
                 </p>
               </div>
+              <WorkflowChatNative
+                apiBase={payload.apiBase}
+                workflowId={execution.workflowId || execution.taskId || ''}
+                active={chatTabActive}
+              >
               {logStreamingEnabled ? (
                 resolvedAgentRunId ? (
                   <>
@@ -9745,6 +9751,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   compact
                 />
               ) : null}
+              </WorkflowChatNative>
             </section>
           ) : null}
 

@@ -64,6 +64,10 @@ from api_service.api.routers.omnigent_bridge import (
     router as omnigent_bridge_router,
     workflow_chat_router as omnigent_workflow_chat_router,
 )
+from api_service.api.routers.omnigent_native_ui import (
+    NATIVE_UI_MOUNT_PATH,
+    native_ui_router,
+)
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
@@ -594,6 +598,10 @@ app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
 app.include_router(
     omnigent_workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
 )
+# Serve the native Omnigent web app through MoonMind-scoped routes
+# (MoonLadderStudios/MoonMind#3638). The browser loads native UI assets and all
+# application traffic exclusively through this binding-scoped mount.
+app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
 app.include_router(workflow_console_router)

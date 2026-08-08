@@ -16007,6 +16007,39 @@ def test_chat_binding_unavailable_has_no_scoped_urls(monkeypatch) -> None:
     assert body["apiBase"] == ""
 
 
+def test_chat_binding_serving_disabled_falls_back(monkeypatch) -> None:
+    # With native-UI serving disabled the scoped route fails closed to a 503, so
+    # the binding projection must surface ``unavailable`` and drop ``chatUrl`` —
+    # that selects the read-only compatibility fallback in the browser instead of
+    # an iframe pointed at the router's 503 page (MoonMind#3638 requirement 7).
+    monkeypatch.setenv("OMNIGENT_NATIVE_UI_ENABLED", "false")
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=False,
+        chat_binding_id="chatb_opaque123",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "unavailable"
+    assert body["unavailableReason"] == "native_ui_serving_disabled"
+    assert body["chatUrl"] == ""
+    # The binding id itself is still returned; only the live surface is withheld.
+    assert body["chatBindingId"] == "chatb_opaque123"
+
+
 def test_chat_binding_ambiguous_returns_409(monkeypatch) -> None:
     app, _service = _chat_binding_app()
     _override_user_dependencies(app, is_superuser=True)
