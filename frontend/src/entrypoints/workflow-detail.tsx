@@ -9699,6 +9699,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 apiBase={payload.apiBase}
                 workflowId={execution.workflowId || execution.taskId || ''}
                 active={chatTabActive}
+                terminal={isTerminalExecution}
               >
                 <WorkflowChatDiagnostics
                   apiBase={payload.apiBase}

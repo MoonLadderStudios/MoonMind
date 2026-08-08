@@ -10,6 +10,7 @@ import pytest
 from moonmind.omnigent.bridge_artifacts import (
     BridgeResourceHarvester,
     LocalOmnigentArtifactGateway,
+    OmnigentArtifactError,
     OmnigentCaptureBundle,
     _associate_resource_events,
     _capture_resource_projection,
@@ -121,6 +122,37 @@ def test_required_evidence_failure_is_reflected_in_bridge_terminal_refs() -> Non
     assert refs["failureClass"] == "system_error"
     assert refs["failureCode"] == "omnigent_required_resource_evidence_missing"
     assert "evidence" in refs["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_read_bytes_roundtrips_written_artifact(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    ref = await gateway.write_bytes(
+        request=_request(),
+        name="output.bin",
+        payload=b"captured-evidence",
+        link_type="input.attachment",
+    )
+
+    assert await gateway.read_bytes(ref) == b"captured-evidence"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader", ["read_text", "read_bytes"])
+@pytest.mark.parametrize(
+    "escaping_ref",
+    [
+        "artifact://omnigent/../../etc/passwd",
+        "artifact://omnigent//etc/passwd",
+    ],
+)
+async def test_read_rejects_refs_escaping_artifact_root(
+    tmp_path, reader, escaping_ref
+) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "root")
+
+    with pytest.raises(OmnigentArtifactError, match="escapes artifact root"):
+        await getattr(gateway, reader)(escaping_ref)
 
 
 @pytest.mark.asyncio

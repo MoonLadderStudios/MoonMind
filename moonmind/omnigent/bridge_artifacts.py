@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os.path
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -205,13 +206,21 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
-            path = (self._root / relative).resolve()
-            if not path.is_relative_to(self._root):
+            # Normalize the attacker-influenced ref, then require the result to
+            # stay under the artifact root before any read (path-traversal guard).
+            base = os.path.realpath(self._root)
+            fullpath = os.path.realpath(os.path.join(base, relative))
+            if not fullpath.startswith(base):
                 raise OmnigentArtifactError(
                     f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
                 )
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
+            if fullpath != base and not fullpath.startswith(base + os.sep):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
+            if os.path.isfile(fullpath):
+                with open(fullpath, encoding="utf-8") as handle:
+                    return handle.read()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
     async def read_bytes(self, artifact_ref: str) -> bytes:
@@ -220,9 +229,21 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
-            path = (self._root / relative).resolve()
-            if path.is_relative_to(self._root) and path.is_file():
-                return path.read_bytes()
+            # Normalize the attacker-influenced ref, then require the result to
+            # stay under the artifact root before any read (path-traversal guard).
+            base = os.path.realpath(self._root)
+            fullpath = os.path.realpath(os.path.join(base, relative))
+            if not fullpath.startswith(base):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
+            if fullpath != base and not fullpath.startswith(base + os.sep):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
+            if os.path.isfile(fullpath):
+                with open(fullpath, "rb") as handle:
+                    return handle.read()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
 
