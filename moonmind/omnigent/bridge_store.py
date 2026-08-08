@@ -1615,6 +1615,31 @@ class OmnigentBridgeSessionStore:
                 return None
             return _detached(session, row)
 
+    async def get_session_by_chat_binding_id(
+        self, chat_binding_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Return one bridge session by its opaque, browser-facing ``chat_binding_id``.
+
+        MoonLadderStudios/MoonMind#3633: the dedicated ``chat_binding_id`` column
+        is the only identity the browser names on the binding-scoped facade. It is
+        distinct from the server-owned ``bridge_session_id`` (used for journal and
+        terminal lookups), so the facade resolves the durable row by this column.
+        """
+
+        key = (chat_binding_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.chat_binding_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return _detached(session, row)
+
     async def resolve_projection_session(
         self,
         *,

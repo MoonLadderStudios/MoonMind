@@ -65,7 +65,9 @@ from api_service.api.routers.agent_runs import sessions_router as session_resour
 from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
+    WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
     router as omnigent_bridge_router,
+    workflow_chat_router as omnigent_workflow_chat_router,
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
@@ -603,6 +605,9 @@ app.include_router(agent_runs_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(session_resources_router, prefix="/api")
 app.include_router(omnigent_bridge_router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+app.include_router(
+    omnigent_workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
+)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
 app.include_router(workflow_console_router)
