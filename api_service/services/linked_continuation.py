@@ -42,6 +42,27 @@ class LinkedContinuationConflict(LinkedContinuationError):
     """
 
 
+def build_create_idempotency_key(
+    *, source_workflow_id: str, source_run_id: str, client_key: str
+) -> str:
+    """Bounded, source-run-scoped create idempotency key (<=128 chars).
+
+    ``TemporalExecutionCanonicalRecord.create_idempotency_key`` is ``String(128)``
+    while the client idempotency key alone may be up to 512 chars, so a raw
+    ``continue:{workflow}:{key}`` concatenation can exceed the column and truncate
+    after the reservation has already been committed. Derive a stable digest over
+    the *same* ``(source_workflow_id, source_run_id, client_key)`` scope the
+    relationship reservation uses so the two authority boundaries stay aligned:
+    a later terminal run reusing the client key reserves a distinct destination
+    and must not dedupe to the earlier run's workflow through the create path.
+    """
+
+    digest = hashlib.sha256(
+        "\x1f".join((source_workflow_id, source_run_id, client_key)).encode("utf-8")
+    ).hexdigest()
+    return f"continue:{digest}"
+
+
 def compute_request_digest(payload: dict[str, Any]) -> str:
     """Stable digest over the pinnable, authored continuation inputs.
 
@@ -225,5 +246,6 @@ __all__ = [
     "LinkedContinuationError",
     "LinkedContinuationReservation",
     "SqlLinkedContinuationRepository",
+    "build_create_idempotency_key",
     "compute_request_digest",
 ]

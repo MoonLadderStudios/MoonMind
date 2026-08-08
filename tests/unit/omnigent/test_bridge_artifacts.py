@@ -82,6 +82,33 @@ class OversizedHarvestClient(FakeHarvestClient):
         return b"too large"
 
 
+@pytest.mark.asyncio
+async def test_gateway_read_returns_bytes_and_recorded_content_type(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    ref = await gateway.write_json(
+        request=_request(),
+        name="final.snapshot.json",
+        payload={"summary": "done"},
+        link_type="final_snapshot",
+    )
+
+    content, content_type = await gateway.read(ref)
+
+    assert json.loads(content.decode("utf-8")) == {"summary": "done"}
+    # The content type is resolved from the sibling metadata sidecar so an
+    # authorized download route serves the right media type.
+    assert content_type == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_gateway_read_rejects_unknown_ref(tmp_path) -> None:
+    from moonmind.omnigent.bridge_artifacts import OmnigentArtifactError
+
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    with pytest.raises(OmnigentArtifactError):
+        await gateway.read("artifact://omnigent/corr/missing.json")
+
+
 def test_resource_reconciliation_accepts_explicit_null_lists() -> None:
     manifest = {"workspaceDiffs": None, "changedFiles": None, "sessionFiles": None}
 

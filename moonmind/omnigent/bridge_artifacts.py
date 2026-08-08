@@ -225,6 +225,33 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 return path.read_bytes()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
+    async def read(self, artifact_ref: str) -> tuple[bytes, str | None]:
+        """Resolve a gateway ref to its bytes and recorded content type.
+
+        Symmetric with ``write_bytes``: the sibling ``*.metadata.json`` records
+        the content type, so a consumer serving the artifact (e.g. an authorized
+        download route) can set the right media type instead of guessing. The
+        content type is ``None`` when it is unknown (an in-memory readable ref or
+        a missing/unreadable metadata sidecar).
+        """
+
+        if artifact_ref in self._readable_refs:
+            return self._readable_refs[artifact_ref].encode("utf-8"), None
+        prefix = "artifact://omnigent/"
+        if artifact_ref.startswith(prefix):
+            relative = artifact_ref[len(prefix) :]
+            path = (self._root / relative).resolve()
+            if path.is_relative_to(self._root) and path.is_file():
+                content_type: str | None = None
+                metadata_path = path.with_suffix(f"{path.suffix}.metadata.json")
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    content_type = str(metadata.get("contentType") or "").strip() or None
+                except (OSError, ValueError):
+                    content_type = None
+                return path.read_bytes(), content_type
+        raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+
 
 def _safe_artifact_segment(value: object) -> str:
     text = sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip("-")

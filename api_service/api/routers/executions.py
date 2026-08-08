@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -210,11 +211,13 @@ from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    _chat_binding_logical_step_id,
 )
 from api_service.services.linked_continuation import (
     LinkedContinuationConflict,
     RELATIONSHIP_TYPE_LINKED_CONTINUATION,
     SqlLinkedContinuationRepository,
+    build_create_idempotency_key,
     compute_request_digest,
 )
 from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
@@ -5179,9 +5182,7 @@ async def _hydrate_related_run_metadata(
         return execution
     if not execution.related_runs:
         hydrated: list[ExecutionRelatedRunModel] = []
-        await _append_linked_continuations(
-            execution, hydrated, session=session, user=user
-        )
+        await _append_linked_continuations(execution, hydrated, user=user)
         if not hydrated:
             return execution
         return execution.model_copy(update={"related_runs": hydrated})
@@ -5219,7 +5220,7 @@ async def _hydrate_related_run_metadata(
                 }
             )
         )
-    await _append_linked_continuations(execution, hydrated, session=session, user=user)
+    await _append_linked_continuations(execution, hydrated, user=user)
     return execution.model_copy(update={"related_runs": hydrated})
 
 def _target_diagnostics_block(
@@ -15042,7 +15043,10 @@ async def _resolve_source_captured_evidence(
         final_snapshot_ref=named_refs.get("finalSnapshotRef"),
         capture_manifest_ref=named_refs.get("captureManifestRef"),
         summary=summary,
-        logical_step_id=None,
+        # Reuse the canonical chat-binding reader so a step-bound source pins the
+        # exact logical Step lineage (#3641 §step-lineage); hard-coding this to
+        # None dropped ``sourceLogicalStepId`` from every continuation.
+        logical_step_id=_chat_binding_logical_step_id(row),
         step_execution_id=(
             str(getattr(row, "step_execution_id", "") or "").strip() or None
         ),
@@ -15143,6 +15147,80 @@ async def get_workflow_captured_evidence(
     )
 
 
+@router.get("/{workflow_id}/captured-evidence/download")
+async def download_workflow_captured_evidence(
+    workflow_id: str,
+    ref: str = Query(..., min_length=1),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    """Serve one authorized captured-evidence artifact for a Workflow (§10, #3641).
+
+    The caller is authorized against the Workflow and ``ref`` must be one this
+    Workflow actually exposes — possession of the ref string is never
+    authorization. Gateway-backed evidence (``artifact://omnigent/...``) is
+    resolved through the Omnigent artifact gateway, because the Temporal-artifact
+    download route only serves ``TemporalArtifact`` ids and 404s on a
+    slash-bearing gateway ref; a plain MoonMind artifact ref redirects to the
+    shared artifact download contract so each store keeps one canonical
+    byte-serving path.
+    """
+
+    execution = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    run_id = str(getattr(execution, "run_id", "") or "").strip() or None
+    evidence = await _resolve_source_captured_evidence(
+        workflow_id=execution.workflow_id, run_id=run_id
+    )
+    candidate = ref.strip()
+    if candidate not in evidence.authorized_refs:
+        # Non-enumerating: an unauthorized or unknown ref is indistinguishable
+        # from a missing one, so a caller cannot probe for hidden source
+        # artifacts (§7).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "captured_evidence_not_found",
+                "message": "No such captured evidence for this workflow.",
+            },
+        )
+
+    if candidate.startswith("artifact://omnigent/"):
+        from moonmind.omnigent.bridge_artifacts import (
+            LocalOmnigentArtifactGateway,
+            OmnigentArtifactError,
+        )
+
+        try:
+            content, content_type = await LocalOmnigentArtifactGateway().read(candidate)
+        except OmnigentArtifactError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "captured_evidence_unavailable",
+                    "message": "The captured evidence could not be read.",
+                },
+            ) from exc
+        filename = candidate.rsplit("/", 1)[-1].strip() or "evidence"
+        return Response(
+            content=content,
+            media_type=content_type or "application/octet-stream",
+            headers={"content-disposition": f'attachment; filename="{filename}"'},
+        )
+
+    from urllib.parse import quote
+
+    artifact_id = (
+        candidate[len("artifact://") :]
+        if candidate.startswith("artifact://")
+        else candidate
+    )
+    return RedirectResponse(
+        url=f"/api/artifacts/{quote(artifact_id, safe='')}/download"
+    )
+
+
 class ContinueInNewWorkflowRequest(BaseModel):
     """Authored intent + selected source evidence for a linked continuation.
 
@@ -15217,6 +15295,49 @@ def _pinned_continuation_source(
     if selected_refs:
         pinned["selectedSourceArtifactRefs"] = sorted(set(selected_refs))
     return pinned
+
+
+def _continuation_attachment_ref(entry: Any) -> str | None:
+    """Best-effort ref extraction for an existing input-attachment entry."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    for key in ("artifactRef", "artifact_ref", "artifactId", "artifact_id", "ref"):
+        text = str(entry.get(key) or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _inject_continuation_evidence_attachments(
+    workflow_payload: dict[str, Any], selected_refs: list[str]
+) -> None:
+    """Carry the selected, authorized source evidence into the run context.
+
+    The pinned ``continuationSource`` metadata is display lineage only — no
+    production consumer materializes it — so the selected refs are surfaced as
+    ordinary objective ``inputAttachments``. That is the same prepared-input /
+    context boundary every other run uses, so the destination agent can actually
+    read the final snapshot, manifest, and chosen artifacts it is continuing from
+    (#3641 §evidence-context). Refs keep their ``artifact://`` scheme so gateway
+    and Temporal-store evidence both resolve through the normal artifact path.
+    """
+
+    if not selected_refs:
+        return
+    existing = workflow_payload.get("inputAttachments")
+    attachments: list[Any] = list(existing) if isinstance(existing, list) else []
+    already_carried = {
+        ref for ref in (_continuation_attachment_ref(e) for e in attachments) if ref
+    }
+    for ref in sorted(set(selected_refs)):
+        if not ref or ref in already_carried:
+            continue
+        filename = ref.rsplit("/", 1)[-1].strip() or "source-evidence"
+        attachments.append({"artifactRef": ref, "filename": filename})
+        already_carried.add(ref)
+    if attachments:
+        workflow_payload["inputAttachments"] = attachments
 
 
 @router.post(
@@ -15322,6 +15443,11 @@ async def continue_in_new_workflow(
             "selectedSourceArtifactRefs": sorted(
                 set(payload.selected_source_artifact_refs)
             ),
+            # ``boundedPurpose`` is authored request data persisted on and
+            # displayed for the relationship, so an edited purpose on a reused key
+            # must surface the idempotency conflict instead of silently keeping
+            # the first submission's purpose (#3641 §idempotency).
+            "boundedPurpose": payload.bounded_purpose,
         }
     )
 
@@ -15374,18 +15500,23 @@ async def continue_in_new_workflow(
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     if payload.initial_parameters:
         initial_params.update(payload.initial_parameters)
+    # Normalize the authored payload onto the canonical ``workflow`` key (the
+    # rerun sanitizer may carry the legacy ``task`` alias), layer the authored
+    # instructions, and materialize the selected source evidence through the
+    # ordinary input-attachment boundary.
+    workflow_payload = initial_params.get("workflow")
+    if not isinstance(workflow_payload, dict):
+        legacy_task = initial_params.get("task")
+        workflow_payload = dict(legacy_task) if isinstance(legacy_task, dict) else {}
+    else:
+        workflow_payload = dict(workflow_payload)
     if payload.instructions:
-        workflow_payload = initial_params.get("workflow")
-        if not isinstance(workflow_payload, dict):
-            workflow_payload = initial_params.get("task")
-        if isinstance(workflow_payload, dict):
-            workflow_payload["instructions"] = payload.instructions
-            initial_params["workflow"] = workflow_payload
-            initial_params.pop("task", None)
-        else:
-            initial_params.setdefault("workflow", {})["instructions"] = (
-                payload.instructions
-            )
+        workflow_payload["instructions"] = payload.instructions
+    _inject_continuation_evidence_attachments(
+        workflow_payload, payload.selected_source_artifact_refs
+    )
+    initial_params["workflow"] = workflow_payload
+    initial_params.pop("task", None)
     initial_params["continuationSource"] = pinned
 
     reserved_workflow_id = reservation.destination_workflow_id
@@ -15397,11 +15528,19 @@ async def continue_in_new_workflow(
             title=payload.title
             or (canonical.memo.get("title") if canonical.memo else None),
             input_artifact_ref=canonical.input_ref,
-            plan_artifact_ref=canonical.plan_ref,
+            # Omit the source plan: passing it makes ``_run_planning_stage`` return
+            # the source plan verbatim, so the authored ``instructions`` /
+            # plan-affecting ``initialParameters`` would never be compiled and the
+            # continuation would replay the source's old nodes (#3641 §plan).
+            plan_artifact_ref=None,
             manifest_artifact_ref=canonical.manifest_ref,
             failure_policy=None,
             initial_parameters=initial_params,
-            idempotency_key=f"continue:{source.workflow_id}:{payload.idempotency_key}",
+            idempotency_key=build_create_idempotency_key(
+                source_workflow_id=source.workflow_id,
+                source_run_id=source_run_id,
+                client_key=payload.idempotency_key,
+            ),
             repository=None,
             integration=None,
             _workflow_id=reserved_workflow_id,
