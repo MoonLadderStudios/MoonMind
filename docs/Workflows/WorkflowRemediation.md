@@ -1403,7 +1403,9 @@ The canonical approval owner is the `approval_state` lifecycle persisted on the
 `execution_remediation_links` record. Authority evaluation creates it once for
 the exact action request digest and stores only redacted parameters plus their
 digest. It records the remediation and target run identities, expected target
-state, security profile, approval class, reviewer rule, actors, timestamps, and
+state, checkpoint/Step Execution, bridge/session/host/lease identities,
+credential generation, immutable policy and security-profile authority,
+approval class, reviewer rule, actors, timestamps, and
 one of `pending`, `approved`, `denied`, `expired`, `stale`, or `consumed`.
 Retries with the same request digest reuse the record; a different request under
 the same approval identity fails closed.
@@ -1411,8 +1413,9 @@ the same approval identity fails closed.
 An `approvalRef` is an opaque lookup key, never evidence by itself. Immediately
 before adapter dispatch MoonMind resolves it from this record, checks decision,
 expiry, single-use state, action identity, and current target authority, and
-marks mismatches stale. A successful dispatch consumes the approval and links
-the action-request artifact to the decision. Requesters cannot decide their own
+marks mismatches stale with a bounded reason code. A successful dispatch consumes
+the approval and links the decision bidirectionally with the action request,
+result, audit, verification, and target-annotation artifacts. Requesters cannot decide their own
 request, and the `high_risk_reviewer` rule requires a privileged reviewer.
 - show the proposed action,
 - show preconditions,

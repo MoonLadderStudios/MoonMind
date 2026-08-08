@@ -549,6 +549,27 @@ class RemediationApprovalStateModel(BaseModel):
     expiresAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
     rationale: str | None = Field(default=None, exclude_if=lambda value: value is None)
     status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    decidedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedByActionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    expectedTargetState: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    checkpointRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    stepExecutionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    bridgeSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    omnigentSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostLeaseRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    providerProfileLeaseRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    credentialGeneration: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policySnapshotRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    securityProfileRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    artifactRefs: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None

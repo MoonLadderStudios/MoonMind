@@ -1031,6 +1031,16 @@ const RemediationApprovalStateSchema = z
     decisionAt: z.string().nullable().optional(),
     canDecide: z.boolean().default(false),
     auditRef: z.string().nullable().optional(),
+    approvalRef: z.string().nullable().optional(),
+    requestingActor: z.string().nullable().optional(),
+    requestedAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    decidedAt: z.string().nullable().optional(),
+    consumedAt: z.string().nullable().optional(),
+    expectedTargetState: z.string().nullable().optional(),
+    checkpointRef: z.string().nullable().optional(),
+    policyRef: z.string().nullable().optional(),
+    artifactRefs: z.record(z.string(), z.string()).nullable().optional(),
   })
   .passthrough();
 
@@ -7766,7 +7776,8 @@ function RemediationApprovalSummary({
   approval: z.infer<typeof RemediationApprovalStateSchema>;
 }) {
   const hasDetails = Boolean(
-    approval.actionKind ||
+    approval.requestId ||
+      approval.actionKind ||
       approval.riskTier ||
       approval.preconditions ||
       approval.blastRadius ||
@@ -7783,9 +7794,18 @@ function RemediationApprovalSummary({
         <Card label="Risk">{approval.riskTier || '—'}</Card>
         <Card label="Decision">{approval.decision || 'not_required'}</Card>
         <Card label="Audit">{approval.auditRef || '—'}</Card>
+        <Card label="Requester">{approval.requestingActor || '—'}</Card>
+        <Card label="Requested">{approval.requestedAt ? formatWhen(approval.requestedAt) : '—'}</Card>
+        <Card label="Expires">{approval.expiresAt ? formatWhen(approval.expiresAt) : '—'}</Card>
+        <Card label="Expected target state">{approval.expectedTargetState || '—'}</Card>
+        <Card label="Checkpoint"><code className="text-xs break-all">{approval.checkpointRef || '—'}</code></Card>
+        <Card label="Policy"><code className="text-xs break-all">{approval.policyRef || '—'}</code></Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
       </div>
+      {approval.artifactRefs ? (
+        <div className="small">Evidence: {Object.entries(approval.artifactRefs).map(([kind, ref]) => `${kind}: ${ref}`).join(', ')}</div>
+      ) : null}
       {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}

@@ -88,7 +88,14 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
         approval_state=None,
     )
     session = AsyncMock()
-    session.get.return_value = link
+    session.get.side_effect = lambda model, _identity: (
+        link
+        if model.__name__ == "TemporalExecutionRemediationLink"
+        else SimpleNamespace(state=SimpleNamespace(value="failed"))
+    )
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    )
     service = RemediationActionAuthorityService(session=session)
     kwargs = dict(
         remediation_workflow_id="remediation-1",
@@ -115,6 +122,8 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     assert pending.decision == "approval_required"
     assert link.approval_state["status"] == "pending"
     assert link.approval_state["requestDigest"]
+    assert link.approval_state["expectedTargetState"] == "failed"
+    assert link.approval_state["parameterDigest"]
     session.commit.assert_awaited_once()
 
     link.approval_state.update(
@@ -132,6 +141,85 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     )
     assert denied.decision == "denied"
     assert denied.reason == "approval_not_found"
+
+
+def test_issue_3620_approval_rejects_each_stale_authority_dimension() -> None:
+    link = SimpleNamespace(
+        target_run_id="run-1",
+        approval_state={
+            "approvalRef": "approval://remediation/1",
+            "status": "approved",
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "actionKind": "host.restart",
+            "requestDigest": "request-digest",
+            "parameterDigest": "parameter-digest",
+            "targetRunId": "run-1",
+            "expectedTargetState": "failed",
+            "checkpointRef": "artifact://checkpoint-1",
+            "stepExecutionId": "step-1",
+            "bridgeSessionId": "bridge-1",
+            "omnigentSessionId": "session-1",
+            "hostRef": "host-1",
+            "hostLeaseRef": "lease-1",
+            "providerProfileLeaseRef": "slot-1",
+            "credentialGeneration": 4,
+            "policyRef": "policy-1@7",
+            "policyDigest": "sha256:policy",
+            "policySnapshotRef": "omnigent-policy:sha256:snapshot",
+            "securityProfileRef": "security-1",
+        },
+    )
+    current = {
+        "targetState": "failed",
+        "checkpointRef": "artifact://checkpoint-1",
+        "stepExecutionId": "step-1",
+        "bridgeSessionId": "bridge-1",
+        "omnigentSessionId": "session-1",
+        "hostRef": "host-1",
+        "hostLeaseRef": "lease-1",
+        "providerProfileLeaseRef": "slot-1",
+        "credentialGeneration": 4,
+        "policyRef": "policy-1@7",
+        "policyDigest": "sha256:policy",
+        "policySnapshotRef": "omnigent-policy:sha256:snapshot",
+        "securityProfileRef": "security-1",
+    }
+
+    validate = RemediationActionAuthorityService._validate_persisted_approval
+    common = dict(
+        link=link,
+        approval_ref="approval://remediation/1",
+        action_kind="host.restart",
+        request_shape_hash="request-digest",
+        parameter_digest="parameter-digest",
+    )
+    assert validate(**common, current_authority=current) is None
+    expected = {
+        "targetState": "approval_stale_target_state",
+        "checkpointRef": "approval_stale_checkpoint",
+        "stepExecutionId": "approval_stale_checkpoint",
+        "bridgeSessionId": "approval_stale_bridge_session",
+        "omnigentSessionId": "approval_stale_session",
+        "hostRef": "approval_stale_host",
+        "hostLeaseRef": "approval_stale_host_lease",
+        "providerProfileLeaseRef": "approval_stale_provider_profile_lease",
+        "credentialGeneration": "approval_stale_credential_generation",
+        "policyRef": "approval_stale_policy",
+        "policyDigest": "approval_stale_policy",
+        "policySnapshotRef": "approval_stale_policy",
+        "securityProfileRef": "approval_stale_security_profile",
+    }
+    for field, reason in expected.items():
+        stale = {**current, field: "changed"}
+        assert validate(**common, current_authority=stale) == reason
+
+    assert (
+        validate(
+            **{**common, "parameter_digest": "changed"},
+            current_authority=current,
+        )
+        == "approval_parameter_mismatch"
+    )
 
 
 def _policy_snapshot(decision: str) -> dict:

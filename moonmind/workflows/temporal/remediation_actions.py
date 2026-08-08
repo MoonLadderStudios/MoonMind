@@ -813,6 +813,9 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 action_kind=normalized_action,
                 request_shape_hash=request_shape_hash,
+                parameter_digest=remediation_parameter_digest(
+                    _redact_payload(parameters or {})
+                ),
             )
             if approval_error is not None:
                 result = self._linked_result(
@@ -844,13 +847,39 @@ class RemediationActionAuthorityService:
                 raise ValueError("approval_idempotency_conflict")
             return
         safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
+        )
+        target_state = _enum_value(getattr(target, "state", None))
+        bridge = (
+            await self._session.execute(
+                select(db_models.OmnigentBridgeSession)
+                .where(
+                    db_models.OmnigentBridgeSession.moonmind_workflow_id
+                    == link.target_workflow_id,
+                    db_models.OmnigentBridgeSession.moonmind_run_id
+                    == link.target_run_id,
+                )
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        launch = (
+            bridge.effective_launch_snapshot_json
+            if bridge is not None
+            and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            else {}
+        )
+        policy = launch.get("policyAuthority")
+        policy_authority = policy if isinstance(policy, Mapping) else {}
+        parameter_digest = remediation_parameter_digest(
+            safe_parameters if isinstance(safe_parameters, Mapping) else {}
+        )
         link.approval_state = {
             "requestId": request_id,
             "approvalRef": f"approval://remediation/{request_id}",
             "requestDigest": request_shape_hash,
-            "parameterDigest": _authority_request_shape_hash(
-                action_kind=result.action_kind or "", parameters=parameters, dry_run=False
-            ),
+            "parameterDigest": parameter_digest,
             "remediationWorkflowId": link.remediation_workflow_id,
             "remediationRunId": link.remediation_run_id,
             "targetWorkflowId": link.target_workflow_id,
@@ -858,7 +887,21 @@ class RemediationActionAuthorityService:
             "actionKind": result.action_kind,
             "riskTier": result.risk,
             "redactedParameters": safe_parameters,
-            "expectedTargetState": link.target_run_id,
+            "expectedTargetState": target_state,
+            "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
+            "stepExecutionId": (
+                getattr(bridge, "step_execution_id", None)
+                or _authority_parameter(parameters, "stepExecutionId")
+            ),
+            "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
+            "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
+            "hostRef": getattr(bridge, "omnigent_host_id", None),
+            "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
+            "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
+            "credentialGeneration": getattr(bridge, "credential_generation", None),
+            "policyRef": policy_authority.get("policyRef"),
+            "policyDigest": policy_authority.get("policyDigest"),
+            "policySnapshotRef": policy_authority.get("snapshotRef"),
             "securityProfileRef": getattr(security_profile, "profile_ref", None),
             "approvalClass": "high_risk" if result.risk == "high" else "operator",
             "reviewerRule": "high_risk_reviewer" if result.risk == "high" else "operator",
@@ -872,7 +915,9 @@ class RemediationActionAuthorityService:
 
     @staticmethod
     def _validate_persisted_approval(*, link: Any, approval_ref: str,
-        action_kind: str, request_shape_hash: str) -> str | None:
+        action_kind: str, request_shape_hash: str,
+        parameter_digest: str | None = None,
+        current_authority: Mapping[str, Any] | None = None) -> str | None:
         raw_state = getattr(link, "approval_state", None)
         state = raw_state if isinstance(raw_state, Mapping) else None
         if state is None or state.get("approvalRef") != approval_ref:
@@ -885,10 +930,49 @@ class RemediationActionAuthorityService:
                 return "approval_expired"
         except (KeyError, TypeError, ValueError):
             return "approval_expiration_invalid"
-        if state.get("actionKind") != action_kind or state.get("requestDigest") != request_shape_hash:
+        if (
+            state.get("actionKind") != action_kind
+            or state.get("requestDigest") != request_shape_hash
+        ):
             return "approval_action_mismatch"
-        if state.get("targetRunId") != link.target_run_id or state.get("expectedTargetState") != link.target_run_id:
+        if (
+            parameter_digest is not None
+            and state.get("parameterDigest") != parameter_digest
+        ):
+            return "approval_parameter_mismatch"
+        if state.get("targetRunId") != link.target_run_id:
             return "approval_stale_target_state"
+        if current_authority is not None:
+            checks = (
+                ("expectedTargetState", "targetState", "approval_stale_target_state"),
+                ("checkpointRef", "checkpointRef", "approval_stale_checkpoint"),
+                ("stepExecutionId", "stepExecutionId", "approval_stale_checkpoint"),
+                ("bridgeSessionId", "bridgeSessionId", "approval_stale_bridge_session"),
+                ("omnigentSessionId", "omnigentSessionId", "approval_stale_session"),
+                ("hostRef", "hostRef", "approval_stale_host"),
+                ("hostLeaseRef", "hostLeaseRef", "approval_stale_host_lease"),
+                (
+                    "providerProfileLeaseRef",
+                    "providerProfileLeaseRef",
+                    "approval_stale_provider_profile_lease",
+                ),
+                (
+                    "credentialGeneration",
+                    "credentialGeneration",
+                    "approval_stale_credential_generation",
+                ),
+                ("policyRef", "policyRef", "approval_stale_policy"),
+                ("policyDigest", "policyDigest", "approval_stale_policy"),
+                ("policySnapshotRef", "policySnapshotRef", "approval_stale_policy"),
+                (
+                    "securityProfileRef",
+                    "securityProfileRef",
+                    "approval_stale_security_profile",
+                ),
+            )
+            for stored_key, current_key, reason in checks:
+                if state.get(stored_key) != current_authority.get(current_key):
+                    return reason
         return None
 
     def _evaluate_with_link(
@@ -2133,6 +2217,11 @@ def _string_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
 
+
+def _enum_value(value: Any) -> str | None:
+    raw = getattr(value, "value", value)
+    return _string_or_none(raw)
+
 def _int_or_zero(value: Any) -> int:
     try:
         return int(value)
@@ -2272,6 +2361,19 @@ def _authority_request_shape_hash(
     }
     encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def remediation_parameter_digest(parameters: Mapping[str, Any] | None) -> str:
+    encoded = json.dumps(
+        parameters or {}, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _authority_parameter(
+    parameters: Mapping[str, Any] | None, key: str
+) -> Any | None:
+    return parameters.get(key) if isinstance(parameters, Mapping) else None
 
 def _action_parameter_error(
     *,
