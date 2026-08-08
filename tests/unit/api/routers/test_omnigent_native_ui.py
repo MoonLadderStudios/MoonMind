@@ -19,7 +19,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import api_service.api.routers.omnigent_native_ui as native_ui_mod
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_execution_service,
@@ -368,7 +367,9 @@ def test_relative_redirect_traversal_kept_in_scope_via_router() -> None:
 async def test_fetch_aborts_when_asset_exceeds_limit(monkeypatch) -> None:
     # The limit is enforced while streaming, so a large/compressed upstream
     # response cannot buffer unbounded bytes into API-service memory.
-    monkeypatch.setattr(native_ui_mod, "_NATIVE_UI_MAX_ASSET_BYTES", 8)
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_native_ui._NATIVE_UI_MAX_ASSET_BYTES", 8
+    )
 
     def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
