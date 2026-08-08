@@ -26,21 +26,29 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
-    RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
+    RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
-    RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
+    RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+    RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
+    RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
+    RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
+    RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH,
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
+    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
+    RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH,
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
@@ -3559,6 +3567,31 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
         )
         self.assertEqual(parameters["assessment_artifact_path"], "existing.json")
 
+    def test_propagates_issue_brief_path_for_durable_handoff(self) -> None:
+        wf = MoonMindRunWorkflow()
+        parameters: dict[str, Any] = {}
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+            ),
+        ):
+            wf._ensure_assessment_parameters(
+                parameters=parameters,
+                node_inputs={
+                    "assessment_artifact_path": "artifacts/assessment.json",
+                    "brief_artifact_path": "artifacts/brief.json",
+                },
+            )
+
+        self.assertEqual(
+            parameters,
+            {
+                "assessment_artifact_path": "artifacts/assessment.json",
+                "brief_artifact_path": "artifacts/brief.json",
+            },
+        )
+
     def test_preserves_assessment_ref_across_intervening_outputs(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._record_assessment_context(
@@ -3573,3 +3606,579 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
         self.assertEqual(merged["assessmentArtifactRef"], "art_assessment_1")
         self.assertEqual(merged["assessmentVerdict"], "FULLY_IMPLEMENTED")
         self.assertEqual(merged["summary"], "classification done")
+
+    def test_assessment_context_binds_assessed_workspace_identity(self) -> None:
+        wf = MoonMindRunWorkflow()
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="workflow-1",
+            idempotencyKey="assessment-1",
+            workspaceSpec={
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+            },
+        )
+
+        wf._record_assessment_context(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+            },
+            request=request,
+        )
+
+        self.assertEqual(
+            wf._assessment_context["assessedRepository"],
+            "MoonLadderStudios/MoonMind",
+        )
+        self.assertEqual(wf._assessment_context["assessedBranch"], "main")
+
+    def test_assessment_context_is_included_for_agent_handoff(self) -> None:
+        context = MoonMindRunWorkflow._trusted_previous_outputs_context(
+            {
+                "trustedSource": "moonmind.github.get_issue",
+                "issueRef": "MoonLadderStudios/MoonMind#3620",
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            },
+            include_assessment=True,
+        )
+
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertEqual(context["assessmentArtifactRef"], "art_assessment_1")
+        self.assertEqual(context["assessmentVerdict"], "PARTIALLY_IMPLEMENTED")
+
+    def test_external_agent_receives_assessment_as_durable_attachment(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._record_assessment_context(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            }
+        )
+
+        refs = wf._append_durable_handoff_attachment_refs(
+            ["artifact://prepared_input"],
+            agent_kind="external",
+        )
+
+        self.assertEqual(
+            refs,
+            ["artifact://prepared_input", "artifact://art_assessment_1"],
+        )
+
+    def test_external_agent_ignores_absent_optional_handoff_refs(self) -> None:
+        wf = MoonMindRunWorkflow()
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+            ),
+        ):
+            refs = wf._append_durable_handoff_attachment_refs(
+                ["artifact://prepared_input"],
+                agent_kind="external",
+            )
+
+        self.assertEqual(refs, ["artifact://prepared_input"])
+
+    def test_managed_agent_does_not_receive_external_attachment(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._record_assessment_context(
+            {"assessmentArtifactRef": "art_assessment_1"}
+        )
+
+        refs = wf._append_durable_handoff_attachment_refs(
+            [], agent_kind="managed"
+        )
+
+        self.assertEqual(refs, [])
+
+    def test_external_request_carries_assessment_context_and_attachment(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._record_assessment_context(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:assessment-handoff",
+            run_id="run-assessment-handoff",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "instructions": "Implement the remaining issue gaps.",
+                    "previousOutputs": {
+                        "trustedSource": "moonmind.github.get_issue",
+                        "issueRef": "MoonLadderStudios/MoonMind#3620",
+                        "assessmentArtifactRef": "art_assessment_1",
+                        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+                    },
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertIn("artifact://art_assessment_1", request.input_refs)
+        self.assertIn("PARTIALLY_IMPLEMENTED", request.instruction_ref or "")
+        self.assertIn(".moonmind/attachments/", request.instruction_ref or "")
+
+    def test_external_request_carries_issue_brief_attachment(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "briefArtifactRef": "art_brief_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:issue-brief-handoff",
+            run_id="run-issue-brief-handoff",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: patch_id
+                in {
+                    RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
+                    RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
+                },
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "instructions": "Verify the implementation.",
+                    "previousOutputs": {
+                        "trustedSource": "moonmind.github.get_issue",
+                        "assessmentArtifactRef": "art_assessment_1",
+                        "briefArtifactRef": "art_brief_1",
+                    },
+                },
+                node_id="verify",
+                tool_name="omnigent",
+            )
+
+        self.assertIn("artifact://art_assessment_1", request.input_refs)
+        self.assertIn("artifact://art_brief_1", request.input_refs)
+        self.assertIn("issue-brief JSON", request.instruction_ref or "")
+
+    def test_external_request_carries_controlling_verifier_attachment(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "briefArtifactRef": "art_brief_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            }
+        )
+        wf._publish_context["moonSpecGate"] = {
+            "verdict": "FULLY_IMPLEMENTED",
+            "recommendedNextAction": "advance",
+            "gateResultRef": "art_verify_1",
+        }
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:verify-handoff",
+            run_id="run-verify-handoff",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: patch_id
+                in {
+                    RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
+                    RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
+                    RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
+                    RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH,
+                },
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "instructions": "Create the verified pull request.",
+                    "previousOutputs": {
+                        "trustedSource": "moonmind.github.get_issue",
+                        "assessmentArtifactRef": "art_assessment_1",
+                        "briefArtifactRef": "art_brief_1",
+                        "moonSpecVerify": {
+                            "verdict": "FULLY_IMPLEMENTED",
+                            "recommendedNextAction": "advance",
+                            "gateResultRef": "art_verify_1",
+                        },
+                        "moonSpecVerifyArtifactRef": "art_verify_1",
+                    },
+                },
+                node_id="pull-request",
+                tool_name="omnigent",
+            )
+
+        self.assertIn("artifact://art_verify_1", request.input_refs)
+        self.assertIn("moonSpecVerifyArtifactRef", request.instruction_ref or "")
+        self.assertIn("FULLY_IMPLEMENTED", request.instruction_ref or "")
+
+    def test_trusted_full_assessment_authorizes_verified_no_commit_result(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessedRepository": "MoonLadderStudios/MoonMind",
+                "assessedBranch": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:trusted-no-commit",
+            run_id="run-trusted-no-commit",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id
+                    in {
+                        RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH,
+                        RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+                    }
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                    # Authored inputs cannot replace this reserved policy.
+                    "repositoryOutcomePolicy": {
+                        "allowNoCommit": False,
+                        "authority": "user",
+                    },
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(
+            request.parameters["repositoryOutcomePolicy"],
+            {
+                "schemaVersion": "repository-outcome-policy/v2",
+                "allowNoCommit": True,
+                "authority": "trusted_assessment",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessedRepository": "MoonLadderStudios/MoonMind",
+                "assessedBranch": "main",
+            },
+        )
+
+    def test_assessment_for_another_repository_does_not_authorize_no_commit(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessedRepository": "another/repository",
+                "assessedBranch": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:repository-bound-assessment",
+            run_id="run-repository-bound-assessment",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertNotIn("repositoryOutcomePolicy", request.parameters)
+
+    def test_replay_preserves_pre_binding_no_commit_request_shape(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:replay-no-commit-v1",
+            run_id="run-replay-no-commit-v1",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(
+            request.parameters["repositoryOutcomePolicy"],
+            {
+                "schemaVersion": "repository-outcome-policy/v1",
+                "allowNoCommit": True,
+                "authority": "trusted_assessment",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_assessment_1",
+            },
+        )
+
+    def test_partial_assessment_does_not_authorize_no_commit_result(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:untrusted-no-commit",
+            run_id="run-untrusted-no-commit",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertNotIn("repositoryOutcomePolicy", request.parameters)
+
+    def test_downstream_request_uses_verified_published_branch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._publish_context.update(
+            {
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-2602f4e9",
+                "headSha": "2b3b49127a73785807b32ea7f2cc4deee376fdc0",
+                "baseRef": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:published-branch-handoff",
+            run_id="run-published-branch-handoff",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_PUBLISHED_BRANCH_HANDOFF_PATCH
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "repositoryTarget": {
+                        "provider": "git",
+                        "repository": {"name": "MoonLadderStudios/MoonMind"},
+                        "branch": {"name": "main"},
+                        "connectionRef": "repository-connection:git-default",
+                    },
+                    "startingBranch": "main",
+                    "targetBranch": "generated-plan-branch",
+                },
+                node_id="verify",
+                tool_name="omnigent",
+            )
+
+        assert request.workspace_spec is not None
+        self.assertEqual(
+            request.workspace_spec["startingBranch"],
+            "moonmind-job-2602f4e9",
+        )
+        self.assertEqual(
+            request.workspace_spec["targetBranch"],
+            "moonmind-job-2602f4e9",
+        )
+        self.assertEqual(
+            request.workspace_spec["repositoryTarget"]["revision"]["commitSha"],
+            "2b3b49127a73785807b32ea7f2cc4deee376fdc0",
+        )
+
+    def test_remediation_request_writes_to_verified_published_branch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._publish_context.update(
+            {
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-2602f4e9",
+                "headSha": "2b3b49127a73785807b32ea7f2cc4deee376fdc0",
+                "baseRef": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:published-branch-remediation",
+            run_id="run-published-branch-remediation",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_PUBLISHED_BRANCH_HANDOFF_PATCH
+                ),
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "repositoryOperation": "write",
+                    "startingBranch": "main",
+                    "targetBranch": "generated-plan-branch",
+                },
+                node_id="remediate",
+                tool_name="omnigent",
+            )
+
+        assert request.workspace_spec is not None
+        self.assertEqual(request.workspace_spec["startingBranch"], "main")
+        self.assertEqual(
+            request.workspace_spec["targetBranch"],
+            "moonmind-job-2602f4e9",
+        )
+        self.assertEqual(request.parameters["repositoryOperation"], "write")
+
+    def test_pushed_result_records_downstream_branch_authority(self) -> None:
+        wf = MoonMindRunWorkflow()
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id
+                in {
+                    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+                    RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
+                }
+            ),
+        ):
+            wf._record_execution_context(
+                node_id="implement",
+                execution_result={
+                    "outputs": {
+                        "push_status": "pushed",
+                        "push_branch": "moonmind-job-2602f4e9",
+                        "baseBranch": "main",
+                        "push_head_sha": (
+                            "2b3b49127a73785807b32ea7f2cc4deee376fdc0"
+                        ),
+                    }
+                },
+            )
+
+        self.assertEqual(wf._publish_context["pushStatus"], "pushed")
+        self.assertEqual(
+            wf._publish_context["branch"],
+            "moonmind-job-2602f4e9",
+        )
+        self.assertEqual(
+            wf._publish_context["headSha"],
+            "2b3b49127a73785807b32ea7f2cc4deee376fdc0",
+        )
+        self.assertEqual(wf._publish_context["baseRef"], "main")

@@ -8,12 +8,12 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from moonmind.schemas.container_job_models import OwnerIdentity
 
 _AUDIENCE = "moonmind-container-jobs"
-_VERSION = 1
+_VERSION = 2
 
 
 class ContainerJobCapabilityError(ValueError):
@@ -26,8 +26,14 @@ class ContainerJobSessionCapability:
 
     owner: OwnerIdentity
     agent_run_id: str
+    workflow_id: str
+    step_id: str | None
     session_id: str
     runtime_id: str
+    source_kind: Literal["managed_session", "omnigent"]
+    workspace_kind: Literal["managed_runtime", "sandbox"]
+    workspace_id: str
+    workspace_relative_path: str
     expires_at: int
 
 
@@ -57,8 +63,14 @@ def mint_container_job_session_capability(
     secret: str,
     owner: OwnerIdentity,
     agent_run_id: str,
+    workflow_id: str,
     session_id: str,
     runtime_id: str,
+    step_id: str | None = None,
+    source_kind: Literal["managed_session", "omnigent"] = "managed_session",
+    workspace_kind: Literal["managed_runtime", "sandbox"] = "managed_runtime",
+    workspace_id: str | None = None,
+    workspace_relative_path: str = "repo",
     lifetime_seconds: int,
     now: int | None = None,
 ) -> str:
@@ -69,14 +81,35 @@ def mint_container_job_session_capability(
         raise ContainerJobCapabilityError(
             "container-job capability lifetime must be positive"
         )
+    if source_kind not in {"managed_session", "omnigent"}:
+        raise ContainerJobCapabilityError(
+            "unsupported container-job capability source kind"
+        )
+    if workspace_kind not in {"managed_runtime", "sandbox"}:
+        raise ContainerJobCapabilityError(
+            "unsupported container-job capability workspace kind"
+        )
     issued_at = int(time.time() if now is None else now)
+    normalized_workspace_id = _required_text(
+        workspace_id or agent_run_id,
+        field="workspaceId",
+    )
     payload = {
         "aud": _AUDIENCE,
         "v": _VERSION,
         "owner": owner.model_dump(mode="json", by_alias=True),
         "agentRunId": _required_text(agent_run_id, field="agentRunId"),
+        "workflowId": _required_text(workflow_id, field="workflowId"),
+        "stepId": str(step_id or "").strip() or None,
         "sessionId": _required_text(session_id, field="sessionId"),
         "runtimeId": _required_text(runtime_id, field="runtimeId"),
+        "sourceKind": source_kind,
+        "workspaceKind": workspace_kind,
+        "workspaceId": normalized_workspace_id,
+        "workspaceRelativePath": _required_text(
+            workspace_relative_path,
+            field="workspaceRelativePath",
+        ),
         "iat": issued_at,
         "exp": issued_at + lifetime_seconds,
     }
@@ -127,11 +160,29 @@ def verify_container_job_session_capability(
     current_time = int(time.time() if now is None else now)
     if expires_at <= current_time:
         raise ContainerJobCapabilityError("expired container-job capability")
+    source_kind = payload.get("sourceKind")
+    workspace_kind = payload.get("workspaceKind")
+    if source_kind not in {"managed_session", "omnigent"}:
+        raise ContainerJobCapabilityError("invalid container-job capability")
+    if workspace_kind not in {"managed_runtime", "sandbox"}:
+        raise ContainerJobCapabilityError("invalid container-job capability")
     return ContainerJobSessionCapability(
         owner=owner,
         agent_run_id=_required_text(payload.get("agentRunId"), field="agentRunId"),
+        workflow_id=_required_text(payload.get("workflowId"), field="workflowId"),
+        step_id=str(payload.get("stepId") or "").strip() or None,
         session_id=_required_text(payload.get("sessionId"), field="sessionId"),
         runtime_id=_required_text(payload.get("runtimeId"), field="runtimeId"),
+        source_kind=source_kind,
+        workspace_kind=workspace_kind,
+        workspace_id=_required_text(
+            payload.get("workspaceId"),
+            field="workspaceId",
+        ),
+        workspace_relative_path=_required_text(
+            payload.get("workspaceRelativePath"),
+            field="workspaceRelativePath",
+        ),
         expires_at=expires_at,
     )
 

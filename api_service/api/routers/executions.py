@@ -8017,6 +8017,17 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 normalized_step[key] = value.strip()
         normalized_step["id"] = _task_step_id_from_payload(step_payload, index)
 
+        repository_operation = step_payload.get("repositoryOperation")
+        if repository_operation is not None:
+            if not isinstance(repository_operation, str) or (
+                normalized_repository_operation := repository_operation.strip().lower()
+            ) not in {"read", "write"}:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].repositoryOperation must be "
+                    "one of: read, write."
+                )
+            normalized_step["repositoryOperation"] = normalized_repository_operation
+
         normalized_skills = _normalize_task_skill_selectors(
             step_payload.get("skills"),
             field_name=f"payload.workflow.steps[{index}].skills",
@@ -8231,6 +8242,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "inputAttachments",
                 "input_attachments",
                 "runtime",
+                "repositoryOperation",
                 "diagnostics",
                 "skill",
                 "skills",

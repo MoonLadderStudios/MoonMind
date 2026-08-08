@@ -634,6 +634,7 @@ def _marked_turn_item_state(
     last_text_assistant_index = -1
     progress = False
     pending_call_ids: set[str] = set()
+    instrumentation_call_ids: set[str] = set()
     anonymous_pending_calls = 0
     for index, raw_item in enumerate(
         raw_items[progress_start_index:],
@@ -646,6 +647,14 @@ def _marked_turn_item_state(
         item_data = data if isinstance(data, Mapping) else {}
         if item_type == "function_call":
             progress = True
+            # Native Codex appends this evidence-only instrumentation after its
+            # final assistant text. It is not agent work and must not turn a
+            # completed response back into an active tool boundary.
+            if str(item_data.get("name") or "").strip() == "turn_diff":
+                call_id = str(item_data.get("call_id") or "").strip()
+                if call_id:
+                    instrumentation_call_ids.add(call_id)
+                continue
             last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
             if call_id:
@@ -654,8 +663,10 @@ def _marked_turn_item_state(
                 anonymous_pending_calls += 1
         elif item_type == "function_call_output":
             progress = True
-            last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
+            if call_id and call_id in instrumentation_call_ids:
+                continue
+            last_tool_index = index
             if call_id:
                 pending_call_ids.discard(call_id)
             elif anonymous_pending_calls:
@@ -672,6 +683,12 @@ def _marked_turn_item_state(
                 for block in content
             ):
                 last_text_assistant_index = index
+                # A later assistant message proves any earlier unmatched call
+                # was omitted from the bounded projection (or failed without
+                # an output item); calls that genuinely remain active are
+                # ordered after that message and are added on later iterations.
+                pending_call_ids.clear()
+                anonymous_pending_calls = 0
 
     last_item = next(
         (item for item in reversed(raw_items) if isinstance(item, Mapping)),
@@ -884,7 +901,20 @@ async def _await_marked_turn_terminal(
     quiet_signature: tuple[Any, ...] | None = None
     quiet_since: float | None = None
     while loop.time() < deadline:
+        observation_started_at = loop.time()
         snapshot = await client.get_session(session_id)
+        observation_completed_at = loop.time()
+        observation_latency_seconds = (
+            observation_completed_at - observation_started_at
+        )
+        # A session read can block behind the provider while a new tool call is
+        # being projected. Never let that unobserved interval satisfy the quiet
+        # window: the returned snapshot may describe the state at request start,
+        # before work that completed while the HTTP request was in flight.
+        observation_was_slow = observation_latency_seconds > max(
+            0.01,
+            interval_seconds * 4,
+        )
         normalized = normalize_omnigent_observation(snapshot)
         turn_state = _marked_turn_item_state(
             snapshot,
@@ -922,9 +952,9 @@ async def _await_marked_turn_terminal(
         )
         signature = turn_state["signature"]
         if stable_candidate and isinstance(signature, tuple):
-            if quiet_signature != signature:
+            if observation_was_slow or quiet_signature != signature:
                 quiet_signature = signature
-                quiet_since = loop.time()
+                quiet_since = observation_completed_at
             required_quiet_seconds = max(
                 0.0,
                 (
@@ -981,6 +1011,8 @@ async def _await_marked_turn_terminal(
                     if stable_candidate
                     else None
                 ),
+                "snapshotLatencySeconds": round(observation_latency_seconds, 3),
+                "snapshotLatencyResetQuietWindow": observation_was_slow,
             }
         )
         await asyncio.sleep(max(0.1, interval_seconds))

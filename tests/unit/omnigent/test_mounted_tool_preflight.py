@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 from pathlib import Path
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -102,19 +103,21 @@ async def test_repository_parser_rejects_embedded_github_hostname(repository: st
 
 
 @pytest.mark.asyncio
-async def test_runner_auth_failure_is_stable_bounded_and_redacted() -> None:
+async def test_runner_auth_failure_is_stable_bounded_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def host_runner(_command: str) -> tuple[int, str, str]:
         return 0, "ok", ""
 
-    call_count = 0
-
-    async def runner_runner(_command: str) -> tuple[int, str, str]:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 4:
+    async def runner_runner(command: str) -> tuple[int, str, str]:
+        if command == "gh auth status":
             return 1, "", "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456"
         return 0, "ok", ""
 
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep
+    )
     with pytest.raises(MountedToolPreflightError) as raised:
         await preflight_mounted_tools(
             required_capabilities=("gh",),
@@ -125,6 +128,52 @@ async def test_runner_auth_failure_is_stable_bounded_and_redacted() -> None:
         )
 
     assert raised.value.code == "github_auth_unavailable"
+    assert sleep.await_count == 3
     serialized = str(raised.value.evidence)
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in serialized
     assert len(serialized) < 4096
+
+
+@pytest.mark.asyncio
+async def test_remote_probe_recovers_without_replacing_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_attempts = 0
+
+    async def host_runner(command: str) -> tuple[int, str, str]:
+        nonlocal repository_attempts
+        if command.startswith("gh repo view"):
+            repository_attempts += 1
+            if repository_attempts < 3:
+                return 1, "", "temporary provider connection failure"
+        return 0, "ok", ""
+
+    async def runner_runner(_command: str) -> tuple[int, str, str]:
+        return 0, "ok", ""
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.mounted_tool_preflight.asyncio.sleep", sleep
+    )
+
+    result = await preflight_mounted_tools(
+        required_capabilities=("gh",),
+        repository="owner/repo",
+        mutation_required=False,
+        host_runner=host_runner,
+        runner_runner=runner_runner,
+    )
+
+    assert result["status"] == "ready"
+    assert repository_attempts == 3
+    assert sleep.await_args_list == [call(1.0), call(2.0)]
+    repository_evidence = [
+        item
+        for item in result["probes"]
+        if item["boundary"] == "host" and item["probe"] == "repository_access"
+    ]
+    assert [item["status"] for item in repository_evidence] == [
+        "failed",
+        "failed",
+        "ready",
+    ]

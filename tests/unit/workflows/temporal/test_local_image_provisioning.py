@@ -64,6 +64,7 @@ class _LocalBuildDaemon:
     def __init__(self, *, build_delay: float = 0.0) -> None:
         self.labels: dict[str, str] | None = None
         self.builds = 0
+        self.build_commands: list[tuple[str, ...]] = []
         self.validations = 0
         self.build_delay = build_delay
 
@@ -90,6 +91,7 @@ class _LocalBuildDaemon:
             )
         if args[0] == "build":
             self.builds += 1
+            self.build_commands.append(args)
             if self.build_delay:
                 await asyncio.sleep(self.build_delay)
             labels: dict[str, str] = {}
@@ -133,6 +135,7 @@ async def test_local_recipe_builds_once_and_reuses_matching_build_key(
     second = await backend.acquire_image(_request())
 
     assert daemon.builds == 1
+    assert "--load" in daemon.build_commands[0]
     assert daemon.validations == 2
     assert first.resolved_image_ref == IMAGE_ID
     assert first.image_observation.provision_action == "build"
