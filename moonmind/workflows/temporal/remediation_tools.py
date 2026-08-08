@@ -1002,8 +1002,14 @@ class RemediationEvidenceToolService:
                 # Non-Omnigent targets must never carry an Omnigent policy
                 # snapshot, including one a caller may have tried to smuggle in.
                 action_request.pop("policySnapshot", None)
-            if approval_binding is not None:
-                action_request["approvalBinding"] = dict(approval_binding)
+            if resolved_approval is not None:
+                # The adapter binding is derived exclusively from the approval
+                # record that was resolved above. ``approval_binding`` remains
+                # accepted at the portable tool boundary as untrusted request
+                # input, but it can never confer or alter dispatch authority.
+                action_request["approvalBinding"] = _approval_binding_from_state(
+                    resolved_approval
+                )
                 action_request["approvalRef"] = _required_string(
                     approval_ref, "approvalRef"
                 )
@@ -1595,6 +1601,20 @@ def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None
             return None
         return max(0, parsed)
     return None
+
+
+def _approval_binding_from_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Build downstream policy evidence from one trusted persisted decision."""
+
+    return {
+        "policyRef": state.get("policyRef"),
+        "policyDigest": state.get("policyDigest"),
+        "snapshotRef": state.get("policySnapshotRef"),
+        "targetExpectedState": state.get("expectedTargetState"),
+        "approvalClass": state.get("approvalClass"),
+        "reviewerRule": state.get("reviewerRule"),
+    }
+
 
 def _normalize_action_result_status(value: Any) -> str:
     status = _required_string(value, "status")

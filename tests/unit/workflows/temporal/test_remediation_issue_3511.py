@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationEvidenceToolService,
     RemediationEvidenceToolError,
     RemediationTargetHealthSnapshot,
+    _approval_binding_from_state,
 )
 
 
@@ -490,6 +491,27 @@ async def test_policy_bound_denies_omnigent_target_missing_snapshot() -> None:
     )
     assert result["status"] == "denied"
     assert result["reason"] == "omnigent_policy_snapshot_required"
+
+
+def test_issue_3620_dispatch_binding_comes_only_from_persisted_approval() -> None:
+    assert _approval_binding_from_state(
+        {
+            "policyRef": "policy-1@7",
+            "policyDigest": "sha256:policy",
+            "policySnapshotRef": "omnigent-policy:sha256:snapshot",
+            "expectedTargetState": "failed",
+            "approvalClass": "operations",
+            "reviewerRule": "workflow-owner",
+            "callerBinding": "must-not-propagate",
+        }
+    ) == {
+        "policyRef": "policy-1@7",
+        "policyDigest": "sha256:policy",
+        "snapshotRef": "omnigent-policy:sha256:snapshot",
+        "targetExpectedState": "failed",
+        "approvalClass": "operations",
+        "reviewerRule": "workflow-owner",
+    }
 
 
 async def test_control_plane_executor_dispatches_typed_adapter_with_evidence() -> None:
