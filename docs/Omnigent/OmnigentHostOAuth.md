@@ -310,7 +310,7 @@ Every declared input state materializes through the one owning-worker boundary b
 Daemon-visible translation is a deployment-selected, deterministic contract applied only at the trusted worker/runtime boundary after authorization and materialization, selected by `WORKFLOW_DOCKER_DAEMON_MODE`:
 
 - `local` (default when no daemon root is configured): the daemon shares the worker filesystem, so the worker path is already daemon-visible and returned unchanged; configuring a daemon root remap in this mode fails closed.
-- `remote`: the worker path is rebased from `WORKFLOW_WORKSPACE_ROOT` onto `WORKFLOW_WORKSPACE_DAEMON_ROOT` after a containment check; a remote selection without a configured daemon root fails closed rather than leaking a worker-only path to the daemon.
+- `remote`: the owning runtime inspects the configured `MOONMIND_AGENT_WORKSPACES_VOLUME_NAME` in the selected Docker daemon, then rebases the worker path from `WORKFLOW_WORKSPACE_ROOT` onto that volume's authoritative absolute mountpoint after a containment check. A missing volume, failed inspection, unsafe volume identity, or non-absolute mountpoint fails before host mutation. The runtime never derives this path from an assumed Docker data-root location.
 
 A denied or interrupted materialization leaves bounded, credential-free reconciliation evidence — the failed authority class, a stable reason code, retryability, whether owned partial state was created, and the reconciliation requirement. Because the durable completion marker is written only after a full materialization, a partially built workspace is rebuilt on the next retry rather than reused, and a retry can never author a second workspace or mutate another run's state.
 

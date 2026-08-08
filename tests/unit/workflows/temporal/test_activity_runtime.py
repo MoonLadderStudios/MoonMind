@@ -99,6 +99,10 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 
 
@@ -6139,6 +6143,18 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                 ),
                 encoding="utf-8",
             )
+            brief_path = workspace / "artifacts/jira-implement-brief.json"
+            brief_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "jira",
+                        "issue_ref": "MM-1139",
+                        "requirements": ["Persist approval decisions."],
+                        "constraints": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
             run_store = ManagedRunStore(tmp_path / "runs")
             run_store.save(
                 ManagedRunRecord(
@@ -6180,8 +6196,13 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                     summary="Completed.",
                     metadata={
                         "agentRunId": "assess-run-1",
+                        "parentWorkflowId": "parent-wf",
+                        "parentRunId": "parent-run",
                         "assessment_artifact_path": (
                             "artifacts/jira-implement-assessment.json"
+                        ),
+                        "brief_artifact_path": (
+                            "artifacts/jira-implement-brief.json"
                         ),
                     },
                 )
@@ -6190,6 +6211,7 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             assert isinstance(result, AgentRunResult)
             assert result.metadata["assessmentArtifactRef"].startswith("art_")
             assert result.metadata["assessmentVerdict"] == "NOT_IMPLEMENTED"
+            assert result.metadata["briefArtifactRef"].startswith("art_")
 
             # The published artifact carries the full structured verdict payload,
             # readable by ref (the bridge-compatible channel) without a shared FS.
@@ -6200,6 +6222,191 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["verdict"] == "NOT_IMPLEMENTED"
             assert persisted["issue_ref"] == "MM-1139"
+            _artifact, links, _pinned, _policy = await service.get_metadata(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            assert any(
+                link.workflow_id == "parent-wf"
+                and link.run_id == "parent-run"
+                and link.link_type == "input.assessment_handoff"
+                for link in links
+            )
+            _artifact, brief_artifact_path = await service.read_path(
+                artifact_id=result.metadata["briefArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted_brief = json.loads(
+                brief_artifact_path.read_text(encoding="utf-8")
+            )
+            assert persisted_brief["issue_ref"] == "MM-1139"
+            _artifact, brief_links, _pinned, _policy = await service.get_metadata(
+                artifact_id=result.metadata["briefArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            assert any(
+                link.workflow_id == "parent-wf"
+                and link.run_id == "parent-run"
+                and link.link_type == "input.issue_brief_handoff"
+                for link in brief_links
+            )
+
+
+async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote runtimes publish portable outputs through their sandbox locator."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace_root = tmp_path / "agent_workspaces"
+            workspace_id = "sandbox-assess-1"
+            workflow_id = "parent-wf"
+            step_execution_id = "parent-wf:run-1:step-2:execution:1"
+            workspace = (
+                workspace_root / "temporal_sandbox" / workspace_id / "repo"
+            )
+            assessment_path = (
+                workspace / "artifacts/github-issue-implement-assessment.json"
+            )
+            assessment_path.parent.mkdir(parents=True)
+            assessment_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "github",
+                        "issue_ref": "MoonLadderStudios/MoonMind#3620",
+                        "verdict": "PARTIALLY_IMPLEMENTED",
+                        "mode": "main",
+                        "summary": "remaining approval lifecycle gaps",
+                        "requirements": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            SandboxWorkspaceRecordStore(workspace_root).ensure(
+                SandboxWorkspaceRecord(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
+                    relative_path="repo",
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workspace_root=workspace_root,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:step-2",
+                    workflow_run_id="child-run-assess",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Omnigent session completed",
+                    metadata={
+                        "correlationId": workflow_id,
+                        "idempotencyKey": f"{step_execution_id}:agent_execute",
+                        "workspaceLocator": {
+                            "kind": "sandbox",
+                            "workspaceId": workspace_id,
+                            "relativePath": "repo",
+                        },
+                        "assessment_artifact_path": (
+                            "artifacts/github-issue-implement-assessment.json"
+                        ),
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            assert result.metadata["assessmentArtifactRef"].startswith("art_")
+            assert result.metadata["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
+
+
+async def test_agent_runtime_publish_artifacts_requires_declared_assessment_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful assessment cannot advance without its controlling verdict."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace = tmp_path / "workspace"
+            workspace.mkdir()
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="assess-run-missing",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=workspace.as_posix(),
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                run_store=run_store,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:assess",
+                    workflow_run_id="child-run-assess-missing",
+                ),
+            )
+
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="Declared assessment verdict artifact was not produced",
+            ):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Completed.",
+                        metadata={
+                            "agentRunId": "assess-run-missing",
+                            "assessment_artifact_path": (
+                                "artifacts/github-issue-implement-assessment.json"
+                            ),
+                        },
+                    )
+                )
 
 
 async def test_agent_runtime_publish_artifacts_skips_assessment_without_path(

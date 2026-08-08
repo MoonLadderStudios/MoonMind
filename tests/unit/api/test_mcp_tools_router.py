@@ -106,6 +106,44 @@ def _managed_container_submission(*, agent_run_id: str = "run-1") -> dict[str, A
     }
 
 
+def _omnigent_container_capability() -> str:
+    return mint_container_job_session_capability(
+        secret="test-container-capability-secret",
+        owner=OwnerIdentity(principalId="run-2", principalType="service"),
+        agent_run_id="run-2",
+        session_id="host-lease-2",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        workspace_kind="sandbox",
+        workspace_id="sandbox-2",
+        workspace_relative_path=".",
+        lifetime_seconds=300,
+    )
+
+
+def _omnigent_container_submission(*, workspace_id: str = "sandbox-2") -> dict[str, Any]:
+    return {
+        "contractVersion": "v1",
+        "idempotencyKey": "container-run:run-2:test",
+        "source": {
+            "source": "omnigent",
+            "workflowId": "workflow-2",
+            "omnigentConversationId": "host-lease-2",
+            "agentRunId": "run-2",
+        },
+        "spec": {
+            "imageSourceRef": "moonmind-python-tests",
+            "workspaceRef": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": ".",
+            },
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+    }
+
+
 async def test_scoped_container_endpoint_dispatches_as_capability_owner(
     router_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,6 +213,64 @@ async def test_scoped_container_endpoint_rejects_workspace_identity_mismatch(
     assert response.json()["detail"]["code"] == (
         "container_capability_scope_mismatch"
     )
+
+
+async def test_scoped_container_endpoint_accepts_omnigent_sandbox_authority(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _dispatch(payload: Any, owner: OwnerIdentity, session: Any) -> dict[str, Any]:
+        captured.update(payload=payload, owner=owner, session=session)
+        return {"jobId": "container-job:" + "2" * 32, "state": "queued"}
+
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_container_job_tool", _dispatch)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_omnigent_container_capability()}"},
+            json={"tool": "container.submit", "arguments": _omnigent_container_submission()},
+        )
+
+    assert response.status_code == 200
+    assert captured["owner"] == OwnerIdentity(
+        principalId="run-2", principalType="service"
+    )
+
+
+async def test_scoped_container_endpoint_rejects_other_omnigent_sandbox(
+    router_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security,
+        "JWT_SECRET_KEY",
+        "test-container-capability-secret",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=router_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {_omnigent_container_capability()}"},
+            json={
+                "tool": "container.submit",
+                "arguments": _omnigent_container_submission(workspace_id="sandbox-other"),
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "container_capability_scope_mismatch"
 
 
 async def test_list_tools_includes_enabled_jira_tools(

@@ -623,7 +623,9 @@ services:
       - MOONMIND_AGENT_RUNTIME_STORE=${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}
       - WORKFLOW_WORKSPACE_ROOT=/work/agent_jobs
       - WORKFLOW_DOCKER_DAEMON_MODE=remote
-      - WORKFLOW_WORKSPACE_DAEMON_ROOT=${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}/_data}
+      # The Omnigent runtime resolves this named volume's authoritative
+      # Mountpoint from the selected Docker daemon before creating bind mounts.
+      # Do not derive a host path from an assumed Docker data-root location.
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
@@ -1249,7 +1251,7 @@ services:
     labels:
       moonmind.egress.profile-set-digest: sha256:210bb382a9738300138bca5e4f6885c2e472c725816504040a559a22a7909e82
       moonmind.egress.enforcer: docker-internal-proxy/v1
-      moonmind.egress.config-digest: sha256:1a14f90f01f7926080e37300ef977a4347b44ad93b2a30d86951eeb76b730191
+      moonmind.egress.config-digest: sha256:742cc613eaeed6b3dfb37e5c4d167b4766a35f16cf9781cfd6fabac673d41e5d
     volumes:
       - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
     expose:
@@ -1263,7 +1265,7 @@ services:
         aliases:
           - omnigent-egress-proxy
     healthcheck:
-      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = 1a14f90f01f7926080e37300ef977a4347b44ad93b2a30d86951eeb76b730191"]
+      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = 742cc613eaeed6b3dfb37e5c4d167b4766a35f16cf9781cfd6fabac673d41e5d"]
       interval: 10s
       timeout: 5s
       retries: 3

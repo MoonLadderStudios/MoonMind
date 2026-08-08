@@ -77,6 +77,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     OmnigentHostLease,
+    RepositoryOutcomePolicy,
 )
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 from moonmind.workflows.executions.runtime_capabilities import (
@@ -137,6 +138,21 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
     if "network" in lowered or "endpoint" in lowered:
         return code, "integration_error", "repair_server_endpoint"
     return code, "integration_error", "retry_transient_upstream"
+
+
+def _trusted_no_commit_repository_policy(
+    request: AgentExecutionRequest,
+) -> RepositoryOutcomePolicy | None:
+    """Validate the exact workflow-owned authority required for no-commit success."""
+
+    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+    raw_policy = parameters.get("repositoryOutcomePolicy")
+    if not isinstance(raw_policy, Mapping):
+        return None
+    try:
+        return RepositoryOutcomePolicy.model_validate(raw_policy)
+    except (TypeError, ValueError):
+        return None
 
 
 def _prepare_host_failure_stage(exc: Exception) -> str | None:
@@ -1346,6 +1362,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             ).strip().lower()
             if result.failure_class is None and publish_mode in {"branch", "pr"}:
                 publication_stage = "repository_publication"
+                no_commit_policy = _trusted_no_commit_repository_policy(request)
                 for continuation_index in range(
                     REPOSITORY_PUBLICATION_CONTINUATION_LIMIT + 1
                 ):
@@ -1445,15 +1462,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                             break
 
                     publication_metadata = dict(publication)
-                    if publication.get("push_status") == "pushed":
+                    push_status = str(
+                        publication.get("push_status") or ""
+                    ).strip().lower()
+                    no_commit_accepted = (
+                        push_status == "no_commits" and no_commit_policy is not None
+                    )
+                    if push_status == "pushed" or no_commit_accepted:
                         evidence = AcceptedRepositoryEvidence(
-                            pushStatus="pushed",
+                            pushStatus=push_status,
                             branch=publication.get("push_branch"),
                             baseBranch=publication.get("push_base_branch"),
                             headSha=publication.get("push_head_sha"),
                             commitsAheadOfBase=publication.get("push_commit_count"),
-                            repositoryChanged=True,
-                            remoteVerified=True,
+                            repositoryChanged=push_status == "pushed",
+                            remoteVerified=publication.get("remote_verified"),
                             authority="omnigent.profile_bound_execution",
                         )
                         publication_metadata["acceptedRepositoryEvidence"] = (
@@ -1474,15 +1497,29 @@ class OmnigentProfileBoundExecutionCoordinator:
                             publication_stage,
                             "completed",
                             metadata={
-                                "pushStatus": "pushed",
+                                "pushStatus": push_status,
                                 "branch": publication.get("push_branch"),
                                 "baseBranch": publication.get("push_base_branch"),
                                 "headSha": publication.get("push_head_sha"),
                                 "commitsAheadOfBase": publication.get(
                                     "push_commit_count"
                                 ),
-                                "remoteVerified": True,
+                                "remoteVerified": publication.get(
+                                    "remote_verified"
+                                ),
                                 "continuationCount": continuation_index,
+                                **(
+                                    {
+                                        "noCommitAuthority": (
+                                            no_commit_policy.authority
+                                        ),
+                                        "assessmentArtifactRef": (
+                                            no_commit_policy.assessment_artifact_ref
+                                        ),
+                                    }
+                                    if no_commit_accepted
+                                    else {}
+                                ),
                             },
                         )
                         break

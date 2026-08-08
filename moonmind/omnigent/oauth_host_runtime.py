@@ -18,41 +18,52 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.config.settings import settings
+from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
+)
 from moonmind.omnigent.oauth_hosts import (
     HostPreflightFailure,
     OmnigentOAuthHostError,
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.publish.service import PublishService
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreRepositoryProviderAdapter,
     LoreWorkspaceError,
 )
-from moonmind.publish.service import PublishService
-from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.schemas.agent_runtime_models import (
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
+)
+from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.schemas.workspace_locator_models import (
+    WORKSPACE_AUTHORITY_MISMATCH,
+    WORKSPACE_LOCATOR_ADAPTER,
+    WORKSPACE_LOCATOR_UNSUPPORTED,
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+    WorkspaceLocatorResolutionError,
+)
+from moonmind.security.container_job_capabilities import (
+    mint_container_job_session_capability,
+)
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
     attest_docker_egress,
     omnigent_proxy_env,
 )
-from moonmind.workloads.docker_launcher import structured_container_security_args
-from moonmind.omnigent.mounted_tool_preflight import (
-    MountedToolPreflightError,
-    preflight_mounted_tools,
-)
-from moonmind.schemas.agent_runtime_models import (
-    OmnigentOAuthHostBinding,
-    OmnigentHostLease,
-)
-from moonmind.schemas.workspace_locator_models import (
-    ExternalStateLocator,
-    ManagedWorkspaceLocator,
-    SandboxWorkspaceLocator,
-    WORKSPACE_AUTHORITY_MISMATCH,
-    WORKSPACE_LOCATOR_ADAPTER,
-    WORKSPACE_LOCATOR_UNSUPPORTED,
-    WorkspaceLocatorResolutionError,
+from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.skills.run_projection import (
+    load_resolved_skillset,
+    materialize_run_skill_snapshot,
+    verify_skill_projection,
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.git_auth import (
@@ -64,13 +75,7 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
 )
-from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
-from moonmind.workflows.skills.run_projection import (
-    load_resolved_skillset,
-    materialize_run_skill_snapshot,
-    verify_skill_projection,
-)
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workloads.docker_launcher import structured_container_security_args
 
 _FORBIDDEN_ENV = (
     "OPENAI_API_KEY",
@@ -101,6 +106,7 @@ _RUNNER_GITHUB_ENV_NAMES = (
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+_SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$")
 _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z0-9]$")
 _GITHUB_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Bound restore-input materialization so a hostile or oversized artifact ref
@@ -208,6 +214,9 @@ class OmnigentOAuthHostRuntime:
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
         )
+        self._workspace_volume = os.getenv(
+            "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
+        ).strip()
         # Local (on-disk) repository sources are only clonable when they are
         # contained within an explicitly authorized per-run source root. Without
         # this root, an authored ``workspaceSpec`` could clone any repository the
@@ -306,13 +315,29 @@ class OmnigentOAuthHostRuntime:
             runtime_uid=int(launch["runtimeUid"]),
             runtime_gid=int(launch["runtimeGid"]),
         )
-        daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
-        daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
+        daemon_workspace_root = await self._resolve_daemon_workspace_root()
+        daemon_workspace_source = daemon_visible_workspace_path(
+            workspace_source,
+            daemon_root=daemon_workspace_root,
+        )
+        daemon_skill_projection = daemon_visible_workspace_path(
+            skill_projection,
+            daemon_root=daemon_workspace_root,
+        )
         launched_container_name: str | None = None
         if binding.host_launch_profile_ref:
+            container_job_environment = self._container_job_environment(
+                binding=binding,
+                host_lease=host_lease,
+                workspace_locator=workspace_locator,
+                current_workflow_id=current_workflow_id,
+                current_step_execution_id=current_step_execution_id,
+                timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
+            )
             daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
                 workspace_key,
                 current_step_execution_id=current_step_execution_id,
+                daemon_workspace_root=daemon_workspace_root,
             )
             if "gh" in {item.strip().lower() for item in required_capabilities}:
                 await self._initialize_required_tools()
@@ -330,6 +355,7 @@ class OmnigentOAuthHostRuntime:
                 runtime_scripts=daemon_runtime_scripts,
                 current_step_execution_id=current_step_execution_id,
                 github_token=github_token,
+                container_job_environment=container_job_environment,
                 effective_launch=launch,
             )
             await self._exec_check(container_name)
@@ -399,6 +425,50 @@ class OmnigentOAuthHostRuntime:
         validated["egressAttestation"] = result["egressAttestation"]
         validated["workspaceResolution"] = dict(self._last_workspace_evidence)
         return validated
+
+    @staticmethod
+    async def _verified_no_commit_publication(
+        *,
+        run_command: Any,
+        base_branch: str,
+    ) -> dict[str, Any]:
+        """Prove the unchanged local checkout is the exact remote base head."""
+
+        normalized_base = str(base_branch or "").strip()
+        if not normalized_base:
+            raise OmnigentOAuthHostError(
+                "no-commit publication requires an authoritative base branch",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+            )
+        head_result = await run_command(["git", "rev-parse", "HEAD"])
+        head_sha = str(head_result.stdout or "").strip().lower()
+        remote_ref = f"refs/heads/{normalized_base}"
+        remote_result = await run_command(
+            ["git", "ls-remote", "--heads", "origin", remote_ref],
+            check=False,
+        )
+        remote_heads = {
+            fields[0].lower()
+            for line in str(remote_result.stdout or "").splitlines()
+            if len(fields := line.split()) >= 2 and fields[1] == remote_ref
+        }
+        if (
+            getattr(remote_result, "returncode", 1) != 0
+            or re.fullmatch(r"[0-9a-f]{40,64}", head_sha) is None
+            or remote_heads != {head_sha}
+        ):
+            raise OmnigentOAuthHostError(
+                "unchanged repository head did not match the exact remote base",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+            )
+        return {
+            "push_status": "no_commits",
+            "push_branch": normalized_base,
+            "push_base_branch": normalized_base,
+            "push_head_sha": head_sha,
+            "push_commit_count": 0,
+            "remote_verified": True,
+        }
 
     async def publish_workspace(
         self,
@@ -526,13 +596,13 @@ class OmnigentOAuthHostRuntime:
         if published is None:
             return {"push_status": "skipped"}
         if published.status == "skipped":
-            return {
-                "push_status": "no_commits",
-                "push_branch": published.branch_name,
-                "push_base_branch": published.base_branch,
-                "push_commit_count": published.commits_ahead_of_base or 0,
-                "remote_verified": False,
-            }
+            return await self._verified_no_commit_publication(
+                run_command=run_command,
+                base_branch=(
+                    str(published.base_branch or base_branch or "main").strip()
+                    or "main"
+                ),
+            )
         if (
             published.status != "published"
             or not published.branch_pushed
@@ -546,7 +616,7 @@ class OmnigentOAuthHostRuntime:
                 "repository publication did not produce authoritative remote evidence",
                 code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
             )
-        return {
+        result: dict[str, Any] = {
             "push_status": "pushed",
             "push_branch": published.branch_name,
             "push_base_branch": published.base_branch,
@@ -558,6 +628,15 @@ class OmnigentOAuthHostRuntime:
                 f"/refs/heads/{published.branch_name}@{published.head_sha}"
             ),
         }
+        if normalized_mode == "pr" and repository and token:
+            pull_request = await GitHubService().resolve_pull_request_selector(
+                repo=str(repository).strip(),
+                selector=published.branch_name,
+                github_token=token,
+            )
+            if pull_request.resolved and pull_request.pr_url:
+                result["pull_request_url"] = pull_request.pr_url
+        return result
 
     async def inspect_session_completion(self, session_id: str) -> dict[str, Any]:
         """Return bounded terminal-answer evidence for one Omnigent session.
@@ -1021,13 +1100,48 @@ class OmnigentOAuthHostRuntime:
         workspace_key: str,
         *,
         current_step_execution_id: str,
+        daemon_workspace_root: Path | str | None = None,
     ) -> Path:
         return daemon_visible_workspace_path(
             self._prepare_runtime_scripts(
                 workspace_key,
                 current_step_execution_id=current_step_execution_id,
-            )
+            ),
+            daemon_root=daemon_workspace_root,
         )
+
+    async def _resolve_daemon_workspace_root(self) -> Path | None:
+        """Resolve the named workspace volume in the selected Docker daemon."""
+
+        mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
+        if mode in {"", "local"}:
+            return None
+        if mode != "remote":
+            raise OmnigentOAuthHostError(
+                "Docker daemon mode is unsupported for Omnigent host launch",
+                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
+            )
+        if not _SAFE_VOLUME.fullmatch(self._workspace_volume):
+            raise OmnigentOAuthHostError(
+                "agent workspace volume identity is missing or unsafe",
+                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
+            )
+        result = await self._run(
+            "docker",
+            "volume",
+            "inspect",
+            "--format",
+            "{{.Mountpoint}}",
+            self._workspace_volume,
+            check=False,
+        )
+        mountpoint = result[1].strip() if result[0] == 0 else ""
+        if not mountpoint or not Path(mountpoint).is_absolute():
+            raise OmnigentOAuthHostError(
+                "agent workspace volume mountpoint is unavailable from the selected Docker daemon",
+                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
+            )
+        return Path(mountpoint).resolve()
 
     async def stop_host(
         self, *, binding: OmnigentOAuthHostBinding, host_lease: OmnigentHostLease
@@ -1135,6 +1249,7 @@ class OmnigentOAuthHostRuntime:
         runtime_scripts: Path,
         current_step_execution_id: str,
         github_token: str | None = None,
+        container_job_environment: Mapping[str, str] | None = None,
         effective_launch: Mapping[str, Any],
     ) -> None:
         if await self.container_exists(container_name):
@@ -1307,6 +1422,13 @@ class OmnigentOAuthHostRuntime:
                     "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
                 ]
             )
+        for key, value in sorted(dict(container_job_environment or {}).items()):
+            runner_env_passthrough.append(key)
+            if key == "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN":
+                child_env[key] = value
+                args.extend(["--env", key])
+            else:
+                args.extend(["--env", f"{key}={value}"])
         args.extend(
             [
                 "--env",
@@ -1323,6 +1445,77 @@ class OmnigentOAuthHostRuntime:
             args.extend(["-u", key])
         args.append(str(adapter["start_script"]))
         await self._run(*args, env=child_env)
+
+    def _container_job_environment(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        workspace_locator: Mapping[str, Any],
+        current_workflow_id: str,
+        current_step_execution_id: str,
+        timeout_seconds: int,
+    ) -> dict[str, str]:
+        """Mint one sandbox-scoped container-job capability for this host lease."""
+
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
+        if not isinstance(locator, SandboxWorkspaceLocator):
+            raise OmnigentOAuthHostError(
+                "Omnigent container jobs require sandbox workspace authority",
+                code=WORKSPACE_LOCATOR_UNSUPPORTED,
+            )
+        # Omnigent does not own a ManagedRunRecord. The Step Execution identity
+        # is the exact durable agent-run authority carried into this Activity and
+        # is also the owner of the sandbox workspace for this host lease.
+        agent_run_id = str(current_step_execution_id or "").strip()
+        if not agent_run_id:
+            raise OmnigentOAuthHostError(
+                "Omnigent container jobs require an agent run identity",
+                code="OMNIGENT_CONTAINER_JOB_AUTHORITY_UNAVAILABLE",
+            )
+        moonmind_url = str(
+            os.environ.get("MOONMIND_URL") or "http://api:8000"
+        ).strip()
+        if not moonmind_url:
+            raise OmnigentOAuthHostError(
+                "MoonMind API URL is unavailable for Omnigent container jobs",
+                code="OMNIGENT_CONTAINER_JOB_AUTHORITY_UNAVAILABLE",
+            )
+        runtime_id = binding.credential_mount_ref.auth_volume_ref.runtime_id
+        session_scope = host_lease.lease_id
+        token = mint_container_job_session_capability(
+            secret=str(settings.security.JWT_SECRET_KEY or ""),
+            owner=OwnerIdentity(
+                principalId=agent_run_id,
+                principalType="service",
+            ),
+            agent_run_id=agent_run_id,
+            session_id=session_scope,
+            runtime_id=runtime_id,
+            source_kind="omnigent",
+            workspace_kind="sandbox",
+            workspace_id=locator.workspace_id,
+            workspace_relative_path=locator.relative_path,
+            lifetime_seconds=timeout_seconds,
+        )
+        return {
+            "MOONMIND_URL": moonmind_url,
+            "MOONMIND_AGENT_RUN_ID": agent_run_id,
+            "MOONMIND_TASK_WORKFLOW_ID": current_workflow_id,
+            "MOONMIND_STEP_ID": current_step_execution_id,
+            "MOONMIND_RUNTIME_ID": runtime_id,
+            "MOONMIND_CONTAINER_JOBS_MCP_URL": (
+                moonmind_url.rstrip("/") + "/mcp/container"
+            ),
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": token,
+            "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
+            "MOONMIND_CONTAINER_JOBS_SESSION_ID": session_scope,
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": locator.workspace_id,
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": (
+                locator.relative_path
+            ),
+        }
 
     async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
         result = await self._run(
@@ -2080,12 +2273,19 @@ class OmnigentOAuthHostRuntime:
                 if isinstance(metadata, tuple) and len(metadata) > 1
                 else ()
             )
+            workflow_family_prefix = f"{required_workflow_id}:"
             if not any(
-                str(getattr(link, "workflow_id", "")) == required_workflow_id
+                (
+                    str(getattr(link, "workflow_id", ""))
+                    == required_workflow_id
+                    or str(getattr(link, "workflow_id", "")).startswith(
+                        workflow_family_prefix
+                    )
+                )
                 for link in links
             ):
                 raise OmnigentOAuthHostError(
-                    "attachment artifact is not linked to the current workflow",
+                    "attachment artifact is not linked to the current workflow family",
                     code=WORKSPACE_AUTHORITY_MISMATCH,
                 )
         size_bytes = getattr(artifact, "size_bytes", None)

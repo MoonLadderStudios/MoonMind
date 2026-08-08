@@ -8832,6 +8832,88 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
+        def _result_workspace() -> Path | None:
+            """Resolve the authoritative workspace for output publication.
+
+            Managed runtimes identify their workspace with ``agentRunId``. Remote
+            runtimes such as Omnigent instead return the sandbox locator that the
+            worker used to materialize and bind the repository. Resolve either
+            contract at this owning worker boundary so portable output files can be
+            published without assuming that every runtime has a managed-run record.
+            """
+
+            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
+            if agent_run_id and self._run_store is not None:
+                record = self._run_store.load(agent_run_id)
+                if record is None:
+                    logger.warning(
+                        "Managed run record was not found while resolving artifact "
+                        "publication workspace for %s",
+                        agent_run_id,
+                    )
+                else:
+                    workspace_path = str(
+                        getattr(record, "workspace_path", "") or ""
+                    ).strip()
+                    if workspace_path:
+                        return Path(workspace_path).expanduser().resolve()
+
+            raw_locator = metadata.get("workspaceLocator")
+            if not isinstance(raw_locator, Mapping):
+                return None
+            try:
+                locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator)
+            except Exception:
+                logger.warning(
+                    "Artifact publication workspace locator is invalid",
+                    exc_info=True,
+                )
+                return None
+            if not isinstance(locator, SandboxWorkspaceLocator):
+                return None
+
+            workflow_id = _metadata_text("correlationId", "correlation_id")
+            idempotency_key = _metadata_text("idempotencyKey", "idempotency_key")
+            suffix = ":agent_execute"
+            step_execution_id = (
+                idempotency_key[: -len(suffix)]
+                if idempotency_key.endswith(suffix)
+                else ""
+            )
+            if not workflow_id or not step_execution_id:
+                logger.warning(
+                    "Sandbox artifact publication requires workflow and step "
+                    "execution identity evidence"
+                )
+                return None
+
+            record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+            try:
+                owner_record = record_store.load(locator.workspace_id)
+                if owner_record is None:
+                    logger.warning(
+                        "Sandbox workspace owner record was not found while "
+                        "publishing artifacts for %s",
+                        locator.workspace_id,
+                    )
+                    return None
+                return resolve_sandbox_workspace_locator(
+                    locator,
+                    workspace_root=self._workspace_root,
+                    expected_workspace_id=locator.workspace_id,
+                    owner_record=owner_record,
+                    expected_workflow_id=workflow_id,
+                    expected_step_execution_id=step_execution_id,
+                    must_exist=True,
+                )
+            except WorkspaceLocatorResolutionError:
+                logger.warning(
+                    "Sandbox workspace locator could not be authorized for "
+                    "artifact publication",
+                    exc_info=True,
+                )
+                return None
+
         def _story_output_mapping() -> Mapping[str, Any]:
             value = metadata.get("storyOutput") or metadata.get("story_output")
             return value if isinstance(value, Mapping) else {}
@@ -8943,21 +9025,9 @@ class TemporalAgentRuntimeActivities:
             )
             if not json_path:
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping story breakdown artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
-                )
-                return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             published: dict[str, Any] = {}
             json_ref = await _publish_story_breakdown_file(
                 workspace=workspace,
@@ -9243,21 +9313,9 @@ class TemporalAgentRuntimeActivities:
             return _positive_int(_remediation_cadence().get("maxAttempts"))
 
         def _workspace_json_path(raw_path: str) -> Path | None:
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return None
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping remediation artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
-                )
-                return None
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return None
-            workspace = Path(workspace_path).expanduser().resolve()
             candidate = Path(raw_path)
             candidates: list[Path]
             if candidate.is_absolute():
@@ -9449,21 +9507,9 @@ class TemporalAgentRuntimeActivities:
                     failure_class,
                 )
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping MoonSpec verify artifact publication: run record not "
-                    "found for %s",
-                    agent_run_id,
-                )
-                return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             path = _workspace_moonspec_verify_path(workspace, verify_path)
             if path is None:
                 return {}
@@ -9601,21 +9647,9 @@ class TemporalAgentRuntimeActivities:
             )
             if not assessment_path:
                 return {}
-            agent_run_id = _metadata_text("agentRunId", "agent_run_id")
-            if not agent_run_id or self._run_store is None:
+            workspace = _result_workspace()
+            if workspace is None:
                 return {}
-            record = self._run_store.load(agent_run_id)
-            if record is None:
-                logger.warning(
-                    "Skipping assessment verdict artifact publication: run record "
-                    "not found for %s",
-                    agent_run_id,
-                )
-                return {}
-            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
-            if not workspace_path:
-                return {}
-            workspace = Path(workspace_path).expanduser().resolve()
             candidates = _workspace_moonspec_verify_path_candidates(
                 workspace,
                 assessment_path,
@@ -9625,12 +9659,23 @@ class TemporalAgentRuntimeActivities:
                 None,
             )
             if path is None:
-                logger.warning(
-                    "Assessment verdict artifact file was not found for "
-                    "publication: %s",
-                    assessment_path,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Skipping missing assessment verdict artifact for failed "
+                        "agent result (%s): %s",
+                        failure_class,
+                        assessment_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact was not produced: "
+                    f"{assessment_path}"
                 )
-                return {}
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -9663,6 +9708,21 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            parent_workflow_id = str(
+                metadata.get("parentWorkflowId") or ""
+            ).strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=verdict_ref.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.assessment_handoff",
+                    ),
+                )
             published: dict[str, Any] = {
                 "assessmentArtifactRef": verdict_ref.artifact_id,
             }
@@ -9677,6 +9737,91 @@ class TemporalAgentRuntimeActivities:
             }:
                 published["assessmentVerdict"] = verdict
             return published
+
+        async def _publish_issue_brief_artifact() -> dict[str, Any]:
+            brief_path = _metadata_text(
+                "brief_artifact_path",
+                "briefArtifactPath",
+            )
+            if not brief_path:
+                return {}
+            workspace = _result_workspace()
+            if workspace is None:
+                return {}
+            candidates = _workspace_moonspec_verify_path_candidates(
+                workspace,
+                brief_path,
+            )
+            path = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                None,
+            )
+            if path is None:
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Skipping missing issue brief artifact for failed agent "
+                        "result (%s): %s",
+                        failure_class,
+                        brief_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared issue brief artifact was not produced: "
+                    f"{brief_path}"
+                )
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "Issue brief artifact could not be read as JSON: %s",
+                    brief_path,
+                    exc_info=True,
+                )
+                return {}
+            if not isinstance(payload, Mapping):
+                logger.warning(
+                    "Issue brief artifact payload must be a JSON object: %s",
+                    brief_path,
+                )
+                return {}
+            brief_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=dict(payload),
+                execution_ref=_execution_ref("output.issue_brief"),
+                metadata_json={
+                    "name": "issue-brief.json",
+                    "path": brief_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": [
+                        "agent_runtime",
+                        "output.issue_brief",
+                        "issue_brief",
+                    ],
+                    **step_artifact_metadata,
+                },
+            )
+            parent_workflow_id = str(
+                metadata.get("parentWorkflowId") or ""
+            ).strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=brief_ref.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.issue_brief_handoff",
+                    ),
+                )
+            return {"briefArtifactRef": brief_ref.artifact_id}
 
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
@@ -9759,6 +9904,31 @@ class TemporalAgentRuntimeActivities:
             title = str(report_output.get("title") or "Final report").strip()
             return f"# {title}\n\n{body.rstrip()}\n"
 
+        assessment_output_required = bool(
+            _metadata_text(
+                "assessment_artifact_path",
+                "assessmentArtifactPath",
+            )
+        ) and not bool(
+            str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+        )
+        brief_output_required = bool(
+            _metadata_text(
+                "brief_artifact_path",
+                "briefArtifactPath",
+            )
+        ) and not bool(
+            str(
+                result_dict.get("failureClass")
+                or result_dict.get("failure_class")
+                or ""
+            ).strip()
+        )
+
         try:
             published_refs: dict[str, Any] = {}
             if instruction_ref:
@@ -9825,6 +9995,16 @@ class TemporalAgentRuntimeActivities:
                     else {}
                 )
                 enriched_metadata_for_result.update(assessment_verdict_refs)
+                result_dict["metadata"] = enriched_metadata_for_result
+            issue_brief_refs = await _publish_issue_brief_artifact()
+            if issue_brief_refs:
+                published_refs.update(issue_brief_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(issue_brief_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
@@ -9996,6 +10176,10 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
             if report_output_enabled and report_output_required:
+                raise
+            if assessment_output_required:
+                raise
+            if brief_output_required:
                 raise
             return result
 

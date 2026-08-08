@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 from urllib.parse import urlparse
@@ -15,6 +16,8 @@ from moonmind.utils.logging import redact_sensitive_text
 
 CommandRunner = Callable[..., Awaitable[tuple[int, str, str]]]
 MAX_EVIDENCE_CHARS = 512
+REMOTE_PROBE_MAX_ATTEMPTS = 4
+REMOTE_PROBE_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 
 
 class MountedToolPreflightError(RuntimeError):
@@ -31,6 +34,7 @@ class Probe:
     name: str
     command: str
     failure_code: str
+    remote: bool = False
 
 
 def _bounded(value: str) -> str:
@@ -82,11 +86,17 @@ def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]
         Probe("manifest", _trusted_gh_digest_checks(), "tool_manifest_mismatch"),
         Probe("lookup", "command -v gh", "tool_not_visible_in_login_shell"),
         Probe("version", "gh --version", "tool_manifest_mismatch"),
-        Probe("authentication", "gh auth status", "github_auth_unavailable"),
+        Probe(
+            "authentication",
+            "gh auth status",
+            "github_auth_unavailable",
+            remote=True,
+        ),
         Probe(
             "repository_access",
             f"gh repo view {quoted_repo} --json nameWithOwner,viewerPermission",
             "github_repository_unauthorized",
+            remote=True,
         ),
     ]
     if mutation_required:
@@ -96,6 +106,7 @@ def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]
                 f"case \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" in "
                 "ADMIN|MAINTAIN|WRITE) true;; *) false;; esac",
                 "github_repository_unauthorized",
+                remote=True,
             )
         )
     return tuple(probes)
@@ -115,27 +126,35 @@ async def preflight_mounted_tools(
     if "gh" not in capabilities:
         return {"status": "not_required", "boundaries": []}
 
-    evidence: list[dict[str, str]] = []
+    evidence: list[dict[str, Any]] = []
     for boundary, command_runner in (("host", host_runner), ("runner", runner_runner)):
         for probe in _gh_probes(repository, mutation_required=mutation_required):
-            rc, stdout, stderr = await command_runner(probe.command)
-            item = {
-                "boundary": boundary,
-                "probe": probe.name,
-                "status": "ready" if rc == 0 else "failed",
-            }
-            if stdout:
-                item["output"] = _bounded(stdout)
-            if rc != 0:
-                if stderr:
+            max_attempts = REMOTE_PROBE_MAX_ATTEMPTS if probe.remote else 1
+            for attempt in range(1, max_attempts + 1):
+                rc, stdout, stderr = await command_runner(probe.command)
+                item = {
+                    "boundary": boundary,
+                    "probe": probe.name,
+                    "attempt": attempt,
+                    "status": "ready" if rc == 0 else "failed",
+                }
+                if stdout:
+                    item["output"] = _bounded(stdout)
+                if stderr and rc != 0:
                     item["error"] = _bounded(stderr)
                 evidence.append(item)
+                if rc == 0:
+                    break
+                if attempt < max_attempts:
+                    await asyncio.sleep(
+                        REMOTE_PROBE_RETRY_DELAYS_SECONDS[attempt - 1]
+                    )
+                    continue
                 raise MountedToolPreflightError(
                     f"Mounted gh preflight failed during {boundary} {probe.name}",
                     code=probe.failure_code,
                     evidence={"tool": "gh", "phase": probe.name, "probes": evidence},
                 )
-            evidence.append(item)
     return {"status": "ready", "tool": "gh", "probes": evidence}
 
 

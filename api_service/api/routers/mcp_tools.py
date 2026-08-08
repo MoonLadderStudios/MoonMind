@@ -30,7 +30,10 @@ from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
-from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator
+from moonmind.schemas.workspace_locator_models import (
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+)
 from moonmind.security.container_job_capabilities import (
     ContainerJobCapabilityError,
     ContainerJobSessionCapability,
@@ -703,25 +706,44 @@ def _enforce_container_capability_scope(
             },
         ) from exc
     workspace = submission.spec.workspace_ref
-    if not isinstance(workspace, ManagedWorkspaceLocator) or (
-        workspace.agent_run_id != capability.agent_run_id
-        or workspace.runtime_id != capability.runtime_id
-    ):
+    if capability.workspace_kind == "managed_runtime":
+        workspace_matches = bool(
+            isinstance(workspace, ManagedWorkspaceLocator)
+            and workspace.agent_run_id == capability.agent_run_id
+            and workspace.runtime_id == capability.runtime_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    else:
+        workspace_matches = bool(
+            isinstance(workspace, SandboxWorkspaceLocator)
+            and workspace.workspace_id == capability.workspace_id
+            and workspace.relative_path == capability.workspace_relative_path
+        )
+    if not workspace_matches:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "container_capability_scope_mismatch",
                 "message": (
-                    "Container workspace exceeds the managed-session capability."
+                    "Container workspace exceeds the session capability."
                 ),
             },
         )
     source = submission.source
-    if (
-        source.source != "managed_session"
-        or source.agent_run_id != capability.agent_run_id
-        or source.managed_session_id != capability.session_id
-    ):
+    source_matches = bool(source.agent_run_id == capability.agent_run_id)
+    if capability.source_kind == "managed_session":
+        source_matches = bool(
+            source_matches
+            and source.source == "managed_session"
+            and source.managed_session_id == capability.session_id
+        )
+    else:
+        source_matches = bool(
+            source_matches
+            and source.source == "omnigent"
+            and source.omnigent_conversation_id == capability.session_id
+        )
+    if not source_matches:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

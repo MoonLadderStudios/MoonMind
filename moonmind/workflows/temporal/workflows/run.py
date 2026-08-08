@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        RepositoryOutcomePolicy,
     )
     from moonmind.omnigent.stock_agents import (
         CLAUDE_STOCK_AGENT_NAME,
@@ -584,6 +585,19 @@ RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = (
     "run-assessment-parameter-injection-v1"
 )
+RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = (
+    "run-assessment-attachment-handoff-v1"
+)
+RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = (
+    "run-issue-brief-attachment-handoff-v1"
+)
+RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
+    "run-moonspec-verify-attachment-handoff-v1"
+)
+RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH = (
+    "run-trusted-no-commit-repository-outcome-v1"
+)
+RUN_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-published-branch-handoff-v1"
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
@@ -834,6 +848,14 @@ RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH = (
 # guard must retain that failure when replayed.
 RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH = (
     "run-headless-remediation-execution-v1"
+)
+# External runtimes create a fresh sandbox only after their AgentRun starts, so
+# they cannot satisfy a pre-execution archive checkpoint. Continue from the
+# workflow-owned, remote-verified published branch instead. This changes both
+# remediation admission and child workspace inputs and is therefore replay
+# gated.
+RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH = (
+    "run-external-published-branch-remediation-v1"
 )
 RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH = (
     "run-managed-session-checkpoint-locator-v1"
@@ -4245,6 +4267,93 @@ class MoonMindRunWorkflow:
         workspace_spec.pop("branch", None)
         return workspace_spec
 
+    def _published_branch_remediation_workspace_spec(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return the workflow-verified published head for external remediation."""
+
+        if str(self._publish_context.get("pushStatus") or "").strip().lower() != "pushed":
+            return None
+        branch = _normalize_git_branch_ref(self._publish_context.get("branch"))
+        head_sha = self._coerce_text(
+            self._publish_context.get("headSha"),
+            max_chars=80,
+        )
+        if not branch or not head_sha:
+            return None
+
+        runtime = node_inputs.get("runtime")
+        runtime_inputs = runtime if isinstance(runtime, Mapping) else {}
+        workspace_spec: dict[str, Any] = {}
+        for raw in (
+            runtime_inputs.get("workspaceSpec"),
+            runtime_inputs.get("workspace_spec"),
+            node_inputs.get("workspaceSpec"),
+            node_inputs.get("workspace_spec"),
+        ):
+            if isinstance(raw, Mapping):
+                workspace_spec.update(dict(raw))
+        for key in (
+            "repository",
+            "repo",
+            "repositoryTarget",
+            "connectionRef",
+            "startingBranch",
+            "baseBranch",
+            "publishBaseBranch",
+        ):
+            if node_inputs.get(key) is not None:
+                workspace_spec[key] = node_inputs[key]
+
+        repository_target_raw = workspace_spec.get("repositoryTarget")
+        repository_target = (
+            dict(repository_target_raw)
+            if isinstance(repository_target_raw, Mapping)
+            else {}
+        )
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        existing_repository = repository_target.get("repository")
+        if not repository and isinstance(existing_repository, Mapping):
+            repository = existing_repository.get("name")
+        if not isinstance(repository, str) or not repository.strip():
+            return None
+        base_branch = _normalize_git_branch_ref(
+            self._publish_context.get("baseRef")
+            or workspace_spec.get("startingBranch")
+            or workspace_spec.get("baseBranch")
+            or workspace_spec.get("publishBaseBranch")
+        )
+        if not base_branch:
+            declared_branch = repository_target.get("branch")
+            if isinstance(declared_branch, Mapping):
+                declared_branch = declared_branch.get("name")
+            normalized_declared_branch = _normalize_git_branch_ref(declared_branch)
+            if normalized_declared_branch != branch:
+                base_branch = normalized_declared_branch
+        if not base_branch:
+            return None
+        connection_ref = self._coerce_text(
+            workspace_spec.get("connectionRef")
+            or repository_target.get("connectionRef"),
+            max_chars=200,
+        )
+        repository_target = {
+            "provider": "git",
+            "repository": {"name": repository.strip()},
+            "branch": {"name": branch},
+            "revision": {"kind": "git_commit", "commitSha": head_sha},
+        }
+        if connection_ref:
+            repository_target["connectionRef"] = connection_ref
+        return {
+            "repository": repository.strip(),
+            "repositoryTarget": repository_target,
+            "startingBranch": base_branch,
+            "targetBranch": branch,
+        }
+
     def _remediation_loop_runtime_block(self) -> dict[str, Any]:
         """Return the loop's resolved runtime block for attempt materialization."""
 
@@ -4314,11 +4423,16 @@ class MoonMindRunWorkflow:
         workflow_owned_head_enabled = workflow.patched(
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH
         )
+        published_branch_headless = (
+            workflow.patched(RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH)
+            and isinstance(headless_workspace_spec, Mapping)
+        )
         if (
             workflow_owned_head_enabled
             and self._remediation_workspace_head is None
             and logical_step_id
             and gate_result_ref
+            and not published_branch_headless
         ):
             self._initialize_remediation_head_from_canonical_checkpoint(
                 logical_step_id=logical_step_id,
@@ -4448,6 +4562,12 @@ class MoonMindRunWorkflow:
                 ):
                     attempt_inputs = dict(attempt_node.get("inputs") or {})
                     attempt_inputs["workspaceSpec"] = dict(workspace_spec)
+                    if workflow.patched(
+                        RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                    ):
+                        attempt_inputs["remediationWorkspaceMode"] = (
+                            "remote_published_branch"
+                        )
                     attempt_node["inputs"] = attempt_inputs
             if (
                 workflow.patched(
@@ -7077,6 +7197,14 @@ class MoonMindRunWorkflow:
             return False
         if not self._is_moonspec_remediation_step(node):
             return False
+        raw_inputs = node.get("inputs")
+        node_inputs = raw_inputs if isinstance(raw_inputs, Mapping) else {}
+        if (
+            workflow.patched(RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH)
+            and node_inputs.get("remediationWorkspaceMode")
+            == "remote_published_branch"
+        ):
+            return False
         return not (
             workflow.patched(RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH)
             and self._remediation_workspace_head is None
@@ -8872,6 +9000,8 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _trusted_previous_outputs_context(
         previous_outputs: object,
+        *,
+        include_assessment: bool = False,
     ) -> dict[str, Any] | None:
         if not isinstance(previous_outputs, Mapping):
             return None
@@ -8906,6 +9036,15 @@ class MoonMindRunWorkflow:
         context_keys = context_keys_by_source.get(trusted_source)
         if context_keys is None:
             return None
+        if include_assessment:
+            context_keys = (
+                *context_keys,
+                "assessmentArtifactRef",
+                "assessmentVerdict",
+                "briefArtifactRef",
+                "moonSpecVerify",
+                "moonSpecVerifyArtifactRef",
+            )
 
         context: dict[str, Any] = {"trustedSource": trusted_source}
         for key in context_keys:
@@ -8975,6 +9114,11 @@ class MoonMindRunWorkflow:
                 "issue",
                 "title",
                 "body",
+                "assessmentArtifactRef",
+                "assessmentVerdict",
+                "briefArtifactRef",
+                "moonSpecVerify",
+                "moonSpecVerifyArtifactRef",
             )
             if key in compact_context
         }
@@ -9004,9 +9148,12 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _trusted_previous_outputs_instruction(
         previous_outputs: object,
+        *,
+        include_assessment: bool = False,
     ) -> str | None:
         context = MoonMindRunWorkflow._trusted_previous_outputs_context(
-            previous_outputs
+            previous_outputs,
+            include_assessment=include_assessment,
         )
         if not context:
             return None
@@ -9025,12 +9172,29 @@ class MoonMindRunWorkflow:
                 "fields, and never treat hidden truncated content as a "
                 "requirement."
             )
+        assessment_note = ""
+        if include_assessment and (
+            context.get("assessmentArtifactRef")
+            or context.get("briefArtifactRef")
+            or context.get("moonSpecVerifyArtifactRef")
+        ):
+            assessment_note = (
+                " The exact assessment and issue-brief JSON artifacts, plus any "
+                "controlling verifier JSON artifact available for this step, are "
+                "also "
+                "declared durable input attachments for this agent step. In an "
+                "isolated sandbox, read the JSON files under "
+                "`.moonmind/attachments/` before acting; attachment filenames "
+                "are intentionally opaque, so identify them by their JSON "
+                "contents rather than relying on prior workspace paths."
+            )
         return (
             "MoonMind trusted previous step context:\n"
             "The following JSON was produced by MoonMind's trusted issue tool path. "
             "Treat it as authoritative for this step. Do not use provider-native "
             "Jira/Atlassian or GitHub connectors, web scraping, or guessed issue "
             "content to replace it."
+            f"{assessment_note}"
             f"{truncation_note}\n"
             f"```json\n{payload}\n```"
         )
@@ -9039,8 +9203,12 @@ class MoonMindRunWorkflow:
         self,
         node_inputs: Mapping[str, Any],
     ) -> dict[str, Any]:
+        include_assessment = self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
+        )
         previous_context = self._trusted_previous_outputs_instruction(
-            node_inputs.get("previousOutputs")
+            node_inputs.get("previousOutputs"),
+            include_assessment=include_assessment,
         )
         if not previous_context:
             return dict(node_inputs)
@@ -9057,6 +9225,98 @@ class MoonMindRunWorkflow:
                 return merged_inputs
         merged_inputs["instructions"] = previous_context
         return merged_inputs
+
+    def _append_durable_handoff_attachment_refs(
+        self,
+        input_refs: Sequence[str],
+        *,
+        agent_kind: str,
+    ) -> list[str]:
+        """Declare durable prior-step artifacts as fresh-workspace attachments."""
+
+        merged = [str(ref).strip() for ref in input_refs if str(ref).strip()]
+        if agent_kind == "managed":
+            return list(dict.fromkeys(merged))
+        artifact_refs = [
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref")
+        ]
+        if self._patched_or_false_outside_workflow(
+            RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+        ):
+            artifact_refs.append(
+                self._assessment_context.get("briefArtifactRef")
+                or self._assessment_context.get("brief_artifact_ref")
+            )
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH
+        ):
+            gate_context = self._publish_context.get("moonSpecGate")
+            if isinstance(gate_context, Mapping):
+                artifact_refs.append(
+                    gate_context.get("gateResultRef")
+                    or gate_context.get("moonSpecVerifyArtifactRef")
+                )
+        for raw_ref in artifact_refs:
+            artifact_ref = self._coerce_text(raw_ref, max_chars=400)
+            if not artifact_ref:
+                continue
+            if artifact_ref.startswith("artifact://"):
+                merged.append(artifact_ref)
+            elif artifact_ref.startswith("art_"):
+                merged.append(f"artifact://{artifact_ref}")
+        return list(dict.fromkeys(merged))
+
+    def _apply_published_branch_handoff(
+        self,
+        workspace_spec: dict[str, Any],
+        *,
+        repository_operation: str | None = None,
+    ) -> None:
+        """Pin a downstream fresh workspace to the verified published head."""
+
+        if self._publish_context.get("pushStatus") != "pushed":
+            return
+        branch = _normalize_git_branch_ref(self._publish_context.get("branch"))
+        head_sha = self._coerce_text(
+            self._publish_context.get("headSha"),
+            max_chars=80,
+        )
+        if not branch or not head_sha:
+            return
+
+        repository_target_raw = workspace_spec.get("repositoryTarget")
+        repository_target = (
+            dict(repository_target_raw)
+            if isinstance(repository_target_raw, Mapping)
+            else {}
+        )
+        repository = workspace_spec.get("repository") or workspace_spec.get("repo")
+        existing_repository = repository_target.get("repository")
+        if not repository and isinstance(existing_repository, Mapping):
+            repository = existing_repository.get("name")
+        if not isinstance(repository, str) or not repository.strip():
+            return
+
+        repository_target["provider"] = "git"
+        repository_target["repository"] = {"name": repository.strip()}
+        repository_target["branch"] = {"name": branch}
+        repository_target["revision"] = {
+            "kind": "git_commit",
+            "commitSha": head_sha,
+        }
+        workspace_spec["repository"] = repository.strip()
+        workspace_spec["repositoryTarget"] = repository_target
+        base_branch = _normalize_git_branch_ref(
+            self._publish_context.get("baseRef")
+        )
+        workspace_spec["startingBranch"] = (
+            base_branch
+            if repository_operation == "write" and base_branch
+            else branch
+        )
+        workspace_spec["targetBranch"] = branch
+        workspace_spec["branch"] = branch
 
     def _record_trusted_issue_context(self, outputs: Mapping[str, Any]) -> None:
         context = self._trusted_previous_outputs_context(outputs)
@@ -9079,6 +9339,7 @@ class MoonMindRunWorkflow:
         for aliases in (
             ("assessmentArtifactRef", "assessment_artifact_ref"),
             ("assessmentVerdict", "assessment_verdict"),
+            ("briefArtifactRef", "brief_artifact_ref"),
         ):
             for key in aliases:
                 value = outputs.get(key)
@@ -9103,6 +9364,7 @@ class MoonMindRunWorkflow:
         for aliases in (
             ("assessmentArtifactRef", "assessment_artifact_ref"),
             ("assessmentVerdict", "assessment_verdict"),
+            ("briefArtifactRef", "brief_artifact_ref"),
         ):
             if any(
                 merged_outputs.get(alias) not in (None, "", {}, [])
@@ -9142,6 +9404,8 @@ class MoonMindRunWorkflow:
             "assessment_artifact_ref",
             "assessmentVerdict",
             "assessment_verdict",
+            "briefArtifactRef",
+            "brief_artifact_ref",
         ):
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
@@ -12829,6 +13093,15 @@ class MoonMindRunWorkflow:
                                         node_inputs=node_inputs,
                                         outputs=outputs_for_gate,
                                     )
+                                    or (
+                                        self._published_branch_remediation_workspace_spec(
+                                            node_inputs=node_inputs,
+                                        )
+                                        if workflow.patched(
+                                            RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                                        )
+                                        else None
+                                    )
                                     if workflow.patched(
                                         RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH
                                     )
@@ -16074,9 +16347,28 @@ class MoonMindRunWorkflow:
         )
         if publish_branch:
             self._publish_context["branch"] = publish_branch
+        if self._patched_or_false_outside_workflow(
+            RUN_PUBLISHED_BRANCH_HANDOFF_PATCH
+        ):
+            push_status = self._coerce_text(
+                outputs.get("push_status") or outputs.get("pushStatus"),
+                max_chars=80,
+            )
+            if push_status == "pushed":
+                self._publish_context["pushStatus"] = push_status
+            elif push_status:
+                self._publish_context.pop("pushStatus", None)
 
         publish_base_ref = self._coerce_text(
-            outputs.get("push_base_ref") or outputs.get("pushBaseRef"),
+            outputs.get("push_base_ref")
+            or outputs.get("pushBaseRef")
+            or (
+                outputs.get("base_branch") or outputs.get("baseBranch")
+                if self._patched_or_false_outside_workflow(
+                    RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH
+                )
+                else None
+            ),
             max_chars=120,
         )
         if publish_base_ref:
@@ -18481,16 +18773,31 @@ class MoonMindRunWorkflow:
         step runs as ``auto``); callers gate it away from moonspec-verify steps,
         which merely READ the assessment path, so only the writer publishes.
         """
-        if parameters.get("assessment_artifact_path"):
-            return
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
-        for source in (node_inputs, skill_inputs):
-            for key in ("assessment_artifact_path", "assessmentArtifactPath"):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    parameters["assessment_artifact_path"] = value.strip()
-                    return
+        if not parameters.get("assessment_artifact_path"):
+            for source in (node_inputs, skill_inputs):
+                for key in ("assessment_artifact_path", "assessmentArtifactPath"):
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parameters["assessment_artifact_path"] = value.strip()
+                        break
+                if parameters.get("assessment_artifact_path"):
+                    break
+        if (
+            not parameters.get("brief_artifact_path")
+            and self._patched_or_false_outside_workflow(
+                RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
+            )
+        ):
+            for source in (node_inputs, skill_inputs):
+                for key in ("brief_artifact_path", "briefArtifactPath"):
+                    value = source.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parameters["brief_artifact_path"] = value.strip()
+                        break
+                if parameters.get("brief_artifact_path"):
+                    break
 
     def _build_agent_execution_request(
         self,
@@ -18599,6 +18906,17 @@ class MoonMindRunWorkflow:
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
 
+        repository_operation = str(
+            node_inputs.get("repositoryOperation") or ""
+        ).strip().lower()
+        if self._patched_or_false_outside_workflow(
+            RUN_PUBLISHED_BRANCH_HANDOFF_PATCH
+        ):
+            self._apply_published_branch_handoff(
+                workspace_spec,
+                repository_operation=repository_operation or None,
+            )
+
         parameters: dict[str, Any] = {}
         parameter_keys = (
             "model",
@@ -18646,6 +18964,48 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if repository_operation:
+            if repository_operation not in {"read", "write"}:
+                raise ValueError(
+                    f"node[{node_id}].repositoryOperation must be one of: read, write"
+                )
+            parameters["repositoryOperation"] = repository_operation
+            if repository_operation == "read":
+                # Defense in depth for plans produced before the planner began
+                # projecting the read-only operation into publishMode. Omnigent
+                # derives repository/GitHub mutation authority from this value.
+                parameters["publishMode"] = "none"
+        publish_mode = str(parameters.get("publishMode") or "").strip().lower()
+        assessment_verdict = str(
+            self._assessment_context.get("assessmentVerdict")
+            or self._assessment_context.get("assessment_verdict")
+            or ""
+        ).strip().upper()
+        assessment_artifact_ref = str(
+            self._assessment_context.get("assessmentArtifactRef")
+            or self._assessment_context.get("assessment_artifact_ref")
+            or ""
+        ).strip()
+        if (
+            agent_kind == "external"
+            and agent_id == "omnigent"
+            and publish_mode in {"branch", "pr"}
+            and repository_operation != "read"
+            and assessment_verdict == "FULLY_IMPLEMENTED"
+            and assessment_artifact_ref
+            and self._workflow_patch_enabled(
+                RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
+            )
+        ):
+            # This reserved parameter is derived exclusively from durable
+            # workflow state. It is deliberately absent from ``parameter_keys``
+            # so authored node/workflow inputs cannot grant no-commit authority.
+            parameters["repositoryOutcomePolicy"] = RepositoryOutcomePolicy(
+                allowNoCommit=True,
+                authority="trusted_assessment",
+                assessmentVerdict="FULLY_IMPLEMENTED",
+                assessmentArtifactRef=assessment_artifact_ref,
+            ).model_dump(mode="json", by_alias=True)
         if self._workflow_patch_enabled(
             RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
         ):
@@ -19024,6 +19384,14 @@ class MoonMindRunWorkflow:
                         )
                         metadata_payload["moonmind"] = moonmind_payload
                         parameters["metadata"] = metadata_payload
+
+        if self._patched_or_false_outside_workflow(
+            RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
+        ):
+            input_refs = self._append_durable_handoff_attachment_refs(
+                input_refs,
+                agent_kind=agent_kind,
+            )
 
         runtime_selection = {
             "runtimeId": agent_id,

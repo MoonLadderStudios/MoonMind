@@ -26,6 +26,11 @@ from uuid import UUID
 
 import pytest
 
+from api_service.db.models import (
+    ProviderCredentialSource,
+    ProviderProfileAuthState,
+    RuntimeMaterializationMode,
+)
 from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -43,14 +48,8 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
-from api_service.db.models import (
-    ProviderCredentialSource,
-    ProviderProfileAuthState,
-    RuntimeMaterializationMode,
-)
-from tests.unit.omnigent.test_policy_authority import policy_document
 from tests.integration.reliability.helpers import load_replay
-
+from tests.unit.omnigent.test_policy_authority import policy_document
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -299,6 +298,75 @@ async def test_clean_omnigent_workspace_publishes_existing_agent_commit(
     assert result["push_head_sha"] == _git_out(
         remote, "rev-parse", result["push_branch"]
     )
+
+
+@pytest.mark.asyncio
+async def test_pr_publication_projects_existing_remote_pull_request(
+    tmp_path, monkeypatch
+) -> None:
+    """The finalizer receives the PR created by the portable agent step."""
+
+    monkeypatch.setattr(
+        "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
+    )
+    resolved_selectors: list[tuple[str, str, str | None]] = []
+
+    async def resolve_pull_request_selector(
+        _self, *, repo: str, selector: str, github_token: str | None = None
+    ):
+        resolved_selectors.append((repo, selector, github_token))
+        return SimpleNamespace(
+            resolved=True,
+            pr_url="https://github.com/MoonLadderStudios/MoonMind/pull/3652",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService.resolve_pull_request_selector",
+        resolve_pull_request_selector,
+    )
+    remote = _init_bare_remote_with_seed(tmp_path)
+    workflow_id = "mm:pr-handoff-replay"
+    step_execution_id = "mm:pr-handoff-replay:agent:node-1"
+    runtime, workspace = await _materialize_workspace(
+        tmp_path,
+        workflow_id=workflow_id,
+        step_execution_id=step_execution_id,
+        source=remote,
+        starting_branch="main",
+        target_branch="agent/pr-handoff",
+    )
+    (workspace / "feature.py").write_text("print('fixed')\n", encoding="utf-8")
+    _git(workspace, "add", "feature.py")
+    _git(workspace, "commit", "-m", "Fix PR handoff")
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+
+    result = await runtime.publish_workspace(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_execution_id,
+        publication_identity="replay:omnigent-pr-handoff",
+        publish_mode="pr",
+        base_branch="main",
+        repository="MoonLadderStudios/MoonMind",
+        github_token="test-token",
+    )
+
+    assert result["pull_request_url"] == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/3652"
+    )
+    assert resolved_selectors == [
+        (
+            "MoonLadderStudios/MoonMind",
+            result["push_branch"],
+            "test-token",
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,36 @@ def test_capability_round_trips_scoped_owner_and_session() -> None:
     assert capability.agent_run_id == "run-1"
     assert capability.session_id == "session-1"
     assert capability.runtime_id == "codex_cli"
+    assert capability.source_kind == "managed_session"
+    assert capability.workspace_kind == "managed_runtime"
+    assert capability.workspace_id == "run-1"
+    assert capability.workspace_relative_path == "repo"
     assert capability.expires_at == 160
+
+
+def test_capability_round_trips_omnigent_sandbox_authority() -> None:
+    token = mint_container_job_session_capability(
+        secret="test-secret",
+        owner=OwnerIdentity(principalId="run-2", principalType="service"),
+        agent_run_id="run-2",
+        session_id="host-lease-2",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        workspace_kind="sandbox",
+        workspace_id="sandbox-2",
+        workspace_relative_path=".",
+        lifetime_seconds=60,
+        now=100,
+    )
+
+    capability = verify_container_job_session_capability(
+        token, secret="test-secret", now=120
+    )
+
+    assert capability.source_kind == "omnigent"
+    assert capability.workspace_kind == "sandbox"
+    assert capability.workspace_id == "sandbox-2"
+    assert capability.workspace_relative_path == "."
 
 
 def test_capability_rejects_tampering() -> None:

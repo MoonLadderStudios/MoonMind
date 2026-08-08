@@ -621,6 +621,33 @@ class AgentTerminalContinuationAuthority(BaseModel):
             and (owner_run_id is None or self.owner_run_id == owner_run_id)
         )
 
+
+class RepositoryOutcomePolicy(BaseModel):
+    """Workflow-owned authority for accepting an unchanged repository result."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["repository-outcome-policy/v1"] = Field(
+        "repository-outcome-policy/v1", alias="schemaVersion"
+    )
+    allow_no_commit: Literal[True] = Field(alias="allowNoCommit")
+    authority: Literal["trusted_assessment"]
+    assessment_verdict: Literal["FULLY_IMPLEMENTED"] = Field(
+        alias="assessmentVerdict"
+    )
+    assessment_artifact_ref: str = Field(
+        alias="assessmentArtifactRef", min_length=1
+    )
+
+    @field_validator("assessment_artifact_ref")
+    @classmethod
+    def _normalize_assessment_artifact_ref(cls, value: str) -> str:
+        return require_non_blank(
+            value,
+            field_name="repositoryOutcomePolicy.assessmentArtifactRef",
+        )
+
+
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
 

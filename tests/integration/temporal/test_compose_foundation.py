@@ -495,6 +495,11 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     assert "read_timeout 300 seconds" in squid_config
     assert "http_port omnigent-egress-proxy:3129 name=omnigent_control" in squid_config
     assert "http_access allow omnigent_listener omnigent_control omnigent_control_port" in squid_config
+    assert "^/mcp/container/tools/call$" in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_container_tool POST"
+    ) in squid_config
     assert "::/0" in squid_config
     assert "acl connection_limit maxconn 128" in squid_config
     assert expected_proxy_domains <= set(squid_config.split())
@@ -615,8 +620,8 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
         "http_proxy": "http://omnigent-egress-proxy:3129",
         "https_proxy": "http://omnigent-egress-proxy:3129",
-        "NO_PROXY": "localhost,127.0.0.1",
-        "no_proxy": "localhost,127.0.0.1",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
             "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
         ),
@@ -701,8 +706,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "HTTPS_PROXY": "http://omnigent-egress-proxy:3129",
         "http_proxy": "http://omnigent-egress-proxy:3129",
         "https_proxy": "http://omnigent-egress-proxy:3129",
-        "NO_PROXY": "localhost,127.0.0.1",
-        "no_proxy": "localhost,127.0.0.1",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
             "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
         ),
@@ -849,6 +854,12 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
 
     assert test_stage < production_stage < omnigent_copy
     assert "USER app" in dockerfile[test_stage:production_stage]
+    assert "COPY api_service/docker/cache_temporal_test_server.py" in dockerfile[
+        test_stage:production_stage
+    ]
+    assert "python /tmp/cache_temporal_test_server.py" in dockerfile[
+        test_stage:production_stage
+    ]
     assert "docker-buildx-plugin" in dockerfile[:test_stage]
     assert "docker buildx version" in dockerfile[:test_stage]
 
@@ -867,10 +878,7 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert worker_env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     )
-    assert worker_env["WORKFLOW_WORKSPACE_DAEMON_ROOT"] == (
-        "${WORKFLOW_WORKSPACE_DAEMON_ROOT:-/var/lib/docker/volumes/"
-        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}/_data}"
-    )
+    assert "WORKFLOW_WORKSPACE_DAEMON_ROOT" not in worker_env
     assert worker_env["MOONMIND_PYTHON_TEST_IMAGE"] == (
         "${MOONMIND_PYTHON_TEST_IMAGE:-}"
     )

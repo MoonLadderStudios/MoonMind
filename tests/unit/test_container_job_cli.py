@@ -22,6 +22,7 @@ _ENV = {
     "MOONMIND_AGENT_RUN_ID": "mm:run-1",
     "MOONMIND_RUNTIME_ID": "codex_cli",
     "MOONMIND_TASK_WORKFLOW_ID": "mm:run-1",
+    "MOONMIND_CONTAINER_JOBS_SESSION_ID": "sess-1",
 }
 
 
@@ -132,6 +133,32 @@ def test_generic_submission_injects_authoritative_identity_and_workspace() -> No
         "runtimeId": "codex_cli",
         "agentRunId": "mm:run-1",
         "relativePath": "repo",
+    }
+
+
+def test_python_test_submission_uses_omnigent_sandbox_authority() -> None:
+    payload = python_test_submission(
+        ["tests/unit/test_one.py"],
+        env={
+            **_ENV,
+            "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
+            "MOONMIND_CONTAINER_JOBS_SESSION_ID": "host-lease-1",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": "sandbox-1",
+            "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": ".",
+        },
+    )
+
+    assert payload["source"] == {
+        "source": "omnigent",
+        "workflowId": "mm:run-1",
+        "agentRunId": "mm:run-1",
+        "omnigentConversationId": "host-lease-1",
+    }
+    assert payload["spec"]["workspaceRef"] == {
+        "kind": "sandbox",
+        "workspaceId": "sandbox-1",
+        "relativePath": ".",
     }
 
 
