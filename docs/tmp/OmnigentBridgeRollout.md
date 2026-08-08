@@ -44,6 +44,21 @@ The proxy must establish the security substrate needed by native Workflow Chat b
 
 ## Phase 3 — Native Workflow Chat
 
+> **Status (MoonLadderStudios/MoonMind#3638 — Serve the native Omnigent web app):**
+> The native UI serving surface is implemented. MoonMind serves the stock native
+> Omnigent app through the binding-scoped route
+> `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]`
+> (`api_service/api/routers/omnigent_native_ui.py`), reverse-proxying stock UI
+> assets, injecting a browser-safe bootstrap
+> (`moonmind/omnigent/native_ui.py`, `window.__MOONMIND_OMNIGENT_CHAT__`),
+> scoping asset URLs, applying the embedded vs full-page security-header policy,
+> and gating on a compatible native UI/server version
+> (`OMNIGENT_NATIVE_UI_ENABLED` / `OMNIGENT_NATIVE_UI_VERSION`). The frontend
+> embeds it via an iframe and adds **Open in Omnigent**
+> (`frontend/src/entrypoints/WorkflowChatNative.tsx`); readiness reports the
+> native-UI serving state under `compatibilityDiagnostics.nativeUi`. Builds on
+> #3633 (opaque `chat_binding_id`) and #3634 (binding-scoped HTTP/SSE facade).
+
 ### 3.1 Browser-safe binding
 
 Add the authoritative binding projection and scoped routes:
