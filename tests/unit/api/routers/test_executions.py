@@ -5755,6 +5755,7 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         decision="approved",
         comment="Reviewed.",
         actor=user.email,
+        actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
     )
 
 def test_record_remediation_approval_decision_rejects_unknown_decision(

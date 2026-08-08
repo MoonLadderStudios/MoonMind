@@ -1030,6 +1030,13 @@ When the user clicks **Resume** on a failed Workflow:
 
 The Workflow Details page does not mutate terminal executions in place.
 
+Workflow Detail renders pending and completed remediation approvals from each
+link's durable `approvalState`; it never reconstructs decisions from logs. The
+projection includes bounded request/action/risk identity, status, actors,
+decision and expiration timestamps, rationale, and audit/artifact references,
+without credential bodies or raw infrastructure authority. The same projection
+appears for the remediation execution and its target.
+
 The Workflow Details page does not hide valid failed-Workflow actions merely because remediation is available.
 
 The Workflow Details page does not reconstruct edit-form state from display-only labels when a canonical submission draft is available.

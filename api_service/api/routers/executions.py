@@ -556,6 +556,35 @@ class RemediationApprovalStateModel(BaseModel):
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None
+    approvalRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    parameterDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestingActor: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    requestedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    expiresAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    rationale: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    decidedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedAt: datetime | None = Field(default=None, exclude_if=lambda value: value is None)
+    consumedByActionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    expectedTargetState: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    checkpointRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    stepExecutionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    bridgeSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    omnigentSessionId: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    hostLeaseRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    providerProfileLeaseRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    credentialGeneration: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policyDigest: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    policySnapshotRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    securityProfileRef: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    artifactRefs: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
@@ -11715,7 +11744,10 @@ def _remediation_approval_state_from_link(
 ) -> RemediationApprovalStateModel | None:
     raw_state = getattr(link, "approval_state", None)
     if isinstance(raw_state, dict):
-        return RemediationApprovalStateModel.model_validate(raw_state)
+        projected = dict(raw_state)
+        projected.setdefault("decision", projected.get("status", "pending"))
+        projected.setdefault("canDecide", projected.get("status") == "pending")
+        return RemediationApprovalStateModel.model_validate(projected)
 
     approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
     if authority_mode != "approval_gated":
@@ -12228,6 +12260,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+            actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(

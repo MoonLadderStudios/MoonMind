@@ -14,13 +14,18 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.remediation_context import (
+        RemediationLifecyclePublisher,
+    )
 
 _GUARD_STATE_RETENTION_SECONDS = 24 * 60 * 60
 _MAX_GUARD_STATE_ENTRIES = 2048
@@ -647,8 +652,14 @@ class _LedgerEntry:
 class RemediationActionAuthorityService:
     """Evaluate remediation action requests against authority boundaries."""
 
-    def __init__(self, *, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        lifecycle_publisher: RemediationLifecyclePublisher | None = None,
+    ) -> None:
         self._session = session
+        self._lifecycle_publisher = lifecycle_publisher
         self._decisions: dict[tuple[str, str, str], RemediationActionAuthorityResult] = {}
         self._request_shapes: dict[tuple[str, str], str] = {}
 
@@ -712,7 +723,7 @@ class RemediationActionAuthorityService:
             dry_run=dry_run,
         )
         cache_key = (workflow_id, idem, request_shape_hash)
-        if workflow_id and idem and cache_key in self._decisions:
+        if workflow_id and idem and not approval_ref and cache_key in self._decisions:
             return self._decisions[cache_key]
 
         if not workflow_id:
@@ -798,8 +809,210 @@ class RemediationActionAuthorityService:
             approval_ref=approval_ref,
         )
         self._request_shapes.setdefault(shape_key, request_shape_hash)
+        if result.decision == "approval_required":
+            await self._persist_approval_request(
+                link=link,
+                result=result,
+                request_shape_hash=request_shape_hash,
+                parameters=parameters,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+            )
+        elif approval_ref:
+            approval_error = self._validate_persisted_approval(
+                link=link,
+                approval_ref=approval_ref,
+                action_kind=normalized_action,
+                request_shape_hash=request_shape_hash,
+                parameter_digest=remediation_parameter_digest(
+                    _redact_payload(parameters or {})
+                ),
+            )
+            if approval_error is not None:
+                result = self._linked_result(
+                    link=link,
+                    action_kind=normalized_action,
+                    risk=result.risk,
+                    decision="denied",
+                    reason=approval_error,
+                    idempotency_key=idem,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
         self._decisions[cache_key] = result
         return result
+
+    async def _persist_approval_request(
+        self, *, link: Any, result: RemediationActionAuthorityResult,
+        request_shape_hash: str, parameters: Mapping[str, Any] | None,
+        requesting_principal: str, security_profile: RemediationSecurityProfile | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        request_id = f"{link.remediation_workflow_id}:approval:{request_shape_hash[:24]}"
+        raw_existing = getattr(link, "approval_state", None)
+        existing = raw_existing if isinstance(raw_existing, Mapping) else None
+        if existing is not None and existing.get("requestDigest") != request_shape_hash:
+            raise ValueError("approval_idempotency_conflict")
+        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
+        )
+        target_state = _enum_value(getattr(target, "state", None))
+        bridge = (
+            await self._session.execute(
+                select(db_models.OmnigentBridgeSession)
+                .where(
+                    db_models.OmnigentBridgeSession.moonmind_workflow_id
+                    == link.target_workflow_id,
+                    db_models.OmnigentBridgeSession.moonmind_run_id
+                    == link.target_run_id,
+                )
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        launch = (
+            bridge.effective_launch_snapshot_json
+            if bridge is not None
+            and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+            else {}
+        )
+        policy = launch.get("policyAuthority")
+        policy_authority = policy if isinstance(policy, Mapping) else {}
+        parameter_digest = remediation_parameter_digest(
+            safe_parameters if isinstance(safe_parameters, Mapping) else {}
+        )
+        approval_state = (
+            dict(existing)
+            if existing is not None
+            else {
+                "requestId": request_id,
+                "approvalRef": f"approval://remediation/{request_id}",
+                "requestDigest": request_shape_hash,
+                "parameterDigest": parameter_digest,
+                "remediationWorkflowId": link.remediation_workflow_id,
+                "remediationRunId": link.remediation_run_id,
+                "targetWorkflowId": link.target_workflow_id,
+                "targetRunId": link.target_run_id,
+                "actionKind": result.action_kind,
+                "riskTier": result.risk,
+                "redactedParameters": safe_parameters,
+                "expectedTargetState": target_state,
+                "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
+                "stepExecutionId": (
+                    getattr(bridge, "step_execution_id", None)
+                    or _authority_parameter(parameters, "stepExecutionId")
+                ),
+                "bridgeSessionId": getattr(bridge, "bridge_session_id", None),
+                "omnigentSessionId": getattr(bridge, "omnigent_session_id", None),
+                "hostRef": getattr(bridge, "omnigent_host_id", None),
+                "hostLeaseRef": getattr(bridge, "host_lease_ref", None),
+                "providerProfileLeaseRef": getattr(bridge, "provider_lease_id", None),
+                "credentialGeneration": getattr(bridge, "credential_generation", None),
+                "policyRef": policy_authority.get("policyRef"),
+                "policyDigest": policy_authority.get("policyDigest"),
+                "policySnapshotRef": policy_authority.get("snapshotRef"),
+                "securityProfileRef": getattr(security_profile, "profile_ref", None),
+                "approvalClass": "high_risk" if result.risk == "high" else "operator",
+                "reviewerRule": (
+                    "high_risk_reviewer" if result.risk == "high" else "operator"
+                ),
+                "requestingActor": requesting_principal,
+                "requestedAt": now.isoformat(),
+                "expiresAt": (now + timedelta(hours=1)).isoformat(),
+                "status": "pending",
+                "singleUse": True,
+            }
+        )
+        link.approval_state = approval_state
+        await self._session.commit()
+        if self._lifecycle_publisher is not None:
+            request_artifact = await self._lifecycle_publisher.publish_json_artifact(
+                remediation_workflow_id=link.remediation_workflow_id,
+                artifact_type="remediation.approval_request",
+                name=f"requests/remediation_approval-{request_id}.json",
+                payload={
+                    "schemaVersion": "v1",
+                    "approvalRef": approval_state["approvalRef"],
+                    "request": approval_state,
+                    "relatedArtifacts": dict(approval_state.get("artifactRefs") or {}),
+                },
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal="service:remediation-approval",
+            )
+            link.approval_state = {
+                **approval_state,
+                "artifactRefs": {
+                    **dict(approval_state.get("artifactRefs") or {}),
+                    "approvalRequest": request_artifact.artifact_id,
+                },
+            }
+            await self._session.commit()
+
+    @staticmethod
+    def _validate_persisted_approval(*, link: Any, approval_ref: str,
+        action_kind: str, request_shape_hash: str,
+        parameter_digest: str | None = None,
+        current_authority: Mapping[str, Any] | None = None) -> str | None:
+        raw_state = getattr(link, "approval_state", None)
+        state = raw_state if isinstance(raw_state, Mapping) else None
+        if state is None or state.get("approvalRef") != approval_ref:
+            return "approval_not_found"
+        status = str(state.get("status") or "")
+        if status != "approved":
+            return f"approval_{status or 'invalid'}"
+        try:
+            if datetime.fromisoformat(str(state["expiresAt"])) <= datetime.now(timezone.utc):
+                return "approval_expired"
+        except (KeyError, TypeError, ValueError):
+            return "approval_expiration_invalid"
+        if (
+            state.get("actionKind") != action_kind
+            or state.get("requestDigest") != request_shape_hash
+        ):
+            return "approval_action_mismatch"
+        if (
+            parameter_digest is not None
+            and state.get("parameterDigest") != parameter_digest
+        ):
+            return "approval_parameter_mismatch"
+        if state.get("targetRunId") != link.target_run_id:
+            return "approval_stale_target_state"
+        if current_authority is not None:
+            checks = (
+                ("expectedTargetState", "targetState", "approval_stale_target_state"),
+                ("checkpointRef", "checkpointRef", "approval_stale_checkpoint"),
+                ("stepExecutionId", "stepExecutionId", "approval_stale_checkpoint"),
+                ("bridgeSessionId", "bridgeSessionId", "approval_stale_bridge_session"),
+                ("omnigentSessionId", "omnigentSessionId", "approval_stale_session"),
+                ("hostRef", "hostRef", "approval_stale_host"),
+                ("hostLeaseRef", "hostLeaseRef", "approval_stale_host_lease"),
+                (
+                    "providerProfileLeaseRef",
+                    "providerProfileLeaseRef",
+                    "approval_stale_provider_profile_lease",
+                ),
+                (
+                    "credentialGeneration",
+                    "credentialGeneration",
+                    "approval_stale_credential_generation",
+                ),
+                ("policyRef", "policyRef", "approval_stale_policy"),
+                ("policyDigest", "policyDigest", "approval_stale_policy"),
+                ("policySnapshotRef", "policySnapshotRef", "approval_stale_policy"),
+                (
+                    "securityProfileRef",
+                    "securityProfileRef",
+                    "approval_stale_security_profile",
+                ),
+            )
+            for stored_key, current_key, reason in checks:
+                if state.get(stored_key) != current_authority.get(current_key):
+                    return reason
+        return None
 
     def _evaluate_with_link(
         self,
@@ -930,6 +1143,24 @@ class RemediationActionAuthorityService:
                 parameters=parameters,
             )
 
+        parameter_error = _action_parameter_error(
+            action_info=action_info,
+            parameters=parameters,
+        )
+        if parameter_error is not None:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=parameter_error,
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+
         if authority_mode == "approval_gated" and not approval_ref:
             return self._linked_result(
                 link=link,
@@ -956,19 +1187,9 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
-        if approval_ref and risk == "high" and not permissions.can_approve_high_risk:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason="high_risk_approval_permission_required",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
+        # Reviewer authority is proven by the persisted decision, not inherited
+        # from the action requester. The authoritative record is resolved below
+        # before an executable result is returned.
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:
@@ -988,24 +1209,6 @@ class RemediationActionAuthorityService:
                     approval_ref=approval_ref,
                     parameters=parameters,
                 )
-
-        parameter_error = _action_parameter_error(
-            action_info=action_info,
-            parameters=parameters,
-        )
-        if parameter_error is not None:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason=parameter_error,
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
 
         return self._linked_result(
             link=link,
@@ -2053,6 +2256,11 @@ def _string_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
 
+
+def _enum_value(value: Any) -> str | None:
+    raw = getattr(value, "value", value)
+    return _string_or_none(raw)
+
 def _int_or_zero(value: Any) -> int:
     try:
         return int(value)
@@ -2192,6 +2400,19 @@ def _authority_request_shape_hash(
     }
     encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def remediation_parameter_digest(parameters: Mapping[str, Any] | None) -> str:
+    encoded = json.dumps(
+        parameters or {}, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _authority_parameter(
+    parameters: Mapping[str, Any] | None, key: str
+) -> Any | None:
+    return parameters.get(key) if isinstance(parameters, Mapping) else None
 
 def _action_parameter_error(
     *,

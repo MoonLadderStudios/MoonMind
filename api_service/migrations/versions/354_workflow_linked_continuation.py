@@ -8,14 +8,14 @@ relationship. Distinct from control-stop continuations, remediation links, and
 checkpoint branches.
 
 Revision ID: 354_workflow_linked_continuation
-Revises: 353_omnigent_chat_binding
+Revises: 354_remediation_approvals
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 revision = "354_workflow_linked_continuation"
-down_revision = "353_omnigent_chat_binding"
+down_revision = "354_remediation_approvals"
 branch_labels = None
 depends_on = None
 

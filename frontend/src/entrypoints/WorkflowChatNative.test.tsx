@@ -105,7 +105,7 @@ describe('WorkflowChatNative', () => {
     expect(queryByTestId('workflow-native-chat-frame')).toBeNull();
   });
 
-  it('shows the unavailable reason and still renders the fallback', async () => {
+  it('shows the unavailable reason, a Retry, and still renders the fallback', async () => {
     mockFetch(
       bindingResponse({ state: 'unavailable', unavailableReason: 'native_ui_upstream_unavailable', chatUrl: '' }),
     );
@@ -116,7 +116,74 @@ describe('WorkflowChatNative', () => {
     );
 
     expect(await findByTestId('workflow-native-chat-unavailable')).toBeTruthy();
+    // The unavailable state is retryable, so a stable Retry action is offered.
+    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
     expect(await findByText('legacy projection')).toBeTruthy();
+  });
+
+  it('surfaces a stable reason and Retry when the binding request is unreachable', async () => {
+    // A non-404 error makes fetchWorkflowChatBinding throw, so the query errors.
+    mockFetch(null, 500);
+    const { findByTestId, findByText } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+
+    const unavailable = await findByTestId('workflow-native-chat-unavailable');
+    expect(unavailable.textContent).toContain('native_chat_binding_unreachable');
+    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
+    // Native failure still shows the read-only fallback rather than swapping in a
+    // behaviorally different interactive chat.
+    expect(await findByText('legacy projection')).toBeTruthy();
+  });
+
+  it('offers Retry while the native session is still starting', async () => {
+    mockFetch(bindingResponse({ state: 'starting', chatUrl: '' }));
+    const { findByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active />,
+    );
+
+    const unavailable = await findByTestId('workflow-native-chat-unavailable');
+    expect(unavailable.textContent).toContain('native_chat_session_starting');
+    expect(await findByTestId('workflow-native-chat-retry')).toBeTruthy();
+  });
+
+  it('does not offer Retry for a runtime that never had a native binding', async () => {
+    mockFetch(null, 404);
+    const { findByText, queryByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+
+    // A clean 404 is a stable historical state: no unavailable banner, no Retry,
+    // just the read-only fallback projection.
+    expect(await findByText('legacy projection')).toBeTruthy();
+    expect(queryByTestId('workflow-native-chat-unavailable')).toBeNull();
+    expect(queryByTestId('workflow-native-chat-retry')).toBeNull();
+  });
+
+  it('refetches the binding and mounts native chat when Retry succeeds', async () => {
+    const fetchMock = vi
+      .fn()
+      // First attempt: upstream not reachable yet.
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => null } as unknown as Response)
+      // Retry: the native binding is now available.
+      .mockResolvedValue({ ok: true, status: 200, json: async () => bindingResponse() } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { findByTestId } = renderWithClient(
+      <WorkflowChatNative apiBase={API_BASE} workflowId={WORKFLOW_ID} active>
+        <div>legacy projection</div>
+      </WorkflowChatNative>,
+    );
+
+    const retry = await findByTestId('workflow-native-chat-retry');
+    fireEvent.click(retry);
+
+    const frame = await findByTestId('workflow-native-chat-frame');
+    expect(frame.getAttribute('src')).toBe(CHAT_URL);
   });
 
   it('does not fetch while the chat tab is inactive', () => {
