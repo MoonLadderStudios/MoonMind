@@ -3268,11 +3268,6 @@ def _initial_stream_cursor(
     )
 
 
-@workflow_chat_router.api_route(
-    "/{chat_binding_id}/omnigent/{omnigent_path:path}",
-    methods=["GET", "POST"],
-    responses=_PUBLIC_ERROR_RESPONSES,
-)
 async def workflow_chat_binding_facade(
     chat_binding_id: str,
     omnigent_path: str,
@@ -3311,6 +3306,23 @@ async def workflow_chat_binding_facade(
         )
     except (WorkflowChatFacadeError, OmnigentBridgeError) as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+# Register the single binding-scoped facade handler once per HTTP method with an
+# explicit, method-suffixed operation id. A single ``api_route(methods=[...])``
+# derives its OpenAPI operation id from ``route.methods`` (a set), so the
+# exported operation id — and the frontend types generated from it — would flip
+# between ``_get`` and ``_post`` across processes with different hash seeds,
+# making the generated-contract check non-deterministic. One route per method
+# keeps the exported contract stable (matching the proxy router idiom).
+for _facade_method in ("GET", "POST"):
+    workflow_chat_router.add_api_route(
+        "/{chat_binding_id}/omnigent/{omnigent_path:path}",
+        workflow_chat_binding_facade,
+        methods=[_facade_method],
+        operation_id=f"workflow_chat_binding_facade_{_facade_method.lower()}",
+        responses=_PUBLIC_ERROR_RESPONSES,
+    )
 
 
 async def _dispatch_workflow_chat_facade(

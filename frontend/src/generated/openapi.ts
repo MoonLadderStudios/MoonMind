@@ -3695,6 +3695,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflow-chat-bindings/{chat_binding_id}/omnigent/{omnigent_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workflow Chat Binding Facade
+         * @description Single binding-scoped entrypoint for the native Omnigent Workflow Chat UI.
+         *
+         *     Not a generic reverse proxy: every request is matched against an explicit
+         *     method + route allowlist, reauthorized against the durable binding, checked
+         *     for identity substitution, capability-gated from recomputed trusted state,
+         *     and forwarded only to the server-resolved provider session with MoonMind
+         *     credentials stripped and upstream credentials injected server-side.
+         */
+        get: operations["workflow_chat_binding_facade_get"];
+        put?: never;
+        /**
+         * Workflow Chat Binding Facade
+         * @description Single binding-scoped entrypoint for the native Omnigent Workflow Chat UI.
+         *
+         *     Not a generic reverse proxy: every request is matched against an explicit
+         *     method + route allowlist, reauthorized against the durable binding, checked
+         *     for identity substitution, capability-gated from recomputed trusted state,
+         *     and forwarded only to the server-resolved provider session with MoonMind
+         *     credentials stripped and upstream credentials injected server-side.
+         */
+        post: operations["workflow_chat_binding_facade_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/codex-catalog-readiness": {
         parameters: {
             query?: never;
@@ -22218,6 +22254,214 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workflow_chat_binding_facade_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_binding_id: string;
+                omnigent_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+        };
+    };
+    workflow_chat_binding_facade_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_binding_id: string;
+                omnigent_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
         };
