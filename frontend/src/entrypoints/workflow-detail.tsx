@@ -91,6 +91,7 @@ import {
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
 } from '../lib/workflowDetailRoutes';
+import { WorkflowNativeChatRoute } from '../features/workflow-native-chat';
 
 export {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -8536,7 +8537,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const executionIdempotencyKey = execution?.idempotencyKey || execution?.idempotency_key || '';
   const shouldResolveBridgeSession = Boolean(
     execution &&
-      detailSubroute === 'chat' &&
+      detailSubroute === 'debug' &&
       !resolvedAgentRunId &&
       !explicitBridgeSessionId &&
       workflowId,
@@ -9689,11 +9690,45 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           </div>
 
           {chatTabActive ? (
-            <section className="stack td-chat-region td-evidence-region" aria-label="Workflow chat">
+            execution ? (
+              <WorkflowNativeChatRoute
+                apiBase={payload.apiBase}
+                workflowId={workflowId}
+                routeWorkflowId={taskId ?? workflowId}
+                search={search}
+                workflowTitle={workflowSubject}
+                statusPill={
+                  <WorkflowLifecycleStatusPill
+                    status={resolveWorkflowDisplayStatus(
+                      execution.rawState,
+                      execution.state,
+                      execution.status,
+                    )}
+                  />
+                }
+                runtimeLabel={
+                  execution.targetRuntime ? formatRuntimeLabel(execution.targetRuntime) : null
+                }
+                pollIntervalMs={detailPoll}
+                onNavigate={setDetailSubroute}
+              />
+            ) : (
+              <p className="small" role="status">
+                Loading workflow chat…
+              </p>
+            )
+          ) : null}
+
+          {debugTabActive ? (
+            <section
+              className="stack td-chat-region td-evidence-region"
+              aria-label="Session diagnostics"
+            >
               <div>
-                <h3>Workflow Chat</h3>
+                <h3>Session diagnostics</h3>
                 <p className="small">
-                  Session transcript, live runtime events, and eligible operator controls for this workflow.
+                  Read-only bridge session transcript, live runtime events, and eligible operator
+                  controls. Diagnostics only — the native chat experience is on the Chat tab.
                 </p>
               </div>
               {logStreamingEnabled ? (

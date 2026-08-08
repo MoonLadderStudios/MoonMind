@@ -499,6 +499,21 @@ describe('Workflow Detail Entrypoint', () => {
           json: async () => stepsSnapshot,
         } as Response);
       }
+      if (url.includes('/chat-binding')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            chatBindingId: 'cb-test',
+            workflowId: 'test-123',
+            chatUrl: '/omnigent-ui/workflow-chat/cb-test?embedded=1',
+            apiBase: '/api/workflow-chat-bindings/cb-test/omnigent',
+            state: 'available',
+            readOnly: false,
+            capabilities: { sendMessage: true },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
         return Promise.resolve({
           ok: true,
@@ -8169,7 +8184,8 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Encoded task')).toBeTruthy();
+      // The title renders in both the detail header and the native chat context bar.
+      expect(screen.getAllByText('Encoded task').length).toBeGreaterThan(0);
       expect(screen.getByText('Workflow mm:test-123')).toBeTruthy();
     });
 
@@ -8210,7 +8226,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders bridge session events before managed-runtime missing copy', async () => {
-    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/debug?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -8314,7 +8330,7 @@ describe('Workflow Detail Entrypoint', () => {
     ['direct Codex compatibility', 'codex_direct_compat'],
     ['Omnigent', 'omnigent_bridge'],
   ])('projects an active %s journey through shared history, SSE, chat, and resources', async (_label, source) => {
-    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/debug?source=temporal');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const bridgeSessionId = `brs-parity-${source}`;
@@ -8374,7 +8390,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders an understandable failed-before-stream lifecycle with zero provider events', async () => {
-    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/debug?source=temporal');
     const mockExecution = {
       taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
       temporalRunId: 'failed-launch-run', runId: 'failed-launch-run', source: 'temporal',
@@ -8457,7 +8473,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('shows an authorization error instead of resource preview or download actions', async () => {
-    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/debug?source=temporal');
     const execution = {
       taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
       temporalRunId: 'auth-run', runId: 'auth-run', source: 'temporal',
@@ -8495,7 +8511,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders bridge terminal failure evidence even without provider deltas', async () => {
-    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/debug?source=temporal');
     const mockExecution = {
       taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
       title: 'Bridge failure', summary: 'Failed before streaming',
@@ -8540,7 +8556,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('uses advertised bridge capabilities and exposes delivery-unknown messages', async () => {
-    window.history.pushState({}, 'Bridge Controls Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Controls Test', '/workflows/test-123/debug?source=temporal');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = {
@@ -8579,7 +8595,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('shows failed bridge delivery and denies controls not advertised by the server', async () => {
-    window.history.pushState({}, 'Bridge Failed Controls Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Failed Controls Test', '/workflows/test-123/debug?source=temporal');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge controls', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
@@ -8604,7 +8620,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('executes advertised bridge elicitation, clear, and cancel controls and preserves durable outcomes', async () => {
-    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/debug?source=temporal');
     const priorEventSource = window.EventSource;
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.EventSource = MockEventSource as unknown as typeof EventSource;
@@ -8685,7 +8701,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not expose bridge elicitation, clear, or cancel actions unless advertised', async () => {
-    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/chat?source=temporal');
+    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/debug?source=temporal');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
@@ -10162,7 +10178,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('handles Escape as a supported stop action and exposes disabled reasons for compact chat controls', async () => {
-    window.history.pushState({}, 'Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/test-123/debug?source=temporal');
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: {
