@@ -58,6 +58,10 @@ CODE_UNSUPPORTED_MEDIA_TYPE = "omnigent_chat_unsupported_media_type"
 CODE_PAYLOAD_TOO_LARGE = "omnigent_chat_payload_too_large"
 CODE_MALFORMED_PAYLOAD = "omnigent_chat_malformed_payload"
 CODE_CONTENT_BLOCKED = "omnigent_chat_content_blocked"
+# Enforcement (outbound scan) could not be performed. Distinct from a content
+# block so a caller can tell "your message contains a secret" apart from "the
+# security scan is unavailable", without either echoing the detected value.
+CODE_ENFORCEMENT_UNAVAILABLE = "omnigent_chat_enforcement_unavailable"
 
 
 class WorkflowChatFacadeError(OmnigentBridgeError):
@@ -65,8 +69,28 @@ class WorkflowChatFacadeError(OmnigentBridgeError):
 
     Subclasses :class:`OmnigentBridgeError` so the router's existing
     bridge-error-to-HTTP mapping renders one consistent, non-enumerating error
-    envelope for both facades.
+    envelope for both facades. ``public_details`` carries bounded, already
+    redacted metadata (for example a blocked scan's finding categories and safe
+    locations) that the router may surface to the caller; it never contains a
+    detected value or raw message body.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_class: str = "integration_error",
+        status_code: int | None = None,
+        code: str | None = None,
+        public_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            failure_class=failure_class,
+            status_code=status_code,
+            code=code,
+        )
+        self.public_details: dict[str, Any] = dict(public_details or {})
 
 
 # --- Capability keys the browser projection understands (WorkflowChatPanel §5)

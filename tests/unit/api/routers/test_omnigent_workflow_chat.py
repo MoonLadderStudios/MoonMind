@@ -1005,15 +1005,18 @@ def test_list_response_topology_redacted_recursively() -> None:
 # --- Outbound secret scan (fail-closed high-security mode) -------------------
 
 
+def _force_high_security(monkeypatch) -> None:
+    # The native-scan contract resolves the effective mode through the function
+    # bound in its own namespace, so patch it there to force high-security mode
+    # for the whole outbound-scan path under test.
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *a, **k: True,
+    )
+
+
 def test_high_security_blocks_secret_bearing_message(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "moonmind.security.outbound_scan.resolve_high_security_mode",
-        lambda *a, **k: True,
-    )
-    monkeypatch.setattr(
-        "api_service.api.routers.omnigent_bridge.resolve_high_security_mode",
-        lambda *a, **k: True,
-    )
+    _force_high_security(monkeypatch)
     client, proxy, _store = _build()
 
     response = client.post(
@@ -1029,9 +1032,123 @@ def test_high_security_blocks_secret_bearing_message(monkeypatch) -> None:
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "omnigent_chat_content_blocked"
+    detail = response.json()["detail"]
+    assert detail["code"] == "omnigent_chat_content_blocked"
+    # Only the redacted finding category + safe location are surfaced, never the
+    # detected value or the message body.
+    assert detail["findings"] == [
+        {"category": "token", "location": "body.data.content[0].text"}
+    ]
+    assert "ghp_" not in response.text
     # The blocked content never reached the provider.
     assert proxy.posted == []
+
+
+def test_high_security_allows_clean_message_and_forwards(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={"type": "message", "data": {"content": [{"type": "text", "text": "hi"}]}},
+    )
+
+    assert response.status_code == 200
+    # A clean message is forwarded unchanged after an allow result.
+    assert len(proxy.posted) == 1
+
+
+def test_high_security_disabled_forwards_original_unchanged(monkeypatch) -> None:
+    # Default (disabled) mode: the scan returns allow and the payload forwards
+    # unchanged even when it would look secret-like under high-security mode.
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *a, **k: False,
+    )
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "data": {"content": [{"type": "text", "text": "ghp_" + "a" * 36}]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(proxy.posted) == 1
+
+
+def test_high_security_fails_closed_on_uninspectable_binary_part(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "data": {"content": [{"type": "input_image", "image_url": "blob://x"}]},
+        },
+    )
+
+    # A binary/opaque part is outside the text-scan contract: enforcement is
+    # unavailable, distinct from a content block, and nothing is forwarded.
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "omnigent_chat_enforcement_unavailable"
+    assert proxy.posted == []
+
+
+def test_high_security_scanner_error_fails_closed(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("scanner down")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.scan_outbound_bundle", _boom
+    )
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={"type": "message", "data": {"content": [{"type": "text", "text": "hi"}]}},
+    )
+
+    # An unavailable/erroring scanner fails closed rather than forwarding.
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "omnigent_chat_enforcement_unavailable"
+    assert proxy.posted == []
+
+
+def test_high_security_scans_elicitation_response(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
+        json={"decision": "approve", "note": "token=" + "z" * 24},
+    )
+
+    # Approval-response text is a scanned outbound surface and blocks on a secret.
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_content_blocked"
+    assert proxy.resolved == []
+
+
+def test_message_claim_records_scanned_payload_digest(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+    client, proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={"type": "message", "data": {"content": [{"type": "text", "text": "hi"}]}},
+    )
+
+    assert response.status_code == 200
+    # The idempotency claim durably names the exact payload that passed the scan,
+    # so an allow result cannot be reused after the content changes.
+    claim = next(entry for entry in store.lifecycle if entry["kind"] == "claim")
+    assert claim["metadata"].get("scannedPayloadDigest")
 
 
 # --- Approval authority ------------------------------------------------------
