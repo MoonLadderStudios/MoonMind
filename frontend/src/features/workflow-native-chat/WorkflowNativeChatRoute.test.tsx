@@ -104,16 +104,19 @@ describe('WorkflowNativeChatRoute', () => {
     expect(onNavigate).toHaveBeenCalledWith('overview', '/workflows/wf-1/overview?source=temporal');
   });
 
-  it('shows a terminal read-only session with Continue in a new workflow', async () => {
+  it('shows a terminal read-only session and withholds Continue until the handoff exists', async () => {
     mockBinding(() => ({
       body: { ...AVAILABLE, state: 'ended', readOnly: true, capabilities: {} },
     }));
     renderRoute();
     await screen.findByTitle('Ship the thing — Omnigent chat');
     expect(screen.getByText(/session ended/i)).toBeTruthy();
+    // The continuation handoff (linked execution + authorized source identity)
+    // does not exist yet, so the misleading "Continue" affordance is withheld
+    // rather than pointed at the source workflow's Overview.
     expect(
-      screen.getByRole('link', { name: 'Continue in a new workflow' }),
-    ).toBeTruthy();
+      screen.queryByRole('link', { name: 'Continue in a new workflow' }),
+    ).toBeNull();
   });
 
   it('renders an explicit unsupported-runtime state with no iframe', async () => {

@@ -30,14 +30,42 @@ export function chatBindingEndpoint(apiBase: string, workflowId: string): string
   return `${base}/executions/${encodeURIComponent(workflowId)}/chat-binding`;
 }
 
+/** Default abort deadline for a single chat-binding request. */
+export const DEFAULT_CHAT_BINDING_TIMEOUT_MS = 15000;
+
 export async function fetchWorkflowChatBinding(
   apiBase: string,
   workflowId: string,
+  requestTimeoutMs: number = DEFAULT_CHAT_BINDING_TIMEOUT_MS,
 ): Promise<WorkflowChatBinding> {
-  const response = await fetch(chatBindingEndpoint(apiBase, workflowId), {
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-  });
+  // A stalled proxy or hung upstream must not leave the request pending forever:
+  // bound it with an abort deadline so React Query resolves to an actionable,
+  // retryable error state instead of an indefinite loading spinner.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(chatBindingEndpoint(apiBase, workflowId), {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new ChatBindingRequestError(
+        408,
+        'Timed out resolving chat binding',
+        'chat_binding_request_timeout',
+      );
+    }
+    throw new ChatBindingRequestError(
+      0,
+      `Failed to reach chat binding service: ${(error as Error).message}`,
+      'chat_binding_request_failed',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
     let code: string | null = null;
     try {
@@ -68,18 +96,34 @@ export function useWorkflowChatBinding(args: {
   apiBase: string;
   workflowId: string;
   enabled: boolean;
+  /**
+   * Whether the parent workflow has reached a terminal state. While the workflow
+   * is nonterminal a later Step can create a different active chat-capable
+   * session (and therefore a new authoritative `chatBindingId`), so the resolver
+   * must keep polling to discover the replacement rather than staying attached to
+   * a superseded session.
+   */
+  workflowTerminal?: boolean;
   pollIntervalMs?: number;
+  requestTimeoutMs?: number;
 }): UseQueryResult<WorkflowChatBinding, ChatBindingRequestError> {
-  const { apiBase, workflowId, enabled, pollIntervalMs = 5000 } = args;
+  const {
+    apiBase,
+    workflowId,
+    enabled,
+    workflowTerminal = false,
+    pollIntervalMs = 5000,
+    requestTimeoutMs,
+  } = args;
   return useQuery<WorkflowChatBinding, ChatBindingRequestError>({
     queryKey: workflowChatBindingQueryKey(workflowId),
-    queryFn: () => fetchWorkflowChatBinding(apiBase, workflowId),
+    queryFn: () => fetchWorkflowChatBinding(apiBase, workflowId, requestTimeoutMs),
     enabled: enabled && Boolean(workflowId),
     retry: false,
-    // Only poll while the session is still coming up; a resolved binding is
-    // stable and the native application owns its own liveness afterwards.
-    refetchInterval: (query) =>
-      query.state.data?.state === 'starting' ? pollIntervalMs : false,
+    // Keep resolving the authoritative binding while the workflow is nonterminal
+    // so a new active Step's session is discovered; stop only once the workflow
+    // is terminal, when no further chat-capable session can appear.
+    refetchInterval: () => (workflowTerminal ? false : pollIntervalMs),
     staleTime: pollIntervalMs,
   });
 }

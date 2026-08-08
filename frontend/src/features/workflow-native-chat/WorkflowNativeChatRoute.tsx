@@ -37,6 +37,8 @@ interface WorkflowNativeChatRouteProps {
   statusPill?: ReactNode;
   runtimeLabel?: string | null;
   enabled?: boolean;
+  /** Whether the parent workflow has reached a terminal state. */
+  workflowTerminal?: boolean;
   pollIntervalMs?: number;
   onNavigate: (subroute: WorkflowDetailSubroute, href: string) => void;
 }
@@ -50,6 +52,7 @@ export function WorkflowNativeChatRoute({
   statusPill = null,
   runtimeLabel = null,
   enabled = true,
+  workflowTerminal = false,
   pollIntervalMs,
   onNavigate,
 }: WorkflowNativeChatRouteProps) {
@@ -57,6 +60,7 @@ export function WorkflowNativeChatRoute({
     apiBase,
     workflowId,
     enabled,
+    workflowTerminal,
     ...(pollIntervalMs != null ? { pollIntervalMs } : {}),
   });
   const binding = query.data ?? null;
@@ -94,7 +98,12 @@ export function WorkflowNativeChatRoute({
   const overviewHref = workflowDetailSubrouteHref(routeWorkflowId, 'overview', search);
   const evidenceHref = workflowDetailSubrouteHref(routeWorkflowId, 'evidence', search);
   const debugHref = workflowDetailSubrouteHref(routeWorkflowId, 'debug', search);
-  const continueHref = serverStatus === 'terminal' ? overviewHref : null;
+  // "Continue in a new workflow" is intentionally omitted until the
+  // workflow-creation/continuation handoff (which must carry the authorized
+  // source identity and evidence and create a linked execution) exists. Pointing
+  // it at the source workflow's Overview would create no linked continuation and
+  // only mislead the operator, so the affordance is withheld rather than faked.
+  const continueHref = null;
 
   const navigate = (href: string) => {
     let pathname: string;

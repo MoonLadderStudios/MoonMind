@@ -9710,6 +9710,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 runtimeLabel={
                   execution.targetRuntime ? formatRuntimeLabel(execution.targetRuntime) : null
                 }
+                workflowTerminal={isTerminalExecution}
                 pollIntervalMs={detailPoll}
                 onNavigate={setDetailSubroute}
               />
