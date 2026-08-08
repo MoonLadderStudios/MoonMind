@@ -2975,7 +2975,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         pending = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
-            parameters={},
+            parameters={"containerRef": "container-1"},
             dry_run=False,
             idempotency_key="gated-pending",
             requesting_principal="user:operator",
@@ -2986,7 +2986,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert pending.reason == "approval_gated_requires_approval"
         assert pending.executable is False
 
-        approved = await service.evaluate_action_request(
+        forged = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
             parameters={"containerRef": "container-1"},
@@ -2997,10 +2997,9 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
             security_profile=_admin_profile(),
             approval_ref="approval://ops/1",
         )
-        assert approved.decision == "allowed"
-        assert approved.executable is True
-        assert approved.audit["requestingPrincipal"] == "user:operator"
-        assert approved.audit["executionPrincipal"] == "service:admin-healer"
+        assert forged.decision == "denied"
+        assert forged.reason == "approval_not_found"
+        assert forged.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_profile_permissions_and_risk(
