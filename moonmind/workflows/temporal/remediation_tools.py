@@ -1267,6 +1267,9 @@ class RemediationEvidenceToolService:
             link.approval_state = {
                 **dict(link.approval_state or {}),
                 "artifactRefs": {
+                    **dict(
+                        (link.approval_state or {}).get("artifactRefs") or {}
+                    ),
                     "actionRequest": request_artifact.artifact_id,
                     "actionResult": result_artifact.artifact_id,
                     "verification": verification_artifact.artifact_id,

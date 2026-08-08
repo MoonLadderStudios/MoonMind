@@ -4,7 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -2388,6 +2388,99 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert link is not None
         assert link.latest_action_summary == action_kind
         assert link.outcome == "applied"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_preserves_approval_lifecycle_artifact_refs(
+    tmp_path, mock_client_adapter
+):
+    """Action evidence must extend the approval lifecycle for issue #3620."""
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        parameters = {"reason": "restart helper", "containerRef": "container-1"}
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters=parameters,
+            dry_run=False,
+            idempotency_key="issue-3620-artifact-links",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="issue-3620-artifact-links",
+            parameters=parameters,
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        link.approval_state = {
+            "approvalRef": "approval://remediation/issue-3620-artifact-links",
+            "status": "approved",
+            "expiresAt": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+            "requestDigest": "request-digest",
+            "artifactRefs": {
+                "approvalRequest": "artifact-approval-request",
+                "approvalDecision": "artifact-approval-decision",
+            },
+        }
+
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+        )
+        with patch.object(
+            tools,
+            "_current_approval_authority",
+            return_value={},
+        ), patch.object(
+            RemediationActionAuthorityService,
+            "_validate_persisted_approval",
+            return_value=None,
+        ):
+            result = await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=authority.to_dict(),
+                guard_result=guard.to_dict(),
+                approval_ref=link.approval_state["approvalRef"],
+                principal="service:test",
+            )
+
+        assert link.approval_state["artifactRefs"] == {
+            "approvalRequest": "artifact-approval-request",
+            "approvalDecision": "artifact-approval-decision",
+            **result["artifactRefs"],
+        }
 
 
 @pytest.mark.asyncio
