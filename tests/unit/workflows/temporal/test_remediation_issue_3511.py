@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -75,6 +76,62 @@ def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
     )
 
     assert expected == {item["actionKind"] for item in catalog}
+
+
+async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approval() -> None:
+    link = SimpleNamespace(
+        remediation_workflow_id="remediation-1",
+        remediation_run_id="remediation-run-1",
+        target_workflow_id="target-1",
+        target_run_id="target-run-1",
+        authority_mode="approval_gated",
+        approval_state=None,
+    )
+    session = AsyncMock()
+    session.get.return_value = link
+    service = RemediationActionAuthorityService(session=session)
+    kwargs = dict(
+        remediation_workflow_id="remediation-1",
+        action_kind="host.restart",
+        parameters={
+            "providerProfileId": "profile-1",
+            "hostLeaseRef": "lease-1",
+            "expectedHostState": "running",
+        },
+        dry_run=False,
+        idempotency_key="action-1",
+        requesting_principal="operator:requester",
+        permissions=RemediationPermissionSet(
+            can_view_target=True, can_request_admin_profile=True
+        ),
+        security_profile=RemediationSecurityProfile(
+            profile_ref="admin",
+            execution_principal="operator:requester",
+            allowed_action_kinds=("host.restart",),
+        ),
+    )
+
+    pending = await service.evaluate_action_request(**kwargs)
+    assert pending.decision == "approval_required"
+    assert link.approval_state["status"] == "pending"
+    assert link.approval_state["requestDigest"]
+    session.commit.assert_awaited_once()
+
+    link.approval_state.update(
+        status="approved",
+        decisionActor="operator:reviewer",
+        expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+    )
+    allowed = await service.evaluate_action_request(
+        **kwargs, approval_ref=link.approval_state["approvalRef"]
+    )
+    assert allowed.decision == "allowed"
+
+    denied = await service.evaluate_action_request(
+        **kwargs, approval_ref="approval://remediation/caller-invented"
+    )
+    assert denied.decision == "denied"
+    assert denied.reason == "approval_not_found"
 
 
 def _policy_snapshot(decision: str) -> dict:

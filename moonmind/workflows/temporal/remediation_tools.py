@@ -887,6 +887,29 @@ class RemediationEvidenceToolService:
             guard_result=guard_result,
             action_request=action_request,
         )
+        resolved_approval: dict[str, Any] | None = None
+        if approval_ref is not None:
+            state = getattr(link, "approval_state", None)
+            if not isinstance(state, Mapping) or state.get("approvalRef") != approval_ref:
+                raise RemediationEvidenceToolError("approval_not_found")
+            approval_status = str(state.get("status") or "")
+            if approval_status != "approved":
+                raise RemediationEvidenceToolError(f"approval_{approval_status or 'invalid'}")
+            try:
+                expired = datetime.fromisoformat(str(state.get("expiresAt") or "")) <= datetime.now(timezone.utc)
+            except ValueError as exc:
+                raise RemediationEvidenceToolError("approval_expiration_invalid") from exc
+            if expired:
+                link.approval_state = {**dict(state), "status": "expired"}
+                await self._session.commit()
+                raise RemediationEvidenceToolError("approval_expired")
+            if state.get("actionKind") != action_kind:
+                raise RemediationEvidenceToolError("approval_action_mismatch")
+            if state.get("targetRunId") != link.target_run_id or state.get("expectedTargetState") != link.target_run_id:
+                link.approval_state = {**dict(state), "status": "stale"}
+                await self._session.commit()
+                raise RemediationEvidenceToolError("approval_stale_target_state")
+            resolved_approval = dict(state)
         # Authority comes from the target run's immutable launch evidence, never
         # from tool arguments. Re-resolve the persisted version immediately
         # before dispatch so disabled, invalid, or digest-conflicting policy
@@ -924,6 +947,7 @@ class RemediationEvidenceToolService:
                     **dict(action_request),
                     "authority": dict(authority_result),
                     "guard": dict(guard_result),
+                    "resolvedApproval": resolved_approval,
                 }
             ),
             target_workflow_id=link.target_workflow_id,
@@ -940,6 +964,18 @@ class RemediationEvidenceToolService:
             target=preparation.target,
         )
 
+        # Claim single-use authority durably before crossing the adapter
+        # boundary. An Activity crash can therefore never replay the mutation
+        # under the same approval; the action guard/result ledger owns recovery.
+        if resolved_approval is not None:
+            link.approval_state = {
+                **resolved_approval,
+                "status": "consumed",
+                "consumedAt": datetime.now(timezone.utc).isoformat(),
+                "consumedByActionId": action_request["actionId"],
+                "actionRequestArtifactRef": request_artifact.artifact_id,
+            }
+            await self._session.commit()
         raw_result = await self._action_executor.execute_action(
             action_request=action_request,
             guard_result=guard_result,
@@ -984,6 +1020,7 @@ class RemediationEvidenceToolService:
             "beforeStateRef": _redact_text(raw_result.get("beforeStateRef")),
             "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
             "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
+            "approvalRef": approval_ref,
         }
         if isinstance(raw_result.get("policyAuthority"), Mapping):
             result_payload["policyAuthority"] = dict(raw_result["policyAuthority"])

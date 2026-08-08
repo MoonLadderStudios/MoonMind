@@ -1033,6 +1033,7 @@ class TemporalExecutionService:
         decision: str,
         comment: str | None,
         actor: str | None,
+        actor_can_approve_high_risk: bool = False,
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise TemporalExecutionValidationError(
@@ -1043,7 +1044,12 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink,
             remediation_workflow_id,
         )
-        expected_request_id = f"{remediation_workflow_id}:approval"
+        approval = link.approval_state if link is not None else None
+        expected_request_id = (
+            str(approval.get("requestId") or "")
+            if isinstance(approval, Mapping)
+            else ""
+        )
         if (
             link is None
             or link.authority_mode != "approval_gated"
@@ -1053,6 +1059,47 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "request_id must reference a pending approval-gated remediation."
             )
+        assert isinstance(approval, Mapping)
+        if (
+            approval.get("reviewerRule") == "high_risk_reviewer"
+            and not actor_can_approve_high_risk
+        ):
+            raise TemporalExecutionValidationError(
+                "high-risk approval requires a privileged reviewer."
+            )
+        if actor and actor == approval.get("requestingActor"):
+            raise TemporalExecutionValidationError(
+                "the requesting actor cannot approve its own remediation action."
+            )
+        current_status = str(approval.get("status") or "")
+        normalized_decision = "denied" if decision == "rejected" else decision
+        if current_status == normalized_decision:
+            return {
+                "accepted": True,
+                "workflowId": remediation_workflow_id,
+                "requestId": request_id,
+                "decision": decision,
+            }
+        if current_status != "pending":
+            raise TemporalExecutionValidationError(
+                "approval decision is terminal and cannot be reinterpreted."
+            )
+        decided_at = datetime.now(UTC)
+        try:
+            expires_at = datetime.fromisoformat(str(approval.get("expiresAt") or ""))
+        except ValueError as exc:
+            raise TemporalExecutionValidationError("approval expiration is invalid.") from exc
+        if expires_at <= decided_at:
+            link.approval_state = {**dict(approval), "status": "expired"}
+            await self._session.commit()
+            raise TemporalExecutionValidationError("approval request has expired.")
+        link.approval_state = {
+            **dict(approval),
+            "status": normalized_decision,
+            "decisionActor": actor,
+            "rationale": (comment[:500] if comment else None),
+            "decidedAt": decided_at.isoformat(),
+        }
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")

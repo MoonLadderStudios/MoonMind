@@ -712,7 +712,7 @@ class RemediationActionAuthorityService:
             dry_run=dry_run,
         )
         cache_key = (workflow_id, idem, request_shape_hash)
-        if workflow_id and idem and cache_key in self._decisions:
+        if workflow_id and idem and not approval_ref and cache_key in self._decisions:
             return self._decisions[cache_key]
 
         if not workflow_id:
@@ -798,8 +798,98 @@ class RemediationActionAuthorityService:
             approval_ref=approval_ref,
         )
         self._request_shapes.setdefault(shape_key, request_shape_hash)
+        if result.decision == "approval_required":
+            await self._persist_approval_request(
+                link=link,
+                result=result,
+                request_shape_hash=request_shape_hash,
+                parameters=parameters,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+            )
+        elif approval_ref:
+            approval_error = self._validate_persisted_approval(
+                link=link,
+                approval_ref=approval_ref,
+                action_kind=normalized_action,
+                request_shape_hash=request_shape_hash,
+            )
+            if approval_error is not None:
+                result = self._linked_result(
+                    link=link,
+                    action_kind=normalized_action,
+                    risk=result.risk,
+                    decision="denied",
+                    reason=approval_error,
+                    idempotency_key=idem,
+                    requesting_principal=requesting_principal,
+                    security_profile=security_profile,
+                    approval_ref=approval_ref,
+                    parameters=parameters,
+                )
         self._decisions[cache_key] = result
         return result
+
+    async def _persist_approval_request(
+        self, *, link: Any, result: RemediationActionAuthorityResult,
+        request_shape_hash: str, parameters: Mapping[str, Any] | None,
+        requesting_principal: str, security_profile: RemediationSecurityProfile | None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        request_id = f"{link.remediation_workflow_id}:approval:{request_shape_hash[:24]}"
+        raw_existing = getattr(link, "approval_state", None)
+        existing = raw_existing if isinstance(raw_existing, Mapping) else None
+        if existing is not None:
+            if existing.get("requestDigest") != request_shape_hash:
+                raise ValueError("approval_idempotency_conflict")
+            return
+        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        link.approval_state = {
+            "requestId": request_id,
+            "approvalRef": f"approval://remediation/{request_id}",
+            "requestDigest": request_shape_hash,
+            "parameterDigest": _authority_request_shape_hash(
+                action_kind=result.action_kind or "", parameters=parameters, dry_run=False
+            ),
+            "remediationWorkflowId": link.remediation_workflow_id,
+            "remediationRunId": link.remediation_run_id,
+            "targetWorkflowId": link.target_workflow_id,
+            "targetRunId": link.target_run_id,
+            "actionKind": result.action_kind,
+            "riskTier": result.risk,
+            "redactedParameters": safe_parameters,
+            "expectedTargetState": link.target_run_id,
+            "securityProfileRef": getattr(security_profile, "profile_ref", None),
+            "approvalClass": "high_risk" if result.risk == "high" else "operator",
+            "reviewerRule": "high_risk_reviewer" if result.risk == "high" else "operator",
+            "requestingActor": requesting_principal,
+            "requestedAt": now.isoformat(),
+            "expiresAt": (now + timedelta(hours=1)).isoformat(),
+            "status": "pending",
+            "singleUse": True,
+        }
+        await self._session.commit()
+
+    @staticmethod
+    def _validate_persisted_approval(*, link: Any, approval_ref: str,
+        action_kind: str, request_shape_hash: str) -> str | None:
+        raw_state = getattr(link, "approval_state", None)
+        state = raw_state if isinstance(raw_state, Mapping) else None
+        if state is None or state.get("approvalRef") != approval_ref:
+            return "approval_not_found"
+        status = str(state.get("status") or "")
+        if status != "approved":
+            return f"approval_{status or 'invalid'}"
+        try:
+            if datetime.fromisoformat(str(state["expiresAt"])) <= datetime.now(timezone.utc):
+                return "approval_expired"
+        except (KeyError, TypeError, ValueError):
+            return "approval_expiration_invalid"
+        if state.get("actionKind") != action_kind or state.get("requestDigest") != request_shape_hash:
+            return "approval_action_mismatch"
+        if state.get("targetRunId") != link.target_run_id or state.get("expectedTargetState") != link.target_run_id:
+            return "approval_stale_target_state"
+        return None
 
     def _evaluate_with_link(
         self,
@@ -930,6 +1020,24 @@ class RemediationActionAuthorityService:
                 parameters=parameters,
             )
 
+        parameter_error = _action_parameter_error(
+            action_info=action_info,
+            parameters=parameters,
+        )
+        if parameter_error is not None:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=parameter_error,
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+
         if authority_mode == "approval_gated" and not approval_ref:
             return self._linked_result(
                 link=link,
@@ -956,19 +1064,9 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
-        if approval_ref and risk == "high" and not permissions.can_approve_high_risk:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason="high_risk_approval_permission_required",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
+        # Reviewer authority is proven by the persisted decision, not inherited
+        # from the action requester. The authoritative record is resolved below
+        # before an executable result is returned.
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:
@@ -988,24 +1086,6 @@ class RemediationActionAuthorityService:
                     approval_ref=approval_ref,
                     parameters=parameters,
                 )
-
-        parameter_error = _action_parameter_error(
-            action_info=action_info,
-            parameters=parameters,
-        )
-        if parameter_error is not None:
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision="denied",
-                reason=parameter_error,
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
 
         return self._linked_result(
             link=link,
