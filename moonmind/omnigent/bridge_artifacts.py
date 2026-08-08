@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os.path
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -199,17 +200,31 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             ) from exc
         return f"artifact://omnigent/{safe_correlation}/{safe_name}"
 
+    def _resolve_readable_path(self, artifact_ref: str, relative: str) -> Path:
+        """Resolve a ref's relative component to a path inside the artifact root.
+
+        The relative component originates from an ``artifact://omnigent/`` ref
+        that may be attacker-influenced, so containment is enforced with an
+        ``os.path.realpath``/``os.path.commonpath`` check (a recognized
+        path-traversal sanitizer): the resolved candidate must live under the
+        resolved root, otherwise the ref is rejected before any read.
+        """
+
+        root = os.path.realpath(self._root)
+        candidate = os.path.realpath(os.path.join(root, relative))
+        if candidate != root and not candidate.startswith(root + os.sep):
+            raise OmnigentArtifactError(
+                f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+            )
+        return Path(candidate)
+
     async def read_text(self, artifact_ref: str) -> str:
         if artifact_ref in self._readable_refs:
             return self._readable_refs[artifact_ref]
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
-            path = (self._root / relative).resolve()
-            if not path.is_relative_to(self._root):
-                raise OmnigentArtifactError(
-                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
-                )
+            path = self._resolve_readable_path(artifact_ref, relative)
             if path.is_file():
                 return path.read_text(encoding="utf-8")
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
@@ -220,11 +235,7 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         prefix = "artifact://omnigent/"
         if artifact_ref.startswith(prefix):
             relative = artifact_ref[len(prefix) :]
-            path = (self._root / relative).resolve()
-            if not path.is_relative_to(self._root):
-                raise OmnigentArtifactError(
-                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
-                )
+            path = self._resolve_readable_path(artifact_ref, relative)
             if path.is_file():
                 return path.read_bytes()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
