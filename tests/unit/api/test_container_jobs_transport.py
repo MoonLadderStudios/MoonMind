@@ -23,7 +23,6 @@ from api_service.services.container_jobs import (
     ContainerJobIdempotencyConflictError,
     ContainerJobNotFoundError,
 )
-from moonmind.mcp.tool_registry import QueueToolRegistry
 from moonmind.mcp.container_job_tool_registry import classify_container_job_error
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
@@ -125,7 +124,6 @@ def mcp_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
-    monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_namespace
