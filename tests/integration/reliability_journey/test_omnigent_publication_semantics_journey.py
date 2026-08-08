@@ -373,7 +373,7 @@ async def test_pr_publication_projects_existing_remote_pull_request(
 async def test_profile_bound_publication_reports_no_commits_over_base(
     tmp_path, monkeypatch
 ) -> None:
-    """Provider completion with an untouched workspace is not publish success."""
+    """An untouched workspace proves no-commit publication against the remote base."""
 
     monkeypatch.setattr(
         "moonmind.publish.service.resolve_high_security_mode", lambda *a, **k: False
@@ -410,7 +410,7 @@ async def test_profile_bound_publication_reports_no_commits_over_base(
 
     assert result["push_status"] == "no_commits"
     assert result["push_commit_count"] == 0
-    assert result["remote_verified"] is False
+    assert result["remote_verified"] is True
 
 
 @pytest.mark.asyncio
