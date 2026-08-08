@@ -11600,6 +11600,58 @@ export interface components {
             canDecide: boolean;
             /** Auditref */
             auditRef?: string | null;
+            /** Approvalref */
+            approvalRef?: string | null;
+            /** Requestdigest */
+            requestDigest?: string | null;
+            /** Parameterdigest */
+            parameterDigest?: string | null;
+            /** Requestingactor */
+            requestingActor?: string | null;
+            /** Requestedat */
+            requestedAt?: string | null;
+            /** Expiresat */
+            expiresAt?: string | null;
+            /** Rationale */
+            rationale?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Decidedat */
+            decidedAt?: string | null;
+            /** Consumedat */
+            consumedAt?: string | null;
+            /** Consumedbyactionid */
+            consumedByActionId?: string | null;
+            /** Expectedtargetstate */
+            expectedTargetState?: string | null;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Stepexecutionid */
+            stepExecutionId?: string | null;
+            /** Bridgesessionid */
+            bridgeSessionId?: string | null;
+            /** Omnigentsessionid */
+            omnigentSessionId?: string | null;
+            /** Hostref */
+            hostRef?: string | null;
+            /** Hostleaseref */
+            hostLeaseRef?: string | null;
+            /** Providerprofileleaseref */
+            providerProfileLeaseRef?: string | null;
+            /** Credentialgeneration */
+            credentialGeneration?: number | null;
+            /** Policyref */
+            policyRef?: string | null;
+            /** Policydigest */
+            policyDigest?: string | null;
+            /** Policysnapshotref */
+            policySnapshotRef?: string | null;
+            /** Securityprofileref */
+            securityProfileRef?: string | null;
+            /** Artifactrefs */
+            artifactRefs?: {
+                [key: string]: string;
+            } | null;
         };
         /** RemediationCheckpointBranchLinkModel */
         RemediationCheckpointBranchLinkModel: {

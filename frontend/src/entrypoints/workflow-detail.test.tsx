@@ -6526,7 +6526,15 @@ describe('Workflow Detail Entrypoint', () => {
                     },
                   },
                 ],
-                approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
+                approvalState: {
+                  requestId: 'approval-1',
+                  decision: 'pending',
+                  canDecide: true,
+                  requestingActor: 'operator:requester-3620',
+                  expectedTargetState: 'awaiting external session',
+                  checkpointRef: 'artifact://checkpoint/approval-3620',
+                  policyRef: 'omnigent-policy-3620@7',
+                },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
               },
@@ -6621,6 +6629,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('2 / 3')).toBeTruthy();
     expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
     expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
+    expect(screen.getByText('operator:requester-3620')).toBeTruthy();
+    expect(screen.getByText('awaiting external session')).toBeTruthy();
+    expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
+    expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
