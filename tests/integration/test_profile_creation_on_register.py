@@ -29,10 +29,6 @@ async def test_profile_created_on_register(monkeypatch, tmp_path):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default", raising=False)
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()

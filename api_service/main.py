@@ -31,11 +31,9 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
 from api_service.api.routers.omnigent_agent_profiles import router as omnigent_agent_profiles_router
-from api_service.api.routers.chat import responses_router, router as chat_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
-from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
 )
@@ -44,7 +42,6 @@ from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.container_jobs import router as container_jobs_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
-from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import router as recurring_workflows_router
@@ -111,94 +108,6 @@ _PRESET_SEED_DIR = (
 # MoonSpec became the canonical bundle identity. Remove after the submodule
 # cutover has run through existing development installations.
 _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
-
-def _initialize_embedding_model(app_state, app_settings):
-    """Initializes the embedding model and records its dimensionality on app_state."""
-    logger.info("Initializing embedding model...")
-
-    # Build the model and get any dimension configured in settings
-    try:
-        from moonmind.factories.embed_model_factory import build_embed_model
-
-        app_state.embed_model, configured_dims = build_embed_model(app_settings)
-    except Exception as e:
-        logger.error("Embedding model initialization failed: %s", e)
-        app_state.embed_model = None
-        app_state.embed_dimensions = None
-        return
-
-    # -------------------------------------------------------
-    # Detect the true dimensionality produced by the model
-    # -------------------------------------------------------
-    detected_dims = None
-    try:
-        if hasattr(app_state.embed_model, "embed_query"):
-            test_vec = app_state.embed_model.embed_query("dim_check")
-        elif hasattr(app_state.embed_model, "get_query_embedding"):
-            test_vec = app_state.embed_model.get_query_embedding("dim_check")
-        else:
-            raise AttributeError(
-                "Embedding model lacks 'embed_query' and 'get_query_embedding'."
-            )
-        detected_dims = len(test_vec)
-    except Exception as e:  # pragma: no cover – best-effort probe
-        logger.error("Failed to detect embedding dimensions: %s", e)
-
-    # -------------------------------------------------------
-    # Decide which dimension to keep
-    # -------------------------------------------------------
-    if configured_dims and configured_dims > 0:
-        # Settings override, but warn if they disagree with what we probed
-        if detected_dims and detected_dims != configured_dims:
-            logger.warning(
-                "Configured embedding dimension %s ≠ detected %s. "
-                "Using detected dimension.",
-                configured_dims,
-                detected_dims,
-            )
-            final_dims = detected_dims
-        else:
-            final_dims = configured_dims
-    else:
-        # No valid configured dimension → rely on detection
-        final_dims = detected_dims
-
-    if not final_dims or final_dims <= 0:
-        raise RuntimeError(
-            "Embedding dimension could not be determined. "
-            "Please provide a valid value in configuration."
-        )
-
-    app_state.embed_dimensions = final_dims
-    logger.info("Embedding model initialized with dimensions: %s", final_dims)
-
-def _initialize_vector_store(app_state, app_settings):
-    """Initializes and sets the vector store on app_state."""
-    logger.info("Initializing vector store...")
-    try:
-        from moonmind.factories.vector_store_factory import build_vector_store
-
-        app_state.vector_store = build_vector_store(
-            app_settings, app_state.embed_model, app_state.embed_dimensions
-        )
-        logger.info("Vector store initialized successfully.")
-    except ValueError as e:
-        logger.error(f"Failed to build vector store: {e}. This is a critical error.")
-        raise
-
-def _initialize_contexts(app_state, app_settings):
-    """Initializes and sets storage and service contexts on app_state."""
-    logger.info("Initializing storage and service contexts...")
-    from moonmind.factories.service_context_factory import build_service_context
-    from moonmind.factories.storage_context_factory import build_storage_context
-
-    app_state.storage_context = build_storage_context(
-        app_settings, app_state.vector_store
-    )
-    app_state.settings = build_service_context(
-        app_settings, app_state.embed_model
-    )  # settings is used as service_context
-    logger.info("Storage and service contexts initialized successfully.")
 
 async def _sync_env_managed_secrets() -> int:
     """Seed or refresh managed secrets from environment values."""
@@ -436,41 +345,6 @@ async def _initialize_oidc_provider(app: FastAPI):
             logger.error(f"Error processing Google OIDC discovery document: {e}")
             raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
 
-def _load_or_create_vector_index(app_state):
-    """Loads an existing vector index or creates a new one if loading fails."""
-    from llama_index.core import VectorStoreIndex, load_index_from_storage
-
-    logger.info("Attempting to load VectorStoreIndex from storage_context...")
-    try:
-        app_state.vector_index = load_index_from_storage(
-            storage_context=app_state.storage_context,
-        )
-        if not app_state.vector_index.docstore.docs:
-            logger.warning(
-                "Loaded index appears to be empty (no documents in docstore)."
-            )
-        else:
-            logger.info("Successfully loaded VectorStoreIndex from storage.")
-    except ValueError as e_load_idx:
-        logger.warning(
-            f"Could not load VectorStoreIndex from storage (it might be new or empty): {e_load_idx}. "
-            "Creating a new empty VectorStoreIndex."
-        )
-        if app_state.storage_context and app_state.settings:
-            app_state.vector_index = VectorStoreIndex.from_documents(
-                [],
-                storage_context=app_state.storage_context,
-                service_context=app_state.settings,
-            )
-            logger.info("Created a new empty VectorStoreIndex.")
-        else:
-            logger.error(
-                "Cannot create new VectorStoreIndex because storage_context or service_context is not available."
-            )
-            raise RuntimeError(
-                "Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex."
-            )
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
@@ -563,11 +437,7 @@ async def docs_redirect() -> RedirectResponse:
 
 app.include_router(health_router, tags=["health"])
 
-# Include all routers
-app.include_router(chat_router, prefix="/v1/chat", tags=["Chat"])
-app.include_router(responses_router, prefix="/v1", tags=["Responses"])
-app.include_router(models_router, prefix="/v1/models", tags=["Models"])
-app.include_router(documents_router, prefix="/v1/documents", tags=["Documents"])
+# Include workflow-oriented and operational routers.
 app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
@@ -1749,10 +1619,6 @@ async def startup_event():
 
         app.state = State()
 
-    _initialize_embedding_model(app.state, settings)
-    _initialize_vector_store(app.state, settings)
-    _initialize_contexts(app.state, settings)
-    _load_or_create_vector_index(app.state)
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
@@ -1836,9 +1702,6 @@ async def startup_event():
                             logger.info(
                                 f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
                             )
-                        from moonmind.models_cache import refresh_model_cache_for_user
-
-                        await refresh_model_cache_for_user(default_user, db_session)
                     else:
                         logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:

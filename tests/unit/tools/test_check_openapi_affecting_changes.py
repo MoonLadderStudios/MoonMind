@@ -28,8 +28,6 @@ def _run_script(*paths: str, stdin: str | None = None) -> subprocess.CompletedPr
         "moonmind/core/artifacts.py",
         "moonmind/schemas/agent_runtime_models.py",
         "moonmind/schemas/agent_skill_models.py",
-        "moonmind/schemas/chat_models.py",
-        "moonmind/schemas/documents_models.py",
         "moonmind/schemas/manifest_models.py",
         "moonmind/schemas/manifest_v0_models.py",
         "moonmind/schemas/manifest_ingest_models.py",

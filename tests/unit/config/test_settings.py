@@ -32,7 +32,7 @@ def app_settings_defaults():
         "qdrant": {"qdrant_enabled": False},  # Disable things not under test
         "rag": {},
         "github": {"github_enabled": False},
-        "google_drive": {"google_drive_enabled": False},
+        "google_drive": {},
         "atlassian": {
             "confluence": {"confluence_enabled": False},
             "jira": {"jira_enabled": False},

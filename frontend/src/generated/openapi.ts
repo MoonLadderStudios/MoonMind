@@ -24,114 +24,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/chat/completions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Chat Completions */
-        post: operations["chat_completions_v1_chat_completions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/responses": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Response */
-        post: operations["create_response_v1_responses_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/models/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Models */
-        get: operations["models_v1_models__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/documents/confluence/load": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Load Confluence Documents */
-        post: operations["load_confluence_documents_v1_documents_confluence_load_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/documents/documents/github/load": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Load Github Repo
-         * @description Load documents from a GitHub repository.
-         */
-        post: operations["load_github_repo_v1_documents_documents_github_load_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/documents/documents/google_drive/load": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Load Google Drive Documents
-         * @description Load documents from Google Drive.
-         */
-        post: operations["load_google_drive_documents_v1_documents_documents_google_drive_load_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/retrieval/health": {
         parameters: {
             query?: never;
@@ -5971,56 +5863,6 @@ export interface components {
             /** Unavailablereason */
             unavailableReason?: string | null;
         };
-        /** ChatCompletionRequest */
-        ChatCompletionRequest: {
-            /**
-             * Model
-             * @description The model to use. If not specified, the default model will be used.
-             */
-            model?: string | null;
-            /**
-             * Messages
-             * @description A list of messages describing the conversation so far.
-             */
-            messages: components["schemas"]["Message"][];
-            /**
-             * Temperature
-             * @description Sampling temperature, between 0 and 2.
-             * @default 1
-             */
-            temperature: number | null;
-            /**
-             * Max Tokens
-             * @description The maximum number of tokens to generate.
-             */
-            max_tokens?: number | null;
-        };
-        /** ChatCompletionResponse */
-        ChatCompletionResponse: {
-            /**
-             * Id
-             * @default cmpl-xxxxxxxxxxxxxxxxxxxxxxx
-             */
-            id: string;
-            /**
-             * Object
-             * @default chat.completion
-             */
-            object: string;
-            /**
-             * Created
-             * @default 1678909000
-             */
-            created: number;
-            /**
-             * Model
-             * @default gemini-1.5-pro
-             */
-            model: string;
-            /** Choices */
-            choices: components["schemas"]["Choice"][];
-            usage?: components["schemas"]["Usage"] | null;
-        };
         /** CheckpointBranchApiSourceModel */
         CheckpointBranchApiSourceModel: {
             /** Workflowid */
@@ -6450,30 +6292,6 @@ export interface components {
             /** Checkpointdigest */
             checkpointDigest?: string | null;
         };
-        /** Choice */
-        Choice: {
-            /**
-             * Index
-             * @default 0
-             */
-            index: number;
-            message: components["schemas"]["ChoiceMessage"];
-            /**
-             * Finish Reason
-             * @default stop
-             */
-            finish_reason: string;
-        };
-        /** ChoiceMessage */
-        ChoiceMessage: {
-            /**
-             * Role
-             * @default assistant
-             */
-            role: string;
-            /** Content */
-            content: string;
-        };
         /** ClaudeManualAuthCommitRequest */
         ClaudeManualAuthCommitRequest: {
             /** Token */
@@ -6684,19 +6502,6 @@ export interface components {
             };
             /** Resultrefs */
             resultRefs?: string[];
-        };
-        /** ConfluenceLoadRequest */
-        ConfluenceLoadRequest: {
-            /** Space Key */
-            space_key?: string | null;
-            /** Page Id */
-            page_id?: string | null;
-            /** Page Title */
-            page_title?: string | null;
-            /** Cql Query */
-            cql_query?: string | null;
-            /** Max Pages To Fetch */
-            max_pages_to_fetch?: number | null;
         };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
@@ -9063,20 +8868,6 @@ export interface components {
             /** Artifactref */
             artifactRef?: string | null;
         };
-        /** GitHubLoadRequest */
-        GitHubLoadRequest: {
-            /** Repo */
-            repo: string;
-            /**
-             * Branch
-             * @default main
-             */
-            branch: string | null;
-            /** Filter Extensions */
-            filter_extensions?: string[] | null;
-            /** Github Token */
-            github_token?: string | null;
-        };
         /**
          * GitHubTokenProbeRequest
          * @description Targeted GitHub token validation request.
@@ -9092,20 +8883,6 @@ export interface components {
             mode: "indexing" | "publish" | "readiness" | "full_pr_automation";
             /** Basebranch */
             baseBranch?: string | null;
-        };
-        /** GoogleDriveLoadRequest */
-        GoogleDriveLoadRequest: {
-            /** Folder Id */
-            folder_id?: string | null;
-            /** File Ids */
-            file_ids?: string[] | null;
-            /**
-             * Recursive
-             * @default false
-             */
-            recursive: boolean | null;
-            /** Service Account Key Path */
-            service_account_key_path?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -9928,19 +9705,6 @@ export interface components {
          */
         ManifestUpsertRequest: {
             /** Content */
-            content: string;
-        };
-        /** Message */
-        Message: {
-            /**
-             * Role
-             * @description The role of the message (system, user, assistant)
-             */
-            role: string;
-            /**
-             * Content
-             * @description The content of the message
-             */
             content: string;
         };
         /** ModelDefaults */
@@ -12178,69 +11942,6 @@ export interface components {
             /** Concurrency */
             concurrency: number;
         };
-        /**
-         * ResponseCreateRequest
-         * @description Supported subset of OpenAI's Responses API create request.
-         */
-        ResponseCreateRequest: {
-            /**
-             * Model
-             * @description The model to use. If omitted, MoonMind's default chat model is used.
-             */
-            model?: string | null;
-            /**
-             * Input
-             * @description Text input or Responses-style message input items.
-             */
-            input: string | unknown[];
-            /**
-             * Instructions
-             * @description Optional system/developer instructions prepended to the input.
-             */
-            instructions?: string | null;
-            /**
-             * Temperature
-             * @description Sampling temperature, between 0 and 2.
-             * @default 1
-             */
-            temperature: number | null;
-            /**
-             * Max Output Tokens
-             * @description Maximum output tokens to generate.
-             */
-            max_output_tokens?: number | null;
-            /**
-             * Stream
-             * @description Streaming is not supported by MoonMind's compatibility route.
-             * @default false
-             */
-            stream: boolean;
-            /**
-             * Tools
-             * @description Tool use is not supported by MoonMind's compatibility route.
-             */
-            tools?: unknown[] | null;
-            /**
-             * Conversation
-             * @description Conversation state is not supported by MoonMind's compatibility route.
-             */
-            conversation?: unknown | null;
-            /**
-             * Previous Response Id
-             * @description Previous response state is not supported by MoonMind's compatibility route.
-             */
-            previous_response_id?: string | null;
-            /**
-             * Background
-             * @description Background responses are not supported by MoonMind's compatibility route.
-             * @default false
-             */
-            background: boolean;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
-        };
         /** ResumeExecutionRefModel */
         ResumeExecutionRefModel: {
             /** Workflowid */
@@ -13425,19 +13126,6 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
-        /** Usage */
-        Usage: {
-            /** Prompt Tokens */
-            prompt_tokens?: number | null;
-            /** Completion Tokens */
-            completion_tokens?: number | null;
-            /** Total Tokens */
-            total_tokens?: number | null;
-            /** Cost Estimate Usd */
-            cost_estimate_usd?: number | null;
-            /** Pricing Source */
-            pricing_source?: string | null;
-        };
         /** UserCreate */
         UserCreate: {
             /**
@@ -14188,191 +13876,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    chat_completions_v1_chat_completions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatCompletionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChatCompletionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_response_v1_responses_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResponseCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    models_v1_models__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    load_confluence_documents_v1_documents_confluence_load_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfluenceLoadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    load_github_repo_v1_documents_documents_github_load_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GitHubLoadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    load_google_drive_documents_v1_documents_documents_google_drive_load_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GoogleDriveLoadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
