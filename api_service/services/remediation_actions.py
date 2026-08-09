@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.services.checkpoint_branch_service import CheckpointBranchService
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
+)
 from moonmind.omnigent.policies import (
     bind_approval_request,
     policy_authority_evidence,
@@ -176,6 +181,8 @@ class TemporalRemediationControlPlane:
             raise ValueError("instructionDigest must be a sha256 digest")
         if self._checkpoint_branch_service is None:
             raise RuntimeError("checkpoint branch service is unavailable")
+        if self._execution_service is None:
+            raise RuntimeError("execution service is unavailable")
         branch_id = f"remediation-{action_id}"
         turn_id = f"{branch_id}-turn-1"
         graph = await self._checkpoint_branch_service.create_branch_graph(
@@ -208,17 +215,99 @@ class TemporalRemediationControlPlane:
                 "idempotencyKey": action_id,
             }
         )
-        # Persisting the branch graph is *delivery*, not a verified repair. The
-        # trusted verification phase re-reads the target objective from fresh
-        # evidence and classifies the actual repair outcome (issue #3622); this
-        # adapter no longer claims "verified" immediately after persistence.
+        source = await self._execution_service.describe_execution(target.workflow_id)
+        launch_key = build_branch_turn_launch_idempotency_key(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+        )
+        launch_namespace = uuid5(NAMESPACE_URL, launch_key)
+        runtime_workflow_id = f"mm:{uuid5(launch_namespace, 'workflow')}"
+        runtime_run_id = str(uuid5(launch_namespace, "run"))
+        logical_step_id = str(params.get("logicalStepId") or "checkpoint-branch-turn")
+        step_execution_id = (
+            f"{runtime_workflow_id}:{runtime_run_id}:{logical_step_id}:execution:1"
+        )
+        branch_turn = {
+            "branchId": branch_id,
+            "branchTurnId": turn_id,
+            "sourceCheckpoint": {
+                "workflowId": target.workflow_id,
+                "runId": target.current_run_id,
+                "logicalStepId": params.get("logicalStepId"),
+                "sourceExecutionOrdinal": params.get("executionOrdinal"),
+                "checkpointBoundary": str(params.get("checkpointBoundary") or "after_execution"),
+                "checkpointRef": checkpoint_ref,
+                "checkpointDigest": params.get("checkpointDigest"),
+            },
+            "instructionRef": instruction_ref,
+            "instructionDigest": instruction_digest,
+            "workspacePolicy": str(
+                params.get("workspacePolicy")
+                or "apply_previous_execution_diff_to_clean_baseline"
+            ),
+            "runtimeContextPolicy": "fresh_agent_run",
+        }
+        runtime = {
+            "mode": "omnigent",
+            "kind": "external",
+            "providerProfileRef": params.get("providerProfileRef"),
+            "executionProfileRef": params.get("executionProfileRef"),
+            "model": params.get("model"),
+            "effort": params.get("effort"),
+        }
+        runtime_parameters = {
+            "repository": deepcopy((source.parameters or {}).get("repository") or {}),
+            "targetRuntime": "omnigent",
+            "workflow": {
+                "runtime": runtime,
+                "steps": [{
+                    "id": logical_step_id,
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {"checkpointBranchTurn": branch_turn},
+                }],
+            },
+            "checkpointBranchTurn": branch_turn,
+        }
+        await self._execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=source.owner_id,
+            owner_type=(source.owner_type.value if source.owner_type else "user"),
+            title=f"Checkpoint Branch {branch_id}",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=runtime_parameters,
+            idempotency_key=launch_key,
+            repository=None,
+            integration=None,
+            summary=f"Server-owned remediation branch for {target.workflow_id}.",
+            _workflow_id=runtime_workflow_id,
+            _run_id=runtime_run_id,
+        )
+        await self._checkpoint_branch_service.launch_turn(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+            context_bundle_ref=context_ref,
+            step_execution_manifest_ref=(
+                f"artifact://checkpoint-branches/{turn_id}/step-execution-manifest"
+            ),
+            checkpoint_ref=None,
+            diagnostics_ref=f"artifact://checkpoint-branches/{turn_id}/diagnostics",
+            idempotency_key=launch_key,
+            created_step_execution_id=step_execution_id,
+            runtime_agent_run_id=runtime_workflow_id,
+        )
         return {
-            "status": "applied",
-            "message": "Checkpoint Branch was persisted by its durable owner.",
+            "status": "accepted",
+            "message": "Checkpoint Branch execution was accepted by the Omnigent coordinator.",
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": [
                 f"checkpoint-branch:{graph.branch.branch_id}",
                 f"checkpoint-branch-turn:{turn_id}",
+                f"workflow:{runtime_workflow_id}:run:{runtime_run_id}",
                 context_ref,
             ],
             "verificationRequired": True,

@@ -893,6 +893,14 @@ These operate on workload containers that MoonMind launched through the Docker w
 #### `checkpoint_branch.create_from_remediation_context`
 Create a branch from a validated remediation context and checkpoint. Use this when corrected instructions, alternate branch settings, alternate publish mode, or a different runtime/model are required. This action must preserve source checkpoint identity, immutable instruction refs, workspace policy, runtime context policy, publish mode, remediation provenance, and idempotency key.
 
+The action persists the branch graph and immediately submits its first turn to
+the normal server-owned `external/omnigent` execution path. Its initial result
+is `accepted`, not verified: `running` requires an active Step Execution,
+`completed` requires authoritative terminal evidence, and successful repair
+remains `verification_required` until post-action verification establishes the
+target objective. Failures retain their bounded runtime outcome (`failed`,
+`canceled`, `delivery_unknown`, or `resume_unavailable`) and lifecycle evidence.
+
 ### 11.4 Action request contract
 
 Representative shape:

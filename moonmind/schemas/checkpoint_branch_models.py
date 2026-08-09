@@ -165,15 +165,19 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
 class CheckpointBranchTurnLaunchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    created_step_execution_id: str = Field(
-        ..., alias="createdStepExecutionId", min_length=1, max_length=255
+    idempotency_key: str = Field(
+        ..., alias="idempotencyKey", min_length=1, max_length=512
     )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1, max_length=255
+    # Decode legacy client fields but never serialize or use them as launch
+    # authority. All new runtime identities and evidence are server-owned.
+    created_step_execution_id: str | None = Field(
+        None, alias="createdStepExecutionId", exclude=True
     )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1, max_length=255
-    )
+    runtime_agent_run_id: str | None = Field(None, alias="runtimeAgentRunId", exclude=True)
+    provider_session_id: str | None = Field(None, alias="providerSessionId", exclude=True)
+    runtime_request_ref: str | None = Field(None, alias="runtimeRequestRef", exclude=True)
+    runtime_result_ref: str | None = Field(None, alias="runtimeResultRef", exclude=True)
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef", exclude=True)
     workspace_baseline: dict[str, Any] = Field(
         default_factory=dict, alias="workspaceBaseline"
     )
@@ -186,24 +190,10 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
     builder_metadata: dict[str, Any] = Field(
         default_factory=dict, alias="builderMetadata"
     )
-    runtime_request_ref: str | None = Field(
-        None, alias="runtimeRequestRef", min_length=1, max_length=1024
-    )
-    runtime_result_ref: str | None = Field(
-        None, alias="runtimeResultRef", min_length=1, max_length=1024
-    )
-    diagnostics_ref: str | None = Field(
-        None, alias="diagnosticsRef", min_length=1, max_length=1024
-    )
-
     @field_validator(
-        "created_step_execution_id",
-        "runtime_agent_run_id",
-        "provider_session_id",
-        "runtime_request_ref",
-        "runtime_result_ref",
-        "diagnostics_ref",
-        mode="before",
+        "idempotency_key", "created_step_execution_id", "runtime_agent_run_id",
+        "provider_session_id", "runtime_request_ref", "runtime_result_ref",
+        "diagnostics_ref", mode="before"
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str | None:
@@ -228,13 +218,6 @@ class CheckpointBranchTurnLaunchRequest(BaseModel):
             if summary is not None and len(str(summary)) > 1200:
                 raise ValueError("boundedSummaries entries must be bounded")
         return value
-
-    @model_validator(mode="after")
-    def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
-        if not self.created_step_execution_id:
-            raise ValueError("launch requires Step Execution evidence")
-        return self
-
 
 class CheckpointBranchPromoteRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

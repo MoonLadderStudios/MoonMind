@@ -759,8 +759,16 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     checkpoint_service.create_branch_graph.return_value = SimpleNamespace(
         branch=SimpleNamespace(branch_id="remediation-action-branch")
     )
+    execution_service = AsyncMock()
+    execution_service.describe_execution.return_value = SimpleNamespace(
+        parameters={"repository": {"repository": {"name": "owner/repo"}}},
+        owner_id="owner-1",
+        owner_type=SimpleNamespace(value="user"),
+    )
     plane = TemporalRemediationControlPlane(
-        client=AsyncMock(), checkpoint_branch_service=checkpoint_service
+        client=AsyncMock(),
+        execution_service=execution_service,
+        checkpoint_branch_service=checkpoint_service,
     )
 
     result = await plane.handlers()[
@@ -782,7 +790,7 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         _production_target_health(),
     )
 
-    assert result["status"] == "applied"
+    assert result["status"] == "accepted"
     payload = checkpoint_service.create_branch_graph.await_args.args[0]
     assert payload["source"]["workflowId"] == "target"
     assert payload["source"]["runId"] == "target-run"
@@ -791,6 +799,15 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     assert payload["instructionRef"] == "artifact://instructions"
     assert payload["instructionDigest"] == "sha256:" + ("a" * 64)
     assert payload["idempotencyKey"] == "action-branch"
+    execution_service.create_execution.assert_awaited_once()
+    runtime_parameters = execution_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert runtime_parameters["targetRuntime"] == "omnigent"
+    assert runtime_parameters["workflow"]["steps"][0]["inputs"][
+        "checkpointBranchTurn"
+    ]["instructionRef"] == "artifact://instructions"
+    checkpoint_service.launch_turn.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

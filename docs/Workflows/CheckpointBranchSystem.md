@@ -139,6 +139,19 @@ Message 1
 
 MoonMind's checkpoint branch model is:
 
+Branch-turn launch is a server-owned semantic execution. The launch request
+contains operator context and an idempotency key; it never supplies Step
+Execution, Agent Run, host, lease, Omnigent session, request, result, or
+diagnostics identities. MoonMind revalidates the exact source workflow, run,
+step, execution ordinal, checkpoint ref, checkpoint digest, and immutable
+instruction identity before dispatch. It then allocates stable execution
+identities and starts a dedicated normal-path `external/omnigent` execution.
+The Omnigent coordinator remains the sole owner of profile capacity, workspace
+restore, host/session creation, first-message delivery, terminal harvesting,
+publication evidence, cleanup, and release-last lease handling. Replaying the
+launch idempotency key resolves the same execution and cannot post a second
+first message.
+
 ```text
 Checkpoint C1
   Branch A: "try minimal fix"

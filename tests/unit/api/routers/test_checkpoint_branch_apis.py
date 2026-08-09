@@ -175,7 +175,10 @@ async def checkpoint_branch_client(tmp_path):
 
     app = FastAPI()
     app.include_router(router)
-    service = SimpleNamespace(describe_execution=AsyncMock(return_value=record))
+    service = SimpleNamespace(
+        describe_execution=AsyncMock(return_value=record),
+        create_execution=AsyncMock(return_value=record),
+    )
     app.dependency_overrides[_get_service] = lambda: service
 
     async def _session_override():
@@ -522,6 +525,7 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     )
     branch_turn_id = turns.json()["items"][0]["branchTurnId"]
     payload = {
+        "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
         "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:3",
         "workspaceBaseline": {
             "kind": "git_patch",
@@ -554,9 +558,8 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
     body = first.json()
     assert body["branchTurnId"] == branch_turn_id
     assert body["status"] == "running"
-    assert body["createdStepExecutionId"] == (
-        "mm:wf-branch:run-branch:implement:execution:3"
-    )
+    assert body["createdStepExecutionId"] != payload["createdStepExecutionId"]
+    assert body["createdStepExecutionId"].endswith(":implement:execution:1")
     assert "checkpointRef" not in body
     assert body["contextBundleRef"].startswith(
         f"artifact://checkpoint-branch-turns/{branch_turn_id}/context-bundle/"
@@ -589,15 +592,13 @@ async def test_checkpoint_branch_api_launches_turn_with_context_bundle_evidence_
             )
         ).scalars().all()
 
-    assert len(artifact_rows) == 7
+        assert len(artifact_rows) == 5
     assert {
         artifact.artifact_kind for artifact in artifact_rows
     } == {
         "runtime.branch.workspace_restore.json",
         "runtime.branch.git_binding.json",
         "runtime.branch_turn.context_bundle.json",
-        "runtime.branch_turn.agent_request.json",
-        "runtime.branch_turn.agent_result.json",
         "output.branch_turn.step_execution_manifest.json",
         "output.branch_turn.diagnostics.json",
     }
@@ -963,7 +964,7 @@ async def test_remediation_checkpoint_branch_repair_fails_closed_for_unselected_
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_branch_api_launch_requires_step_execution_id(
+async def test_checkpoint_branch_api_launch_rejects_caller_runtime_identity_without_key(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
     created = await checkpoint_branch_client.post(
@@ -1010,6 +1011,7 @@ async def test_checkpoint_branch_api_launch_rejects_unsupported_provider_continu
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
+            "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
             "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
             "providerSessionId": "omnigent-session-1",
             "diagnosticsRef": "artifact://diagnostics/mm-1104",
@@ -1048,6 +1050,7 @@ async def test_checkpoint_branch_api_launch_rejects_branch_provider_continuation
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
+            "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
             "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:5",
             "providerSessionId": "omnigent-session-branch",
             "diagnosticsRef": "artifact://diagnostics/mm-1104-branch",
@@ -1072,6 +1075,7 @@ async def test_checkpoint_branch_api_launch_replays_before_provider_continuation
     )
     branch_turn_id = turns.json()["items"][0]["branchTurnId"]
     payload = {
+        "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
         "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:6",
         "providerSessionId": "omnigent-session-replay",
         "diagnosticsRef": "artifact://diagnostics/mm-1104-replay",
@@ -1159,6 +1163,7 @@ async def test_checkpoint_branch_api_launch_rejects_archived_branch(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
+            "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
             "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:9",
             "diagnosticsRef": "artifact://diagnostics/archived",
         },
@@ -1187,6 +1192,7 @@ async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mu
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
         f"{branch_turn_id}/launch",
         json={
+            "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
             "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
             "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
             "boundedSummaries": [{"label": "raw", "rawLogs": "do not persist"}],
@@ -1196,6 +1202,7 @@ async def test_checkpoint_branch_api_rejects_launch_raw_context_and_immutable_mu
     assert raw_context.status_code == 422
 
     launch_payload = {
+        "idempotencyKey": f"mm:wf-branch:{branch_id}:{branch_turn_id}:launch",
         "createdStepExecutionId": "mm:wf-branch:run-branch:implement:execution:4",
         "workspaceBaseline": {"kind": "git_ref", "ref": "main"},
         "diagnosticsRef": "artifact://diagnostics/immutable",
