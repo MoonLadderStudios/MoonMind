@@ -111,6 +111,7 @@ steps:
     - git
 - title: Verify implementation
   enabled: '{{ inputs.run_verify }}'
+  repositoryOperation: read
   instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
     from the assess step) before doing anything.
 
@@ -193,6 +194,7 @@ steps:
         type: agent_runtime
         name: auto
         inputs:
+          repositoryOperation: write
           selectedSkill: auto
           issue_provider: '{{ inputs.issue_provider }}'
           issue_ref: '{{ inputs.issue_ref }}'
@@ -206,6 +208,7 @@ steps:
         type: agent_runtime
         name: auto
         inputs:
+          repositoryOperation: read
           selectedSkill: moonspec-verify
           instructions: 'Run the selected moonspec-verify Skill against the latest
             remediation workspace head using the supplied Skill inputs. Do not modify

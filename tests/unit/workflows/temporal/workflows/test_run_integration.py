@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
     RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
@@ -4272,6 +4273,88 @@ async def test_headless_remediation_inherits_remote_verified_workspace(
         assert request.workspace_spec == expected_workspace
 
 
+@pytest.mark.asyncio
+async def test_external_remediation_uses_workflow_published_branch_without_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:88f2f7c8-6a24-54c2-8165-59b54099318a."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    mock_run_workflow._publish_context.update(
+        {
+            "pushStatus": "pushed",
+            "branch": "moonmind-job-9babb57e",
+            "headSha": "e50804e0641b002669d120774394b6f1ace2a248",
+        }
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+            RUN_HEADLESS_REMEDIATION_VERIFIED_WORKSPACE_PATCH,
+            RUN_HEADLESS_REMEDIATION_EXECUTION_PATCH,
+            RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
+        },
+    )
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_initialize_remediation_head_from_canonical_checkpoint",
+        lambda **_: pytest.fail("external remediation must not require a checkpoint"),
+    )
+    workspace_spec = (
+        mock_run_workflow._published_branch_remediation_workspace_spec(
+            node_inputs={
+                "repository": "MoonLadderStudios/MoonMind",
+                "startingBranch": "main",
+                "repositoryTarget": {
+                    "connectionRef": "repository-connection:git-default"
+                },
+            }
+        )
+    )
+
+    ordered_nodes: list[dict[str, Any]] = []
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        logical_step_id="initial-verification",
+        headless_workspace_spec=workspace_spec,
+    )
+
+    assert admitted is True
+    assert mock_run_workflow._remediation_workspace_head is None
+    remediation, verification = ordered_nodes
+    assert remediation["inputs"]["repositoryOperation"] == "write"
+    assert verification["inputs"]["repositoryOperation"] == "read"
+    assert remediation["inputs"]["workspaceSpec"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "repositoryTarget": {
+            "provider": "git",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "moonmind-job-9babb57e"},
+            "revision": {
+                "kind": "git_commit",
+                "commitSha": "e50804e0641b002669d120774394b6f1ace2a248",
+            },
+            "connectionRef": "repository-connection:git-default",
+        },
+        "startingBranch": "main",
+        "targetBranch": "moonmind-job-9babb57e",
+    }
+
+
 def test_headless_remediation_accepts_normalized_no_commit_baseline() -> None:
     workspace_spec = MoonMindRunWorkflow._verified_headless_remediation_workspace_spec(
         node_inputs={
@@ -4363,6 +4446,33 @@ def test_headless_remediation_execution_skips_checkpoint_materialization_guard(
     node = {
         "id": "remediation-1",
         "annotations": {"issueImplementRole": "moonspec-remediation"},
+    }
+
+    assert not mock_run_workflow._remediation_workspace_materialization_required(
+        node
+    )
+
+
+def test_remote_published_remediation_skips_checkpoint_even_with_stale_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+            RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
+        },
+    )
+    mock_run_workflow._remediation_workspace_head = object()  # type: ignore[assignment]
+    node = {
+        "id": "remediation-1",
+        "annotations": {"issueImplementRole": "moonspec-remediation"},
+        "inputs": {
+            "remediationWorkspaceMode": "remote_published_branch",
+        },
     }
 
     assert not mock_run_workflow._remediation_workspace_materialization_required(

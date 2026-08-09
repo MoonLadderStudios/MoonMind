@@ -160,7 +160,11 @@ def resolve_sandbox_workspace_locator(
     return workspace
 
 
-def daemon_visible_workspace_path(path: Path) -> Path:
+def daemon_visible_workspace_path(
+    path: Path,
+    *,
+    daemon_root: Path | str | None = None,
+) -> Path:
     """Translate a worker path to a daemon-visible bind path at the trusted boundary.
 
     The translation contract is deployment-selected and deterministic:
@@ -181,7 +185,11 @@ def daemon_visible_workspace_path(path: Path) -> Path:
     after authorization and materialization.
     """
     worker_root_text = os.getenv("WORKFLOW_WORKSPACE_ROOT", "").strip()
-    daemon_root_text = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+    daemon_root_text = str(
+        daemon_root
+        if daemon_root is not None
+        else os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "")
+    ).strip()
     resolved = path.resolve()
 
     mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()

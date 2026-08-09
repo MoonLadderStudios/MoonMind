@@ -8712,6 +8712,49 @@ button.workflow-workspace-sidebar-row:active {
   gap: 0.5rem;
 }
 
+.td-native-chat-evidence {
+  border: 1px solid var(--mm-border, #e2e8f0);
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface-muted, #f8fafc);
+  padding: 0.5rem 0.75rem;
+}
+
+.td-native-chat-evidence-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.td-native-chat-continue-error {
+  color: var(--mm-danger, #b91c1c);
+  text-align: right;
+}
+
+.td-native-chat-terminal-actions {
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form {
+  border: 1px solid var(--mm-border, #e2e8f0);
+  border-radius: var(--mm-radius, 8px);
+  background: var(--mm-surface-muted, #f8fafc);
+  padding: 0.75rem;
+  gap: 0.5rem;
+}
+
+.td-native-chat-continue-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.td-native-chat-continue-form input,
+.td-native-chat-continue-form textarea {
+  width: 100%;
+}
+
 .td-facts-region,
 .td-run-summary-region,
 .td-steps-region,
@@ -9907,4 +9950,155 @@ button.workflow-workspace-sidebar-row:active {
   border: 1px solid rgb(var(--mm-border));
   border-radius: 0.5rem;
   padding: 0.6rem 0.8rem;
+}
+
+/* Workflow Detail native Omnigent Chat route (MoonLadderStudios/MoonMind#3639).
+   MoonMind owns a thin context bar; the native application fills the primary
+   pane. Keep the context bar visually subordinate to the native surface. */
+.wf-native-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.wf-native-chat__context-bar {
+  align-items: center;
+  border-bottom: 1px solid rgb(var(--mm-border));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
+  padding-bottom: 0.5rem;
+}
+.wf-native-chat__identity {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+}
+.wf-native-chat__title {
+  color: rgb(var(--mm-ink));
+  font-weight: 600;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-native-chat__meta {
+  align-items: center;
+  color: rgb(var(--mm-muted));
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  gap: 0.35rem 0.6rem;
+}
+.wf-native-chat__status-label,
+.wf-native-chat__step,
+.wf-native-chat__runtime {
+  color: rgb(var(--mm-muted));
+}
+.wf-native-chat__status-label {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+}
+.wf-native-chat__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.wf-native-chat__surface {
+  display: flex;
+  min-height: min(70vh, 760px);
+  position: relative;
+}
+.wf-native-chat__frame {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: inherit;
+  position: relative;
+  width: 100%;
+}
+.wf-native-chat__iframe {
+  border: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: inherit;
+  width: 100%;
+}
+.wf-native-chat__loading {
+  align-items: center;
+  background: rgb(var(--mm-bg));
+  color: rgb(var(--mm-muted));
+  display: flex;
+  gap: 0.6rem;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+  z-index: 1;
+}
+.wf-native-chat__state {
+  align-items: center;
+  border: 1px dashed rgb(var(--mm-border));
+  border-radius: 0.75rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+.wf-native-chat__state-title {
+  margin: 0;
+}
+.wf-native-chat__state-desc {
+  color: rgb(var(--mm-muted));
+  margin: 0;
+  max-width: 52ch;
+}
+.wf-native-chat__state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+.wf-native-chat__spinner {
+  animation: wf-native-chat-spin 0.9s linear infinite;
+  border: 2px solid rgb(var(--mm-border));
+  border-radius: 50%;
+  border-top-color: rgb(var(--mm-accent));
+  height: 1.1rem;
+  width: 1.1rem;
+}
+@keyframes wf-native-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 720px) {
+  .wf-native-chat__context-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .wf-native-chat__surface {
+    min-height: min(80vh, 620px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wf-native-chat__spinner {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .wf-native-chat__iframe,
+  .wf-native-chat__state {
+    border: 1px solid CanvasText;
+  }
+  .wf-native-chat__spinner {
+    border-color: CanvasText;
+    border-top-color: Highlight;
+  }
 }

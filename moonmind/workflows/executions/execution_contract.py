@@ -1877,6 +1877,10 @@ class WorkflowStepSpec(BaseModel):
     id: str | None = Field(None, alias="id")
     title: str | None = Field(None, alias="title")
     instructions: str | None = Field(None, alias="instructions")
+    repository_operation: Literal["read", "write"] | None = Field(
+        None,
+        alias="repositoryOperation",
+    )
     runtime: WorkflowRuntimeSelection | None = Field(None, alias="runtime")
     skill: WorkflowSkillSelection | None = Field(None, alias="skill")
     skills: WorkflowSkillSelectors | None = Field(None, alias="skills")
@@ -1890,6 +1894,12 @@ class WorkflowStepSpec(BaseModel):
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
+
+    @field_validator("repository_operation", mode="before")
+    @classmethod
+    def _normalize_repository_operation(cls, value: object) -> str | None:
+        cleaned = _clean_optional_str(value)
+        return cleaned.lower() if cleaned is not None else None
 
     @field_validator("input_attachments", mode="before")
     @classmethod
