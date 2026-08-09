@@ -474,11 +474,9 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
 
     Operators need a bounded, non-secret projection of whether the native
     Workflow Chat UI is served through MoonMind: UI-asset serving, the
-    compatibility version gate, the scoped HTTP/SSE route surface, and
-    credential separation. It reveals no upstream URL, credential, or provider
-    session identity. A WebSocket route is intentionally absent from
-    ``scopedRoutes`` until a binding-authorized WebSocket handler exists, so the
-    diagnostics never advertise a socket the facade cannot accept.
+    compatibility version gate, the scoped HTTP/SSE/WebSocket route surface,
+    and credential separation. It reveals no upstream URL, credential, or
+    provider session identity.
     """
 
     serving_enabled = resolved_native_ui_serving_enabled()
@@ -500,6 +498,7 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
             "apiBase": scoped_api,
             "http": scoped_api,
             "sse": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
+            "websocket": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
         },
         # MoonMind strips its own credentials before forwarding upstream and
         # virtualizes the provider session id, so neither the upstream credential

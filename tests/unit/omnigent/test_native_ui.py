@@ -111,9 +111,7 @@ def test_bootstrap_is_browser_safe_and_scoped() -> None:
     assert bootstrap["schemaVersion"] == NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION
     assert bootstrap["chatBindingId"] == _BINDING
     assert bootstrap["apiBase"] == scoped_api_base(_BINDING)
-    # ``wsBase`` is intentionally absent until a binding-authorized WebSocket
-    # handler exists, so the bootstrap never advertises an unbacked socket.
-    assert "wsBase" not in bootstrap
+    assert bootstrap["wsBase"] == scoped_api_base(_BINDING)
     assert bootstrap["mode"] == "embedded"
     assert bootstrap["embedded"] is True
     assert bootstrap["readOnly"] is False
@@ -198,11 +196,13 @@ def test_embedded_document_headers_allow_self_framing_and_no_store() -> None:
     # connect-src confines fetch/XHR/EventSource/WebSocket to the MoonMind
     # origin so provider JS cannot reach an absolute upstream/external URL.
     assert "connect-src 'self'" in headers["Content-Security-Policy"]
+    assert "worker-src 'none'" in headers["Content-Security-Policy"]
     assert headers["X-Frame-Options"] == "SAMEORIGIN"
     assert headers["Cache-Control"] == "no-store, private"
     assert headers["Vary"] == "Cookie"
     assert headers["X-Content-Type-Options"] == "nosniff"
     assert headers["Referrer-Policy"] == "same-origin"
+    assert headers["Cross-Origin-Resource-Policy"] == "same-origin"
 
 
 def test_full_page_document_refuses_framing() -> None:

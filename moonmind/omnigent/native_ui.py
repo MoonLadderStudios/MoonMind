@@ -193,11 +193,6 @@ def build_chat_bootstrap(
     read-only state, the filtered effective capability manifest with disabled
     reasons, safe display labels, and a stable compatibility version.
 
-    ``wsBase`` is deliberately not advertised: the binding-scoped facade
-    currently exposes only HTTP/SSE routes, so the bootstrap does not promise a
-    WebSocket base until a binding-authorized WebSocket handler exists
-    (MoonLadderStudios/MoonMind#3638).
-
     It deliberately never carries a raw provider session id, upstream endpoint,
     host, runner, credential, profile, launch policy, or workspace authority —
     those stay server-side and are only reachable through the separately
@@ -221,6 +216,7 @@ def build_chat_bootstrap(
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
         "apiBase": scoped_api_base(chat_binding_id),
+        "wsBase": scoped_api_base(chat_binding_id),
         "mode": mode,
         "embedded": mode == "embedded",
         "readOnly": bool(read_only),
@@ -275,13 +271,17 @@ def native_ui_security_headers(
         # connection to an absolute upstream or external URL.
         "Content-Security-Policy": (
             f"frame-ancestors {frame_ancestors}; base-uri 'self'; "
-            "form-action 'self'; connect-src 'self'"
+            "form-action 'self'; connect-src 'self'; worker-src 'none'"
         ),
         "X-Frame-Options": x_frame_options,
         "X-Content-Type-Options": "nosniff",
         # Never leak the scoped route (which contains the opaque binding id) to a
         # cross-origin destination through the Referer header.
         "Referrer-Policy": "same-origin",
+        # The native surface is deliberately same-origin. This makes the
+        # CORS/resource boundary explicit instead of inheriting permissive
+        # upstream policy; CSP worker-src above disables service workers.
+        "Cross-Origin-Resource-Policy": "same-origin",
     }
     if is_document:
         headers["Cache-Control"] = "no-store, private"

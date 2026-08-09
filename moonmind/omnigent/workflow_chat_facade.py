@@ -236,6 +236,15 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         sse=True,
         requires_provider_session=False,
     ),
+    # Same durable event stream over a browser WebSocket. The router selects
+    # this entry only for an ASGI WebSocket upgrade; it is intentionally the
+    # same scoped path and capability contract as SSE.
+    _op(
+        rf"v1/sessions/{_SESSION}/stream",
+        name="stream_events_websocket",
+        method="WEBSOCKET",
+        requires_provider_session=False,
+    ),
     # Message and supported control events. Capability is resolved per event
     # type (and read-only state) by the router, so no generic gate applies here.
     _op(
