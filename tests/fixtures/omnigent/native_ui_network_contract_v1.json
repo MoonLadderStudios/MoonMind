@@ -43,21 +43,23 @@
         "sha256": "b4ee700e98b524257cf0fb2c47c18c9a6f2144380821f80a80ea90bc27a19d53"
       }
     ],
-    "routeCount": 34,
+    "routeCount": 35,
     "dimensions": [
       "pathPattern", "methods", "transport", "subprotocols", "payloadClasses",
       "routeRelativeRedirects", "assetBaseDiscovery", "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "3a8d7340df5b305cbb6f6341f8a286675fbc1b6975a21dfed7da6e6d466d5199",
+  "contractSha256": "bdfd088714434023eb24aff23a33e71792706bcb2cfcfe1dcfc33f94fe1604e1",
   "routes": [
-    "liveness", "list_agents", "get_session", "stream_events", "post_event",
+    "liveness", "list_agents", "get_session", "stream_events",
+    "stream_events_websocket", "post_event",
     "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",
     "workspace_diff", "session_files", "session_file", "terminal_view",
-    "terminal_create", "terminal_status", "terminal_input", "terminal_resize",
-    "terminal_close", "terminal_shell", "execution_logs", "workspace_edit",
+    "terminal_create", "terminal_status", "terminal_close", "terminal_shell",
+    "execution_logs", "workspace_edit",
     "workspace_delete", "resource_upload", "resource_download", "resource_attach",
-    "browser_pane", "subagent_tree", "task_todo", "host_liveness",
+    "browser_pane", "subagent_tree", "subagent_control", "task_todo",
+    "task_mutate", "host_liveness",
     "runner_liveness", "session_reconnect", "ws_session_updates",
     "terminal_attach", "dictation_stream"
   ],

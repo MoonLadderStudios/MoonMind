@@ -71,7 +71,7 @@ def test_network_contract_is_anchored_to_pinned_stock_sources() -> None:
     fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
     evidence = fixture["evidence"]
     pinned_commit = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT / "omnigent"), "rev-parse", "HEAD"],
+        ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD:omnigent"],
         check=True,
         capture_output=True,
         text=True,
@@ -83,9 +83,19 @@ def test_network_contract_is_anchored_to_pinned_stock_sources() -> None:
     assert any("/server/routes/" in item["path"] for item in source_files)
     assert any("/web/src/" in item["path"] for item in source_files)
     for item in source_files:
-        source = _REPO_ROOT / item["path"]
-        assert source.is_file(), item["path"]
-        assert hashlib.sha256(source.read_bytes()).hexdigest() == item["sha256"]
+        submodule_path = item["path"].removeprefix("omnigent/")
+        source = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(_REPO_ROOT / "omnigent"),
+                "show",
+                f"{pinned_commit}:{submodule_path}",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert hashlib.sha256(source).hexdigest() == item["sha256"]
 
 
 def test_served_surface_is_single_sourced_from_facade_operations() -> None:
@@ -101,8 +111,6 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "terminal_view",
         "terminal_create",
         "terminal_status",
-        "terminal_input",
-        "terminal_resize",
         "terminal_close",
         "terminal_shell",
         "execution_logs",
@@ -113,7 +121,9 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "resource_attach",
         "browser_pane",
         "subagent_tree",
+        "subagent_control",
         "task_todo",
+        "task_mutate",
         "host_liveness",
         "runner_liveness",
         "session_reconnect",
@@ -129,7 +139,7 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         ("GET", "v1/sessions/b1/resources/terminals", "terminal_view"),
         ("POST", "v1/sessions/b1/resources/terminals", "terminal_create"),
         ("DELETE", "v1/sessions/b1/resources/terminals/t1", "terminal_close"),
-        ("PATCH", "v1/sessions/b1/tasks/t1", "task_todo"),
+        ("PATCH", "v1/sessions/b1/tasks/t1", "task_mutate"),
         ("POST", "v1/sessions/b1/reconnect", "session_reconnect"),
     ],
 )
@@ -146,10 +156,23 @@ def test_classify_reviewed_http_routes(method: str, path: str, name: str) -> Non
 def test_native_http_classifier_fails_closed_on_unknown_method_or_route() -> None:
     assert compat.classify_native_ui_http("TRACE", "v1/sessions/b1/tasks") is None
     assert compat.classify_native_ui_http("GET", "v1/sessions/b1/new-route") is None
+    # Input and resize are terminal-attach WebSocket frames. The internal
+    # cross-session transfer route is not part of the stock browser contract.
+    assert compat.classify_native_ui_http(
+        "POST", "v1/sessions/b1/resources/terminals/t1/transfer"
+    ) is None
+    assert compat.classify_native_ui_http(
+        "PATCH", "v1/sessions/b1/resources/terminals/t1"
+    ) is None
 
 
 def test_every_native_ui_transport_class_is_represented() -> None:
     classes = {route.operation_class for route in compat.NATIVE_UI_ROUTES}
+    frame_classes = {
+        operation
+        for route in compat.NATIVE_UI_ROUTES
+        for operation in route.frame_operations
+    }
     # The transports/route families the issue enumerates are all classified.
     assert {
         compat.CLASS_STREAM,
@@ -159,8 +182,6 @@ def test_every_native_ui_transport_class_is_represented() -> None:
         compat.CLASS_TERMINAL_VIEW,
         compat.CLASS_TERMINAL_CREATE,
         compat.CLASS_TERMINAL_ATTACH,
-        compat.CLASS_TERMINAL_INPUT,
-        compat.CLASS_TERMINAL_RESIZE,
         compat.CLASS_TERMINAL_CLOSE,
         compat.CLASS_EXEC_LOG,
         compat.CLASS_BROWSER_PANE,
@@ -168,6 +189,10 @@ def test_every_native_ui_transport_class_is_represented() -> None:
         compat.CLASS_TASK,
         compat.CLASS_RECONNECT,
     } <= classes
+    assert {
+        compat.CLASS_TERMINAL_INPUT,
+        compat.CLASS_TERMINAL_RESIZE,
+    } <= frame_classes
 
 
 @pytest.mark.parametrize(
@@ -219,18 +244,20 @@ def test_terminal_write_operations_require_ungranted_capabilities() -> None:
     # PTY (acceptance criteria 4-5).
     write_ops = {
         "terminal_create": compat.CAP_CREATE_TERMINAL,
-        "terminal_attach": compat.CAP_WRITE_TERMINAL,
-        "terminal_input": compat.CAP_WRITE_TERMINAL,
-        "terminal_resize": compat.CAP_WRITE_TERMINAL,
-        "terminal_close": compat.CAP_WRITE_TERMINAL,
+        "terminal_attach": compat.CAP_ATTACH_TERMINAL,
+        "terminal_close": compat.CAP_CLOSE_TERMINAL,
     }
     by_name = {route.name: route for route in compat.NATIVE_UI_ROUTES}
     for name, capability in write_ops.items():
         assert by_name[name].capability == capability
         assert by_name[name].mutation is True
     # Terminal viewing / exec-log inspection is a read capability, kept distinct.
-    assert by_name["terminal_view"].capability == compat.CAP_READ_RESOURCES
+    assert by_name["terminal_view"].capability == compat.CAP_VIEW_TERMINAL
     assert by_name["terminal_view"].mutation is False
+    assert by_name["terminal_attach"].frame_operations == (
+        compat.CLASS_TERMINAL_INPUT,
+        compat.CLASS_TERMINAL_RESIZE,
+    )
 
 
 def test_subprotocol_negotiation_allowlists_one_protocol() -> None:

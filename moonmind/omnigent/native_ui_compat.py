@@ -84,11 +84,20 @@ CLASS_SUBAGENT = "subagent_tree"
 CLASS_TASK = "task_todo"
 
 # --- Capability keys the facade never grants (mirror workflow_chat_facade) -----
-# Terminal create/attach/input/resize/close and workspace mutation each require a
-# distinct authority the browser facade does not carry; they always fail closed.
+# Native operations use the canonical capability names resolved by
+# ``effective_capabilities``. Each mutating class remains independently gated.
 CAP_CREATE_TERMINAL = "createTerminal"
+CAP_ATTACH_TERMINAL = "attachTerminal"
 CAP_WRITE_TERMINAL = "writeTerminal"
+CAP_VIEW_TERMINAL = "viewTerminal"
+CAP_CLOSE_TERMINAL = "closeTerminal"
 CAP_MUTATE_WORKSPACE = "mutateWorkspace"
+CAP_UPLOAD_FILES = "uploadFiles"
+CAP_OPEN_BROWSER = "openBrowser"
+CAP_VIEW_SUBAGENTS = "viewSubagents"
+CAP_CONTROL_SUBAGENTS = "controlSubagents"
+CAP_CHANGE_GOAL = "changeGoal"
+CAP_RECONNECT_SESSION = "reconnectSession"
 
 # --- Stable, non-enumerating compatibility diagnostic codes -------------------
 CODE_COMPAT_REVIEW_REQUIRED = "omnigent_chat_compat_review_required"
@@ -139,6 +148,9 @@ class NativeUiRoute:
     mutation: bool = False
     # WebSocket subprotocol allowlist (empty for HTTP/SSE routes).
     subprotocols: tuple[str, ...] = ()
+    # Distinct operations multiplexed as frames on this transport. Terminal
+    # input and resize are WebSocket frames in the pinned UI, not HTTP routes.
+    frame_operations: tuple[str, ...] = ()
     # Compiled path matcher; ``None`` for the served entries whose matching is
     # owned by ``workflow_chat_facade.match_facade_operation``.
     pattern: re.Pattern[str] | None = None
@@ -160,6 +172,7 @@ _SERVED_OPERATION_CLASS: dict[str, tuple[str, str]] = {
     "list_agents": (CLASS_SESSION_READ, TRANSPORT_HTTP),
     "get_session": (CLASS_SESSION_READ, TRANSPORT_HTTP),
     "stream_events": (CLASS_STREAM, TRANSPORT_SSE),
+    "stream_events_websocket": (CLASS_STREAM, TRANSPORT_WEBSOCKET),
     "post_event": (CLASS_CONTROL, TRANSPORT_HTTP),
     "resolve_elicitation": (CLASS_CONTROL, TRANSPORT_HTTP),
     "changed_files": (CLASS_RESOURCE_READ, TRANSPORT_HTTP),
@@ -239,25 +252,25 @@ def _reviewed_http(
 # each reviewed operation is explicitly allowlisted rather than falling through
 # to a generic proxy.
 _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_READ_RESOURCES),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_READ_RESOURCES),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/transfer", name="terminal_input", methods=("POST",), operation_class=CLASS_TERMINAL_INPUT, capability=CAP_WRITE_TERMINAL, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_resize", methods=("PATCH",), operation_class=CLASS_TERMINAL_RESIZE, capability=CAP_WRITE_TERMINAL, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_close", methods=("DELETE",), operation_class=CLASS_TERMINAL_CLOSE, capability=CAP_WRITE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_close", methods=("DELETE",), operation_class=CLASS_TERMINAL_CLOSE, capability=CAP_CLOSE_TERMINAL, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/shell", name="terminal_shell", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/logs", name="execution_logs", methods=("GET",), operation_class=CLASS_EXEC_LOG, capability=CAP_READ_RESOURCES),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_edit", methods=("PUT", "PATCH"), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_delete", methods=("DELETE",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files", name="resource_upload", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files", name="resource_upload", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_UPLOAD_FILES, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/content", name="resource_download", methods=("GET",), operation_class=CLASS_RESOURCE_READ, capability=CAP_READ_RESOURCES),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/attach", name="resource_attach", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/browser(?:/.*)?", name="browser_pane", methods=("GET", "POST", "DELETE"), operation_class=CLASS_BROWSER_PANE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_tree", methods=("GET", "POST"), operation_class=CLASS_SUBAGENT, capability=CAP_VIEW_TRANSCRIPT),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_todo", methods=("GET", "POST", "PATCH"), operation_class=CLASS_TASK, capability=CAP_VIEW_TRANSCRIPT),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/attach", name="resource_attach", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_UPLOAD_FILES, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/browser(?:/.*)?", name="browser_pane", methods=("GET", "POST", "DELETE"), operation_class=CLASS_BROWSER_PANE, capability=CAP_OPEN_BROWSER, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_tree", methods=("GET",), operation_class=CLASS_SUBAGENT, capability=CAP_VIEW_SUBAGENTS),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_control", methods=("POST",), operation_class=CLASS_SUBAGENT, capability=CAP_CONTROL_SUBAGENTS, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_todo", methods=("GET",), operation_class=CLASS_TASK, capability=CAP_VIEW_TRANSCRIPT),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_mutate", methods=("POST", "PATCH"), operation_class=CLASS_TASK, capability=CAP_CHANGE_GOAL, mutation=True),
     _reviewed_http(r"v1/hosts", name="host_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
     _reviewed_http(r"v1/runners/(?P<runner_id>[^/]+)/status", name="runner_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/reconnect", name="session_reconnect", methods=("POST",), operation_class=CLASS_RECONNECT, capability=CAP_VIEW_TRANSCRIPT),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/reconnect", name="session_reconnect", methods=("POST",), operation_class=CLASS_RECONNECT, capability=CAP_RECONNECT_SESSION, mutation=True),
 )
 
 
@@ -278,8 +291,9 @@ _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
         rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/attach",
         name="terminal_attach",
         operation_class=CLASS_TERMINAL_ATTACH,
-        capability=CAP_WRITE_TERMINAL,
+        capability=CAP_ATTACH_TERMINAL,
         mutation=True,
+        frame_operations=(CLASS_TERMINAL_INPUT, CLASS_TERMINAL_RESIZE),
     ),
     # Dictation is binary input and needs a separately reviewed audio policy.
     _ws(
@@ -436,6 +450,7 @@ def compatibility_map() -> dict[str, Any]:
                 "mutation": route.mutation,
                 "pathPattern": route.pattern.pattern if route.pattern else None,
                 "subprotocols": list(route.subprotocols),
+                "frameOperations": list(route.frame_operations),
             }
             for route in NATIVE_UI_ROUTES
         ],
@@ -443,8 +458,17 @@ def compatibility_map() -> dict[str, Any]:
 
 
 __all__ = [
+    "CAP_ATTACH_TERMINAL",
+    "CAP_CHANGE_GOAL",
+    "CAP_CLOSE_TERMINAL",
+    "CAP_CONTROL_SUBAGENTS",
     "CAP_CREATE_TERMINAL",
     "CAP_MUTATE_WORKSPACE",
+    "CAP_OPEN_BROWSER",
+    "CAP_RECONNECT_SESSION",
+    "CAP_UPLOAD_FILES",
+    "CAP_VIEW_SUBAGENTS",
+    "CAP_VIEW_TERMINAL",
     "CAP_WRITE_TERMINAL",
     "CLASS_BROWSER_PANE",
     "CLASS_CONTROL",

@@ -114,6 +114,7 @@ def _row(**overrides: Any) -> SimpleNamespace:
     grants = {name: True for name in CAPABILITY_NAMES}
     values = dict(
         bridge_session_id=_BRIDGE_SESSION_ID,
+        chat_binding_id=_CHAT_BINDING_ID,
         moonmind_workflow_id="mm:w1",
         moonmind_run_id="run-1",
         moonmind_agent_run_id="ar-1",
@@ -289,6 +290,7 @@ class _FakeStore:
 class _FakeProxy:
     def __init__(self) -> None:
         self.posted: list[dict[str, Any]] = []
+        self.stopped: list[str] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
 
@@ -317,6 +319,7 @@ class _FakeProxy:
         return {"ok": True, "type": event.type, "session_id": session_id}
 
     async def stop_session(self, session_id: str):
+        self.stopped.append(session_id)
         return {"ok": True, "status": "stopped", "session_id": session_id}
 
     async def resolve_elicitation(
@@ -476,7 +479,10 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
 
 
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
-    client, _proxy, _store = _build(owner_id=uuid4())
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    client, _proxy, _store = _build(
+        owner_id=uuid4(), store=_FakeStore(row=_row(metadata_=metadata))
+    )
 
     response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
 
@@ -504,6 +510,27 @@ def test_route_not_allowlisted_is_rejected() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "omnigent_chat_route_not_allowlisted"
+
+
+def test_native_task_mutation_uses_effective_change_goal_authority() -> None:
+    row = _row()
+    metadata = dict(row.metadata_)
+    caller_authorities = dict(metadata["callerAuthorities"])
+    caller_grants = dict(caller_authorities[str(_USER_ID)])
+    caller_grants["changeGoal"] = False
+    caller_authorities[str(_USER_ID)] = caller_grants
+    metadata["callerAuthorities"] = caller_authorities
+    client, _proxy, _store = _build(
+        store=_FakeStore(row=_row(metadata_=metadata))
+    )
+
+    response = client.patch(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
+        json={"completed": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
 
 
 def test_delete_method_not_allowlisted() -> None:
@@ -678,9 +705,8 @@ def test_stop_control_uses_distinct_authority() -> None:
 
     assert response.status_code == 200
     registry.revoke_scope.assert_called_once()
-    assert proxy.posted == [
-        {"session_id": _PROVIDER_SESSION_ID, "type": "stop", "actor": None}
-    ]
+    assert proxy.posted == []
+    assert proxy.stopped == [_PROVIDER_SESSION_ID]
 
 
 @pytest.mark.parametrize(
@@ -961,7 +987,11 @@ def test_websocket_rejects_missing_or_foreign_origin(origin: str) -> None:
 def test_websocket_rejects_unauthorized_or_substituted_identity(
     owner_id: Any, suffix: str
 ) -> None:
-    client, _proxy, _store = _build(owner_id=owner_id)
+    store = None
+    if owner_id != _USER_ID:
+        metadata = {**_row().metadata_, "callerAuthorities": {}}
+        store = _FakeStore(row=_row(metadata_=metadata))
+    client, _proxy, _store = _build(owner_id=owner_id, store=store)
 
     with pytest.raises(WebSocketDisconnect) as closed:
         with client.websocket_connect(
@@ -978,7 +1008,10 @@ def test_websocket_closes_when_authority_is_revoked_midstream(monkeypatch) -> No
         1,
     )
     service = _FakeService(_USER_ID, deny_after=1)
-    client, _proxy, _store = _build(service=service)
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    client, _proxy, _store = _build(
+        service=service, store=_FakeStore(row=_row(metadata_=metadata))
+    )
 
     with client.websocket_connect(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
@@ -1036,7 +1069,10 @@ def test_stream_stops_when_authority_revoked_midstream(monkeypatch) -> None:
         "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
         1,
     )
-    store = _FakeStore(row=_row(status="active"), events=[_event(1)])
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    store = _FakeStore(
+        row=_row(status="active", metadata_=metadata), events=[_event(1)]
+    )
     # The binding is authorized when the stream opens, then denied on the next
     # authorization pass (deny_after=1).
     service = _FakeService(_USER_ID, deny_after=1)

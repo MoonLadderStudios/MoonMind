@@ -1,4 +1,4 @@
-"""Materialize the Temporal test server used by the hermetic test runner."""
+"""Materialize the SDK-compatible Temporal test server for hermetic tests."""
 
 from __future__ import annotations
 
@@ -7,13 +7,11 @@ import asyncio
 from temporalio.testing import WorkflowEnvironment
 
 
-TEMPORAL_TEST_SERVER_VERSION = "v1.29.0"
-
-
 async def _cache_test_server() -> None:
-    environment = await WorkflowEnvironment.start_time_skipping(
-        test_server_download_version=TEMPORAL_TEST_SERVER_VERSION
-    )
+    # Let the installed SDK select its compatible binary. Temporal does not
+    # publish every explicit test-server release for every architecture; pinning
+    # v1.29.0 made the on-demand Python test image unbuildable on Linux ARM64.
+    environment = await WorkflowEnvironment.start_time_skipping()
     await environment.shutdown()
 
 

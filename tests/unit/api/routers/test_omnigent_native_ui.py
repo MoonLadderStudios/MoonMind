@@ -258,7 +258,10 @@ def test_asset_is_reverse_proxied_without_bootstrap() -> None:
 
 
 def test_unauthorized_caller_is_non_enumerating() -> None:
-    client, _upstream = _build(owner_id=uuid4())
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    client, _upstream = _build(
+        owner_id=uuid4(), store=_FakeStore(row=_row(metadata_=metadata))
+    )
 
     response = client.get(_url(), params={"embedded": "1"})
 

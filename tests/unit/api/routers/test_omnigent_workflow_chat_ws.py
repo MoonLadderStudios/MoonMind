@@ -42,6 +42,7 @@ from api_service.api.routers.omnigent_bridge import (
 )
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 
 _USER_ID = uuid4()
 _UNSET = object()
@@ -74,6 +75,11 @@ class _FakeService:
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
+    all_capabilities = {name: True for name in CAPABILITY_NAMES}
+    caller_capabilities = {
+        name: name in {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
+        for name in CAPABILITY_NAMES
+    }
     values = dict(
         bridge_session_id=_BRIDGE_SESSION_ID,
         chat_binding_id=_CHAT_BINDING_ID,
@@ -87,7 +93,29 @@ def _row(**overrides: Any) -> SimpleNamespace:
         omnigent_host_id="host-1",
         compatibility_profile="omnigent.server.v1",
         terminal_refs={},
-        metadata_={},
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "callerAuthorities": {str(_USER_ID): caller_capabilities},
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": all_capabilities,
+                "agentProfile": all_capabilities,
+                "launchPolicy": all_capabilities,
+                "state": {"sessionEpoch": 2, "capabilities": all_capabilities},
+            },
+        },
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -173,7 +201,17 @@ def test_dictation_ws_relays_through_binding_scope() -> None:
     assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
 
     store = _FakeStore(
-        row=_row(metadata_={"interventionCapabilities": {"mutateWorkspace": True}})
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "callerAuthorities": {
+                    str(_USER_ID): {
+                        **_row().metadata_["callerAuthorities"][str(_USER_ID)],
+                        "mutateWorkspace": True,
+                    }
+                },
+            }
+        )
     )
     disconnect = _connect_expect_close(
         _build(store=store), _ws_path("v1/dictation/stream")
@@ -184,7 +222,8 @@ def test_dictation_ws_relays_through_binding_scope() -> None:
 def test_non_owner_ws_is_non_enumerating() -> None:
     # A caller who does not own the workflow gets the same close as an unknown
     # binding, so bindings cannot be enumerated over WebSocket.
-    client = _build(owner_id=uuid4())
+    row = _row(metadata_={**_row().metadata_, "callerAuthorities": {}})
+    client = _build(owner_id=uuid4(), store=_FakeStore(row=row))
     disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
     assert disconnect.code == WS_CLOSE_BINDING_UNKNOWN
     assert disconnect.reason == "omnigent_chat_binding_unknown"
@@ -220,11 +259,25 @@ def test_terminal_attach_is_denied_by_capability() -> None:
 
 def test_terminal_attach_relays_when_durable_policy_explicitly_grants_it() -> None:
     store = _FakeStore(
-        row=_row(metadata_={"interventionCapabilities": {"writeTerminal": True}})
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "callerAuthorities": {
+                    str(_USER_ID): {
+                        **_row().metadata_["callerAuthorities"][str(_USER_ID)],
+                        "attachTerminal": True,
+                        "writeTerminal": True,
+                    }
+                },
+            }
+        )
     )
     client = _build(store=store)
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+        client,
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"
+        ),
     )
     assert disconnect.code == 1000
 
@@ -264,7 +317,17 @@ def test_read_only_binding_from_policy_denies_terminal_view() -> None:
     # A read-only viewer (policy withholds resource reads) cannot open the
     # terminal-view transport.
     store = _FakeStore(
-        row=_row(metadata_={"interventionCapabilities": {"readResources": False}})
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "callerAuthorities": {
+                    str(_USER_ID): {
+                        **_row().metadata_["callerAuthorities"][str(_USER_ID)],
+                        "viewTerminal": False,
+                    }
+                },
+            }
+        )
     )
     client = _build(store=store)
     disconnect = _connect_expect_close(
@@ -279,7 +342,10 @@ def test_terminal_binding_closes_live_transport() -> None:
     store = _FakeStore(row=_row(status="completed"))
     client = _build(store=store)
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+        client,
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"
+        ),
     )
     assert disconnect.code == WS_CLOSE_READ_ONLY
     assert disconnect.reason == "omnigent_chat_session_read_only"
@@ -289,7 +355,10 @@ def test_starting_binding_without_provider_session_is_not_ready() -> None:
     store = _FakeStore(row=_row(omnigent_session_id=None))
     client = _build(store=store)
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+        client,
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"
+        ),
     )
     assert disconnect.code == WS_CLOSE_SESSION_NOT_READY
 
@@ -315,7 +384,9 @@ def test_ws_rejects_unlisted_subprotocol() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client,
-        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"
+        ),
         subprotocols=["evil.raw.protocol"],
     )
     assert disconnect.code == WS_CLOSE_SUBPROTOCOL_REJECTED
@@ -336,7 +407,9 @@ def test_ws_accepts_allowlisted_subprotocol_then_relays() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client,
-        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
+        _ws_path(
+            "v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"
+        ),
         subprotocols=["omnigent.workflow-chat.v1"],
     )
     assert disconnect.code == 1000
