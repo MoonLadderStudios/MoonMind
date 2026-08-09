@@ -185,6 +185,7 @@ def _served_route(operation: FacadeOperation) -> NativeUiRoute:
         disposition=DISPOSITION_SERVED,
         capability=operation.capability,
         mutation=operation.mutation,
+        pattern=operation.pattern,
     )
 
 
@@ -396,6 +397,8 @@ def compatibility_map() -> dict[str, Any]:
                 "disposition": route.disposition,
                 "capability": route.capability,
                 "mutation": route.mutation,
+                "pathPattern": route.pattern.pattern if route.pattern else None,
+                "subprotocols": list(route.subprotocols),
             }
             for route in NATIVE_UI_ROUTES
         ],

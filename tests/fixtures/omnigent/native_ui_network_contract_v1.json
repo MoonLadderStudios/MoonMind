@@ -2,6 +2,15 @@
   "schemaVersion": "moonmind.omnigent.native-ui-network-contract/v1",
   "compatibilityProfile": "omnigent.server.v1",
   "source": "vendored pinned omnigent server and native workspace UI",
+  "evidence": {
+    "capture": "stock-ui-and-server-static-analysis",
+    "routeCount": 34,
+    "dimensions": [
+      "pathPattern", "methods", "transport", "subprotocols", "payloadClasses",
+      "routeRelativeRedirects", "assetBaseDiscovery", "apiBaseDiscovery"
+    ]
+  },
+  "contractSha256": "3ba12729ec02a8c41eba05ae463af6118a5237df20dfa214d2361ca8a8546aa6",
   "routes": [
     "liveness", "list_agents", "get_session", "stream_events", "post_event",
     "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",

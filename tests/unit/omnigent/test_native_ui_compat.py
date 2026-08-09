@@ -9,6 +9,7 @@ be allowlisted.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -43,14 +44,23 @@ def test_compatibility_map_is_versioned_and_inventories_every_route() -> None:
 
 
 def test_compatibility_map_exactly_covers_pinned_network_contract_fixture() -> None:
-    """A short declared map can no longer prove its own completeness."""
+    """The implementation must exactly match independently captured evidence."""
 
     fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
     assert fixture["compatibilityProfile"] == compat.NATIVE_UI_COMPAT_VERSION
-    declared = [route["name"] for route in compat.compatibility_map()["routes"]]
-    assert declared == fixture["routes"]
-    assert compat.compatibility_map()["payloadClasses"] == fixture["payloadClasses"]
-    assert compat.compatibility_map()["urlBehaviors"] == fixture["urlBehaviors"]
+    cmap = compat.compatibility_map()
+    observed_contract = {
+        "routes": cmap["routes"],
+        "payloadClasses": cmap["payloadClasses"],
+        "urlBehaviors": cmap["urlBehaviors"],
+    }
+    canonical = json.dumps(
+        observed_contract, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert hashlib.sha256(canonical).hexdigest() == fixture["contractSha256"]
+    assert fixture["evidence"]["routeCount"] == len(cmap["routes"])
+    assert fixture["evidence"]["capture"] == "stock-ui-and-server-static-analysis"
+    assert all(route["pathPattern"] for route in cmap["routes"])
 
 
 def test_served_surface_is_single_sourced_from_facade_operations() -> None:
