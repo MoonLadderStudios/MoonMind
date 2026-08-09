@@ -605,6 +605,13 @@ RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH = (
     "run-repository-bound-no-commit-outcome-v1"
 )
 RUN_PUBLISHED_BRANCH_HANDOFF_PATCH = "run-published-branch-handoff-v1"
+# Preserve the authored PR/branch base when a downstream publishing step omits
+# repositoryOperation. Publishing itself is mutation authority, so current
+# executions compile that omission to ``write`` while older histories replay
+# their recorded candidate-as-base behavior.
+RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH = (
+    "run-publish-mode-repository-operation-v1"
+)
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
@@ -19053,6 +19060,24 @@ class MoonMindRunWorkflow:
         repository_operation = str(
             node_inputs.get("repositoryOperation") or ""
         ).strip().lower()
+        if (
+            not repository_operation
+            and self._patched_or_false_outside_workflow(
+                RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH
+            )
+        ):
+            effective_publish_mode = runtime_block.get("publishMode")
+            if effective_publish_mode is None:
+                effective_publish_mode = node_inputs.get("publishMode")
+            if effective_publish_mode is None and isinstance(
+                workflow_parameters, Mapping
+            ):
+                effective_publish_mode = workflow_parameters.get("publishMode")
+            if str(effective_publish_mode or "").strip().lower() in {
+                "branch",
+                "pr",
+            }:
+                repository_operation = "write"
         if self._patched_or_false_outside_workflow(
             RUN_PUBLISHED_BRANCH_HANDOFF_PATCH
         ):

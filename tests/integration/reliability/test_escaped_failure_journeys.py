@@ -107,6 +107,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
+    RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
+    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -140,6 +142,46 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_omnigent_pr_step_reuses_candidate_against_original_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:6103dddf at the published-branch request boundary."""
+
+    replay_id = "omnigent-pr-step-candidate-base"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        lambda: SimpleNamespace(**manifest["workflowInfo"]),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+            RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
+        },
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._publish_context.update(manifest["publishContext"])
+    request = parent._build_agent_execution_request(
+        node_inputs=manifest["nodeInputs"],
+        node_id=manifest["logicalStepId"],
+        tool_name="omnigent",
+    )
+
+    assert request.parameters["repositoryOperation"] == expected[
+        "repositoryOperation"
+    ]
+    assert request.workspace_spec is not None
+    assert request.workspace_spec["startingBranch"] == expected["publishBaseBranch"]
+    assert request.workspace_spec["targetBranch"] == expected["candidateBranch"]
+    assert request.workspace_spec["repositoryTarget"]["revision"]["commitSha"] == (
+        expected["candidateHeadSha"]
+    )
 
 
 @activity.defn(name="reliability.omnigent_activity_heartbeat_probe")
