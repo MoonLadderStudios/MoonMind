@@ -105,12 +105,10 @@ CAP_INTERRUPT_TURN = "interruptTurn"
 CAP_RESOLVE_ELICITATION = "resolveElicitation"
 CAP_READ_RESOURCES = "readResources"
 
-# Capabilities the facade intentionally never grants to the browser. These are
-# authority/immutability boundaries (terminal creation, workspace mutation,
-# per-session model/effort/goal changes) that require separate authorization the
-# facade does not carry; they are always reported false so the native UI hides
-# the affordance and the server rejects the operation if attempted.
-_ALWAYS_DENIED_CAPABILITIES: tuple[str, ...] = (
+# Higher-risk capabilities with no status-derived default. They require an
+# explicit grant from the durable effective-capability projection and remain
+# unavailable to terminal sessions.
+_EXPLICIT_POLICY_CAPABILITIES: tuple[str, ...] = (
     "createTerminal",
     "writeTerminal",
     "mutateWorkspace",
@@ -161,8 +159,12 @@ def recompute_capabilities(
         CAP_INTERRUPT_TURN: _grant(CAP_INTERRUPT_TURN, not read_only),
         CAP_RESOLVE_ELICITATION: _grant(CAP_RESOLVE_ELICITATION, not read_only),
     }
-    for denied in _ALWAYS_DENIED_CAPABILITIES:
-        capabilities[denied] = False
+    # These higher-risk capabilities have no status-derived default.  The
+    # effective capability resolver must explicitly grant them in the durable
+    # projection and an active session is still required.  Browser input can
+    # therefore never manufacture terminal or workspace authority.
+    for denied in _EXPLICIT_POLICY_CAPABILITIES:
+        capabilities[denied] = bool(not read_only and policy.get(denied) is True)
     return capabilities
 
 

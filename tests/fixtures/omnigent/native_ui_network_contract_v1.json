@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "moonmind.omnigent.native-ui-network-contract/v1",
+  "compatibilityProfile": "omnigent.server.v1",
+  "source": "vendored pinned omnigent server and native workspace UI",
+  "evidence": {
+    "capture": "stock-ui-and-server-static-analysis",
+    "sourceCommit": "e51dcb647bf101a1be27b77ac9da24331e9d20ee",
+    "sourceFiles": [
+      {
+        "path": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+        "sha256": "773979d21dd4a8403cb36ebfc5a5eaf3a84fa4d8c6d2c9650045a08b83bddfce"
+      },
+      {
+        "path": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+        "sha256": "b90407af3af6fda56880dbc0aac9348ce0e82403b4e777520e51c8394ae4444d"
+      },
+      {
+        "path": "omnigent/omnigent/server/routes/terminal_attach.py",
+        "sha256": "f0dc7aa17d6b1be920aab377b367e5b08642b74b155ce8326f503e71cfc430bd"
+      },
+      {
+        "path": "omnigent/omnigent/server/routes/dictation.py",
+        "sha256": "a086ddae9009df9325e49a758cc2e58145115466e85b0eafad7eb53d0558b64f"
+      },
+      {
+        "path": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
+        "sha256": "c84871c429df5e76e0653d0322ad2a676f2e25df1cdc557418629dd0e168283a"
+      },
+      {
+        "path": "omnigent/web/src/hooks/useTerminals.ts",
+        "sha256": "f40acde15f68c48bc290d67d5c13700838a900fa08f78819ab96f6b0a5f2ee14"
+      },
+      {
+        "path": "omnigent/web/src/components/blocks/TerminalView.tsx",
+        "sha256": "1ded9e10822839df16805dec87e1e3eb5d3637b7e8bee1c163210b42c8db3847"
+      },
+      {
+        "path": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
+        "sha256": "5eb2429b3f9f9766fb7969d2c747eb9910e3e740aca8e8ce35453a82ed2596aa"
+      },
+      {
+        "path": "omnigent/web/src/lib/dictation.ts",
+        "sha256": "b4ee700e98b524257cf0fb2c47c18c9a6f2144380821f80a80ea90bc27a19d53"
+      }
+    ],
+    "routeCount": 34,
+    "dimensions": [
+      "pathPattern", "methods", "transport", "subprotocols", "payloadClasses",
+      "routeRelativeRedirects", "assetBaseDiscovery", "apiBaseDiscovery"
+    ]
+  },
+  "contractSha256": "3a8d7340df5b305cbb6f6341f8a286675fbc1b6975a21dfed7da6e6d466d5199",
+  "routes": [
+    "liveness", "list_agents", "get_session", "stream_events", "post_event",
+    "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",
+    "workspace_diff", "session_files", "session_file", "terminal_view",
+    "terminal_create", "terminal_status", "terminal_input", "terminal_resize",
+    "terminal_close", "terminal_shell", "execution_logs", "workspace_edit",
+    "workspace_delete", "resource_upload", "resource_download", "resource_attach",
+    "browser_pane", "subagent_tree", "task_todo", "host_liveness",
+    "runner_liveness", "session_reconnect", "ws_session_updates",
+    "terminal_attach", "dictation_stream"
+  ],
+  "payloadClasses": ["json", "text", "binary", "multipart"],
+  "urlBehaviors": ["route_relative_redirect", "asset_base_discovery", "api_base_discovery"]
+}

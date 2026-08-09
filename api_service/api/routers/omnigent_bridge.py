@@ -17,10 +17,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
+import aiohttp
 from fastapi import (
     APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
     WebSocketDisconnect, status,
@@ -95,6 +97,18 @@ from moonmind.omnigent.native_ui import (
     NATIVE_UI_ROUTE_FEATURE_VERSION,
     evaluate_native_ui_compatibility,
     scoped_api_base,
+)
+from moonmind.omnigent.native_ui_compat import (
+    CODE_COMPAT_REVIEW_REQUIRED,
+    CODE_TRANSPORT_UNSUPPORTED,
+    CODE_WS_SUBPROTOCOL_REJECTED,
+    NativeUiCompatibilityError,
+    DISPOSITION_SERVED,
+    classify_native_ui_http,
+    classify_native_ui_websocket,
+    negotiate_ws_subprotocol,
+    upstream_http_path,
+    upstream_websocket_path,
 )
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -3453,6 +3467,244 @@ async def workflow_chat_binding_facade(
         raise _http_error_from_bridge(exc) from exc
 
 
+async def _read_bounded_facade_body(request: Request) -> bytes:
+    """Read any reviewed native payload without allowing unbounded buffering."""
+
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_size = int(declared)
+            if declared_size < 0 or declared_size > _FACADE_MAX_BODY_BYTES:
+                raise ValueError("too large")
+        except ValueError as exc:
+            raise WorkflowChatFacadeError(
+                "The request body exceeds the Workflow Chat facade limit.",
+                failure_class="user_error",
+                status_code=413,
+                code=CODE_PAYLOAD_TOO_LARGE,
+            ) from exc
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > _FACADE_MAX_BODY_BYTES:
+            raise WorkflowChatFacadeError(
+                "The request body exceeds the Workflow Chat facade limit.",
+                failure_class="user_error",
+                status_code=413,
+                code=CODE_PAYLOAD_TOO_LARGE,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_native_resource_path(value: str | None) -> None:
+    """Reject encoded traversal, absolute, drive/UNC, and NUL-bearing paths."""
+
+    from urllib.parse import unquote
+
+    candidate = str(value or "")
+    for _ in range(3):
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            break
+        candidate = decoded
+    normalized = candidate.replace("\\", "/")
+    parts = normalized.split("/")
+    if (
+        "\x00" in normalized
+        or normalized.startswith("/")
+        or normalized.startswith("//")
+        or (len(normalized) >= 2 and normalized[1] == ":")
+        or any(part in {".", ".."} for part in parts)
+    ):
+        raise WorkflowChatFacadeError(
+            "The requested resource path is not permitted.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+
+
+async def _dispatch_native_ui_http(
+    *,
+    match: Any,
+    row: Any,
+    request: Request,
+    chat_binding_id: str,
+    user: Any,
+    store: OmnigentBridgeSessionStore,
+):
+    """Relay one explicitly inventoried HTTP operation through its binding."""
+
+    route = match.route
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
+    session_status = str(getattr(row, "status", "") or "")
+    body = b""
+    parsed_body: Any | None = None
+    if request.method.upper() in {"POST", "PUT", "PATCH"}:
+        body = await _read_bounded_facade_body(request)
+        content_type = str(request.headers.get("content-type") or "").lower()
+        if content_type.startswith("application/json") and body:
+            try:
+                parsed_body = json.loads(body)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise WorkflowChatFacadeError(
+                    "The request body is not valid JSON.", failure_class="user_error",
+                    status_code=400, code=CODE_MALFORMED_PAYLOAD,
+                ) from exc
+    assert_no_identity_substitution(
+        chat_binding_id=chat_binding_id,
+        path_session_id=match.params.get("session_id"),
+        query=dict(request.query_params),
+        body=parsed_body,
+        headers=request.headers,
+    )
+    runner_alias = str(match.params.get("runner_id") or "")
+    if runner_alias and runner_alias != chat_binding_id:
+        raise WorkflowChatFacadeError(
+            "The request attempts to supply a server-owned runner identity.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+    _validate_native_resource_path(match.params.get("res_path"))
+
+    capabilities = recompute_capabilities(
+        session_status, policy_capabilities=_projection_capabilities(row)
+    )
+    if route.capability and not capabilities.get(route.capability, False):
+        raise WorkflowChatFacadeError(
+            "The requested operation is not permitted for this binding.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+    if route.mutation and is_read_only(session_status):
+        raise WorkflowChatFacadeError(
+            "This Workflow Chat session is terminal and read-only.",
+            failure_class="user_error",
+            status_code=409,
+            code=CODE_SESSION_READ_ONLY,
+        )
+
+    # Topology/liveness and reconnect are projections of the durable binding;
+    # browser-provided host, runner, profile, or endpoint identity is never used.
+    if route.name == "host_liveness":
+        return {
+            "hosts": [
+                {"id": chat_binding_id, "state": _facade_reconnect_state(row)}
+            ]
+        }
+    if route.name in {"runner_liveness", "session_reconnect"}:
+        return {
+            "chatBindingId": chat_binding_id,
+            "state": _facade_reconnect_state(row),
+            "readOnly": is_read_only(session_status),
+        }
+    if not provider_session_id:
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat binding has no active provider session yet.",
+            failure_class="user_error",
+            status_code=409,
+            code=CODE_SESSION_NOT_READY,
+        )
+
+    if route.mutation:
+        _, fresh_provider, fresh_capabilities = await _revalidate_binding_before_mutation(
+            store=store,
+            chat_binding_id=chat_binding_id,
+            expected_provider_session_id=provider_session_id,
+        )
+        if route.capability and not fresh_capabilities.get(route.capability, False):
+            raise WorkflowChatFacadeError(
+                "The requested operation is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=403,
+                code=CODE_OPERATION_DENIED,
+            )
+        provider_session_id = fresh_provider
+
+    from urllib.parse import urlencode, urlsplit
+
+    upstream_path = upstream_http_path(match, provider_session_id)
+    query = urlencode(list(request.query_params.multi_items()))
+    base = urlsplit(resolved_server_url())
+    upstream_url = f"{base.scheme}://{base.netloc}{upstream_path}"
+    if query:
+        upstream_url += "?" + query
+    headers: dict[str, str] = {"Accept": str(request.headers.get("accept") or "*/*")}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        headers["Content-Type"] = str(content_type)
+    token = resolved_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    idempotency_key = request.headers.get("idempotency-key")
+    if idempotency_key:
+        headers["Idempotency-Key"] = str(idempotency_key)[:256]
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.request(
+                request.method.upper(),
+                upstream_url,
+                data=body or None,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as upstream:
+                payload = await upstream.content.read(_FACADE_MAX_BODY_BYTES + 1)
+                if len(payload) > _FACADE_MAX_BODY_BYTES:
+                    raise WorkflowChatFacadeError(
+                        "The upstream response exceeds the facade limit.",
+                        failure_class="integration_error",
+                        status_code=502,
+                        code=CODE_PAYLOAD_TOO_LARGE,
+                    )
+                response_type = str(
+                    upstream.headers.get("content-type")
+                    or "application/octet-stream"
+                )
+                if "json" in response_type.lower() and payload:
+                    try:
+                        value = json.loads(payload)
+                    except (json.JSONDecodeError, ValueError):
+                        value = None
+                    if value is not None:
+                        value = _virtualize_facade_payload(
+                            value, provider_session_id=provider_session_id,
+                            chat_binding_id=chat_binding_id,
+                        )
+                        payload = json.dumps(value, separators=(",", ":")).encode()
+                response_headers: dict[str, str] = {}
+                disposition = str(upstream.headers.get("content-disposition") or "")
+                if disposition and "\r" not in disposition and "\n" not in disposition:
+                    response_headers["Content-Disposition"] = disposition[:512]
+                result = Response(
+                    content=payload,
+                    status_code=upstream.status,
+                    media_type=response_type.split(";", 1)[0],
+                    headers=response_headers,
+                )
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise WorkflowChatFacadeError(
+            "The upstream Omnigent route is unavailable.",
+            failure_class="integration_error",
+            status_code=502,
+            code="omnigent_chat_upstream_unavailable",
+        ) from exc
+
+    if route.mutation:
+        _audit_facade(
+            outcome="mutation",
+            operation=route.name,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="binding_scoped_native_http",
+        )
+    return result
+
+
 # Register the single binding-scoped facade handler once per HTTP method with an
 # explicit, method-suffixed operation id. A single ``api_route(methods=[...])``
 # derives its OpenAPI operation id from ``route.methods`` (a set), so the
@@ -3460,7 +3712,7 @@ async def workflow_chat_binding_facade(
 # between ``_get`` and ``_post`` across processes with different hash seeds,
 # making the generated-contract check non-deterministic. One route per method
 # keeps the exported contract stable (matching the proxy router idiom).
-for _facade_method in ("GET", "POST"):
+for _facade_method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
     workflow_chat_router.add_api_route(
         "/{chat_binding_id}/omnigent/{omnigent_path:path}",
         workflow_chat_binding_facade,
@@ -3486,7 +3738,12 @@ async def _dispatch_workflow_chat_facade(
     # 1. Resolve + authorize the durable binding first, so an unauthorized
     #    caller cannot even probe which routes exist (fully non-enumerating).
     match = match_facade_operation(request.method, omnigent_path)
-    operation_name = match.operation.name if match else "unknown"
+    native_match = None if match else classify_native_ui_http(request.method, omnigent_path)
+    operation_name = (
+        match.operation.name
+        if match
+        else native_match.route.name if native_match else "unknown"
+    )
     row = await _resolve_and_authorize_chat_binding(
         chat_binding_id=chat_binding_id,
         operation=operation_name,
@@ -3496,7 +3753,7 @@ async def _dispatch_workflow_chat_facade(
     )
 
     # 2. Enforce the explicit method + route allowlist.
-    if match is None:
+    if match is None and native_match is None:
         _audit_facade(
             outcome="denied",
             operation="unknown",
@@ -3510,6 +3767,16 @@ async def _dispatch_workflow_chat_facade(
             status_code=status.HTTP_404_NOT_FOUND,
             code=CODE_ROUTE_NOT_ALLOWLISTED,
         )
+    if native_match is not None:
+        return await _dispatch_native_ui_http(
+            match=native_match,
+            row=row,
+            request=request,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            store=store,
+        )
+    assert match is not None
     operation = match.operation
     params = match.params
     # Journal reads use the resolved durable bridge-session key; the browser only
@@ -3949,6 +4216,520 @@ def _strict_query_cursor(value: Any, field: str) -> int | None:
             code=CODE_MALFORMED_PAYLOAD,
         )
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Binding-scoped Workflow Chat WebSocket facade (MoonLadderStudios/MoonMind#3635)
+#
+# The native Omnigent UI also drives live surfaces over WebSocket: session
+# control/event channels, terminal/PTY streams, execution logs, browser panes,
+# sub-agent/task trees, and reconnect/wake flows. Leaving any of them pointed at
+# the upstream server would bypass the scoped HTTP facade, so every WebSocket
+# connection *and every reconnect* independently authenticates the caller,
+# resolves the durable binding, authorizes against the bound Workflow Execution,
+# rejects caller-supplied identity, recomputes capabilities from trusted state,
+# validates the requested transport against the versioned native-UI
+# compatibility map, and negotiates only an allowlisted subprotocol — all
+# *before* the socket is accepted. A successful earlier HTTP bootstrap never
+# authorizes a later WebSocket (this handler reauthorizes from scratch).
+#
+# The pinned compatibility profile supplies the exact reviewed upstream paths.
+# Unknown or changed transports remain absent from that map and fail closed;
+# reviewed transports are identity-virtualized and relayed with bounded,
+# renewable authority.
+# ---------------------------------------------------------------------------
+
+# Application-defined WebSocket close codes (4000-4999 private range), mirroring
+# the host/runner tunnel convention above. The close ``reason`` carries the
+# stable, non-enumerating diagnostic code.
+WS_CLOSE_BINDING_UNKNOWN = 4404
+WS_CLOSE_CAPABILITY_DENIED = 4403
+WS_CLOSE_IDENTITY_SUBSTITUTION = 4403
+WS_CLOSE_READ_ONLY = 4410
+WS_CLOSE_SESSION_NOT_READY = 4409
+WS_CLOSE_SUBPROTOCOL_REJECTED = 4406
+WS_CLOSE_TRANSPORT_UNSUPPORTED = 4400
+WS_CLOSE_COMPAT_REVIEW = 4451
+WS_CLOSE_UPSTREAM_UNAVAILABLE = 1013
+WS_CLOSE_LIMIT_EXCEEDED = 1009
+
+_NATIVE_WS_MAX_MESSAGE_BYTES = 1 * 1024 * 1024
+_NATIVE_WS_IDLE_SECONDS = 60.0
+_NATIVE_WS_LIFETIME_SECONDS = 60.0 * 60.0
+_NATIVE_WS_REAUTH_SECONDS = 2.0
+_NATIVE_WS_MESSAGES_PER_MINUTE = 240
+
+
+def _websocket_origin_allowed(websocket: WebSocket) -> bool:
+    """Apply a same-origin check without trusting forwarded topology headers."""
+
+    origin = str(websocket.headers.get("origin") or "").strip()
+    if not origin:  # non-browser clients authenticate through the normal dependency
+        return True
+    try:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    host = str(websocket.headers.get("host") or "").strip().lower()
+    return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host
+
+
+def _upstream_ws_url(path: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+
+    configured = urlsplit(resolved_server_url())
+    scheme = "wss" if configured.scheme == "https" else "ws"
+    return urlunsplit((scheme, configured.netloc, path, "", ""))
+
+
+async def _relay_native_websocket(
+    *,
+    browser: WebSocket,
+    upstream_url: str,
+    subprotocol: str | None,
+    still_authorized: Any,
+    browser_frame_filter: Any | None = None,
+    upstream_frame_filter: Any | None = None,
+) -> None:
+    """Relay one reviewed native transport with bounded, renewable authority."""
+
+    headers: dict[str, str] = {}
+    token = resolved_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    started = time.monotonic()
+    recent_messages: list[float] = []
+    try:
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.ws_connect(
+                upstream_url,
+                protocols=([subprotocol] if subprotocol else ()),
+                max_msg_size=_NATIVE_WS_MAX_MESSAGE_BYTES,
+                heartbeat=_NATIVE_WS_IDLE_SECONDS / 2,
+                receive_timeout=_NATIVE_WS_IDLE_SECONDS,
+            ) as upstream:
+                await browser.accept(subprotocol=subprotocol)
+
+                async def browser_to_upstream() -> None:
+                    while True:
+                        message = await asyncio.wait_for(
+                            browser.receive(), timeout=_NATIVE_WS_IDLE_SECONDS
+                        )
+                        kind = message.get("type")
+                        if kind == "websocket.disconnect":
+                            await upstream.close()
+                            return
+                        now = time.monotonic()
+                        recent_messages[:] = [
+                            t for t in recent_messages if now - t < 60
+                        ]
+                        if len(recent_messages) >= _NATIVE_WS_MESSAGES_PER_MINUTE:
+                            await browser.close(
+                                code=WS_CLOSE_LIMIT_EXCEEDED,
+                                reason="omnigent_chat_ws_rate_limited",
+                            )
+                            return
+                        recent_messages.append(now)
+                        if message.get("text") is not None:
+                            payload = str(message["text"])
+                            if len(payload.encode("utf-8")) > _NATIVE_WS_MAX_MESSAGE_BYTES:
+                                raise ValueError("message too large")
+                            if browser_frame_filter is not None:
+                                payload = browser_frame_filter(payload)
+                                if payload is None:
+                                    continue
+                            await upstream.send_str(payload)
+                        elif message.get("bytes") is not None:
+                            payload = bytes(message["bytes"])
+                            if len(payload) > _NATIVE_WS_MAX_MESSAGE_BYTES:
+                                raise ValueError("message too large")
+                            await upstream.send_bytes(payload)
+
+                async def upstream_to_browser() -> None:
+                    async for message in upstream:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            payload = message.data
+                            if upstream_frame_filter is not None:
+                                payload = upstream_frame_filter(payload)
+                                if payload is None:
+                                    continue
+                            await browser.send_text(payload)
+                        elif message.type == aiohttp.WSMsgType.BINARY:
+                            await browser.send_bytes(message.data)
+                        elif message.type in {
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        }:
+                            return
+
+                async def authority_monitor() -> None:
+                    while True:
+                        await asyncio.sleep(_NATIVE_WS_REAUTH_SECONDS)
+                        if time.monotonic() - started >= _NATIVE_WS_LIFETIME_SECONDS:
+                            await browser.close(
+                                code=1000, reason="omnigent_chat_ws_lifetime"
+                            )
+                            return
+                        if not await still_authorized():
+                            await browser.close(
+                                code=WS_CLOSE_CAPABILITY_DENIED,
+                                reason=CODE_OPERATION_DENIED,
+                            )
+                            await upstream.close()
+                            return
+
+                tasks = [
+                    asyncio.create_task(browser_to_upstream()),
+                    asyncio.create_task(upstream_to_browser()),
+                    asyncio.create_task(authority_monitor()),
+                ]
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    task.result()
+                if not upstream.closed:
+                    await upstream.close()
+                try:
+                    await browser.close(code=1000)
+                except RuntimeError:
+                    pass
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        await browser.close(
+            code=WS_CLOSE_UPSTREAM_UNAVAILABLE,
+            reason="omnigent_chat_upstream_unavailable",
+        )
+    except PermissionError:
+        await browser.close(
+            code=WS_CLOSE_IDENTITY_SUBSTITUTION,
+            reason=CODE_SESSION_SUBSTITUTION,
+        )
+    except ValueError:
+        await browser.close(
+            code=WS_CLOSE_LIMIT_EXCEEDED,
+            reason="omnigent_chat_ws_message_too_large",
+        )
+    except WebSocketDisconnect:
+        # A browser disconnect is normal terminal evidence for this bounded
+        # relay; no payload or terminal input is logged.
+        return
+
+
+def _facade_reconnect_state(row: Any) -> str:
+    """Return a truthful native reconnect/liveness state (OB §17, brief §5).
+
+    The browser never selects a host, runner, endpoint, profile, or credential
+    generation; the state is derived only from the durable binding so the native
+    UI can distinguish a still-starting session from a terminal one and from one
+    that has no live provider session to reconnect to.
+    """
+
+    status_value = str(getattr(row, "status", "") or "").strip().lower()
+    metadata = getattr(row, "metadata_", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if is_read_only(status_value):
+        return "terminal"
+    if metadata.get("compatibilityUnsupported") is True:
+        return "unsupported"
+    if metadata.get("localStranded") is True:
+        return "local-stranded"
+    if metadata.get("hostOnline") is False:
+        return "wakeable" if metadata.get("hostWakeable") is True else "host-offline"
+    if not str(getattr(row, "omnigent_session_id", "") or "").strip():
+        return "starting"
+    return "available"
+
+
+def _filter_session_updates_watch_frame(
+    payload: str, *, chat_binding_id: str, provider_session_id: str
+) -> str:
+    """Validate and virtualize the client-authored updates watch set."""
+
+    try:
+        frame = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise PermissionError("invalid session updates frame") from exc
+    if not isinstance(frame, dict) or frame.get("type") != "watch":
+        raise PermissionError("unrecognized session updates frame")
+    session_ids = frame.get("session_ids")
+    if not isinstance(session_ids, list) or any(
+        item != chat_binding_id for item in session_ids
+    ):
+        raise PermissionError("session updates identity substitution")
+    frame["session_ids"] = [provider_session_id] if session_ids else []
+    return json.dumps(frame, separators=(",", ":"))
+
+
+def _virtualize_session_updates_frame(
+    payload: str, *, chat_binding_id: str, provider_session_id: str
+) -> str | None:
+    """Virtualize provider identity in an updates frame; drop malformed data."""
+
+    try:
+        frame = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    virtualized = _virtualize_facade_payload(
+        frame,
+        provider_session_id=provider_session_id,
+        chat_binding_id=chat_binding_id,
+    )
+    return json.dumps(virtualized, separators=(",", ":"))
+
+
+async def workflow_chat_binding_facade_ws(
+    websocket: WebSocket,
+    chat_binding_id: str,
+    omnigent_path: str,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> None:
+    """Authenticate, authorize, and validate a native-UI WebSocket before upgrade.
+
+    Fails closed with a specific, non-enumerating close code for every rejection
+    path; recognized-but-unreviewed transports are closed with the compatibility
+    diagnostic instead of being proxied. The socket is only ever accepted after
+    the full per-connection authorization succeeds.
+    """
+
+    match = classify_native_ui_websocket(omnigent_path)
+    operation = match.route.name if match else "unknown"
+
+    # 1. Authenticate (dependency) + resolve/authorize the durable binding. An
+    #    unknown binding and an unauthorized caller collapse to one close code so
+    #    the browser cannot enumerate which bindings exist.
+    try:
+        row = await _resolve_and_authorize_chat_binding(
+            chat_binding_id=chat_binding_id,
+            operation=operation,
+            user=user,
+            service=service,
+            store=store,
+        )
+    except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+        await websocket.close(
+            code=WS_CLOSE_BINDING_UNKNOWN, reason=CODE_BINDING_UNKNOWN
+        )
+        return
+
+    # 2. Reject any caller-supplied server-owned identity in the path or query
+    #    (the only session id the browser may name is the bound chatBindingId).
+    try:
+        assert_no_identity_substitution(
+            chat_binding_id=chat_binding_id,
+            path_session_id=(match.params.get("session_id") if match else None),
+            query=dict(websocket.query_params),
+            headers=websocket.headers,
+        )
+    except WorkflowChatFacadeError as exc:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="identity_substitution",
+        )
+        await websocket.close(
+            code=WS_CLOSE_IDENTITY_SUBSTITUTION, reason=exc.code
+        )
+        return
+
+    # 3. Unknown transport class fails closed with a compatibility diagnostic;
+    #    it is never generically proxied (issue §1, acceptance criterion 8).
+    if match is None:
+        _audit_facade(
+            outcome="denied",
+            operation="unknown",
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="transport_unsupported",
+        )
+        await websocket.close(
+            code=WS_CLOSE_TRANSPORT_UNSUPPORTED, reason=CODE_TRANSPORT_UNSUPPORTED
+        )
+        return
+    route = match.route
+
+    if route.disposition != DISPOSITION_SERVED:
+        await websocket.close(
+            code=WS_CLOSE_COMPAT_REVIEW, reason=CODE_COMPAT_REVIEW_REQUIRED
+        )
+        return
+
+    if not _websocket_origin_allowed(websocket):
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="origin_rejected",
+        )
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED,
+            reason="omnigent_chat_ws_origin_rejected",
+        )
+        return
+
+    # 4. A terminal/revoked binding cannot open a new live transport; close it
+    #    rather than letting a WebSocket outlive terminal authority (criterion 10).
+    session_status = str(getattr(row, "status", "") or "")
+    if is_read_only(session_status):
+        await websocket.close(code=WS_CLOSE_READ_ONLY, reason=CODE_SESSION_READ_ONLY)
+        return
+
+    # 5. Capability gate from recomputed trusted state intersected with policy.
+    #    Terminal create/attach/input/resize/close and browser-pane control
+    #    require capabilities the facade never grants, so a read-only viewer or a
+    #    nonowner is denied here before the transport is opened (criteria 4, 5).
+    capabilities = recompute_capabilities(
+        session_status, policy_capabilities=_projection_capabilities(row)
+    )
+    required_capability = route.capability
+    terminal_read_only = (
+        operation == "terminal_attach"
+        and str(websocket.query_params.get("read_only") or "").lower() == "true"
+    )
+    if terminal_read_only:
+        required_capability = "readResources"
+    if required_capability and not capabilities.get(required_capability, False):
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="capability_denied",
+        )
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
+        )
+        return
+
+    # 6. Negotiate only an allowlisted subprotocol before upgrade.
+    offered = [
+        part.strip()
+        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if part.strip()
+    ]
+    try:
+        selected_subprotocol = negotiate_ws_subprotocol(offered, route=route)
+    except NativeUiCompatibilityError:
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="subprotocol_rejected",
+        )
+        await websocket.close(
+            code=WS_CLOSE_SUBPROTOCOL_REJECTED, reason=CODE_WS_SUBPROTOCOL_REJECTED
+        )
+        return
+
+    # 7. A live provider session must exist before any live transport (the
+    #    reconnect probe is exempt: it truthfully reports a still-starting state).
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
+    if not provider_session_id and route.operation_class != "reconnect":
+        await websocket.close(
+            code=WS_CLOSE_SESSION_NOT_READY, reason=CODE_SESSION_NOT_READY
+        )
+        return
+
+    if not provider_session_id:
+        await websocket.accept(subprotocol=selected_subprotocol)
+        await websocket.send_json({"state": _facade_reconnect_state(row)})
+        await websocket.close(code=1000)
+        return
+
+    # 8. Replace the browser-visible binding alias with the server-owned provider
+    #    identity and relay through MoonMind. Browser headers, credentials, and
+    #    query parameters are never forwarded upstream.
+    upstream_path = upstream_websocket_path(match, provider_session_id)
+    browser_frame_filter = None
+    upstream_frame_filter = None
+    if operation == "ws_session_updates":
+        def browser_frame_filter(payload: str) -> str:
+            return _filter_session_updates_watch_frame(
+                payload,
+                chat_binding_id=chat_binding_id,
+                provider_session_id=provider_session_id,
+            )
+
+        def upstream_frame_filter(payload: str) -> str | None:
+            return _virtualize_session_updates_frame(
+                payload,
+                chat_binding_id=chat_binding_id,
+                provider_session_id=provider_session_id,
+            )
+    if operation == "terminal_attach":
+        from urllib.parse import urlencode
+
+        query = {"read_only": "true" if terminal_read_only else "false"}
+        transport = str(websocket.query_params.get("transport") or "").strip()
+        if transport:
+            if transport not in {"control", "pty"}:
+                await websocket.close(
+                    code=WS_CLOSE_CAPABILITY_DENIED,
+                    reason=CODE_OPERATION_DENIED,
+                )
+                return
+            query["transport"] = transport
+        upstream_path += "?" + urlencode(query)
+
+    async def still_authorized() -> bool:
+        try:
+            refreshed = await _resolve_and_authorize_chat_binding(
+                chat_binding_id=chat_binding_id,
+                operation=operation,
+                user=user,
+                service=service,
+                store=store,
+            )
+        except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+            return False
+        if is_read_only(str(getattr(refreshed, "status", "") or "")):
+            return False
+        if (
+            str(getattr(refreshed, "omnigent_session_id", "") or "").strip()
+            != provider_session_id
+        ):
+            return False
+        refreshed_capabilities = recompute_capabilities(
+            str(getattr(refreshed, "status", "") or ""),
+            policy_capabilities=_projection_capabilities(refreshed),
+        )
+        return not required_capability or refreshed_capabilities.get(
+            required_capability, False
+        )
+
+    _audit_facade(
+        outcome="connected",
+        operation=f"{operation}:{_facade_reconnect_state(row)}",
+        chat_binding_id=chat_binding_id,
+        user=user,
+        reason="binding_scoped_websocket",
+    )
+    await _relay_native_websocket(
+        browser=websocket,
+        upstream_url=_upstream_ws_url(upstream_path),
+        subprotocol=selected_subprotocol,
+        still_authorized=still_authorized,
+        browser_frame_filter=browser_frame_filter,
+        upstream_frame_filter=upstream_frame_filter,
+    )
+
+
+workflow_chat_router.add_api_websocket_route(
+    "/{chat_binding_id}/omnigent/{omnigent_path:path}",
+    workflow_chat_binding_facade_ws,
+)
 
 
 __all__ = [
