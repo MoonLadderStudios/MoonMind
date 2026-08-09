@@ -269,7 +269,13 @@ def test_effective_launch_snapshot_carries_and_validates_block() -> None:
                 "runtimeUid": 1000,
                 "runtimeGid": 1000,
             },
-            "session": {"cleanup": "drain"},
+            "session": {
+                "create": True,
+                "continuation": True,
+                "interruption": True,
+                "cancellation": True,
+                "cleanup": "drain",
+            },
             "retention": {"days": 30},
             "capture": {"logs": True},
         }
@@ -316,7 +322,13 @@ def test_effective_launch_snapshot_defaults_to_disabled() -> None:
                 "runtimeUid": 1000,
                 "runtimeGid": 1000,
             },
-            "session": {"cleanup": "drain"},
+            "session": {
+                "create": True,
+                "continuation": True,
+                "interruption": True,
+                "cancellation": True,
+                "cleanup": "drain",
+            },
             "retention": {"days": 30},
             "capture": {"logs": True},
         }
