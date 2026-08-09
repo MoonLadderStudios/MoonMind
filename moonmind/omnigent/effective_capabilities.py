@@ -170,3 +170,72 @@ def resolve_effective_capabilities(
         json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return EffectiveCapabilitySet(CAPABILITY_SCHEMA_VERSION, digest, decisions)
+
+
+def resolve_bridge_row_capabilities(
+    row: Any,
+    *,
+    caller_capabilities: Mapping[str, Any],
+    expected_session_epoch: Any = None,
+    expected_active_turn: Any = None,
+    expected_elicitation: Any = None,
+) -> EffectiveCapabilitySet:
+    """Resolve the canonical capability set from one durable bridge row.
+
+    ``capabilityAuthority`` is written with the execution-bound bridge
+    projection and is the sole capability input.  The adapter deliberately
+    does not infer grants from provider names, mutable defaults, or the legacy
+    ``interventionCapabilities`` map.  Expected request fields are compared at
+    this boundary so the browser manifest and mutation handoff use identical
+    authority semantics.
+    """
+
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    evidence = dict(metadata.get("capabilityAuthority") or {})
+    launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
+    policy = dict(launch.get("policyAuthority") or {})
+    state = dict(evidence.get("state") or {})
+    authority = {
+        "agentProfileRef": launch.get("executionProfileRef"),
+        "agentProfileDigest": launch.get("executionProfileDigest"),
+        "providerProfileId": getattr(row, "provider_profile_id", None),
+        "providerProfileGeneration": getattr(row, "credential_generation", None),
+        "launchPolicyRef": launch.get("launchPolicyRef"),
+        "policySnapshotRef": policy.get("snapshotRef"),
+        "policyDigest": policy.get("policyDigest"),
+        "effectiveLaunchSnapshotRef": launch.get("snapshotRef"),
+        "sessionEpoch": state.get("sessionEpoch"),
+        "authorityFresh": evidence.get("fresh") is True,
+        "expectedProviderProfileGeneration": evidence.get(
+            "providerProfileGeneration"
+        ),
+        "expectedSessionEpoch": expected_session_epoch,
+    }
+    stale_reason = None
+    if expected_active_turn is not None and str(expected_active_turn) != str(
+        state.get("activeTurnId")
+    ):
+        stale_reason = "active_turn_stale"
+    if expected_elicitation is not None and str(expected_elicitation) != str(
+        state.get("elicitationId")
+    ):
+        stale_reason = "elicitation_stale"
+    if stale_reason:
+        authority["authorityFresh"] = False
+
+    result = resolve_effective_capabilities(
+        authority=authority,
+        upstream_capabilities=dict(evidence.get("upstream") or {}),
+        profile_capabilities=dict(evidence.get("agentProfile") or {}),
+        launch_capabilities=dict(evidence.get("launchPolicy") or {}),
+        state_capabilities=dict(state.get("capabilities") or {}),
+        caller_capabilities=caller_capabilities,
+        session_status=getattr(row, "status", None),
+    )
+    if stale_reason:
+        decisions = {
+            name: CapabilityDecision(False, stale_reason, item.upstream_supported)
+            for name, item in result.decisions.items()
+        }
+        return EffectiveCapabilitySet(result.schema_version, result.authority_digest, decisions)
+    return result

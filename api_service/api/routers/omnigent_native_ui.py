@@ -40,9 +40,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from api_service.api.routers.omnigent_bridge import (
     _facade_liveness_state,
+    _effective_capabilities,
     _get_bridge_store,
     _get_execution_service,
-    _projection_capabilities,
     _require_bridge_enabled,
     _resolve_and_authorize_chat_binding,
 )
@@ -68,11 +68,7 @@ from moonmind.omnigent.settings import (
     resolved_native_ui_version,
     resolved_server_url,
 )
-from moonmind.omnigent.workflow_chat_facade import (
-    WorkflowChatFacadeError,
-    is_read_only,
-    recompute_capabilities,
-)
+from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError, is_read_only
 
 logger = logging.getLogger(__name__)
 
@@ -372,15 +368,16 @@ async def _serve_native_ui(
     # 4. SPA document: inject the browser-safe binding-scoped bootstrap and scope
     #    the asset URLs so every subsequent request stays on the MoonMind origin.
     session_status = str(getattr(row, "status", "") or "")
-    capabilities = recompute_capabilities(
-        session_status, policy_capabilities=_projection_capabilities(row)
-    )
+    capability_set = _effective_capabilities(row)
     bootstrap = build_chat_bootstrap(
         chat_binding_id=chat_binding_id,
         mode=mode,
         read_only=is_read_only(session_status),
-        capabilities=capabilities,
+        capabilities=capability_set.capabilities,
         state=_facade_liveness_state(row),
+        capability_schema_version=capability_set.schema_version,
+        capability_authority_digest=capability_set.authority_digest,
+        disabled_reasons=capability_set.disabled_reasons,
     )
     rendered = render_native_ui_document(
         response.content.decode("utf-8", "replace"),

@@ -131,8 +131,12 @@ from moonmind.omnigent.workflow_chat_facade import (
     assert_no_identity_substitution,
     is_read_only,
     match_facade_operation,
-    recompute_capabilities,
     required_capability_for_event,
+)
+from moonmind.omnigent.effective_capabilities import (
+    CAPABILITY_NAMES,
+    EffectiveCapabilitySet,
+    resolve_bridge_row_capabilities,
 )
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -1436,6 +1440,15 @@ def _projection_capabilities(row: Any) -> dict[str, bool]:
         for key, value in raw.items()
         if isinstance(key, str) and isinstance(value, bool)
     }
+
+
+def _effective_capabilities(row: Any) -> EffectiveCapabilitySet:
+    """Return the caller-filtered canonical decision for an authorized owner."""
+
+    return resolve_bridge_row_capabilities(
+        row,
+        caller_capabilities={name: True for name in CAPABILITY_NAMES},
+    )
 
 
 def _bridge_event_kind(event_type: str | None) -> str:
@@ -3110,6 +3123,7 @@ async def _revalidate_binding_before_mutation(
     store: OmnigentBridgeSessionStore,
     chat_binding_id: str,
     expected_provider_session_id: str,
+    expected_authority_digest: str,
 ) -> tuple[Any, str, dict[str, bool]]:
     """Re-read and compare-and-set the binding state at the mutation handoff.
 
@@ -3141,10 +3155,15 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    fresh_capabilities = recompute_capabilities(
-        fresh_status, policy_capabilities=_projection_capabilities(fresh)
-    )
-    return fresh, fresh_provider, fresh_capabilities
+    fresh_capabilities = _effective_capabilities(fresh)
+    if fresh_capabilities.authority_digest != expected_authority_digest:
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat authority changed before the request completed.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_NOT_READY,
+        )
+    return fresh, fresh_provider, fresh_capabilities.capabilities
 
 
 async def _claim_facade_message(
@@ -3215,7 +3234,10 @@ async def _record_facade_mutation_audit(
     actor: str,
     idempotency_key: str | None = None,
     scan_evidence: NativeScanEvidence | None = None,
-) -> None:
+    upstream_result: Any = None,
+    request_time: str | None = None,
+    dispatch_time: str | None = None,
+) -> str:
     """Persist durable, secret-safe evidence of a facade mutation (OB-§19).
 
     A rotating process log is not durable evidence, so mutation outcomes are
@@ -3255,19 +3277,42 @@ async def _record_facade_mutation_audit(
         "effectiveLaunchSnapshotRef": str(launch.get("snapshotRef") or ""),
         "policySnapshotRef": str(policy.get("snapshotRef") or ""),
         "policyDigest": str(policy.get("policyDigest") or ""),
-        "expectedSessionEpoch": dict(getattr(row, "metadata_", None) or {}).get(
-            "sessionEpoch"
-        ),
+        "expectedSessionEpoch": dict(
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
+            or {}
+        ).get("state", {}).get("sessionEpoch"),
+        "expectedActiveTurn": dict(
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
+            or {}
+        ).get("state", {}).get("activeTurnId"),
+        "expectedElicitation": dict(
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
+            or {}
+        ).get("state", {}).get("elicitationId"),
         "expectedTerminalState": str(getattr(row, "status", "") or ""),
-        "requestTime": now,
-        "dispatchTime": now,
-        "completionTime": now,
+        "requestTime": request_time or now,
+        "dispatchTime": dispatch_time,
+        "completionTime": None if outcome == "pending" else now,
         "durableAuditRef": (
             f"omnigent-bridge-event://{getattr(row, 'bridge_session_id', '')}/"
             f"workflow-chat-control/{request_id}"
         ),
         "sourceMode": "workflow_chat_facade",
     }
+    if upstream_result is not None:
+        normalized = _virtualize_facade_payload(
+            upstream_result,
+            provider_session_id=str(getattr(row, "omnigent_session_id", "") or ""),
+            chat_binding_id=str(getattr(row, "chat_binding_id", "") or ""),
+        )
+        metadata["normalizedResult"] = normalized
+        if isinstance(upstream_result, dict):
+            metadata["upstreamCorrelation"] = str(
+                upstream_result.get("request_id")
+                or upstream_result.get("requestId")
+                or upstream_result.get("id")
+                or ""
+            ) or None
     if idempotency_key:
         metadata["controlIdempotencyKey"] = idempotency_key
     if scan_evidence is not None:
@@ -3291,6 +3336,7 @@ async def _record_facade_mutation_audit(
             control_type,
             outcome,
         )
+    return request_time or now
 
 
 def _event_is_chat_visible(row: Any) -> bool:
@@ -3555,9 +3601,8 @@ async def _dispatch_workflow_chat_facade(
     # Capabilities are recomputed from trusted status *and* intersected with the
     # binding's stored policy so a disabled operation is never re-advertised or
     # re-authorized from status alone.
-    capabilities = recompute_capabilities(
-        session_status, policy_capabilities=_projection_capabilities(row)
-    )
+    capability_set = _effective_capabilities(row)
+    capabilities = capability_set.capabilities
 
     # 3. Read a bounded JSON body for mutations before the substitution guard.
     body: dict[str, Any] | None = None
@@ -3591,6 +3636,9 @@ async def _dispatch_workflow_chat_facade(
             "state": _facade_liveness_state(row),
             "readOnly": is_read_only(session_status),
             "capabilities": capabilities,
+            "disabledReasons": capability_set.disabled_reasons,
+            "capabilitySchemaVersion": capability_set.schema_version,
+            "capabilityAuthorityDigest": capability_set.authority_digest,
         }
 
     # 6. Recompute-driven capability + session-state gates.
@@ -3755,6 +3803,7 @@ async def _dispatch_workflow_chat_facade(
                 store=store,
                 chat_binding_id=chat_binding_id,
                 expected_provider_session_id=provider_session_id,
+                expected_authority_digest=capability_set.authority_digest,
             )
         )
         if not fresh_capabilities.get(required, False):
@@ -3799,12 +3848,33 @@ async def _dispatch_workflow_chat_facade(
                 chat_binding_id=chat_binding_id,
                 user=user,
             )
-            return {
-                "ok": True,
-                "deduplicated": True,
-                "type": event.type,
-                "session_id": chat_binding_id,
-            }
+            prior = await store.get_lifecycle_event_metadata(
+                fresh_row.idempotency_key,
+                event_identity=(
+                    f"workflow-chat-control:{event.type}:posted:{effective_key}"
+                ),
+            )
+            if isinstance(prior, dict) and "normalizedResult" in prior:
+                return prior["normalizedResult"]
+            raise WorkflowChatFacadeError(
+                "The prior request is still pending or its delivery is unknown.",
+                failure_class="system_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_NOT_READY,
+            )
+
+
+        # The canonical pending receipt is durable before provider dispatch.
+        request_time = await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=event.type,
+            outcome="pending",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+        )
+        dispatch_time = datetime.now(tz=UTC).isoformat()
 
         result = await _apply_owned_session_control(
             control_facade=facade,
@@ -3825,6 +3895,9 @@ async def _dispatch_workflow_chat_facade(
             actor=str(user.id),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
+            upstream_result=result,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
         )
         _audit_facade(
             outcome="mutation",
@@ -3887,6 +3960,7 @@ async def _dispatch_workflow_chat_facade(
                 store=store,
                 chat_binding_id=chat_binding_id,
                 expected_provider_session_id=provider_session_id,
+                expected_authority_digest=capability_set.authority_digest,
             )
         )
         if not fresh_capabilities.get(CAP_RESOLVE_ELICITATION, False):
@@ -3908,6 +3982,41 @@ async def _dispatch_workflow_chat_facade(
             if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
             else {}
         )
+        elicitation_key = _facade_idempotency_key(request) or f"mm-{uuid4().hex}"
+        claimed = await _claim_facade_message(
+            store=store,
+            row=fresh_row,
+            event_type="resolve_elicitation",
+            actor=str(user.id),
+            idempotency_key=elicitation_key,
+            payload_digest=elicitation_scan_evidence.payload_digest,
+        )
+        if not claimed:
+            prior = await store.get_lifecycle_event_metadata(
+                fresh_row.idempotency_key,
+                event_identity=(
+                    "workflow-chat-control:resolve_elicitation:posted:"
+                    f"{elicitation_key}"
+                ),
+            )
+            if isinstance(prior, dict) and "normalizedResult" in prior:
+                return prior["normalizedResult"]
+            raise WorkflowChatFacadeError(
+                "The prior request is still pending or its delivery is unknown.",
+                failure_class="system_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_NOT_READY,
+            )
+        request_time = await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type="resolve_elicitation",
+            outcome="pending",
+            actor=str(user.id),
+            idempotency_key=elicitation_key,
+            scan_evidence=elicitation_scan_evidence,
+        )
+        dispatch_time = datetime.now(tz=UTC).isoformat()
         result = await facade.resolve_elicitation(
             session_id=fresh_provider,
             elicitation_id=params["elicitation_id"],
@@ -3920,8 +4029,11 @@ async def _dispatch_workflow_chat_facade(
             control_type="resolve_elicitation",
             outcome="posted",
             actor=str(user.id),
-            idempotency_key=_facade_idempotency_key(request),
+            idempotency_key=elicitation_key,
             scan_evidence=elicitation_scan_evidence,
+            upstream_result=result,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
         )
         _audit_facade(
             outcome="mutation",

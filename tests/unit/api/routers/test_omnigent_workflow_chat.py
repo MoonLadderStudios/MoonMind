@@ -34,6 +34,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
@@ -77,6 +78,7 @@ class _FakeService:
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
+    grants = {name: True for name in CAPABILITY_NAMES}
     values = dict(
         bridge_session_id=_BRIDGE_SESSION_ID,
         moonmind_workflow_id="mm:w1",
@@ -89,7 +91,28 @@ def _row(**overrides: Any) -> SimpleNamespace:
         omnigent_host_id="host-1",
         compatibility_profile="omnigent.server.v1",
         terminal_refs={},
-        metadata_={},
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            }
+        },
         diagnostics_ref=None,
         capture_manifest_ref=None,
         initial_snapshot_ref=None,
@@ -223,8 +246,7 @@ class _FakeStore:
         # can be reconciled against the digest it was first bound to.
         for entry in reversed(self.lifecycle):
             if (
-                entry["kind"] == "claim"
-                and entry["event_identity"] == event_identity
+                entry["event_identity"] == event_identity
             ):
                 return dict(entry["metadata"])
         return None
@@ -1248,7 +1270,9 @@ def test_message_idempotency_key_dedupes_replay() -> None:
     assert second.status_code == 200
     # Exactly one provider turn was issued despite the retry.
     assert len(proxy.posted) == 1
-    assert second.json()["deduplicated"] is True
+    # A duplicate receives the canonical persisted prior result, not a newly
+    # synthesized acknowledgement with different semantics.
+    assert second.json() == first.json()
 
 
 def test_message_idempotency_key_reuse_with_different_payload_conflicts() -> None:

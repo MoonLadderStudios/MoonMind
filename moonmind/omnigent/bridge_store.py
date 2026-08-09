@@ -1460,11 +1460,14 @@ class OmnigentBridgeSessionStore:
                         "policySnapshotRef",
                         "policyDigest",
                         "expectedSessionEpoch",
+                        "expectedActiveTurn",
+                        "expectedElicitation",
                         "expectedTerminalState",
                         "requestTime",
                         "dispatchTime",
                         "completionTime",
                         "upstreamCorrelation",
+                        "normalizedResult",
                         "durableAuditRef",
                         # Bounded, non-disclosing native outbound-scan evidence
                         # (MoonLadderStudios/MoonMind#3637). Persisted so a
@@ -2062,6 +2065,21 @@ class OmnigentBridgeSessionStore:
                 changed = True
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
+                launch = dict(row.effective_launch_snapshot_json or {})
+                metadata["capabilityAuthority"] = {
+                    "schemaVersion": "moonmind.omnigent.capability-authority.v1",
+                    "fresh": True,
+                    "providerProfileGeneration": row.credential_generation,
+                    "upstream": dict(capabilities),
+                    "agentProfile": dict(launch.get("agentProfileCapabilities") or {}),
+                    "launchPolicy": dict(launch.get("capabilities") or {}),
+                    "state": {
+                        "sessionEpoch": 1,
+                        "activeTurnId": None,
+                        "elicitationId": None,
+                        "capabilities": dict(capabilities),
+                    },
+                }
                 changed = True
             if not already_recorded:
                 journal.append(

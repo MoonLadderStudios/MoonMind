@@ -1,8 +1,11 @@
 """Effective native capability contract tests for MoonLadderStudios/MoonMind#3636."""
 
+from types import SimpleNamespace
+
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     CAPABILITY_SCHEMA_VERSION,
+    resolve_bridge_row_capabilities,
     resolve_effective_capabilities,
 )
 
@@ -81,3 +84,53 @@ def test_missing_source_entry_cannot_be_inferred_or_granted():
     result = _resolve(upstream_capabilities=upstream)
     assert result.capabilities["changeModel"] is False
     assert result.decisions["changeModel"].reason == "upstream_unsupported"
+
+
+def test_bridge_row_adapter_uses_only_execution_bound_authority():
+    grants = _all()
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            # A contradictory legacy map must not become parallel authority.
+            "interventionCapabilities": _all(False),
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
+    )
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert all(result.capabilities.values())
+
+    stale = resolve_bridge_row_capabilities(
+        row, caller_capabilities=grants, expected_session_epoch=3
+    )
+    assert set(stale.disabled_reasons.values()) == {"session_epoch_stale"}
+
+
+def test_bridge_row_adapter_fails_closed_without_capability_authority():
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={},
+        metadata_={"interventionCapabilities": _all()},
+    )
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=_all())
+    assert set(result.disabled_reasons.values()) == {"immutable_authority_missing"}
