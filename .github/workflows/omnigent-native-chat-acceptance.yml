@@ -1,0 +1,69 @@
+name: Provider / Omnigent Native Chat Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_artifact:
+        description: Complete deterministic and protected-live #3642 evidence
+        required: true
+        type: string
+      evidence_run_id:
+        description: Workflow run that produced the protected evidence
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-native-chat-acceptance
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v7
+      - name: Download complete protected evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.evidence_artifact }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/omnigent-native-chat-acceptance/input
+      - name: Build fail-closed native Chat report
+        run: |
+          python tools/build_omnigent_native_chat_acceptance.py \
+            artifacts/omnigent-native-chat-acceptance/input/native-chat-acceptance-input.json \
+            artifacts/omnigent-native-chat-acceptance/report.json \
+            --evidence-root artifacts/omnigent-native-chat-acceptance/input/evidence \
+            --expected-commit "${{ github.sha }}"
+      - name: Upload passing report
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-native-chat-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-native-chat-acceptance/report.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Link passing report from issue 3642
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact="omnigent-native-chat-acceptance-${{ github.run_id }}-${{ github.run_attempt }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          comment_file="${RUNNER_TEMP}/omnigent-native-chat-acceptance.md"
+          {
+            echo "Native Workflow Chat acceptance gate: PASS"
+            echo
+            echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Durable report: \`${artifact}\`"
+            echo "- Source evidence: \`${{ inputs.evidence_artifact }}\` from run \`${{ inputs.evidence_run_id }}\`"
+          } > "$comment_file"
+          gh issue comment 3642 --repo "${{ github.repository }}" --body-file "$comment_file"

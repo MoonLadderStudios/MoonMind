@@ -11,8 +11,15 @@ artifact independently proves the row. Code presence alone is “implemented” 
 the normal Create catalog; readiness may steer an operator to connect OAuth or
 repair a live dependency, but release evidence does not hide or disable the
 runtime. The current default-selection phase is **1 — explicit selection**:
-the repository does not contain the complete protected-live acceptance artifact,
-so promotion to the preselected Codex default remains fail-closed. The end-to-end product-path sequence, field
+the repository contains the fail-closed builder and publication workflow for the
+complete native Workflow Chat protected-live artifact
+(`moonmind.omnigent.native-chat-acceptance/v1`,
+MoonLadderStudios/MoonMind#3642), but no passing protected-live observation is
+checked in. The artifact must be produced by
+`.github/workflows/omnigent-native-chat-acceptance.yml`; configured, skipped,
+fixture-generated, unresolved, mutable-image, or partial evidence cannot pass.
+Until such a report is published, promotion to the preselected Codex default
+remains fail-closed. The end-to-end product-path sequence, field
 authority, and complete failure matrix that this support state qualifies are
 reconciled in
 [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
