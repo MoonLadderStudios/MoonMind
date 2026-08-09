@@ -105,12 +105,10 @@ CAP_INTERRUPT_TURN = "interruptTurn"
 CAP_RESOLVE_ELICITATION = "resolveElicitation"
 CAP_READ_RESOURCES = "readResources"
 
-# Capabilities the facade intentionally never grants to the browser. These are
-# authority/immutability boundaries (terminal creation, workspace mutation,
-# per-session model/effort/goal changes) that require separate authorization the
-# facade does not carry; they are always reported false so the native UI hides
-# the affordance and the server rejects the operation if attempted.
-_ALWAYS_DENIED_CAPABILITIES: tuple[str, ...] = (
+# Higher-risk capabilities with no status-derived default. They require an
+# explicit grant from the durable effective-capability projection and remain
+# unavailable to terminal sessions.
+_EXPLICIT_POLICY_CAPABILITIES: tuple[str, ...] = (
     "createTerminal",
     "writeTerminal",
     "mutateWorkspace",
@@ -161,8 +159,12 @@ def recompute_capabilities(
         CAP_INTERRUPT_TURN: _grant(CAP_INTERRUPT_TURN, not read_only),
         CAP_RESOLVE_ELICITATION: _grant(CAP_RESOLVE_ELICITATION, not read_only),
     }
-    for denied in _ALWAYS_DENIED_CAPABILITIES:
-        capabilities[denied] = False
+    # These higher-risk capabilities have no status-derived default.  The
+    # effective capability resolver must explicitly grant them in the durable
+    # projection and an active session is still required.  Browser input can
+    # therefore never manufacture terminal or workspace authority.
+    for denied in _EXPLICIT_POLICY_CAPABILITIES:
+        capabilities[denied] = bool(not read_only and policy.get(denied) is True)
     return capabilities
 
 
@@ -232,6 +234,15 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         name="stream_events",
         method="GET",
         sse=True,
+        requires_provider_session=False,
+    ),
+    # Same durable event stream over a browser WebSocket. The router selects
+    # this entry only for an ASGI WebSocket upgrade; it is intentionally the
+    # same scoped path and capability contract as SSE.
+    _op(
+        rf"v1/sessions/{_SESSION}/stream",
+        name="stream_events_websocket",
+        method="WEBSOCKET",
         requires_provider_session=False,
     ),
     # Message and supported control events. Capability is resolved per event
@@ -323,35 +334,34 @@ def match_facade_operation(method: str, path: str) -> FacadeMatch | None:
     return None
 
 
-# Sentinel capability the facade never grants. Any composer/control event that
-# is not on the supported allowlist maps here and is therefore denied: the
-# browser facade only carries message and interrupt authority, never the
-# distinct stop, reset, harvest, or cleanup authority those controls require.
+# Sentinel capability the facade never grants. Any event that is not on the
+# supported allowlist maps here and is therefore denied.
 CAP_CONTROL_UNSUPPORTED = "controlUnsupported"
 
-# Composer/control events the binding-scoped facade supports, mapped to the one
-# capability each requires. ``stop_session``, ``clear_session``,
-# ``reset_session``, ``cleanup_session``, ``terminal_cleanup``,
-# ``harvest_session``, and any future control are intentionally absent: they
-# stop, reset, harvest, or destroy owned runtime resources and need their own
-# authority, which the browser facade does not carry (OB-§4.2, §16).
+# Events the binding-scoped facade supports, mapped to the distinct capability
+# each requires. The resolver, not the event name or browser visibility, is the
+# authority boundary for lifecycle controls.
 _SUPPORTED_COMPOSER_EVENTS: dict[str, str] = {
     "message": CAP_SEND_MESSAGE,
     "user.message": CAP_SEND_MESSAGE,
     "interrupt": CAP_INTERRUPT_TURN,
+    "stop": "stopSession",
+    "session.stop": "stopSession",
+    "stop_session": "stopSession",
+    "clear_session": "replaceSession",
+    "reset_session": "replaceSession",
+    "harvest_session": "harvestEvidence",
+    "cleanup_session": "cleanupSession",
+    "terminal_cleanup": "cleanupSession",
 }
 
 
 def required_capability_for_event(event_type: str | None) -> str:
     """Map a supported composer event type to the capability it requires.
 
-    Only ``message``/``user.message`` (``sendMessage``) and ``interrupt``
-    (``interruptTurn``) are supported through the browser facade. Every other
-    event type — including ``stop_session``, ``clear_session``,
-    ``cleanup_session``, and ``terminal_cleanup`` — maps to
-    :data:`CAP_CONTROL_UNSUPPORTED`, a capability the facade never grants, so a
-    caller holding only ``sendMessage`` cannot reach a destructive control by
-    naming an off-allowlist event type.
+    Every supported lifecycle event has a separate grant. Unknown controls map
+    to :data:`CAP_CONTROL_UNSUPPORTED`, so message authority can never be used
+    to reach a destructive operation.
     """
 
     raw = str(event_type or "").strip().lower()
@@ -417,9 +427,7 @@ _FORBIDDEN_IDENTITY_KEYS: frozenset[str] = frozenset(
     }
 )
 # Keys that name a session id. Their value may only be the bound chatBindingId.
-_SESSION_ID_KEYS: frozenset[str] = frozenset(
-    {"session_id", "sessionid", "session"}
-)
+_SESSION_ID_KEYS: frozenset[str] = frozenset({"session_id", "sessionid", "session"})
 # Request headers that attempt to name an upstream identity. sanitize_proxy
 # already prevents credential headers from crossing the boundary; these are
 # rejected outright (and audited) rather than silently dropped, because their
@@ -489,7 +497,7 @@ def assert_no_identity_substitution(
     *,
     chat_binding_id: str,
     path_session_id: str | None,
-    query: Mapping[str, Any] | None = None,
+    query: Any | None = None,
     body: Any | None = None,
     headers: Mapping[str, Any] | None = None,
 ) -> None:

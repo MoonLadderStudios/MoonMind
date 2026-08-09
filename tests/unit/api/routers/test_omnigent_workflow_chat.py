@@ -10,6 +10,7 @@ credentials, and forwards only to the server-resolved provider session.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -18,6 +19,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers.omnigent_bridge import (
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
@@ -26,6 +28,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
+    _validate_native_resource_path,
     workflow_chat_router,
 )
 from api_service.api.routers.retrieval_gateway import get_capability_registry
@@ -34,6 +37,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
@@ -58,6 +62,37 @@ _CHAT_BINDING_ID = "brs-1"
 _BRIDGE_SESSION_ID = "brs-internal-1"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../secret",
+        "%2e%2e/secret",
+        "%252e%252e/secret",
+        "/etc/passwd",
+        "C:\\secret",
+        "\\\\host\\share",
+    ],
+)
+def test_native_resource_path_rejects_escape_forms(path: str) -> None:
+    with pytest.raises(WorkflowChatFacadeError):
+        _validate_native_resource_path(path)
+
+
+def test_native_resource_path_accepts_scoped_relative_path() -> None:
+    _validate_native_resource_path("src/package/file name.py")
+
+
+def test_websocket_stream_is_explicitly_allowlisted() -> None:
+    match = match_facade_operation(
+        "WEBSOCKET", f"v1/sessions/{_CHAT_BINDING_ID}/stream"
+    )
+
+    assert match is not None
+    assert match.operation.name == "stream_events_websocket"
+    assert match.params["session_id"] == _CHAT_BINDING_ID
+    assert match_facade_operation("WEBSOCKET", "v1/sessions/other/control") is None
+
+
 def _mock_user():
     return SimpleNamespace(id=_USER_ID, email="chat@example.com", is_superuser=False)
 
@@ -77,8 +112,10 @@ class _FakeService:
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
+    grants = {name: True for name in CAPABILITY_NAMES}
     values = dict(
         bridge_session_id=_BRIDGE_SESSION_ID,
+        chat_binding_id=_CHAT_BINDING_ID,
         moonmind_workflow_id="mm:w1",
         moonmind_run_id="run-1",
         moonmind_agent_run_id="ar-1",
@@ -89,7 +126,29 @@ def _row(**overrides: Any) -> SimpleNamespace:
         omnigent_host_id="host-1",
         compatibility_profile="omnigent.server.v1",
         terminal_refs={},
-        metadata_={},
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "callerAuthorities": {str(_USER_ID): grants},
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
         diagnostics_ref=None,
         capture_manifest_ref=None,
         initial_snapshot_ref=None,
@@ -222,10 +281,7 @@ class _FakeStore:
         # already recorded for this event identity, so a replayed idempotency key
         # can be reconciled against the digest it was first bound to.
         for entry in reversed(self.lifecycle):
-            if (
-                entry["kind"] == "claim"
-                and entry["event_identity"] == event_identity
-            ):
+            if entry["event_identity"] == event_identity:
                 return dict(entry["metadata"])
         return None
 
@@ -233,6 +289,7 @@ class _FakeStore:
 class _FakeProxy:
     def __init__(self) -> None:
         self.posted: list[dict[str, Any]] = []
+        self.stopped: list[str] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
 
@@ -261,6 +318,7 @@ class _FakeProxy:
         return {"ok": True, "type": event.type, "session_id": session_id}
 
     async def stop_session(self, session_id: str):
+        self.stopped.append(session_id)
         return {"ok": True, "status": "stopped", "session_id": session_id}
 
     async def resolve_elicitation(
@@ -341,15 +399,14 @@ def _build(
     store: _FakeStore | None = None,
     registry: Any | None = None,
     service: Any | None = None,
+    host_protocol_mode: str = HOST_PROTOCOL_MODE_PROXY,
 ) -> tuple[TestClient, _FakeProxy, _FakeStore]:
     app = FastAPI()
-    app.include_router(
-        workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
-    )
+    app.include_router(workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH)
     proxy = proxy or _FakeProxy()
     store = store or _FakeStore()
     registry = registry or _fake_registry()
-    config = SimpleNamespace(host_protocol_mode=HOST_PROTOCOL_MODE_PROXY)
+    config = SimpleNamespace(host_protocol_mode=host_protocol_mode)
     app.dependency_overrides[get_current_user()] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: (
         service or _FakeService(owner_id)
@@ -373,9 +430,7 @@ def _build_embedded(
     """Build a client whose bridge runs in the embedded host protocol mode."""
 
     app = FastAPI()
-    app.include_router(
-        workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
-    )
+    app.include_router(workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH)
     embedded = embedded or _FakeEmbeddedFacade()
     store = store or _FakeStore()
     registry = registry or _fake_registry()
@@ -420,7 +475,10 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
 
 
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
-    client, _proxy, _store = _build(owner_id=uuid4())
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    client, _proxy, _store = _build(
+        owner_id=uuid4(), store=_FakeStore(row=_row(metadata_=metadata))
+    )
 
     response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
 
@@ -450,6 +508,104 @@ def test_route_not_allowlisted_is_rejected() -> None:
     assert response.json()["detail"]["code"] == "omnigent_chat_route_not_allowlisted"
 
 
+def test_native_task_mutation_uses_effective_change_goal_authority() -> None:
+    row = _row()
+    metadata = dict(row.metadata_)
+    caller_authorities = dict(metadata["callerAuthorities"])
+    caller_grants = dict(caller_authorities[str(_USER_ID)])
+    caller_grants["changeGoal"] = False
+    caller_authorities[str(_USER_ID)] = caller_grants
+    metadata["callerAuthorities"] = caller_authorities
+    client, _proxy, _store = _build(store=_FakeStore(row=_row(metadata_=metadata)))
+
+    response = client.patch(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
+        json={"completed": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+
+
+def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
+    monkeypatch,
+) -> None:
+    _force_high_security(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    response_body = json.dumps(
+        {"ok": True, "session_id": _PROVIDER_SESSION_ID}
+    ).encode()
+
+    class _Content:
+        async def read(self, _limit: int) -> bytes:
+            return response_body
+
+    class _Response:
+        status = 307
+        headers = {
+            "content-type": "application/json",
+            "location": f"/v1/sessions/{_PROVIDER_SESSION_ID}/tasks/task-1",
+        }
+        content = _Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, method: str, url: str, **kwargs):
+            calls.append({"method": method, "url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: _Client(),
+    )
+    client, _proxy, store = _build()
+    path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1")
+    headers = {"Idempotency-Key": "native-task-1"}
+
+    first = client.patch(
+        path,
+        json={"completed": True},
+        headers=headers,
+        follow_redirects=False,
+    )
+    replay = client.patch(
+        path,
+        json={"completed": True},
+        headers=headers,
+        follow_redirects=False,
+    )
+
+    assert first.status_code == 307
+    assert replay.status_code == 307
+    expected_location = (
+        f"{WORKFLOW_CHAT_BINDINGS_MOUNT_PATH}/{_CHAT_BINDING_ID}/omnigent/"
+        f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"
+    )
+    assert first.headers["location"] == expected_location
+    assert replay.headers["location"] == expected_location
+    assert len(calls) == 1
+    claim = next(entry for entry in store.lifecycle if entry["kind"] == "claim")
+    assert claim["metadata"]["controlOutcome"] == "pending"
+    assert claim["metadata"]["scanSurface"] == "native_mutation"
+    posted = next(
+        entry
+        for entry in store.lifecycle
+        if entry["metadata"].get("controlOutcome") == "posted"
+    )
+    assert posted["metadata"]["normalizedResult"]["statusCode"] == 307
+
+
 def test_delete_method_not_allowlisted() -> None:
     client, _proxy, _store = _build()
 
@@ -468,6 +624,39 @@ def test_session_substitution_in_path_is_rejected() -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "omnigent_chat_session_substitution"
+
+
+def test_duplicate_query_identity_values_are_all_validated() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.get(
+        _path("health") + f"?sessionId=other-session&sessionId={_CHAT_BINDING_ID}"
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_substitution"
+
+
+def test_native_wildcard_path_rejects_encoded_traversal() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}/subagents/" "%252e%252e/%252e%252e/secret"
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+
+
+def test_embedded_mode_rejects_proxy_only_native_transport() -> None:
+    client, _proxy, _store = _build(host_protocol_mode="embedded")
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks"))
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_bridge_mode_unsupported"
 
 
 def test_identity_substitution_in_query_is_rejected() -> None:
@@ -607,7 +796,7 @@ def test_message_forwarded_to_bound_provider_session() -> None:
     assert _PROVIDER_SESSION_ID not in response.text
 
 
-def test_stop_control_denied_without_distinct_authority() -> None:
+def test_stop_control_uses_distinct_authority() -> None:
     # The browser facade carries message/interrupt authority only. Destructive
     # session controls (stop/clear/cleanup/terminal_cleanup) need their own
     # authority the facade does not grant, so a caller with sendMessage cannot
@@ -620,19 +809,28 @@ def test_stop_control_denied_without_distinct_authority() -> None:
         json={"type": "stop"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
-    # The destructive control never reached the revocation/forward path.
-    registry.revoke_scope.assert_not_called()
+    assert response.status_code == 200
+    registry.revoke_scope.assert_called_once()
     assert proxy.posted == []
+    assert proxy.stopped == [_PROVIDER_SESSION_ID]
 
 
 @pytest.mark.parametrize(
     "event_type",
     ["stop", "stop_session", "clear_session", "cleanup_session", "terminal_cleanup"],
 )
-def test_destructive_controls_denied(event_type: str) -> None:
-    client, proxy, _store = _build()
+def test_destructive_controls_denied_without_distinct_grant(
+    event_type: str,
+) -> None:
+    grants = {name: True for name in CAPABILITY_NAMES}
+    grants[required_capability_for_event(event_type)] = False
+    row = _row(
+        metadata_={
+            **_row().metadata_,
+            "callerAuthorities": {str(_USER_ID): grants},
+        }
+    )
+    client, proxy, _store = _build(store=_FakeStore(row=row))
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
@@ -671,6 +869,19 @@ def test_resolve_elicitation_persists_scan_evidence_in_mutation_audit(
     assert metadata.get("scanContractVersion")
     assert metadata.get("scannerPolicyRef")
     assert metadata.get("highSecurityMode") is True
+    assert metadata["receiptSchemaVersion"] == "moonmind.omnigent.mutation-receipt.v1"
+    assert metadata["actor"] == str(_USER_ID)
+    assert metadata["workflowId"] == "mm:w1"
+    assert metadata["runId"] == "run-1"
+    assert metadata["stepExecutionId"] == "step-1"
+    assert metadata["agentRunId"] == "ar-1"
+    assert metadata["bridgeSessionId"] == _BRIDGE_SESSION_ID
+    assert metadata["providerSessionId"] == _PROVIDER_SESSION_ID
+    assert metadata["moonmindRequestId"]
+    assert metadata["requestTime"]
+    assert metadata["dispatchTime"]
+    assert metadata["completionTime"]
+    assert metadata["durableAuditRef"].startswith("omnigent-bridge-event://")
 
 
 def test_resolve_elicitation_forwarded_to_bound_session() -> None:
@@ -738,8 +949,7 @@ def test_resource_index_delegated_to_bound_session() -> None:
 
     response = client.get(
         _path(
-            f"v1/sessions/{_CHAT_BINDING_ID}"
-            "/resources/environments/default/changes"
+            f"v1/sessions/{_CHAT_BINDING_ID}" "/resources/environments/default/changes"
         )
     )
 
@@ -760,9 +970,7 @@ def test_resource_file_returns_bytes() -> None:
     assert response.status_code == 200
     assert response.content == b"RAW-BYTES"
     assert response.headers["content-type"].startswith("application/octet-stream")
-    assert proxy.resources == [
-        ("workspace_file", _PROVIDER_SESSION_ID, "src/main.py")
-    ]
+    assert proxy.resources == [("workspace_file", _PROVIDER_SESSION_ID, "src/main.py")]
 
 
 def test_workspace_diff_media_type() -> None:
@@ -801,7 +1009,222 @@ def test_liveness_probe_is_local() -> None:
     assert proxy.resources == []  # never touched upstream
 
 
-# --- SSE replay / reconnect / revocation ------------------------------------
+# --- SSE/WebSocket replay, reconnect, and revocation -------------------------
+
+
+def _websocket_headers(*, origin: str = "http://testserver") -> dict[str, str]:
+    return {"Origin": origin}
+
+
+def test_websocket_stream_delivers_virtualized_events_and_terminal_close() -> None:
+    event = _event(
+        1,
+        metadata={
+            "providerSession": _PROVIDER_SESSION_ID,
+            "nested": {"session_id": _PROVIDER_SESSION_ID},
+        },
+    )
+    store = _FakeStore(row=_row(status="completed"), events=[event])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        delivered = websocket.receive_json()
+        terminal = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert delivered["type"] == "bridge_event"
+    assert delivered["sequence"] == 1
+    assert delivered["data"]["bridgeSessionId"] == _CHAT_BINDING_ID
+    assert delivered["data"]["sessionId"] == _CHAT_BINDING_ID
+    assert delivered["data"]["session_id"] == _CHAT_BINDING_ID
+    assert _PROVIDER_SESSION_ID not in str(delivered)
+    assert terminal["type"] == "terminal"
+    assert terminal["data"]["status"] == "completed"
+    assert closed.value.code == 1000
+    # A second read confirms that no final event committed between the page read
+    # and terminal-state observation.
+    assert store.event_query_keys == [_BRIDGE_SESSION_ID, _BRIDGE_SESSION_ID]
+
+
+def test_websocket_reconnect_resumes_after_cursor() -> None:
+    store = _FakeStore(row=_row(status="completed"), events=[_event(1), _event(2)])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream?cursor=1"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        delivered = websocket.receive_json()
+        terminal = websocket.receive_json()
+
+    assert delivered["sequence"] == 2
+    assert terminal["type"] == "terminal"
+
+
+def test_websocket_reports_retention_gap_before_replay() -> None:
+    store = _FakeStore(row=_row(status="active"), events=[_event(5), _event(6)])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        gap = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert gap == {
+        "type": "retention_gap",
+        "data": {"requestedAfter": 0, "earliestAvailable": 5},
+    }
+    assert closed.value.code == 1000
+
+
+def test_websocket_confirms_terminal_drain_before_closing() -> None:
+    final_event = _event(1)
+
+    class _TerminalRaceStore(_FakeStore):
+        def __init__(self) -> None:
+            super().__init__(row=_row(status="completed"))
+            self.page_calls = 0
+
+        async def list_event_page(
+            self, bridge_session_id: str, *, after: int, limit: int
+        ):
+            self.page_calls += 1
+            self.event_query_keys.append(bridge_session_id)
+            if self.page_calls == 1:
+                return SimpleNamespace(
+                    rows=[],
+                    has_more=False,
+                    latest_sequence=0,
+                    earliest_sequence=None,
+                )
+            if self.page_calls in {2, 3}:
+                rows = [final_event] if after < final_event.sequence else []
+                return SimpleNamespace(
+                    rows=rows,
+                    has_more=False,
+                    latest_sequence=1,
+                    earliest_sequence=1,
+                )
+            return SimpleNamespace(
+                rows=[],
+                has_more=False,
+                latest_sequence=1,
+                earliest_sequence=1,
+            )
+
+    store = _TerminalRaceStore()
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        delivered = websocket.receive_json()
+        terminal = websocket.receive_json()
+
+    assert delivered["type"] == "bridge_event"
+    assert delivered["sequence"] == 1
+    assert terminal["type"] == "terminal"
+    assert store.page_calls == 4
+
+
+def test_websocket_closes_when_transcript_capability_is_revoked(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
+        1,
+    )
+    revoked = _row()
+    metadata = dict(revoked.metadata_)
+    authorities = dict(metadata["callerAuthorities"])
+    grants = dict(authorities[str(_USER_ID)])
+    grants["viewTranscript"] = False
+    authorities[str(_USER_ID)] = grants
+    metadata["callerAuthorities"] = authorities
+    revoked = _row(metadata_=metadata)
+    store = _FakeStore(rows_by_call=[_row(), revoked])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert closed.value.code == 4403
+    assert closed.value.reason == "omnigent_chat_operation_denied"
+
+
+@pytest.mark.parametrize("origin", ["", "https://foreign.example"])
+def test_websocket_rejects_missing_or_foreign_origin(origin: str) -> None:
+    client, _proxy, _store = _build()
+    headers = {} if not origin else _websocket_headers(origin=origin)
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect(
+            _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"), headers=headers
+        ):
+            pass
+
+    assert closed.value.code == 4403
+    assert closed.value.reason == "omnigent_chat_origin_denied"
+
+
+@pytest.mark.parametrize(
+    ("owner_id", "suffix"),
+    [
+        (uuid4(), f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        (_USER_ID, "v1/sessions/other-binding/stream"),
+        (
+            _USER_ID,
+            f"v1/sessions/{_CHAT_BINDING_ID}/stream?endpoint=https://upstream.invalid",
+        ),
+    ],
+)
+def test_websocket_rejects_unauthorized_or_substituted_identity(
+    owner_id: Any, suffix: str
+) -> None:
+    store = None
+    if owner_id != _USER_ID:
+        metadata = {**_row().metadata_, "callerAuthorities": {}}
+        store = _FakeStore(row=_row(metadata_=metadata))
+    client, _proxy, _store = _build(owner_id=owner_id, store=store)
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect(_path(suffix), headers=_websocket_headers()):
+            pass
+
+    assert closed.value.code == 4404
+
+
+def test_websocket_closes_when_authority_is_revoked_midstream(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
+        1,
+    )
+    service = _FakeService(_USER_ID, deny_after=1)
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    client, _proxy, _store = _build(
+        service=service, store=_FakeStore(row=_row(metadata_=metadata))
+    )
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert closed.value.code == 4403
+    assert closed.value.reason == "omnigent_chat_binding_unknown"
+    assert service.calls == 2
 
 
 def test_stream_replays_from_cursor_and_terminates() -> None:
@@ -848,7 +1271,10 @@ def test_stream_stops_when_authority_revoked_midstream(monkeypatch) -> None:
         "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
         1,
     )
-    store = _FakeStore(row=_row(status="active"), events=[_event(1)])
+    metadata = {**_row().metadata_, "callerAuthorities": {}}
+    store = _FakeStore(
+        row=_row(status="active", metadata_=metadata), events=[_event(1)]
+    )
     # The binding is authorized when the stream opens, then denied on the next
     # authorization pass (deny_after=1).
     service = _FakeService(_USER_ID, deny_after=1)
@@ -921,9 +1347,7 @@ def test_identity_guard_allows_bound_session_echo() -> None:
 def test_recompute_capabilities_intersects_binding_policy() -> None:
     # A stored policy that disables sendMessage must remove it even on a live,
     # non-terminal session; it can never re-grant a status-denied capability.
-    caps = recompute_capabilities(
-        "active", policy_capabilities={"sendMessage": False}
-    )
+    caps = recompute_capabilities("active", policy_capabilities={"sendMessage": False})
     assert caps[CAP_SEND_MESSAGE] is False
     assert caps[CAP_INTERRUPT_TURN] is True
     assert caps[CAP_VIEW_TRANSCRIPT] is True
@@ -958,9 +1382,11 @@ def test_required_capability_for_event_allowlist() -> None:
     assert required_capability_for_event("message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("user.message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("interrupt") == CAP_INTERRUPT_TURN
-    # Destructive/unknown controls map to a capability the facade never grants.
-    for control in ("stop_session", "cleanup_session", "terminal_cleanup", "weird"):
-        assert required_capability_for_event(control) == CAP_CONTROL_UNSUPPORTED
+    assert required_capability_for_event("stop_session") == "stopSession"
+    assert required_capability_for_event("clear_session") == "replaceSession"
+    assert required_capability_for_event("harvest_session") == "harvestEvidence"
+    assert required_capability_for_event("cleanup_session") == "cleanupSession"
+    assert required_capability_for_event("weird") == CAP_CONTROL_UNSUPPORTED
 
 
 def test_interrupt_is_forwarded() -> None:
@@ -1069,11 +1495,7 @@ def test_high_security_blocks_secret_bearing_message(monkeypatch) -> None:
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
         json={
             "type": "message",
-            "data": {
-                "content": [
-                    {"type": "text", "text": "ghp_" + "a" * 36}
-                ]
-            },
+            "data": {"content": [{"type": "text", "text": "ghp_" + "a" * 36}]},
         },
     )
 
@@ -1195,6 +1617,16 @@ def test_message_claim_records_scanned_payload_digest(monkeypatch) -> None:
     # so an allow result cannot be reused after the content changes.
     claim = next(entry for entry in store.lifecycle if entry["kind"] == "claim")
     assert claim["metadata"].get("scannedPayloadDigest")
+    assert claim["metadata"]["receiptSchemaVersion"] == (
+        "moonmind.omnigent.mutation-receipt.v1"
+    )
+    assert claim["metadata"]["controlOutcome"] == "pending"
+    assert claim["metadata"]["requestTime"]
+    assert not any(
+        entry["kind"] == "record"
+        and entry["metadata"].get("controlOutcome") == "pending"
+        for entry in store.lifecycle
+    )
 
 
 # --- Approval authority ------------------------------------------------------
@@ -1235,7 +1667,9 @@ def test_message_idempotency_key_dedupes_replay() -> None:
     assert second.status_code == 200
     # Exactly one provider turn was issued despite the retry.
     assert len(proxy.posted) == 1
-    assert second.json()["deduplicated"] is True
+    # A duplicate receives the canonical persisted prior result, not a newly
+    # synthesized acknowledgement with different semantics.
+    assert second.json() == first.json()
 
 
 def test_message_idempotency_key_reuse_with_different_payload_conflicts() -> None:
@@ -1278,9 +1712,44 @@ def test_message_records_durable_control_audit() -> None:
     kinds = {entry["kind"] for entry in store.lifecycle}
     assert "claim" in kinds
     assert any(
-        entry["metadata"].get("controlOutcome") == "posted"
-        for entry in store.lifecycle
+        entry["metadata"].get("controlOutcome") == "posted" for entry in store.lifecycle
     )
+
+
+def test_message_receipt_retains_caller_compare_and_set_values() -> None:
+    client, _proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 2,
+            "expectedTerminalState": "active",
+            "expectedAgentProfileDigest": "sha256:agent",
+            "expectedProviderProfileGeneration": 4,
+            "expectedLaunchSnapshotRef": "artifact://launch",
+            "expectedPolicyDigest": "sha256:policy",
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    receipts = [
+        entry["metadata"]
+        for entry in store.lifecycle
+        if entry["metadata"].get("receiptSchemaVersion")
+    ]
+    assert receipts
+    assert all(item["expectedSessionEpoch"] == 2 for item in receipts)
+    assert all(item["expectedTerminalState"] == "active" for item in receipts)
+    assert all(
+        item["expectedAgentProfileDigest"] == "sha256:agent" for item in receipts
+    )
+    assert all(item["expectedProviderProfileGeneration"] == 4 for item in receipts)
+    assert all(
+        item["expectedLaunchSnapshotRef"] == "artifact://launch" for item in receipts
+    )
+    assert all(item["expectedPolicyDigest"] == "sha256:policy" for item in receipts)
 
 
 # --- Mutation-handoff revalidation (compare-and-set) -------------------------
@@ -1288,9 +1757,7 @@ def test_message_records_durable_control_audit() -> None:
 
 def test_message_rejected_when_session_terminalizes_midrequest() -> None:
     # The row is active when first loaded, then terminal on the handoff re-read.
-    store = _FakeStore(
-        rows_by_call=[_row(status="active"), _row(status="completed")]
-    )
+    store = _FakeStore(rows_by_call=[_row(status="active"), _row(status="completed")])
     client, proxy, _store = _build(store=store)
 
     response = client.post(
@@ -1301,6 +1768,62 @@ def test_message_rejected_when_session_terminalizes_midrequest() -> None:
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "omnigent_chat_session_read_only"
     assert proxy.posted == []
+
+
+def test_message_rejects_caller_supplied_stale_session_epoch() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 1,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expectedAgentProfileDigest", "sha256:stale"),
+        ("expectedProviderProfileGeneration", 3),
+        ("expectedLaunchSnapshotRef", "artifact://stale-launch"),
+        ("expectedPolicyDigest", "sha256:stale-policy"),
+    ],
+)
+def test_message_rejects_stale_immutable_authority(field: str, value: Any) -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            field: value,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+def test_elicitation_rejects_caller_supplied_wrong_elicitation() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
+        json={"decision": "approve", "expectedElicitation": "el-other"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.resolved == []
 
 
 # --- Terminal durable read after provider cleanup ----------------------------
@@ -1456,8 +1979,7 @@ def test_embedded_resource_read_delegated() -> None:
 
     response = client.get(
         _path(
-            f"v1/sessions/{_CHAT_BINDING_ID}"
-            "/resources/environments/default/changes"
+            f"v1/sessions/{_CHAT_BINDING_ID}" "/resources/environments/default/changes"
         )
     )
 

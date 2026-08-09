@@ -25,6 +25,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_execution_service,
     _get_launch_default_agent_selection,
     _require_bridge_enabled,
+    _reconcile_facade_mutation,
     embedded_host_auth_preflight,
     router,
 )
@@ -38,6 +39,7 @@ from moonmind.omnigent.bridge_proxy import (
     BridgeSessionEventRequest,
     OmnigentBridgeError,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.host_auth_profile import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
@@ -57,6 +59,58 @@ _ELICITATION_RESOLVE_PATH = (
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
 _UNSET = object()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_stop_reconciles_terminal_provider_state_without_repost(
+    monkeypatch,
+) -> None:
+    store = SimpleNamespace(get_lifecycle_event_metadata=AsyncMock(return_value=None))
+    facade = SimpleNamespace(
+        get_session=AsyncMock(return_value={"id": "sess-77", "status": "stopped"})
+    )
+    recorded = AsyncMock(return_value="2026-08-09T00:00:00+00:00")
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+    monkeypatch.setattr(module, "_record_facade_mutation_audit", recorded)
+    row = SimpleNamespace(idempotency_key="bridge-key")
+    scan = SimpleNamespace(audit_metadata=lambda: {}, payload_digest="sha256:payload")
+
+    result = await _reconcile_facade_mutation(
+        store=store,
+        row=row,
+        facade=facade,
+        control_type="stop",
+        idempotency_key="request-key",
+        provider_session_id="sess-77",
+        chat_binding_id="binding-1",
+        actor="user-1",
+        scan_evidence=scan,
+    )
+
+    assert result == {"id": "binding-1", "status": "stopped", "reconciled": True}
+    facade.get_session.assert_awaited_once_with("sess-77")
+    recorded.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_message_is_not_reposted_without_provider_evidence() -> None:
+    store = SimpleNamespace(get_lifecycle_event_metadata=AsyncMock(return_value=None))
+    facade = SimpleNamespace(get_session=AsyncMock())
+
+    result = await _reconcile_facade_mutation(
+        store=store,
+        row=SimpleNamespace(idempotency_key="bridge-key"),
+        facade=facade,
+        control_type="message",
+        idempotency_key="request-key",
+        provider_session_id="sess-77",
+        chat_binding_id="binding-1",
+        actor="user-1",
+        scan_evidence=SimpleNamespace(),
+    )
+
+    assert result is None
+    facade.get_session.assert_not_awaited()
 
 
 @pytest.fixture(autouse=True)
@@ -375,6 +429,8 @@ class _FakeStore:
         self._session_overrides = session_overrides or {}
         self.active_modes: dict[str, int] = {}
         self.appended_events: list[dict[str, Any]] = []
+        self.lifecycle_events: list[dict[str, Any]] = []
+        self.claims: set[str] = set()
 
     async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
         self.excluded_idempotency_key = exclude_idempotency_key
@@ -401,11 +457,54 @@ class _FakeStore:
     async def get_session_by_provider_session_id(self, session_id: str):
         return self._session() if session_id == "sess-77" else None
 
+    async def get_session_by_chat_binding_id(self, chat_binding_id: str):
+        return self._session() if chat_binding_id == "chatb-77" else None
+
+    async def claim_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        event_identity: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        if event_identity in self.claims:
+            return False
+        self.claims.add(event_identity)
+        self.lifecycle_events.append(
+            {"event_identity": event_identity, "metadata": metadata or {}}
+        )
+        return True
+
+    async def record_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        event_identity: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ):
+        self.lifecycle_events.append(
+            {"event_identity": event_identity, "metadata": metadata or {}}
+        )
+        return self._session()
+
+    async def get_lifecycle_event_metadata(
+        self, idempotency_key: str, *, event_identity: str
+    ) -> dict[str, Any] | None:
+        for event in reversed(self.lifecycle_events):
+            if event["event_identity"] == event_identity:
+                return dict(event["metadata"])
+        return None
+
     async def append_events(self, bridge_session_id: str, events: list[dict[str, Any]]):
         assert bridge_session_id == "brs-1"
         self.appended_events.extend(events)
 
     def _session(self):
+        capabilities = {name: True for name in CAPABILITY_NAMES}
         terminal_status = next(
             (
                 row.normalized_status
@@ -417,6 +516,7 @@ class _FakeStore:
         )
         values = dict(
             bridge_session_id="brs-1",
+            chat_binding_id="chatb-77",
             moonmind_workflow_id=self._owner.workflow_id,
             moonmind_run_id="run-1",
             moonmind_agent_run_id=self._owner.agent_run_id,
@@ -425,11 +525,32 @@ class _FakeStore:
             status=terminal_status or "active",
             compatibility_profile="omnigent.server.v1",
             provider_profile_id="profile-1",
+            credential_generation=4,
             host_binding_ref="host-ref",
             omnigent_host_id="host-ref",
-            omnigent_session_id="session-ref",
+            omnigent_session_id="sess-77",
             terminal_refs={},
-            metadata_={},
+            effective_launch_snapshot_json={
+                "executionProfileRef": "agent-profile://p/versions/7",
+                "executionProfileDigest": "sha256:agent",
+                "launchPolicyRef": "policy://launch/3",
+                "snapshotRef": "artifact://launch",
+                "policyAuthority": {
+                    "snapshotRef": "artifact://policy",
+                    "policyDigest": "sha256:policy",
+                },
+            },
+            metadata_={
+                "callerAuthorities": {str(_USER_ID): capabilities},
+                "capabilityAuthority": {
+                    "fresh": True,
+                    "providerProfileGeneration": 4,
+                    "upstream": capabilities,
+                    "agentProfile": capabilities,
+                    "launchPolicy": capabilities,
+                    "state": {"sessionEpoch": 2, "capabilities": capabilities},
+                },
+            },
             diagnostics_ref=None,
             capture_manifest_ref=None,
             initial_snapshot_ref=None,
@@ -723,7 +844,7 @@ def test_delete_authorizes_and_delegates() -> None:
     registry.revoke_scope.assert_called_once_with(
         run_id="run-1",
         host_id="host-ref",
-        session_id="session-ref",
+        session_id="sess-77",
         step_id="step-1",
     )
     assert store.appended_events[0]["metadata"] == {
@@ -1555,7 +1676,7 @@ def test_superuser_owns_any_workflow() -> None:
     # Service returns a foreign owner, but superuser bypasses ownership.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
-    app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
     client = TestClient(app)
 
@@ -1585,7 +1706,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
     client = TestClient(app)
 
@@ -1651,7 +1772,7 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     registry.revoke_scope.assert_called_once_with(
         run_id="run-1",
         host_id="host-ref",
-        session_id="session-ref",
+        session_id="sess-77",
         step_id="step-1",
     )
 
@@ -1673,7 +1794,12 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    store = _FakeStore()
+    store = _FakeStore(
+        session_overrides={
+            "host_lease_ref": "lease-1",
+            "terminal_refs": {"cleanupState": "runner_exited"},
+        }
+    )
     registry = SimpleNamespace(
         revoke_scope=Mock(return_value=["cap-1"]),
         has_live_session_authority=Mock(return_value=True),
@@ -1687,6 +1813,39 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     assert response.status_code == 200
     assert facade.control_payloads[0]["idempotencyKey"] == "cleanup-1"
     registry.revoke_scope.assert_called_once()
+
+
+def test_cleanup_session_rejects_missing_terminal_lease_evidence() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config({
+        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        "hostConnection": {"embedded": {
+            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+        }},
+    })
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
+    app.dependency_overrides[get_capability_registry] = lambda: SimpleNamespace(
+        revoke_scope=Mock(return_value=[]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+
+    response = TestClient(app).post(
+        _EVENTS_PATH,
+        json={"type": "cleanup_session", "idempotencyKey": "cleanup-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_cleanup_not_ready"
+    assert facade.control_payloads == []
 
 
 def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
@@ -1710,6 +1869,7 @@ def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     client = TestClient(app)
 
     response = client.post(_EVENTS_PATH, json={"type": "interrupt"})
@@ -1901,6 +2061,6 @@ def test_proxy_clear_still_revokes_retrieval_authority_before_replacement() -> N
     registry.revoke_scope.assert_called_once_with(
         run_id="run-1",
         host_id="host-ref",
-        session_id="session-ref",
+        session_id="sess-77",
         step_id="step-1",
     )

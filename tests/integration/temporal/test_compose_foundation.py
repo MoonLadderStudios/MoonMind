@@ -848,6 +848,12 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
         encoding="utf-8"
     )
+    cache_script = (
+        REPO_ROOT / "api_service" / "docker" / "cache_temporal_test_server.py"
+    ).read_text(encoding="utf-8")
+    test_conftest = (REPO_ROOT / "tests" / "conftest.py").read_text(
+        encoding="utf-8"
+    )
     test_stage = dockerfile.index("FROM runtime-dependencies AS test-runtime")
     production_stage = dockerfile.index("FROM runtime-dependencies AS runtime-base")
     omnigent_copy = dockerfile.index("COPY omnigent/omnigent /app/omnigent/omnigent/")
@@ -860,6 +866,9 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert "python /tmp/cache_temporal_test_server.py" in dockerfile[
         test_stage:production_stage
     ]
+    assert "WorkflowEnvironment.start_time_skipping()" in cache_script
+    assert "test_server_download_version" not in cache_script
+    assert "test_server_download_version" not in test_conftest
     assert "docker-buildx-plugin" in dockerfile[:test_stage]
     assert "docker buildx version" in dockerfile[:test_stage]
 

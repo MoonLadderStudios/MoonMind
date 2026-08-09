@@ -58,6 +58,8 @@ class NativeScanSurface(StrEnum):
 
     MESSAGE = "message"
     ELICITATION_RESPONSE = "elicitation_response"
+    NATIVE_MUTATION = "native_mutation"
+    WEBSOCKET_FRAME = "websocket_frame"
 
 
 class NativeScanOutcome(StrEnum):
@@ -88,9 +90,7 @@ _BINARY_PART_TYPES: frozenset[str] = frozenset(
 )
 
 # Content-part ``type`` values whose ``text`` payload MUST decode to a string.
-_TEXT_PART_TYPES: frozenset[str] = frozenset(
-    {"text", "input_text", "output_text"}
-)
+_TEXT_PART_TYPES: frozenset[str] = frozenset({"text", "input_text", "output_text"})
 
 # Characters permitted verbatim in an exposed finding-location path segment. A
 # caller controls object keys, so a raw key can otherwise carry a secret-like
@@ -241,9 +241,7 @@ def canonical_payload_digest(body: Any) -> str:
     return hashlib.sha256(serialized.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _collect_scannable(
-    value: Any, *, prefix: str
-) -> list[OutboundBundleItem]:
+def _collect_scannable(value: Any, *, prefix: str) -> list[OutboundBundleItem]:
     """Recursively extract ``(location, text)`` pairs, failing closed on binary.
 
     Every string leaf is scanned (a safe superset that never misses operator

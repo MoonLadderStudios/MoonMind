@@ -35,6 +35,11 @@ from moonmind.omnigent.checkpoints import (
     validate_restore_material,
 )
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.effective_capabilities import (
+    CAPABILITY_NAMES,
+    adapt_provider_capabilities,
+    resolve_bridge_row_capabilities,
+)
 from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     validate_effective_launch_snapshot,
@@ -139,8 +144,49 @@ def test_persisted_policy_snapshot_is_complete_launch_authority():
     assert realized["mountClasses"] == snapshot["boundaries"]["workspace"]["mountClasses"]
     assert realized["boundaries"] == snapshot["boundaries"]
     assert realized["policyAuthority"]["policyDigest"] == snapshot["policyDigest"]
+    assert realized["executionProfileDigest"].startswith("sha256:")
+    assert realized["agentProfileCapabilities"]["sendMessage"] is True
+    assert realized["capabilities"]["sendMessage"] is True
+    assert realized["sessionStateCapabilities"]["sendMessage"] is True
     assert realized["snapshotRef"].startswith("omnigent-launch:sha256:")
     validate_effective_launch_snapshot(realized)
+
+
+def test_compiled_launch_drives_a_live_canonical_capability_decision():
+    snapshot = compile_policy_snapshot(
+        policy_id="codex-static",
+        version=1,
+        document=policy_document(),
+        validation={"valid": True, "diagnostics": []},
+    )
+    launch = _compile_persisted_effective_launch(
+        snapshot, provider_profile_id="profile-1"
+    )
+    upstream = adapt_provider_capabilities({"sendFollowUp": True})
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="profile-1",
+        credential_generation=3,
+        effective_launch_snapshot_json=launch,
+        metadata_={
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 3,
+                "upstream": upstream,
+                "agentProfile": launch["agentProfileCapabilities"],
+                "launchPolicy": launch["capabilities"],
+                "state": {
+                    "sessionEpoch": 1,
+                    "capabilities": launch["sessionStateCapabilities"],
+                },
+            }
+        },
+    )
+    result = resolve_bridge_row_capabilities(
+        row, caller_capabilities=dict.fromkeys(CAPABILITY_NAMES, True)
+    )
+    assert result.capabilities["sendMessage"] is True
+    assert result.disabled_reasons["queueMessage"] == "upstream_unsupported"
 
 
 @pytest.mark.asyncio

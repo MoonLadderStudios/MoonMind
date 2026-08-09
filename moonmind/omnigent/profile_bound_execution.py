@@ -504,9 +504,43 @@ def _compile_persisted_effective_launch(
     workspace = boundaries["workspace"]
     session = boundaries["session"]
     retention = boundaries["retention"]
+    from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+
+    # Resolve the selected profile once and persist its normalized identity and
+    # grants.  The registry is launch-time input only; downstream enforcement
+    # never reads mutable profile state.
+    selected_profile = PROFILES.get(str(execution["profileRef"]))
+    profile_authority = (
+        selected_profile.model_dump(by_alias=True, mode="json")
+        if selected_profile is not None
+        else dict(execution)
+    )
+    execution_profile_digest = "sha256:" + hashlib.sha256(
+        json.dumps(profile_authority, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    profile_capabilities = dict.fromkeys(CAPABILITY_NAMES, True)
+    if selected_profile is not None:
+        profile_capabilities["changeModel"] = selected_profile.model is None
+        profile_capabilities["changeEffort"] = selected_profile.reasoning is None
+    session_capabilities = dict.fromkeys(CAPABILITY_NAMES, True)
+    launch_capabilities = dict.fromkeys(CAPABILITY_NAMES, False)
+    for capability in (
+        "viewTranscript", "readResources", "viewTerminal", "viewSubagents",
+        "sendMessage", "queueMessage", "resolveElicitation", "harvestEvidence",
+    ):
+        launch_capabilities[capability] = True
+    launch_capabilities["interruptTurn"] = bool(session["interruption"])
+    launch_capabilities["stopSession"] = bool(session["cancellation"])
+    launch_capabilities["replaceSession"] = bool(session["create"])
+    launch_capabilities["reconnectSession"] = bool(session["continuation"])
+    launch_capabilities["cleanupSession"] = session["cleanup"] in {"drain", "remove"}
+    for capability in ("uploadFiles", "mutateWorkspace"):
+        launch_capabilities[capability] = bool(workspace["repositoryMutation"])
     payload = {
         "schemaVersion": 3,
         "executionProfileRef": execution["profileRef"],
+        "executionProfileDigest": execution_profile_digest,
+        "executionProfileAuthority": profile_authority,
         "launchPolicyRef": policy_snapshot["policyRef"],
         "providerProfileId": provider_profile_id,
         "endpointRef": endpoint["ref"],
@@ -544,6 +578,9 @@ def _compile_persisted_effective_launch(
             "terminate",
             "clear_context",
         ],
+        "agentProfileCapabilities": profile_capabilities,
+        "capabilities": launch_capabilities,
+        "sessionStateCapabilities": session_capabilities,
         # Every policy section remains available to downstream enforcement
         # consumers without reconstructing authority from environment or code.
         "boundaries": dict(boundaries),

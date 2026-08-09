@@ -59,19 +59,30 @@ async def store(tmp_path):
 @pytest.mark.asyncio
 async def test_active_host_protocol_modes_reports_ownership_and_unknown(store) -> None:
     await store.get_or_create(
-        request=_request("proxy"), endpoint_ref="endpoint", agent_id=None,
-        agent_name=None, target_metadata={"hostProtocolMode": "proxy"},
+        request=_request("proxy"),
+        endpoint_ref="endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={"hostProtocolMode": "proxy"},
     )
     await store.get_or_create(
-        request=_request("legacy"), endpoint_ref="endpoint", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request("legacy"),
+        endpoint_ref="endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     await store.get_or_create(
-        request=_request("terminal"), endpoint_ref="endpoint", agent_id=None,
-        agent_name=None, target_metadata={"hostProtocolMode": "embedded"},
+        request=_request("terminal"),
+        endpoint_ref="endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={"hostProtocolMode": "embedded"},
     )
     await store.record_lifecycle_event(
-        "terminal", event_type="terminal", status="completed",
+        "terminal",
+        event_type="terminal",
+        status="completed",
     )
 
     assert await store.active_host_protocol_modes() == {"proxy": 1, "unknown": 1}
@@ -98,14 +109,21 @@ def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
 
 
 @pytest.mark.asyncio
-async def test_initial_retrieval_store_rejects_unbounded_or_unknown_evidence(store) -> None:
+async def test_initial_retrieval_store_rejects_unbounded_or_unknown_evidence(
+    store,
+) -> None:
     await store.get_or_create(
-        request=_request(), endpoint_ref="endpoint", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
 
     with pytest.raises(ValueError, match="unsupported fields"):
-        await store.record_initial_context("idem-1", evidence={"state": "completed", "body": "not bounded"})
+        await store.record_initial_context(
+            "idem-1", evidence={"state": "completed", "body": "not bounded"}
+        )
     with pytest.raises(ValueError, match="16 KiB"):
         await store.record_initial_context(
             "idem-1", evidence={"state": "completed", "queryPreview": "x" * 17_000}
@@ -231,9 +249,7 @@ async def test_get_or_create_reopens_terminal_attempt_that_never_posted(store):
     assert reopened.terminal_refs == {}
     assert reopened.metadata_["unpostedAttemptHistory"][-1]["status"] == "failed"
     assert (
-        reopened.metadata_["unpostedAttemptHistory"][-1]["terminalRefs"][
-            "summary"
-        ]
+        reopened.metadata_["unpostedAttemptHistory"][-1]["terminalRefs"]["summary"]
         == "host registration failed before session start"
     )
 
@@ -488,8 +504,11 @@ async def test_digest_mismatch_fails_fast(store):
 @pytest.mark.asyncio
 async def test_initial_retrieval_cannot_change_after_message_preparation(store):
     await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     evidence = {
         "state": "completed",
@@ -505,7 +524,8 @@ async def test_initial_retrieval_cannot_change_after_message_preparation(store):
         match="initial retrieval changed after first-message preparation",
     ):
         await store.record_initial_context(
-            "idem-1", evidence={**evidence, "contextPackRef": "artifact://context/other.json"}
+            "idem-1",
+            evidence={**evidence, "contextPackRef": "artifact://context/other.json"},
         )
 
     unchanged = await store.record_initial_context("idem-1", evidence=evidence)
@@ -515,8 +535,11 @@ async def test_initial_retrieval_cannot_change_after_message_preparation(store):
 @pytest.mark.asyncio
 async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     evidence = {
         "state": "degraded",
@@ -531,8 +554,7 @@ async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
 
     events = await store.list_events(row.bridge_session_id)
     retrieval_events = [
-        event for event in events
-        if event.event_type == "lifecycle.initial_retrieval"
+        event for event in events if event.event_type == "lifecycle.initial_retrieval"
     ]
     assert len(retrieval_events) == 1
     event = retrieval_events[0]
@@ -549,8 +571,11 @@ async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
 @pytest.mark.asyncio
 async def test_workspace_resolution_metadata_persists_through_allowlist(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     resolution = {
         "locatorKind": "sandbox",
@@ -591,8 +616,11 @@ async def test_authority_chain_metadata_persists_through_allowlist(store):
     """
 
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     authority_chain = {
         "schemaVersion": "omnigent-authority-chain-v1",
@@ -625,9 +653,7 @@ async def test_authority_chain_metadata_persists_through_allowlist(store):
 
     events = await store.list_events(row.bridge_session_id)
     authority_events = [
-        event
-        for event in events
-        if event.event_type == "lifecycle.authority_chain"
+        event for event in events if event.event_type == "lifecycle.authority_chain"
     ]
     assert len(authority_events) == 1
     assert authority_events[0].metadata_["metadata"] == {
@@ -638,8 +664,11 @@ async def test_authority_chain_metadata_persists_through_allowlist(store):
 @pytest.mark.asyncio
 async def test_workspace_intent_evidence_persists_through_allowlist(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     # A representative subset of bounded, credential-free workspace-intent
     # compilation evidence (see ``WorkspaceIntentRecord.evidence``).
@@ -685,8 +714,11 @@ async def test_workspace_intent_evidence_persists_through_allowlist(store):
 @pytest.mark.asyncio
 async def test_conflicting_intent_digest_records_a_distinct_event(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     # A deterministic retry (same digest) deduplicates; a conflicting
     # resubmission under the same idempotency key (new digest) is recorded as a
@@ -722,8 +754,11 @@ async def test_conflicting_intent_digest_records_a_distinct_event(store):
 @pytest.mark.asyncio
 async def test_long_lifecycle_retry_identities_preserve_distinct_attempts(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     attempt_prefix = (
         "mm:96eb128d-ff2e-4d22-9fe5-cde712d2c678:"
@@ -1039,14 +1074,21 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
 
 
 @pytest.mark.asyncio
-async def test_append_events_deduplicates_replay_but_preserves_identical_distinct_deltas(store):
+async def test_append_events_deduplicates_replay_but_preserves_identical_distinct_deltas(
+    store,
+):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     first = {
-        "eventType": "response.delta", "normalizedStatus": "running",
-        "textPreview": "same", "deduplicationKey": "cursor:7:abc",
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
+        "textPreview": "same",
+        "deduplicationKey": "cursor:7:abc",
     }
     second = {**first, "deduplicationKey": "cursor:8:abc"}
 
@@ -1062,32 +1104,43 @@ async def test_append_events_deduplicates_replay_but_preserves_identical_distinc
 @pytest.mark.asyncio
 async def test_append_events_deduplicates_replay_within_one_reconnect_batch(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     replay = {
-        "eventType": "response.delta", "normalizedStatus": "running",
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
         "deduplicationKey": "provider:event-1",
     }
 
     appended = await store.append_events(row.bridge_session_id, [replay, replay])
 
     assert len(appended) == 1
-    assert [event.sequence for event in await store.list_events(row.bridge_session_id)] == [1]
+    assert [
+        event.sequence for event in await store.list_events(row.bridge_session_id)
+    ] == [1]
 
 
 @pytest.mark.asyncio
 async def test_terminal_reconciliation_never_deletes_live_rows(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     live = {
-        "eventType": "response.delta", "normalizedStatus": "running",
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
         "deduplicationKey": "provider:event-1",
     }
     terminal = {
-        "eventType": "response.completed", "normalizedStatus": "completed",
+        "eventType": "response.completed",
+        "normalizedStatus": "completed",
         "deduplicationKey": "provider:event-2",
     }
     await store.append_events(row.bridge_session_id, [live])
@@ -1097,30 +1150,42 @@ async def test_terminal_reconciliation_never_deletes_live_rows(store):
     events = await store.list_events(row.bridge_session_id)
     assert [event.sequence for event in events] == [1, 2]
     assert [event.event_type for event in events] == [
-        "response.delta", "response.completed",
+        "response.delta",
+        "response.completed",
     ]
 
 
 @pytest.mark.asyncio
 async def test_lifecycle_events_share_the_ordered_projection(store):
     row = await store.get_or_create(
-        request=_request(), endpoint_ref="default", agent_id=None,
-        agent_name=None, target_metadata={},
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
     )
     await store.record_lifecycle_event(
-        "idem-1", event_type="profile.resolved", code="ready",
+        "idem-1",
+        event_type="profile.resolved",
+        code="ready",
         summary="Profile authorized",
     )
     await store.append_events(
         row.bridge_session_id,
-        [{"eventType": "response.delta", "normalizedStatus": "running",
-          "deduplicationKey": "provider:event-1"}],
+        [
+            {
+                "eventType": "response.delta",
+                "normalizedStatus": "running",
+                "deduplicationKey": "provider:event-1",
+            }
+        ],
     )
 
     events = await store.list_events(row.bridge_session_id)
     assert [event.sequence for event in events] == [1, 2]
     assert [event.event_type for event in events] == [
-        "profile.resolved", "response.delta",
+        "profile.resolved",
+        "response.delta",
     ]
 
 
@@ -1167,6 +1232,51 @@ async def test_record_session_created_is_idempotent(store):
     row = await store.record_session_created("idem-1", session_id="sess-1")
 
     assert len(row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_preserves_state_and_advances_replacement_epoch(
+    store,
+):
+    await _seed_created_session(store)
+    capabilities = {"sendFollowUp": True}
+    created = await store.record_session_created(
+        "idem-1", session_id="sess-1", capabilities=capabilities
+    )
+    async with store._session_factory() as session:
+        db_row = await session.get(OmnigentBridgeSession, created.bridge_session_id)
+        metadata = dict(db_row.metadata_ or {})
+        authority = dict(metadata["capabilityAuthority"])
+        state = dict(authority["state"])
+        state["activeTurnId"] = "turn-7"
+        state["elicitationId"] = "el-3"
+        authority["state"] = state
+        metadata["capabilityAuthority"] = authority
+        db_row.metadata_ = metadata
+        await session.commit()
+
+    retried = await store.record_session_created(
+        "idem-1", session_id="sess-1", capabilities=capabilities
+    )
+    retried_state = retried.metadata_["capabilityAuthority"]["state"]
+    assert retried_state["sessionEpoch"] == 1
+    assert retried_state["activeTurnId"] == "turn-7"
+    assert retried_state["elicitationId"] == "el-3"
+
+    async with store._session_factory() as session:
+        db_row = await session.get(OmnigentBridgeSession, created.bridge_session_id)
+        db_row.omnigent_session_id = "sess-2"
+        await session.commit()
+
+    replaced = await store.record_session_created("idem-1", session_id="sess-2")
+    replaced_state = replaced.metadata_["capabilityAuthority"]["state"]
+    assert replaced_state["sessionEpoch"] == 2
+    assert replaced_state["activeTurnId"] is None
+    assert replaced_state["elicitationId"] is None
+    assert [
+        event["omnigentSessionId"]
+        for event in replaced.metadata_[BRIDGE_EVENT_JOURNAL_KEY]
+    ] == ["sess-1", "sess-2"]
 
 
 @pytest.mark.asyncio
@@ -1234,9 +1344,12 @@ async def test_chat_binding_allocated_only_after_provider_binding(store):
         agent_run_id="ar-1",
     )
     # No provider session yet -> no durable binding to allocate.
-    assert await store.ensure_chat_binding_id(
-        (await store.get_existing("idem-1")).bridge_session_id
-    ) is None
+    assert (
+        await store.ensure_chat_binding_id(
+            (await store.get_existing("idem-1")).bridge_session_id
+        )
+        is None
+    )
 
     await store.attach_session("idem-1", "sess-1")
     created = await store.record_session_created("idem-1", session_id="sess-1")
@@ -1247,7 +1360,10 @@ async def test_chat_binding_allocated_only_after_provider_binding(store):
 @pytest.mark.asyncio
 async def test_chat_binding_allocation_is_idempotent_across_retries(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
         session_id="sess-1",
     )
     row = await store.get_existing("idem-1")
@@ -1266,7 +1382,10 @@ async def test_ensure_chat_binding_backfills_historical_row(store):
     """A row created before the column existed is backfilled on first touch."""
 
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
         session_id="sess-1",
     )
     row = await store.get_existing("idem-1")
@@ -1285,8 +1404,12 @@ async def test_ensure_chat_binding_backfills_historical_row(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_active_available(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", capabilities={"viewTranscript": True, "sendMessage": True},
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": True},
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
@@ -1298,8 +1421,12 @@ async def test_resolve_chat_binding_active_available(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_read_only_from_capabilities(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", capabilities={"viewTranscript": True, "sendMessage": False},
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": False},
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     # Active workflow, but the capability projection withholds sendMessage.
@@ -1327,8 +1454,12 @@ async def test_resolve_chat_binding_starting_has_no_binding(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_terminal_read_only(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", terminal_status="completed",
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        terminal_status="completed",
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_ENDED
@@ -1347,8 +1478,13 @@ async def test_resolve_chat_binding_unavailable_when_no_session(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_cleaned_up_session(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", terminal_status="completed", delete_session=True,
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        terminal_status="completed",
+        delete_session=True,
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
@@ -1358,7 +1494,10 @@ async def test_resolve_chat_binding_cleaned_up_session(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_unsupported_runtime(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
         session_id="sess-1",
     )
     row = await store.get_existing("idem-1")
@@ -1375,11 +1514,17 @@ async def test_resolve_chat_binding_unsupported_runtime(store):
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_rejects_ambiguous_active_sessions(store):
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
         session_id="sess-1",
     )
     await _seed_chat_session(
-        store, key="idem-2", workflow_id="mm:wf-1", agent_run_id="ar-2",
+        store,
+        key="idem-2",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-2",
         session_id="sess-2",
     )
     with pytest.raises(BridgeChatBindingAmbiguousError):
@@ -1391,11 +1536,18 @@ async def test_resolve_chat_binding_prefers_active_over_terminal(store):
     # A terminal session plus one active session -> the active one wins and is
     # not treated as ambiguous.
     await _seed_chat_session(
-        store, key="idem-old", workflow_id="mm:wf-1", agent_run_id="ar-old",
-        session_id="sess-old", terminal_status="completed",
+        store,
+        key="idem-old",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-old",
+        session_id="sess-old",
+        terminal_status="completed",
     )
     await _seed_chat_session(
-        store, key="idem-new", workflow_id="mm:wf-1", agent_run_id="ar-new",
+        store,
+        key="idem-new",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-new",
         session_id="sess-new",
     )
     active_binding = (await store.get_existing("idem-new")).chat_binding_id
@@ -1411,8 +1563,12 @@ async def test_resolve_chat_binding_read_only_without_capability_snapshot(store)
     # Historical rows and compatibility paths persist no ``interventionCapabilities``
     # snapshot; the binding must be read-only rather than advertising send.
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", capabilities=None,
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities=None,
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
@@ -1425,8 +1581,12 @@ async def test_resolve_chat_binding_read_only_when_send_capability_absent(store)
     """A partial snapshot without ``sendMessage`` still fails closed."""
 
     await _seed_chat_session(
-        store, key="idem-1", workflow_id="mm:wf-1", agent_run_id="ar-1",
-        session_id="sess-1", capabilities={"viewTranscript": True},
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True},
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.read_only is True
@@ -1478,14 +1638,23 @@ async def test_resolve_chat_binding_fails_closed_when_latest_terminal_cleaned_up
     base = datetime(2026, 1, 1, tzinfo=UTC)
     # Older terminal session whose transcript is still present.
     await _seed_chat_session(
-        store, key="idem-old", workflow_id="mm:wf-1", agent_run_id="ar-old",
-        session_id="sess-old", terminal_status="completed",
+        store,
+        key="idem-old",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-old",
+        session_id="sess-old",
+        terminal_status="completed",
     )
     old_row = await store.get_existing("idem-old")
     # Newest terminal session, whose provider transcript was cleaned up.
     await _seed_chat_session(
-        store, key="idem-new", workflow_id="mm:wf-1", agent_run_id="ar-new",
-        session_id="sess-new", terminal_status="completed", delete_session=True,
+        store,
+        key="idem-new",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-new",
+        session_id="sess-new",
+        terminal_status="completed",
+        delete_session=True,
     )
     new_row = await store.get_existing("idem-new")
     await _set_updated_at(store, old_row.bridge_session_id, base)
@@ -1503,13 +1672,22 @@ async def test_resolve_chat_binding_uses_latest_terminal_when_older_cleaned_up(s
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
     await _seed_chat_session(
-        store, key="idem-old", workflow_id="mm:wf-1", agent_run_id="ar-old",
-        session_id="sess-old", terminal_status="completed", delete_session=True,
+        store,
+        key="idem-old",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-old",
+        session_id="sess-old",
+        terminal_status="completed",
+        delete_session=True,
     )
     old_row = await store.get_existing("idem-old")
     await _seed_chat_session(
-        store, key="idem-new", workflow_id="mm:wf-1", agent_run_id="ar-new",
-        session_id="sess-new", terminal_status="completed",
+        store,
+        key="idem-new",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-new",
+        session_id="sess-new",
+        terminal_status="completed",
     )
     new_row = await store.get_existing("idem-new")
     await _set_updated_at(store, old_row.bridge_session_id, base)
