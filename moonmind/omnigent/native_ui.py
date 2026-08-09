@@ -182,6 +182,9 @@ def build_chat_bootstrap(
     compatibility_version: str = NATIVE_UI_ROUTE_FEATURE_VERSION,
     unavailable_reason: str | None = None,
     labels: Mapping[str, Any] | None = None,
+    capability_schema_version: str | None = None,
+    capability_authority_digest: str | None = None,
+    disabled_reasons: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the browser-safe native application bootstrap object (issue §2).
 
@@ -204,13 +207,16 @@ def build_chat_bootstrap(
     filtered_caps = {
         str(key): bool(value) for key, value in dict(capabilities or {}).items()
     }
-    disabled_reasons = {
+    resolved_disabled_reasons = {
         capability: (
             "session_read_only" if read_only else "policy_or_capability_denied"
         )
         for capability, allowed in filtered_caps.items()
         if not allowed
     }
+    for capability, reason in dict(disabled_reasons or {}).items():
+        if capability in filtered_caps and not filtered_caps[capability] and reason:
+            resolved_disabled_reasons[capability] = str(reason)
     bootstrap: dict[str, Any] = {
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
@@ -220,10 +226,14 @@ def build_chat_bootstrap(
         "readOnly": bool(read_only),
         "state": state,
         "capabilities": filtered_caps,
-        "disabledReasons": disabled_reasons,
+        "disabledReasons": resolved_disabled_reasons,
         "compatibilityVersion": compatibility_version,
         "labels": {str(k): v for k, v in dict(labels or {}).items()},
     }
+    if capability_schema_version:
+        bootstrap["capabilitySchemaVersion"] = capability_schema_version
+    if capability_authority_digest:
+        bootstrap["capabilityAuthorityDigest"] = capability_authority_digest
     if unavailable_reason:
         bootstrap["unavailableReason"] = unavailable_reason
     return bootstrap

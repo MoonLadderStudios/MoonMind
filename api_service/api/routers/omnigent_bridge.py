@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -3228,10 +3228,44 @@ async def _record_facade_mutation_audit(
     for message *and* elicitation/approval mutations alike.
     """
 
+    now = datetime.now(tz=UTC).isoformat()
+    launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
+    policy = dict(launch.get("policyAuthority") or {})
+    request_id = idempotency_key or f"mm-{uuid4().hex}"
     metadata: dict[str, Any] = {
+        "receiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1",
         "actor": actor,
         "controlType": control_type,
         "controlOutcome": outcome,
+        "reasonCode": (
+            None if outcome in {"posted", "completed", "accepted"} else outcome
+        ),
+        "moonmindRequestId": request_id,
+        "workflowId": str(getattr(row, "moonmind_workflow_id", "") or ""),
+        "runId": str(getattr(row, "moonmind_run_id", "") or ""),
+        "stepExecutionId": str(getattr(row, "step_execution_id", "") or ""),
+        "agentRunId": str(getattr(row, "moonmind_agent_run_id", "") or ""),
+        "bridgeSessionId": str(getattr(row, "bridge_session_id", "") or ""),
+        "providerSessionId": str(getattr(row, "omnigent_session_id", "") or ""),
+        "providerProfileId": str(getattr(row, "provider_profile_id", "") or ""),
+        "providerProfileGeneration": getattr(row, "credential_generation", None),
+        "agentProfileRef": str(launch.get("executionProfileRef") or ""),
+        "agentProfileDigest": str(launch.get("executionProfileDigest") or ""),
+        "launchPolicyRef": str(launch.get("launchPolicyRef") or ""),
+        "effectiveLaunchSnapshotRef": str(launch.get("snapshotRef") or ""),
+        "policySnapshotRef": str(policy.get("snapshotRef") or ""),
+        "policyDigest": str(policy.get("policyDigest") or ""),
+        "expectedSessionEpoch": dict(getattr(row, "metadata_", None) or {}).get(
+            "sessionEpoch"
+        ),
+        "expectedTerminalState": str(getattr(row, "status", "") or ""),
+        "requestTime": now,
+        "dispatchTime": now,
+        "completionTime": now,
+        "durableAuditRef": (
+            f"omnigent-bridge-event://{getattr(row, 'bridge_session_id', '')}/"
+            f"workflow-chat-control/{request_id}"
+        ),
         "sourceMode": "workflow_chat_facade",
     }
     if idempotency_key:

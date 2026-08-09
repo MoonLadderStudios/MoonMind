@@ -671,6 +671,19 @@ def test_resolve_elicitation_persists_scan_evidence_in_mutation_audit(
     assert metadata.get("scanContractVersion")
     assert metadata.get("scannerPolicyRef")
     assert metadata.get("highSecurityMode") is True
+    assert metadata["receiptSchemaVersion"] == "moonmind.omnigent.mutation-receipt.v1"
+    assert metadata["actor"] == str(_USER_ID)
+    assert metadata["workflowId"] == "mm:w1"
+    assert metadata["runId"] == "run-1"
+    assert metadata["stepExecutionId"] == "step-1"
+    assert metadata["agentRunId"] == "ar-1"
+    assert metadata["bridgeSessionId"] == _BRIDGE_SESSION_ID
+    assert metadata["providerSessionId"] == _PROVIDER_SESSION_ID
+    assert metadata["moonmindRequestId"]
+    assert metadata["requestTime"]
+    assert metadata["dispatchTime"]
+    assert metadata["completionTime"]
+    assert metadata["durableAuditRef"].startswith("omnigent-bridge-event://")
 
 
 def test_resolve_elicitation_forwarded_to_bound_session() -> None:
