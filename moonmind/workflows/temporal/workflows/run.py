@@ -618,6 +618,12 @@ RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
     "run-ungated-continuation-disposition-v1"
 )
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
+# Expose the workflow-owned continuation capability to the portable Skill at
+# launch.  The absence of an authority is meaningful: a one-shot runtime must
+# keep supported waits in the foreground because no later workflow owns them.
+RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH = (
+    "run-terminal-continuation-authority-instructions-v1"
+)
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -11905,6 +11911,15 @@ class MoonMindRunWorkflow:
                                         "terminal evidence. MoonMind must not substitute "
                                         "native PR snapshot, comment, gate, or merge logic."
                                     )
+                                    if workflow.patched(
+                                        RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH
+                                    ):
+                                        portable_note = (
+                                            f"{portable_note}\n\n"
+                                            + self._terminal_continuation_authority_instruction(
+                                                request
+                                            )
+                                        )
                                     request = request.model_copy(
                                         update={
                                             "instruction_ref": (
@@ -13939,6 +13954,30 @@ class MoonMindRunWorkflow:
         outputs = self._get_from_result(result, "outputs")
         if not isinstance(outputs, Mapping):
             return True
+
+        metadata = outputs.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+
+        # A validated terminal-contract decision belongs to the selected Skill,
+        # not to generic provider recovery.  Retrying terminal failure evidence
+        # can repeat mutations or override a deliberate manual-review result.
+        # Likewise, a rejected continuation cannot become owned merely by
+        # relaunching the same top-level workflow.  Missing/malformed evidence
+        # remains retryable through the existing bounded repair path.
+        terminal_contract_outcome = str(
+            metadata.get("terminalContractOutcome") or ""
+        ).strip().lower()
+        terminal_contract_recovery = str(
+            metadata.get("terminalContractRecoveryOutcome") or ""
+        ).strip().lower()
+        if terminal_contract_outcome == "terminal_failure":
+            return False
+        if (
+            terminal_contract_outcome == "continuation_requested"
+            and terminal_contract_recovery.startswith("continuation_rejected_")
+        ):
+            return False
 
         provider_failure = outputs.get("providerFailure")
         if not isinstance(provider_failure, Mapping):
@@ -17130,6 +17169,31 @@ class MoonMindRunWorkflow:
         if not parent:
             return False
         return parent == self._actual_parent_workflow_id()
+
+    @staticmethod
+    def _terminal_continuation_authority_instruction(
+        request: AgentExecutionRequest,
+    ) -> str:
+        """Describe continuation ownership without duplicating Skill semantics."""
+
+        authority = request.terminal_continuation_authority
+        if authority is None:
+            return (
+                "Execution continuation authority: none. No durable parent "
+                "workflow owns a later gate cycle after this agent process "
+                "exits. Treat this execution as standalone: if the resolved "
+                "Skill describes a parent-owned typed continuation, do not emit "
+                "it; keep supported bounded waits in the foreground and follow "
+                "the Skill to a terminal outcome."
+            )
+        allowed_actions = ", ".join(authority.allowed_actions)
+        return (
+            "Execution continuation authority: validated. Durable parent "
+            f"{authority.owner_workflow_type} owns gate "
+            f"'{authority.gate_type}' and permits only these typed actions: "
+            f"{allowed_actions}. Return a continuation only when the resolved "
+            "Skill authorizes that exact action."
+        )
 
     @staticmethod
     def _normalize_gate_type(value: str | None) -> str:

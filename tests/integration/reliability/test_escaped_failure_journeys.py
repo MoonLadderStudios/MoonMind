@@ -935,6 +935,34 @@ async def test_invalid_batch_range_records_terminal_failure_without_retry(
     assert expected["parentState"] == "failed"
 
 
+async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without_retry(
+) -> None:
+    """Replay mm:7f52b94b at the runtime-instruction and retry boundaries."""
+
+    replay_id = "omnigent-pr-resolver-unowned-continuation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = AgentExecutionRequest.model_validate(manifest["request"])
+    assert request.terminal_continuation_authority is None
+
+    parent = MoonMindRunWorkflow()
+    instruction = parent._terminal_continuation_authority_instruction(request)
+    assert f"continuation authority: {expected['continuationAuthority']}" in instruction
+    assert ("Treat this execution as standalone" in instruction) is expected[
+        "standaloneInstruction"
+    ]
+
+    retryable = parent._activity_result_retryable(
+        manifest["childResult"],
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+    assert retryable is expected["retryable"]
+    assert expected["genericRetryCount"] == 0
+    assert expected["parentState"] == "failed"
+
+
 async def test_completed_batch_no_op_replays_through_production_activity_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
