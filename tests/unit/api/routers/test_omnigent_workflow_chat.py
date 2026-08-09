@@ -58,6 +58,17 @@ _CHAT_BINDING_ID = "brs-1"
 _BRIDGE_SESSION_ID = "brs-internal-1"
 
 
+def test_websocket_stream_is_explicitly_allowlisted() -> None:
+    match = match_facade_operation(
+        "WEBSOCKET", f"v1/sessions/{_CHAT_BINDING_ID}/stream"
+    )
+
+    assert match is not None
+    assert match.operation.name == "stream_events_websocket"
+    assert match.params["session_id"] == _CHAT_BINDING_ID
+    assert match_facade_operation("WEBSOCKET", "v1/sessions/other/control") is None
+
+
 def _mock_user():
     return SimpleNamespace(id=_USER_ID, email="chat@example.com", is_superuser=False)
 

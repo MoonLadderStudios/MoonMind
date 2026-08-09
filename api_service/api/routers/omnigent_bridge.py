@@ -455,11 +455,9 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
 
     Operators need a bounded, non-secret projection of whether the native
     Workflow Chat UI is served through MoonMind: UI-asset serving, the
-    compatibility version gate, the scoped HTTP/SSE route surface, and
-    credential separation. It reveals no upstream URL, credential, or provider
-    session identity. A WebSocket route is intentionally absent from
-    ``scopedRoutes`` until a binding-authorized WebSocket handler exists, so the
-    diagnostics never advertise a socket the facade cannot accept.
+    compatibility version gate, the scoped HTTP/SSE/WebSocket route surface,
+    and credential separation. It reveals no upstream URL, credential, or
+    provider session identity.
     """
 
     serving_enabled = resolved_native_ui_serving_enabled()
@@ -481,6 +479,7 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
             "apiBase": scoped_api,
             "http": scoped_api,
             "sse": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
+            "websocket": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
         },
         # MoonMind strips its own credentials before forwarding upstream and
         # virtualizes the provider session id, so neither the upstream credential
@@ -3451,6 +3450,124 @@ async def workflow_chat_binding_facade(
         )
     except (WorkflowChatFacadeError, OmnigentBridgeError) as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+@workflow_chat_router.websocket(
+    "/{chat_binding_id}/omnigent/{omnigent_path:path}",
+    name="workflow_chat_binding_facade_websocket",
+)
+async def workflow_chat_binding_facade_websocket(
+    websocket: WebSocket,
+    chat_binding_id: str,
+    omnigent_path: str,
+    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> None:
+    """Serve the authorized durable chat stream over a same-origin WebSocket.
+
+    Every connect/reconnect resolves the opaque binding and workflow owner. The
+    server reads the durable journal rather than accepting an upstream target
+    from the browser, and periodically repeats authorization while connected.
+    """
+
+    origin = str(websocket.headers.get("origin") or "").rstrip("/")
+    host = str(websocket.headers.get("host") or "")
+    allowed_origins = {f"http://{host}", f"https://{host}"}
+    if not host or origin not in allowed_origins:
+        await websocket.close(code=4403, reason="omnigent_chat_origin_denied")
+        return
+    match = match_facade_operation("WEBSOCKET", omnigent_path)
+    if match is None:
+        await websocket.close(code=4404, reason=CODE_ROUTE_NOT_ALLOWLISTED)
+        return
+    try:
+        row = await _resolve_and_authorize_chat_binding(
+            chat_binding_id=chat_binding_id,
+            operation=match.operation.name,
+            user=user,
+            service=service,
+            store=store,
+        )
+        assert_no_identity_substitution(
+            chat_binding_id=chat_binding_id,
+            path_session_id=match.params.get("session_id"),
+            query=dict(websocket.query_params),
+            headers=websocket.headers,
+        )
+    except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException) as exc:
+        await websocket.close(
+            code=4404, reason=getattr(exc, "code", CODE_BINDING_UNKNOWN)
+        )
+        return
+
+    bridge_session_id = str(getattr(row, "bridge_session_id", "") or "")
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "")
+    try:
+        cursor = (
+            _strict_query_cursor(websocket.query_params.get("cursor"), "cursor") or 0
+        )
+    except WorkflowChatFacadeError as exc:
+        await websocket.close(code=4400, reason=exc.code)
+        return
+
+    await websocket.accept()
+    polls_since_reauth = 0
+    try:
+        while True:
+            polls_since_reauth += 1
+            if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
+                polls_since_reauth = 0
+                await _resolve_and_authorize_chat_binding(
+                    chat_binding_id=chat_binding_id,
+                    operation=match.operation.name,
+                    user=user,
+                    service=service,
+                    store=store,
+                )
+            page = await store.list_event_page(
+                bridge_session_id, after=cursor, limit=_BRIDGE_STREAM_PAGE_SIZE
+            )
+            for event in page.rows:
+                cursor = event.sequence
+                if not _event_is_chat_visible(event):
+                    continue
+                payload = _bridge_event_payload(event)
+                for key in ("bridgeSessionId", "sessionId", "session_id"):
+                    if key in payload:
+                        payload[key] = chat_binding_id
+                await websocket.send_json(
+                    {
+                        "type": "bridge_event",
+                        "sequence": event.sequence,
+                        "data": _virtualize_facade_payload(
+                            payload,
+                            provider_session_id=provider_session_id,
+                            chat_binding_id=chat_binding_id,
+                        ),
+                    }
+                )
+            session_row = await store.get_bridge_session(bridge_session_id)
+            envelope = _terminal_envelope(session_row)
+            if envelope is not None and not page.has_more:
+                await websocket.send_json(
+                    {"type": "terminal", "data": envelope.model_dump(by_alias=True)}
+                )
+                await websocket.close(code=1000)
+                return
+            try:
+                # Client frames are not an authority-bearing control channel;
+                # receiving one merely confirms the connection remains open.
+                await asyncio.wait_for(
+                    websocket.receive_text(), timeout=_BRIDGE_STREAM_POLL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                continue
+    except WebSocketDisconnect:
+        return
+    except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+        await websocket.close(code=4403, reason=CODE_BINDING_UNKNOWN)
 
 
 # Register the single binding-scoped facade handler once per HTTP method with an
