@@ -25,10 +25,6 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         await conn.run_sync(Base.metadata.create_all)
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()

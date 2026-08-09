@@ -36,10 +36,6 @@ async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_
     monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-token")
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
@@ -80,10 +76,6 @@ async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled
     monkeypatch.setenv("GITHUB_TOKEN", "new-github-token")
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
@@ -110,10 +102,6 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
     monkeypatch.setattr("moonmind.config.paths.ENV_FILE", dotenv_path)
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
@@ -159,10 +147,6 @@ async def test_startup_syncs_github_alias_and_refreshes_canonical_slug(
     monkeypatch.setenv(slug, "ghp-alias-token")
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
@@ -195,10 +179,6 @@ async def test_startup_ignores_whitespace_only_env_tokens(
     monkeypatch.setenv("ATLASSIAN_API_KEY", "\t")
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()

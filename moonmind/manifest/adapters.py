@@ -42,7 +42,7 @@ class _BaseAdapter:
 # ---------------------------------------------------------------------------
 
 class GitHubReaderAdapter(_BaseAdapter):
-    """Wraps ``moonmind.indexers.github_indexer.GitHubIndexer``."""
+    """Read GitHub repository content through the portable manifest contract."""
 
     def plan(self) -> PlanResult:
         params = self.ds.params
@@ -129,7 +129,7 @@ class GitHubReaderAdapter(_BaseAdapter):
 # ---------------------------------------------------------------------------
 
 class GoogleDriveReaderAdapter(_BaseAdapter):
-    """Wraps ``moonmind.indexers.google_drive_indexer.GoogleDriveIndexer``."""
+    """Read Google Drive content through the portable manifest contract."""
 
     def plan(self) -> PlanResult:
         params = self.ds.params
@@ -188,7 +188,7 @@ class GoogleDriveReaderAdapter(_BaseAdapter):
 # ---------------------------------------------------------------------------
 
 class SimpleDirectoryReaderAdapter(_BaseAdapter):
-    """Wraps ``moonmind.indexers.local_data_indexer.LocalDataIndexer``."""
+    """Read local files through the portable manifest contract."""
 
     def _iter_files(self) -> Iterator[Path]:
         input_dir = self.ds.params.get("inputDir", ".")
@@ -277,7 +277,7 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
 # ---------------------------------------------------------------------------
 
 class ConfluenceReaderAdapter(_BaseAdapter):
-    """Wraps ``moonmind.indexers.confluence_indexer.ConfluenceIndexer``."""
+    """Read Confluence content through the portable manifest contract."""
 
     def plan(self) -> PlanResult:
         params = self.ds.params
