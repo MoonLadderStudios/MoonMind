@@ -22052,7 +22052,7 @@ class MoonMindRunWorkflow:
                     self._step_execution_branch_artifact_manifests.get(latest_key)
                     or {}
                 )
-                finish_summary["checkpointBranchTurn"] = {
+                terminal_branch_turn = {
                     "branchId": branch_projection.get("branchId"),
                     "branchTurnId": branch_projection.get("branchTurnId"),
                     "sourceCheckpoint": branch_projection.get("sourceCheckpoint"),
@@ -22072,8 +22072,32 @@ class MoonMindRunWorkflow:
                     "artifactManifestDigest": branch_manifest.get(
                         "artifactManifestDigest"
                     ),
-                    "artifacts": list(branch_manifest.get("artifacts") or ()),
                 }
+                if workflow.patched("checkpoint-branch-terminal-evidence-v1"):
+                    terminal_branch_turn.update(
+                        {
+                            "artifactPrincipal": self._principal(),
+                            "evidenceRefs": {
+                                "runtime.branch_turn.context_bundle.json": str(
+                                    branch_manifest.get("contextBundleRef") or ""
+                                ),
+                                **{
+                                    str(entry.get("name")): str(
+                                        entry.get("artifactRef")
+                                    )
+                                    for entry in branch_manifest.get("artifacts", ())
+                                    if isinstance(entry, Mapping)
+                                    and str(entry.get("name") or "").strip()
+                                    and str(entry.get("artifactRef") or "").strip()
+                                },
+                            },
+                        },
+                    )
+                else:
+                    terminal_branch_turn["artifacts"] = list(
+                        branch_manifest.get("artifacts") or ()
+                    )
+                finish_summary["checkpointBranchTurn"] = terminal_branch_turn
             if self._workflow_control_stop:
                 auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
                 if isinstance(auxiliary, dict):

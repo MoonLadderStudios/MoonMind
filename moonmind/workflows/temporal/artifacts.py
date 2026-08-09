@@ -3112,9 +3112,72 @@ class TemporalArtifactActivities:
                 from api_service.services.checkpoint_branch_service import (
                     CheckpointBranchService,
                 )
+                from moonmind.schemas.temporal_activity_models import (
+                    CheckpointBranchTerminalEvidence,
+                )
 
-                branch_id = str(branch_terminal.get("branchId") or "").strip()
-                turn_id = str(branch_terminal.get("branchTurnId") or "").strip()
+                terminal_contract = CheckpointBranchTerminalEvidence.model_validate(
+                    branch_terminal
+                )
+                manifest_artifact, manifest_payload = await self._service.read(
+                    artifact_id=self._normalize_activity_artifact_id(
+                        terminal_contract.artifact_manifest_ref
+                    ),
+                    principal=terminal_contract.artifact_principal,
+                )
+                actual_sha = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
+                stored_sha = str(getattr(manifest_artifact, "sha256", "") or "")
+                if stored_sha and not stored_sha.startswith("sha256:"):
+                    stored_sha = "sha256:" + stored_sha
+                if stored_sha and stored_sha != actual_sha:
+                    raise TemporalArtifactValidationError(
+                        "checkpoint branch terminal artifact manifest digest mismatch"
+                    )
+                try:
+                    authoritative_manifest = json.loads(manifest_payload)
+                except (TypeError, ValueError) as exc:
+                    raise TemporalArtifactValidationError(
+                        "checkpoint branch terminal artifact manifest is not JSON"
+                    ) from exc
+                if not isinstance(authoritative_manifest, Mapping):
+                    raise TemporalArtifactValidationError(
+                        "checkpoint branch terminal artifact manifest must be an object"
+                    )
+                semantic_payload = dict(authoritative_manifest)
+                declared_semantic_digest = str(
+                    semantic_payload.pop("artifactManifestDigest", "") or ""
+                )
+                computed_semantic_digest = "sha256:" + hashlib.sha256(
+                    json.dumps(
+                        semantic_payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                if (
+                    declared_semantic_digest
+                    != terminal_contract.artifact_manifest_digest
+                    or computed_semantic_digest
+                    != terminal_contract.artifact_manifest_digest
+                ):
+                    raise TemporalArtifactValidationError(
+                        "checkpoint branch terminal manifest semantic digest mismatch"
+                    )
+                if (
+                    authoritative_manifest.get("branchId") != terminal_contract.branch_id
+                    or authoritative_manifest.get("branchTurnId")
+                    != terminal_contract.branch_turn_id
+                    or authoritative_manifest.get("contextBundleRef")
+                    != terminal_contract.context_bundle_ref
+                    or authoritative_manifest.get("contextBundleDigest")
+                    != terminal_contract.context_bundle_digest
+                ):
+                    raise TemporalArtifactValidationError(
+                        "checkpoint branch terminal artifact manifest lineage mismatch"
+                    )
+
+                branch_id = terminal_contract.branch_id
+                turn_id = terminal_contract.branch_turn_id
                 if branch_id and turn_id:
                     outcome_code = str(model.finish_outcome_code or "").lower()
                     if model.state == "completed":
@@ -3130,9 +3193,7 @@ class TemporalArtifactActivities:
                     refs = {
                         key: value
                         for key, value in {
-                            "artifact_manifest": branch_terminal.get(
-                                "artifactManifestRef"
-                            ),
+                            "artifact_manifest": terminal_contract.artifact_manifest_ref,
                             "run_summary": getattr(record, "summary_ref", None),
                             "terminal": branch_terminal.get("terminalRef"),
                             "workspace": branch_terminal.get("workspaceRef"),
@@ -3148,6 +3209,18 @@ class TemporalArtifactActivities:
                         }.items()
                         if isinstance(value, str) and value.strip()
                     }
+                    refs.update(terminal_contract.evidence_refs)
+                    if model.state == "completed":
+                        required = {
+                            "input.branch_turn.instructions.md",
+                            "runtime.branch_turn.context_bundle.json",
+                        }
+                        missing = sorted(required.difference(refs))
+                        if missing:
+                            raise TemporalArtifactValidationError(
+                                "completed checkpoint branch lacks authoritative evidence: "
+                                + ", ".join(missing)
+                            )
                     await CheckpointBranchService(session).reconcile_turn_terminal(
                         branch_id=branch_id,
                         branch_turn_id=turn_id,

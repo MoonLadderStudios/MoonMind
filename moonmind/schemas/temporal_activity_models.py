@@ -190,6 +190,43 @@ class ExecutionTerminalStateInput(BaseModel):
     ] | None = Field(None, alias="errorCategory")
 
 
+class CheckpointBranchTerminalEvidence(BaseModel):
+    """Typed authority handoff for a checkpoint-branch terminal projection."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    branch_id: str = Field(..., alias="branchId", min_length=1)
+    branch_turn_id: str = Field(..., alias="branchTurnId", min_length=1)
+    artifact_manifest_ref: str = Field(..., alias="artifactManifestRef", min_length=1)
+    artifact_manifest_digest: str = Field(
+        ..., alias="artifactManifestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    artifact_principal: str = Field(..., alias="artifactPrincipal", min_length=1)
+    context_bundle_ref: str = Field(..., alias="contextBundleRef", min_length=1)
+    context_bundle_digest: str = Field(
+        ..., alias="contextBundleDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    evidence_refs: dict[str, str] = Field(default_factory=dict, alias="evidenceRefs")
+    terminal_state: str | None = Field(None, alias="terminalState")
+    cleanup_state: str | None = Field(None, alias="cleanupState")
+    host_release_state: str | None = Field(None, alias="hostReleaseState")
+    profile_release_state: str | None = Field(None, alias="profileReleaseState")
+
+    @model_validator(mode="after")
+    def _normalize_refs(self) -> "CheckpointBranchTerminalEvidence":
+        self.branch_id = self.branch_id.strip()
+        self.branch_turn_id = self.branch_turn_id.strip()
+        self.artifact_manifest_ref = self.artifact_manifest_ref.strip()
+        self.artifact_principal = self.artifact_principal.strip()
+        self.context_bundle_ref = self.context_bundle_ref.strip()
+        self.evidence_refs = {
+            str(key).strip(): str(value).strip()
+            for key, value in self.evidence_refs.items()
+            if str(key).strip() and str(value).strip()
+        }
+        return self
+
+
 class ExternalAgentRunInput(BaseModel):
     """Public input for external provider run status/fetch/cancel activities."""
 

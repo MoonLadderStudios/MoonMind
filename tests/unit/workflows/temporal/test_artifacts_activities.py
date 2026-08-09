@@ -1,7 +1,10 @@
-import pytest
+import hashlib
+import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from moonmind.schemas.temporal_activity_models import ArtifactReadInput, ArtifactWriteCompleteInput
 from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
@@ -191,6 +194,7 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
 @pytest.mark.asyncio
 async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
     activities,
+    mock_service,
     monkeypatch,
 ):
     import api_service.db.base as db_base
@@ -238,6 +242,27 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
     )
     monkeypatch.setattr(activities, "_write_run_digest_best_effort", AsyncMock())
 
+    manifest = {
+        "branchId": "branch-1",
+        "branchTurnId": "turn-1",
+        "contextBundleRef": "artifact://branch/context",
+        "contextBundleDigest": "sha256:" + "c" * 64,
+    }
+    manifest_digest = "sha256:" + hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    manifest["artifactManifestDigest"] = manifest_digest
+    manifest_payload = json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    stored_digest = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
+    mock_service.read.return_value = (
+        SimpleNamespace(sha256=stored_digest.removeprefix("sha256:")),
+        manifest_payload,
+    )
+
     await activities.execution_record_terminal_state(
         {
             "workflowId": "runtime-wf",
@@ -249,11 +274,19 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
                     "branchId": "branch-1",
                     "branchTurnId": "turn-1",
                     "artifactManifestRef": "artifact://branch/terminal-manifest",
-                    "checkpointRef": "artifact://branch/checkpoint",
-                    "cleanupRef": "artifact://branch/cleanup",
-                    "hostLeaseRef": "artifact://branch/host-lease",
-                    "providerLeaseRef": "artifact://branch/provider-lease",
-                    "firstMessageRef": "artifact://branch/first-message",
+                    "artifactManifestDigest": manifest_digest,
+                    "artifactPrincipal": "owner-1",
+                    "contextBundleRef": "artifact://branch/context",
+                    "contextBundleDigest": "sha256:" + "c" * 64,
+                    "evidenceRefs": {
+                        "input.branch_turn.instructions.md": "artifact://branch/instructions",
+                        "runtime.branch_turn.context_bundle.json": "artifact://branch/context",
+                        "checkpoint": "artifact://branch/checkpoint",
+                        "cleanup": "artifact://branch/cleanup",
+                        "host_lease": "artifact://branch/host-lease",
+                        "provider_lease": "artifact://branch/provider-lease",
+                        "first_message": "artifact://branch/first-message",
+                    },
                     "terminalState": "harvested",
                     "cleanupState": "completed",
                     "hostReleaseState": "released",
@@ -276,6 +309,8 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
                 "host_lease": "artifact://branch/host-lease",
                 "provider_lease": "artifact://branch/provider-lease",
                 "first_message": "artifact://branch/first-message",
+                "input.branch_turn.instructions.md": "artifact://branch/instructions",
+                "runtime.branch_turn.context_bundle.json": "artifact://branch/context",
             },
             "terminal_summary": {
                 "state": "completed",
