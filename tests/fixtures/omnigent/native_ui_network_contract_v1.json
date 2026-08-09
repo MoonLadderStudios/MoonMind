@@ -49,7 +49,7 @@
       "routeRelativeRedirects", "assetBaseDiscovery", "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "3ba12729ec02a8c41eba05ae463af6118a5237df20dfa214d2361ca8a8546aa6",
+  "contractSha256": "3a8d7340df5b305cbb6f6341f8a286675fbc1b6975a21dfed7da6e6d466d5199",
   "routes": [
     "liveness", "list_agents", "get_session", "stream_events", "post_event",
     "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",

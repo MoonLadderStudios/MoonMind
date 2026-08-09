@@ -216,12 +216,10 @@ def _reviewed_http(
     capability: str | None = CAP_VIEW_TRANSCRIPT,
     mutation: bool = False,
 ) -> NativeUiRoute:
-    """Inventory a pinned stock route which is not yet exposed by the facade.
+    """Inventory a reviewed pinned stock route served by the facade.
 
-    Keeping these entries in the compatibility contract is important even while
-    they fail closed: omission would make an upstream route indistinguishable
-    from an undiscovered route and allowed the old completeness test to pass
-    with a three-entry map.
+    Each route is explicit so an upstream addition still fails closed rather
+    than falling through to a generic reverse proxy.
     """
 
     return NativeUiRoute(
@@ -229,7 +227,7 @@ def _reviewed_http(
         transport=TRANSPORT_HTTP,
         methods=methods,
         operation_class=operation_class,
-        disposition=DISPOSITION_COMPAT_REVIEW,
+        disposition=DISPOSITION_SERVED,
         capability=capability,
         mutation=mutation,
         pattern=re.compile("^" + path + "$"),
@@ -238,8 +236,8 @@ def _reviewed_http(
 
 # Network contract used by the pinned native workspace UI beyond the #3634
 # transcript facade.  The paths are taken from the vendored server route set;
-# each unsupported operation is deliberately visible as review-required rather
-# than disappearing from the inventory or falling through to a generic proxy.
+# each reviewed operation is explicitly allowlisted rather than falling through
+# to a generic proxy.
 _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_READ_RESOURCES),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
@@ -258,7 +256,7 @@ _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
     _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_tree", methods=("GET", "POST"), operation_class=CLASS_SUBAGENT, capability=CAP_VIEW_TRANSCRIPT),
     _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_todo", methods=("GET", "POST", "PATCH"), operation_class=CLASS_TASK, capability=CAP_VIEW_TRANSCRIPT),
     _reviewed_http(r"v1/hosts", name="host_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
-    _reviewed_http(r"v1/runners/[^/]+/status", name="runner_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
+    _reviewed_http(r"v1/runners/(?P<runner_id>[^/]+)/status", name="runner_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
     _reviewed_http(rf"v1/sessions/{_SESSION}/reconnect", name="session_reconnect", methods=("POST",), operation_class=CLASS_RECONNECT, capability=CAP_VIEW_TRANSCRIPT),
 )
 
@@ -318,6 +316,45 @@ def classify_native_ui_websocket(path: str) -> NativeUiRouteMatch | None:
             params["_browser_path"] = candidate
             return NativeUiRouteMatch(route=route, params=params)
     return None
+
+
+def classify_native_ui_http(method: str, path: str) -> NativeUiRouteMatch | None:
+    """Classify a reviewed native HTTP route by exact method and path.
+
+    The existing transcript routes remain owned by ``workflow_chat_facade``;
+    this classifier covers only the pinned additional workspace surface.  A
+    missing match is deliberately indistinguishable from an unknown route.
+    """
+
+    normalized_method = str(method or "").strip().upper()
+    candidate = str(path or "").strip().strip("/")
+    for route in _PINNED_HTTP_ROUTES:
+        if normalized_method not in route.methods:
+            continue
+        assert route.pattern is not None
+        matched = route.pattern.match(candidate)
+        if matched is not None:
+            params = dict(matched.groupdict())
+            params["_browser_path"] = candidate
+            return NativeUiRouteMatch(route=route, params=params)
+    return None
+
+
+def upstream_http_path(match: NativeUiRouteMatch, provider_session_id: str) -> str:
+    """Build an allowlisted upstream path with the binding alias replaced."""
+
+    browser_path = str(match.params.get("_browser_path") or "")
+    if not browser_path:
+        raise ValueError("classified HTTP path is missing its source path")
+    browser_session = str(match.params.get("session_id") or "")
+    if browser_session:
+        parts = browser_path.split("/")
+        try:
+            parts[parts.index(browser_session)] = provider_session_id
+        except ValueError as exc:
+            raise ValueError("classified HTTP session is not in path") from exc
+        browser_path = "/".join(parts)
+    return "/" + browser_path.lstrip("/")
 
 
 def upstream_websocket_path(match: NativeUiRouteMatch, provider_session_id: str) -> str:
@@ -441,7 +478,9 @@ __all__ = [
     "TRANSPORT_SSE",
     "TRANSPORT_WEBSOCKET",
     "classify_native_ui_websocket",
+    "classify_native_ui_http",
     "compatibility_map",
     "negotiate_ws_subprotocol",
     "upstream_websocket_path",
+    "upstream_http_path",
 ]

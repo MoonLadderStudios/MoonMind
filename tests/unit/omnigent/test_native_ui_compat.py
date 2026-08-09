@@ -94,14 +94,58 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         for route in compat.NATIVE_UI_ROUTES
         if route.disposition == compat.DISPOSITION_SERVED
     }
-    # The served native-UI surface is derived from — and matches — the #3634
-    # HTTP/SSE allowlist, so there is one source of truth for served routes.
+    # The transcript slice is single-sourced from #3634 and the reviewed pinned
+    # workspace routes are served by this compatibility module.
     assert served == {
         *(operation.name for operation in FACADE_OPERATIONS),
+        "terminal_view",
+        "terminal_create",
+        "terminal_status",
+        "terminal_input",
+        "terminal_resize",
+        "terminal_close",
+        "terminal_shell",
+        "execution_logs",
+        "workspace_edit",
+        "workspace_delete",
+        "resource_upload",
+        "resource_download",
+        "resource_attach",
+        "browser_pane",
+        "subagent_tree",
+        "task_todo",
+        "host_liveness",
+        "runner_liveness",
+        "session_reconnect",
         "ws_session_updates",
         "terminal_attach",
         "dictation_stream",
     }
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "name"),
+    [
+        ("GET", "v1/sessions/b1/resources/terminals", "terminal_view"),
+        ("POST", "v1/sessions/b1/resources/terminals", "terminal_create"),
+        ("DELETE", "v1/sessions/b1/resources/terminals/t1", "terminal_close"),
+        ("PATCH", "v1/sessions/b1/tasks/t1", "task_todo"),
+        ("POST", "v1/sessions/b1/reconnect", "session_reconnect"),
+    ],
+)
+def test_classify_reviewed_http_routes(method: str, path: str, name: str) -> None:
+    match = compat.classify_native_ui_http(method, path)
+    assert match is not None
+    assert match.route.name == name
+    assert match.route.disposition == compat.DISPOSITION_SERVED
+    assert compat.upstream_http_path(match, "provider-1").startswith(
+        "/v1/sessions/provider-1/"
+    )
+
+
+def test_native_http_classifier_fails_closed_on_unknown_method_or_route() -> None:
+    assert compat.classify_native_ui_http("TRACE", "v1/sessions/b1/tasks") is None
+    assert compat.classify_native_ui_http("GET", "v1/sessions/b1/new-route") is None
 
 
 def test_every_native_ui_transport_class_is_represented() -> None:

@@ -26,6 +26,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
+    _validate_native_resource_path,
     workflow_chat_router,
 )
 from api_service.api.routers.retrieval_gateway import get_capability_registry
@@ -56,6 +57,26 @@ _CHAT_BINDING_ID = "brs-1"
 # The durable bridge-session key is server-owned and (once #3633 lands) distinct
 # from the browser-facing chatBindingId. Journal reads must use this key.
 _BRIDGE_SESSION_ID = "brs-internal-1"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../secret",
+        "%2e%2e/secret",
+        "%252e%252e/secret",
+        "/etc/passwd",
+        "C:\\secret",
+        "\\\\host\\share",
+    ],
+)
+def test_native_resource_path_rejects_escape_forms(path: str) -> None:
+    with pytest.raises(WorkflowChatFacadeError):
+        _validate_native_resource_path(path)
+
+
+def test_native_resource_path_accepts_scoped_relative_path() -> None:
+    _validate_native_resource_path("src/package/file name.py")
 
 
 def _mock_user():

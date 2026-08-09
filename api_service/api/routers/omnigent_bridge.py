@@ -104,8 +104,10 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_WS_SUBPROTOCOL_REJECTED,
     NativeUiCompatibilityError,
     DISPOSITION_SERVED,
+    classify_native_ui_http,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
+    upstream_http_path,
     upstream_websocket_path,
 )
 from moonmind.omnigent.settings import (
@@ -3465,6 +3467,244 @@ async def workflow_chat_binding_facade(
         raise _http_error_from_bridge(exc) from exc
 
 
+async def _read_bounded_facade_body(request: Request) -> bytes:
+    """Read any reviewed native payload without allowing unbounded buffering."""
+
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_size = int(declared)
+            if declared_size < 0 or declared_size > _FACADE_MAX_BODY_BYTES:
+                raise ValueError("too large")
+        except ValueError as exc:
+            raise WorkflowChatFacadeError(
+                "The request body exceeds the Workflow Chat facade limit.",
+                failure_class="user_error",
+                status_code=413,
+                code=CODE_PAYLOAD_TOO_LARGE,
+            ) from exc
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > _FACADE_MAX_BODY_BYTES:
+            raise WorkflowChatFacadeError(
+                "The request body exceeds the Workflow Chat facade limit.",
+                failure_class="user_error",
+                status_code=413,
+                code=CODE_PAYLOAD_TOO_LARGE,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_native_resource_path(value: str | None) -> None:
+    """Reject encoded traversal, absolute, drive/UNC, and NUL-bearing paths."""
+
+    from urllib.parse import unquote
+
+    candidate = str(value or "")
+    for _ in range(3):
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            break
+        candidate = decoded
+    normalized = candidate.replace("\\", "/")
+    parts = normalized.split("/")
+    if (
+        "\x00" in normalized
+        or normalized.startswith("/")
+        or normalized.startswith("//")
+        or (len(normalized) >= 2 and normalized[1] == ":")
+        or any(part in {".", ".."} for part in parts)
+    ):
+        raise WorkflowChatFacadeError(
+            "The requested resource path is not permitted.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+
+
+async def _dispatch_native_ui_http(
+    *,
+    match: Any,
+    row: Any,
+    request: Request,
+    chat_binding_id: str,
+    user: Any,
+    store: OmnigentBridgeSessionStore,
+):
+    """Relay one explicitly inventoried HTTP operation through its binding."""
+
+    route = match.route
+    provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
+    session_status = str(getattr(row, "status", "") or "")
+    body = b""
+    parsed_body: Any | None = None
+    if request.method.upper() in {"POST", "PUT", "PATCH"}:
+        body = await _read_bounded_facade_body(request)
+        content_type = str(request.headers.get("content-type") or "").lower()
+        if content_type.startswith("application/json") and body:
+            try:
+                parsed_body = json.loads(body)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise WorkflowChatFacadeError(
+                    "The request body is not valid JSON.", failure_class="user_error",
+                    status_code=400, code=CODE_MALFORMED_PAYLOAD,
+                ) from exc
+    assert_no_identity_substitution(
+        chat_binding_id=chat_binding_id,
+        path_session_id=match.params.get("session_id"),
+        query=dict(request.query_params),
+        body=parsed_body,
+        headers=request.headers,
+    )
+    runner_alias = str(match.params.get("runner_id") or "")
+    if runner_alias and runner_alias != chat_binding_id:
+        raise WorkflowChatFacadeError(
+            "The request attempts to supply a server-owned runner identity.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+    _validate_native_resource_path(match.params.get("res_path"))
+
+    capabilities = recompute_capabilities(
+        session_status, policy_capabilities=_projection_capabilities(row)
+    )
+    if route.capability and not capabilities.get(route.capability, False):
+        raise WorkflowChatFacadeError(
+            "The requested operation is not permitted for this binding.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_OPERATION_DENIED,
+        )
+    if route.mutation and is_read_only(session_status):
+        raise WorkflowChatFacadeError(
+            "This Workflow Chat session is terminal and read-only.",
+            failure_class="user_error",
+            status_code=409,
+            code=CODE_SESSION_READ_ONLY,
+        )
+
+    # Topology/liveness and reconnect are projections of the durable binding;
+    # browser-provided host, runner, profile, or endpoint identity is never used.
+    if route.name == "host_liveness":
+        return {
+            "hosts": [
+                {"id": chat_binding_id, "state": _facade_reconnect_state(row)}
+            ]
+        }
+    if route.name in {"runner_liveness", "session_reconnect"}:
+        return {
+            "chatBindingId": chat_binding_id,
+            "state": _facade_reconnect_state(row),
+            "readOnly": is_read_only(session_status),
+        }
+    if not provider_session_id:
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat binding has no active provider session yet.",
+            failure_class="user_error",
+            status_code=409,
+            code=CODE_SESSION_NOT_READY,
+        )
+
+    if route.mutation:
+        _, fresh_provider, fresh_capabilities = await _revalidate_binding_before_mutation(
+            store=store,
+            chat_binding_id=chat_binding_id,
+            expected_provider_session_id=provider_session_id,
+        )
+        if route.capability and not fresh_capabilities.get(route.capability, False):
+            raise WorkflowChatFacadeError(
+                "The requested operation is not permitted for this binding.",
+                failure_class="user_error",
+                status_code=403,
+                code=CODE_OPERATION_DENIED,
+            )
+        provider_session_id = fresh_provider
+
+    from urllib.parse import urlencode, urlsplit
+
+    upstream_path = upstream_http_path(match, provider_session_id)
+    query = urlencode(list(request.query_params.multi_items()))
+    base = urlsplit(resolved_server_url())
+    upstream_url = f"{base.scheme}://{base.netloc}{upstream_path}"
+    if query:
+        upstream_url += "?" + query
+    headers: dict[str, str] = {"Accept": str(request.headers.get("accept") or "*/*")}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        headers["Content-Type"] = str(content_type)
+    token = resolved_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    idempotency_key = request.headers.get("idempotency-key")
+    if idempotency_key:
+        headers["Idempotency-Key"] = str(idempotency_key)[:256]
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.request(
+                request.method.upper(),
+                upstream_url,
+                data=body or None,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as upstream:
+                payload = await upstream.content.read(_FACADE_MAX_BODY_BYTES + 1)
+                if len(payload) > _FACADE_MAX_BODY_BYTES:
+                    raise WorkflowChatFacadeError(
+                        "The upstream response exceeds the facade limit.",
+                        failure_class="integration_error",
+                        status_code=502,
+                        code=CODE_PAYLOAD_TOO_LARGE,
+                    )
+                response_type = str(
+                    upstream.headers.get("content-type")
+                    or "application/octet-stream"
+                )
+                if "json" in response_type.lower() and payload:
+                    try:
+                        value = json.loads(payload)
+                    except (json.JSONDecodeError, ValueError):
+                        value = None
+                    if value is not None:
+                        value = _virtualize_facade_payload(
+                            value, provider_session_id=provider_session_id,
+                            chat_binding_id=chat_binding_id,
+                        )
+                        payload = json.dumps(value, separators=(",", ":")).encode()
+                response_headers: dict[str, str] = {}
+                disposition = str(upstream.headers.get("content-disposition") or "")
+                if disposition and "\r" not in disposition and "\n" not in disposition:
+                    response_headers["Content-Disposition"] = disposition[:512]
+                result = Response(
+                    content=payload,
+                    status_code=upstream.status,
+                    media_type=response_type.split(";", 1)[0],
+                    headers=response_headers,
+                )
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise WorkflowChatFacadeError(
+            "The upstream Omnigent route is unavailable.",
+            failure_class="integration_error",
+            status_code=502,
+            code="omnigent_chat_upstream_unavailable",
+        ) from exc
+
+    if route.mutation:
+        _audit_facade(
+            outcome="mutation",
+            operation=route.name,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="binding_scoped_native_http",
+        )
+    return result
+
+
 # Register the single binding-scoped facade handler once per HTTP method with an
 # explicit, method-suffixed operation id. A single ``api_route(methods=[...])``
 # derives its OpenAPI operation id from ``route.methods`` (a set), so the
@@ -3472,7 +3712,7 @@ async def workflow_chat_binding_facade(
 # between ``_get`` and ``_post`` across processes with different hash seeds,
 # making the generated-contract check non-deterministic. One route per method
 # keeps the exported contract stable (matching the proxy router idiom).
-for _facade_method in ("GET", "POST"):
+for _facade_method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
     workflow_chat_router.add_api_route(
         "/{chat_binding_id}/omnigent/{omnigent_path:path}",
         workflow_chat_binding_facade,
@@ -3498,7 +3738,12 @@ async def _dispatch_workflow_chat_facade(
     # 1. Resolve + authorize the durable binding first, so an unauthorized
     #    caller cannot even probe which routes exist (fully non-enumerating).
     match = match_facade_operation(request.method, omnigent_path)
-    operation_name = match.operation.name if match else "unknown"
+    native_match = None if match else classify_native_ui_http(request.method, omnigent_path)
+    operation_name = (
+        match.operation.name
+        if match
+        else native_match.route.name if native_match else "unknown"
+    )
     row = await _resolve_and_authorize_chat_binding(
         chat_binding_id=chat_binding_id,
         operation=operation_name,
@@ -3508,7 +3753,7 @@ async def _dispatch_workflow_chat_facade(
     )
 
     # 2. Enforce the explicit method + route allowlist.
-    if match is None:
+    if match is None and native_match is None:
         _audit_facade(
             outcome="denied",
             operation="unknown",
@@ -3522,6 +3767,16 @@ async def _dispatch_workflow_chat_facade(
             status_code=status.HTTP_404_NOT_FOUND,
             code=CODE_ROUTE_NOT_ALLOWLISTED,
         )
+    if native_match is not None:
+        return await _dispatch_native_ui_http(
+            match=native_match,
+            row=row,
+            request=request,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            store=store,
+        )
+    assert match is not None
     operation = match.operation
     params = match.params
     # Journal reads use the resolved durable bridge-session key; the browser only
