@@ -29,7 +29,8 @@ semantics stay in one place:
   (:func:`render_native_ui_document`).
 
 Keeping the mechanism here (not inline in the router) mirrors
-``moonmind/omnigent/workflow_chat_facade.py``, the sibling binding-scoped HTTP/SSE
+``moonmind/omnigent/workflow_chat_facade.py``, the sibling binding-scoped
+HTTP/SSE/WebSocket
 API facade (MoonLadderStudios/MoonMind#3634).
 """
 
@@ -51,12 +52,12 @@ NATIVE_UI_MOUNT_PREFIX = "/omnigent-ui/workflow-chat"
 # Stable browser bootstrap schema version. The native application reads the
 # injected ``window.__MOONMIND_OMNIGENT_CHAT__`` object; a compatibility change
 # to the contract shape bumps this version.
-NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION = "moonmind.omnigent_native_ui.bootstrap.v1"
+NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION = "moonmind.omnigent_native_ui.bootstrap.v2"
 
 # Versioned scoped route/feature manifest. Bumped when the scoped serving routes
 # or the bootstrap features the native UI depends on change in a way that
 # requires a matching native UI build.
-NATIVE_UI_ROUTE_FEATURE_VERSION = "1"
+NATIVE_UI_ROUTE_FEATURE_VERSION = "2"
 
 # The single upstream source pin MoonMind's native UI serving is verified
 # against. Reuses the one upstream commit pin (host_auth_adapter) so there is no
@@ -190,10 +191,8 @@ def build_chat_bootstrap(
     read-only state, the filtered effective capability manifest with disabled
     reasons, safe display labels, and a stable compatibility version.
 
-    ``wsBase`` is deliberately not advertised: the binding-scoped facade
-    currently exposes only HTTP/SSE routes, so the bootstrap does not promise a
-    WebSocket base until a binding-authorized WebSocket handler exists
-    (MoonLadderStudios/MoonMind#3638).
+    ``wsBase`` is the same-origin binding-scoped facade path.  The browser may
+    convert its scheme to ``ws``/``wss`` but never receives an upstream URL.
 
     It deliberately never carries a raw provider session id, upstream endpoint,
     host, runner, credential, profile, launch policy, or workspace authority —
@@ -215,6 +214,7 @@ def build_chat_bootstrap(
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
         "apiBase": scoped_api_base(chat_binding_id),
+        "wsBase": scoped_api_base(chat_binding_id),
         "mode": mode,
         "embedded": mode == "embedded",
         "readOnly": bool(read_only),
@@ -363,9 +363,58 @@ def render_native_ui_document(
     payload = json.dumps(dict(bootstrap), separators=(",", ":")).replace(
         "</", "<\\/"
     )
+    # The provider-maintained application uses root-absolute native API paths.
+    # Install the transport adapter before its bundles execute so fetch/XHR,
+    # EventSource and WebSocket all discover the same opaque binding-scoped
+    # route without modifying or forking the upstream UI.
+    transport_adapter = r"""
+(function(){
+  const cfg=window.__MOONMIND_OMNIGENT_CHAT__;
+  const nativeFetch=window.fetch.bind(window);
+  const scope=function(raw, socket){
+    const url=new URL(String(raw), window.location.href);
+    if(url.origin!==window.location.origin){
+      throw new TypeError("cross-origin native transport blocked");
+    }
+    if(url.pathname==="/health" || url.pathname.startsWith("/v1/")){
+      url.pathname=(socket?cfg.wsBase:cfg.apiBase)+url.pathname;
+    }
+    return url.toString();
+  };
+  window.fetch=function(input, init){
+    if(input instanceof Request){
+      return nativeFetch(new Request(scope(input.url,false),input),init);
+    }
+    return nativeFetch(scope(input,false),init);
+  };
+  const nativeOpen=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(method,url){
+    const args=Array.prototype.slice.call(arguments); args[1]=scope(url,false);
+    return nativeOpen.apply(this,args);
+  };
+  if(window.EventSource){
+    const NativeEventSource=window.EventSource;
+    window.EventSource=function(url,options){
+      return new NativeEventSource(scope(url,false),options);
+    };
+    window.EventSource.prototype=NativeEventSource.prototype;
+  }
+  const NativeWebSocket=window.WebSocket;
+  window.WebSocket=function(url,protocols){
+    return protocols===undefined
+      ? new NativeWebSocket(scope(url,true))
+      : new NativeWebSocket(scope(url,true),protocols);
+  };
+  window.WebSocket.prototype=NativeWebSocket.prototype;
+  for(const key of ["CONNECTING","OPEN","CLOSING","CLOSED"]){
+    window.WebSocket[key]=NativeWebSocket[key];
+  }
+})();
+""".strip()
     injected = (
         f'<base href="{base}/">'
-        f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};</script>"
+        f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};"
+        f"{transport_adapter}</script>"
     )
     rewritten = rewrite_asset_urls(upstream_html, scoped_base=base)
     match = _HEAD_OPEN.search(rewritten)

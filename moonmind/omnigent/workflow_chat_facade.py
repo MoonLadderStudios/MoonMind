@@ -1,4 +1,4 @@
-"""Binding-scoped Workflow Chat facade primitives (MoonLadderStudios/MoonMind#3634).
+"""Binding-scoped Workflow Chat facade primitives (#3634, extended by #3635).
 
 The native Omnigent web application never calls the provider/service session API
 with a caller-selected provider session id. It receives an opaque MoonMind
@@ -33,6 +33,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import unquote
 
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 
@@ -104,16 +105,22 @@ CAP_SEND_MESSAGE = "sendMessage"
 CAP_INTERRUPT_TURN = "interruptTurn"
 CAP_RESOLVE_ELICITATION = "resolveElicitation"
 CAP_READ_RESOURCES = "readResources"
+CAP_CREATE_TERMINAL = "createTerminal"
+CAP_ATTACH_TERMINAL = "attachTerminal"
+CAP_WRITE_TERMINAL = "writeTerminal"
+CAP_RESIZE_TERMINAL = "resizeTerminal"
+CAP_CLOSE_TERMINAL = "closeTerminal"
+CAP_MUTATE_WORKSPACE = "mutateWorkspace"
+CAP_UPLOAD_RESOURCES = "uploadResources"
+CAP_DELETE_RESOURCES = "deleteResources"
+CAP_USE_BROWSER = "useBrowser"
+CAP_VIEW_SUBAGENTS = "viewSubagents"
 
-# Capabilities the facade intentionally never grants to the browser. These are
-# authority/immutability boundaries (terminal creation, workspace mutation,
-# per-session model/effort/goal changes) that require separate authorization the
-# facade does not carry; they are always reported false so the native UI hides
-# the affordance and the server rejects the operation if attempted.
+# Capabilities the facade intentionally never grants to the browser. Per-session
+# model/effort/goal changes remain immutable authority boundaries. Terminal and
+# workspace capabilities above are separate: they may be enabled only by an
+# explicit durable policy decision and are never inferred by this transport.
 _ALWAYS_DENIED_CAPABILITIES: tuple[str, ...] = (
-    "createTerminal",
-    "writeTerminal",
-    "mutateWorkspace",
     "changeModel",
     "changeEffort",
     "changeGoal",
@@ -161,6 +168,22 @@ def recompute_capabilities(
         CAP_INTERRUPT_TURN: _grant(CAP_INTERRUPT_TURN, not read_only),
         CAP_RESOLVE_ELICITATION: _grant(CAP_RESOLVE_ELICITATION, not read_only),
     }
+    # Sensitive native-workspace capabilities are never inferred from session
+    # status.  The separate durable policy resolver must opt in explicitly;
+    # this transport layer only intersects that authority with live state.
+    for sensitive in (
+        CAP_CREATE_TERMINAL,
+        CAP_ATTACH_TERMINAL,
+        CAP_WRITE_TERMINAL,
+        CAP_RESIZE_TERMINAL,
+        CAP_CLOSE_TERMINAL,
+        CAP_MUTATE_WORKSPACE,
+        CAP_UPLOAD_RESOURCES,
+        CAP_DELETE_RESOURCES,
+        CAP_USE_BROWSER,
+        CAP_VIEW_SUBAGENTS,
+    ):
+        capabilities[sensitive] = bool(not read_only and policy.get(sensitive) is True)
     for denied in _ALWAYS_DENIED_CAPABILITIES:
         capabilities[denied] = False
     return capabilities
@@ -170,7 +193,7 @@ def is_read_only(status: str | None) -> bool:
     return str(status or "").strip().lower() in TERMINAL_SESSION_STATUSES
 
 
-# --- Route / method allowlist (OB-§4.1 compatibility matrix, §4.2) ------------
+# --- Versioned route / transport allowlist (#3635; OB-§4.1, §4.2) ------------
 # The facade exposes only the Omnigent-shaped operations the native application
 # needs. Every entry is an explicit (method, path-pattern) pair; anything not
 # matched here is rejected with a non-enumerating error. Session lifecycle
@@ -199,6 +222,7 @@ class FacadeOperation:
     mutation: bool = False
     sse: bool = False
     binary: bool = False
+    websocket: bool = False
 
 
 def _op(path: str, **kwargs: Any) -> FacadeOperation:
@@ -215,6 +239,28 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         references_session=False,
         requires_provider_session=False,
     ),
+    _op(
+        r"v1/info",
+        name="server_info",
+        method="GET",
+        capability=None,
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    _op(
+        r"v1/me",
+        name="current_user",
+        method="GET",
+        capability=None,
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    _op(
+        r"v1/sessions",
+        name="list_sessions",
+        method="GET",
+        references_session=False,
+    ),
     # Session catalog / metadata required to bootstrap the native UI.
     _op(
         r"v1/agents",
@@ -225,8 +271,33 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
     ),
     # Session snapshot / bootstrap / history.
     _op(rf"v1/sessions/{_SESSION}", name="get_session", method="GET"),
+    _op(rf"v1/sessions/{_SESSION}/items", name="session_items", method="GET"),
+    _op(
+        rf"v1/sessions/{_SESSION}/child_sessions",
+        name="child_sessions",
+        method="GET",
+        capability=CAP_VIEW_SUBAGENTS,
+    ),
     # Live/replay stream (SSE) — served from the durable bridge journal so
     # Last-Event-ID cursor semantics and mid-stream reauthorization apply.
+    _op(
+        rf"v1/sessions/{_SESSION}/resources",
+        name="resources",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments",
+        name="environments",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default",
+        name="environment",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+    ),
     _op(
         rf"v1/sessions/{_SESSION}/stream",
         name="stream_events",
@@ -274,6 +345,43 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         binary=True,
     ),
     _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/"
+        r"(?P<res_path>.+)",
+        name="workspace_write",
+        method="PUT",
+        capability=CAP_MUTATE_WORKSPACE,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/"
+        r"(?P<res_path>.+)",
+        name="workspace_edit",
+        method="PATCH",
+        capability=CAP_MUTATE_WORKSPACE,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/"
+        r"(?P<res_path>.+)",
+        name="workspace_delete",
+        method="DELETE",
+        capability=CAP_DELETE_RESOURCES,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default/search",
+        name="workspace_search",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/environments/default/shell",
+        name="environment_shell",
+        method="POST",
+        capability=CAP_CREATE_TERMINAL,
+        mutation=True,
+    ),
+    _op(
         rf"v1/sessions/{_SESSION}/resources/environments/default/diff/"
         r"(?P<res_path>.+)",
         name="workspace_diff",
@@ -288,13 +396,87 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         capability=CAP_READ_RESOURCES,
     ),
     _op(
+        rf"v1/sessions/{_SESSION}/resources/files",
+        name="upload_session_file",
+        method="POST",
+        capability=CAP_UPLOAD_RESOURCES,
+        mutation=True,
+        binary=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/files:copy",
+        name="copy_session_files",
+        method="POST",
+        capability=CAP_MUTATE_WORKSPACE,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)",
+        name="session_file_metadata",
+        method="GET",
+        capability=CAP_READ_RESOURCES,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)",
+        name="delete_session_file",
+        method="DELETE",
+        capability=CAP_DELETE_RESOURCES,
+        mutation=True,
+    ),
+    _op(
         rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/content",
         name="session_file",
         method="GET",
         capability=CAP_READ_RESOURCES,
         binary=True,
     ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/terminals",
+        name="terminals",
+        method="GET",
+        capability=CAP_VIEW_TRANSCRIPT,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/terminals",
+        name="create_terminal",
+        method="POST",
+        capability=CAP_CREATE_TERMINAL,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/terminals/(?P<terminal_id>[^/]+)",
+        name="terminal_status",
+        method="GET",
+        capability=CAP_ATTACH_TERMINAL,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/terminals/(?P<terminal_id>[^/]+)",
+        name="close_terminal",
+        method="DELETE",
+        capability=CAP_CLOSE_TERMINAL,
+        mutation=True,
+    ),
+    _op(
+        rf"v1/sessions/{_SESSION}/resources/terminals/(?P<terminal_id>[^/]+)/attach",
+        name="attach_terminal",
+        method="WEBSOCKET",
+        capability=CAP_ATTACH_TERMINAL,
+        websocket=True,
+    ),
+    _op(
+        r"v1/sessions/updates",
+        name="session_updates",
+        method="WEBSOCKET",
+        capability=CAP_VIEW_TRANSCRIPT,
+        references_session=False,
+        websocket=True,
+    ),
 )
+
+# Versioned, reviewable route contract for the pinned upstream source.  Tests
+# compare this profile with the checked-in Omnigent OpenAPI/UI socket surface;
+# a new upstream route therefore cannot become a generic proxy by accident.
+FACADE_COMPATIBILITY_PROFILE = "omnigent.server.e51dcb647bf1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +503,39 @@ def match_facade_operation(method: str, path: str) -> FacadeMatch | None:
         if matched is not None:
             return FacadeMatch(operation=operation, params=dict(matched.groupdict()))
     return None
+
+
+def validate_facade_path_params(params: Mapping[str, str]) -> None:
+    """Reject traversal and alternate-platform path forms before forwarding."""
+
+    value = params.get("res_path")
+    if value is None:
+        return
+    try:
+        decoded = unquote(unquote(str(value)))
+    except (TypeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The resource path is invalid.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        ) from exc
+    segments = decoded.replace("\\", "/").split("/")
+    if (
+        not decoded
+        or len(decoded.encode("utf-8")) > 4096
+        or "\x00" in decoded
+        or decoded.startswith(("/", "\\"))
+        or "\\" in decoded
+        or any(segment in {"", ".", ".."} for segment in segments)
+        or (segments and re.match(r"^[A-Za-z]:", segments[0]) is not None)
+    ):
+        raise WorkflowChatFacadeError(
+            "The resource path is outside the bound workspace.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
 
 
 # Sentinel capability the facade never grants. Any composer/control event that
@@ -524,6 +739,16 @@ def assert_no_identity_substitution(
 
 
 __all__ = [
+    "FACADE_COMPATIBILITY_PROFILE",
+    "FACADE_OPERATIONS",
+    "CAP_ATTACH_TERMINAL",
+    "CAP_CLOSE_TERMINAL",
+    "CAP_CREATE_TERMINAL",
+    "CAP_DELETE_RESOURCES",
+    "CAP_MUTATE_WORKSPACE",
+    "CAP_RESIZE_TERMINAL",
+    "CAP_UPLOAD_RESOURCES",
+    "CAP_WRITE_TERMINAL",
     "CAP_CONTROL_UNSUPPORTED",
     "CAP_INTERRUPT_TURN",
     "CAP_READ_RESOURCES",
@@ -544,7 +769,6 @@ __all__ = [
     "CODE_SESSION_READ_ONLY",
     "CODE_SESSION_SUBSTITUTION",
     "CODE_UNSUPPORTED_MEDIA_TYPE",
-    "FACADE_OPERATIONS",
     "FacadeMatch",
     "FacadeOperation",
     "TERMINAL_SESSION_STATUSES",
@@ -554,4 +778,5 @@ __all__ = [
     "match_facade_operation",
     "recompute_capabilities",
     "required_capability_for_event",
+    "validate_facade_path_params",
 ]

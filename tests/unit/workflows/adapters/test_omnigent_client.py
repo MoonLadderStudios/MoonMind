@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 
@@ -315,3 +317,44 @@ async def test_omnigent_client_forwards_explicitly_allowlisted_headers() -> None
 
     assert captured["x-moonmind-trace"] == "trace-1"
     assert "cookie" not in captured
+
+
+@pytest.mark.asyncio
+async def test_scoped_request_preserves_binary_shape_and_server_authority() -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("authorization")
+        captured["cookie"] = request.headers.get("cookie")
+        captured["body"] = await request.aread()
+        return httpx.Response(
+            200,
+            content=b"raw-result",
+            headers={"content-type": "application/octet-stream"},
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        api_token="upstream-secret",
+        transport=httpx.MockTransport(handler),
+        forward_headers={"Cookie": "browser=secret"},
+    )
+
+    content, content_type, status_code = await client.request_scoped(
+        "PUT",
+        "/v1/sessions/provider/resources/environments/default/filesystem/a.txt",
+        query="mode=replace",
+        body=b"payload",
+        content_type="application/octet-stream",
+    )
+
+    assert (content, content_type, status_code) == (
+        b"raw-result",
+        "application/octet-stream",
+        200,
+    )
+    assert captured["url"].endswith("a.txt?mode=replace")
+    assert captured["authorization"] == "Bearer upstream-secret"
+    assert captured["cookie"] is None
+    assert captured["body"] == b"payload"

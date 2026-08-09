@@ -1,6 +1,6 @@
 """Router + primitive tests for the binding-scoped Workflow Chat facade.
 
-MoonLadderStudios/MoonMind#3634: the native Omnigent web application reaches the
+MoonLadderStudios/MoonMind#3634 and #3635: the native application reaches the
 provider session only through
 ``/api/workflow-chat-bindings/{chatBindingId}/omnigent/{path}``. Every request
 independently authenticates, resolves the durable binding, authorizes the
@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers.omnigent_bridge import (
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
@@ -25,6 +26,8 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
+    _facade_liveness_state,
+    _validate_native_mutation_payload,
     _require_bridge_enabled,
     workflow_chat_router,
 )
@@ -36,6 +39,12 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
+    CAP_ATTACH_TERMINAL,
+    CAP_CREATE_TERMINAL,
+    CAP_DELETE_RESOURCES,
+    CAP_MUTATE_WORKSPACE,
+    CAP_UPLOAD_RESOURCES,
+    CAP_WRITE_TERMINAL,
     CAP_CONTROL_UNSUPPORTED,
     CAP_INTERRUPT_TURN,
     CAP_SEND_MESSAGE,
@@ -45,6 +54,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     match_facade_operation,
     recompute_capabilities,
     required_capability_for_event,
+    validate_facade_path_params,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -235,6 +245,7 @@ class _FakeProxy:
         self.posted: list[dict[str, Any]] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
+        self.scoped: list[dict[str, Any]] = []
 
     async def get_session(self, session_id: str):
         return {
@@ -253,6 +264,10 @@ class _FakeProxy:
         if operation in {"workspace_file", "workspace_diff", "session_file"}:
             return b"RAW-BYTES"
         return {"files": [{"path": "src/main.py", "session": session_id}]}
+
+    async def request_scoped(self, **kwargs):
+        self.scoped.append(dict(kwargs))
+        return (b'{"session_id":"prov-sess-1","ok":true}', "application/json", 200)
 
     async def post_event(self, *, session_id: str, event, actor=None):
         self.posted.append(
@@ -875,6 +890,241 @@ def test_match_facade_operation_allowlist() -> None:
     assert match_facade_operation("GET", "v1/sessions/abc/events") is None
     assert match_facade_operation("DELETE", "v1/sessions/abc") is None
     assert match_facade_operation("GET", "../../etc/passwd") is None
+
+
+def test_native_workspace_compatibility_profile_is_explicit_and_fail_closed() -> None:
+    expected = {
+        ("WEBSOCKET", "attach_terminal"),
+        ("WEBSOCKET", "session_updates"),
+        ("POST", "create_terminal"),
+        ("DELETE", "close_terminal"),
+        ("POST", "upload_session_file"),
+        ("PUT", "workspace_write"),
+        ("PATCH", "workspace_edit"),
+        ("DELETE", "workspace_delete"),
+        ("GET", "child_sessions"),
+    }
+    actual = {
+        (operation.method, operation.name)
+        for operation in __import__(
+            "moonmind.omnigent.workflow_chat_facade", fromlist=["FACADE_OPERATIONS"]
+        ).FACADE_OPERATIONS
+    }
+    assert expected <= actual
+    assert match_facade_operation("POST", "v1/sessions/abc/future-route") is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../secret", "%2e%2e/secret", "%252e%252e/secret", "C:/secret", "dir\\secret"],
+)
+def test_resource_paths_reject_traversal_and_windows_forms(path: str) -> None:
+    with pytest.raises(WorkflowChatFacadeError):
+        validate_facade_path_params({"res_path": path})
+
+
+def test_sensitive_native_capabilities_require_explicit_durable_policy() -> None:
+    default = recompute_capabilities("active")
+    for capability in (
+        CAP_CREATE_TERMINAL,
+        CAP_ATTACH_TERMINAL,
+        CAP_WRITE_TERMINAL,
+        CAP_MUTATE_WORKSPACE,
+        CAP_UPLOAD_RESOURCES,
+        CAP_DELETE_RESOURCES,
+    ):
+        assert default[capability] is False
+    granted = recompute_capabilities(
+        "active",
+        policy_capabilities={
+            CAP_CREATE_TERMINAL: True,
+            CAP_ATTACH_TERMINAL: True,
+            CAP_WRITE_TERMINAL: True,
+        },
+    )
+    assert granted[CAP_CREATE_TERMINAL] is True
+    assert granted[CAP_ATTACH_TERMINAL] is True
+    assert granted[CAP_WRITE_TERMINAL] is True
+    terminal = recompute_capabilities(
+        "completed", policy_capabilities={CAP_WRITE_TERMINAL: True}
+    )
+    assert terminal[CAP_WRITE_TERMINAL] is False
+
+
+def test_scoped_native_resource_mutation_rewrites_only_bound_session() -> None:
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {CAP_MUTATE_WORKSPACE: True}})
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.put(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/src/main.py"
+        ),
+        json={"content": "updated"},
+    )
+
+    assert response.status_code == 200
+    assert proxy.scoped[0]["path"].startswith(
+        f"/v1/sessions/{_PROVIDER_SESSION_ID}/resources/"
+    )
+    assert _CHAT_BINDING_ID not in proxy.scoped[0]["path"]
+    assert response.json()["session_id"] == _CHAT_BINDING_ID
+
+
+def test_scoped_native_mutation_is_idempotent() -> None:
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {CAP_MUTATE_WORKSPACE: True}})
+    )
+    client, proxy, _store = _build(store=store)
+    path = _path(
+        f"v1/sessions/{_CHAT_BINDING_ID}"
+        "/resources/environments/default/filesystem/src/main.py"
+    )
+
+    first = client.put(
+        path,
+        json={"content": "updated"},
+        headers={"Idempotency-Key": "resource-write-1"},
+    )
+    replay = client.put(
+        path,
+        json={"content": "updated"},
+        headers={"Idempotency-Key": "resource-write-1"},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["deduplicated"] is True
+    assert len(proxy.scoped) == 1
+
+
+def test_scoped_native_resource_mutation_denied_without_policy() -> None:
+    client, proxy, _store = _build()
+
+    response = client.delete(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/src/main.py"
+        )
+    )
+
+    assert response.status_code == 403
+    assert proxy.scoped == []
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (_row(status="completed"), "terminal"),
+        (_row(status="asleep"), "wakeable"),
+        (_row(metadata_={"hostState": "offline"}), "host-offline"),
+        (_row(metadata_={"localStranded": True}), "local-stranded"),
+        (
+            _row(metadata_={"unavailableReason": "unsupported_runtime"}),
+            "unsupported",
+        ),
+        (_row(omnigent_session_id=None), "starting"),
+    ],
+)
+def test_liveness_reports_truthful_reconnect_states(row, expected) -> None:
+    assert _facade_liveness_state(row) == expected
+
+
+def test_terminal_routes_reject_arbitrary_commands() -> None:
+    with pytest.raises(WorkflowChatFacadeError):
+        _validate_native_mutation_payload(
+            "create_terminal",
+            {"shell_type": "bash", "command": "arbitrary"},
+            b"",
+            "application/json",
+        )
+
+
+def test_upload_rejects_path_like_filename() -> None:
+    body = (
+        b'--boundary\r\nContent-Disposition: form-data; name="file"; '
+        b'filename="../secret.txt"\r\n\r\ncontent\r\n--boundary--\r\n'
+    )
+    with pytest.raises(WorkflowChatFacadeError):
+        _validate_native_mutation_payload(
+            "upload_session_file",
+            None,
+            body,
+            "multipart/form-data; boundary=boundary",
+        )
+
+
+def test_binding_scoped_websocket_rewrites_provider_identity(monkeypatch) -> None:
+    class _Upstream:
+        def __init__(self) -> None:
+            self.messages = [
+                '{"session_id":"prov-sess-1","type":"heartbeat"}',
+            ]
+
+        async def recv(self):
+            if not self.messages:
+                raise WebSocketDisconnect()
+            return self.messages.pop(0)
+
+        async def send(self, _data):
+            return None
+
+        async def close(self):
+            return None
+
+    upstream = _Upstream()
+    upstream_url = {"value": ""}
+
+    async def connect(url, **_kwargs):
+        upstream_url["value"] = url
+        return upstream
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.websocket_connect",
+        connect,
+    )
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {CAP_ATTACH_TERMINAL: True}})
+    )
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/terminals/term-1/attach?read_only=true"
+        ),
+        headers={"origin": "http://testserver"},
+    ) as socket:
+        payload = socket.receive_json()
+
+    assert payload["session_id"] == _CHAT_BINDING_ID
+    assert _PROVIDER_SESSION_ID not in str(payload)
+    assert (
+        f"/v1/sessions/{_PROVIDER_SESSION_ID}/resources/terminals/"
+        in upstream_url["value"]
+    )
+    assert _CHAT_BINDING_ID not in upstream_url["value"]
+
+
+def test_binding_scoped_websocket_rejects_cross_origin() -> None:
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {CAP_ATTACH_TERMINAL: True}})
+    )
+    client, _proxy, _store = _build(store=store)
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(
+            _path(
+                f"v1/sessions/{_CHAT_BINDING_ID}"
+                "/resources/terminals/term-1/attach"
+            ),
+            headers={"origin": "https://attacker.invalid"},
+        ):
+            pass
+
+    assert exc.value.code == 4403
 
 
 def test_recompute_capabilities_read_only_when_terminal() -> None:

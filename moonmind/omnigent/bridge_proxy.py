@@ -713,6 +713,33 @@ class OmnigentBridgeSessionProxy:
             )
         return bounded
 
+    async def request_scoped(
+        self,
+        *,
+        method: str,
+        path: str,
+        query: str = "",
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> tuple[bytes, str, int]:
+        """Forward an allowlisted native route through server-owned authority."""
+
+        self._require_proxy_mode()
+        try:
+            result = await self._client.request_scoped(
+                method, path, query=query, body=body, content_type=content_type
+            )
+        except OmnigentClientError as exc:
+            raise _bridge_client_error(exc) from exc
+        if len(result[0]) > _MAX_FACADE_RESOURCE_BYTES:
+            raise OmnigentBridgeError(
+                "Upstream response exceeds the bridge response limit",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_response_too_large",
+            )
+        return result
+
     async def post_event(
         self,
         *,

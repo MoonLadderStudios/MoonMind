@@ -132,6 +132,9 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert native_ui["scopedRoutes"]["uiMountPath"] == (
         "/omnigent-ui/workflow-chat/{chatBindingId}"
     )
+    assert native_ui["scopedRoutes"]["websocket"].endswith(
+        "/{chatBindingId}/omnigent"
+    )
 
 
 @pytest.mark.asyncio

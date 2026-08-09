@@ -680,6 +680,50 @@ class OmnigentEmbeddedHostProtocolFacade:
             )
         return bounded
 
+    async def request_scoped(
+        self,
+        *,
+        session_id: str,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+    ) -> tuple[bytes, str, int]:
+        """Forward one allowlisted native HTTP operation to the bound runner."""
+
+        _, runner_id = await self._bound_runner(session_id)
+        payload: dict[str, Any] | None = None
+        if body:
+            try:
+                decoded = json.loads(body)
+            except (TypeError, ValueError) as exc:
+                raise OmnigentBridgeError(
+                    "Embedded native mutations require a JSON payload",
+                    failure_class="user_error",
+                    status_code=415,
+                ) from exc
+            if not isinstance(decoded, dict):
+                raise OmnigentBridgeError(
+                    "Embedded native mutation payload must be an object",
+                    failure_class="user_error",
+                    status_code=400,
+                )
+            payload = decoded
+        result = await self._host_channels.request_runner(
+            runner_id=runner_id,
+            method=method,
+            path=path,
+            payload=payload,
+            expect_json=False,
+        )
+        if len(result) > _MAX_FACADE_RESOURCE_BYTES:
+            raise OmnigentBridgeError(
+                "Embedded runner response exceeds the bridge response limit",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_response_too_large",
+            )
+        return bytes(result), "application/json", 200
+
     async def list_changed_files(self, session_id: str) -> Any:
         return await self.get_resource("changed_files", session_id)
 

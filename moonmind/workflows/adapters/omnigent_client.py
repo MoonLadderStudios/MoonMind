@@ -297,6 +297,58 @@ class OmnigentHttpClient:
             f"{quote(file_id, safe='')}/content",
         )
 
+    async def request_scoped(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: str = "",
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> tuple[bytes, str, int]:
+        """Forward one already-allowlisted native route without leaking auth.
+
+        Route selection and identity substitution are owned by the binding
+        facade.  This transport helper deliberately accepts only a relative
+        ``/v1/`` path and returns bounded raw response metadata so binary and
+        multipart-compatible native operations preserve their wire shape.
+        """
+
+        if not path.startswith("/v1/") or "?" in path or "#" in path:
+            raise OmnigentClientError(
+                "Scoped Omnigent path is invalid", failure_class="user_error"
+            )
+        url = f"{self._base}{path}"
+        if query:
+            url += f"?{query}"
+        headers = self._headers(accept="*/*")
+        if content_type:
+            headers["Content-Type"] = content_type
+        kwargs: dict[str, Any] = {}
+        if body is not None:
+            kwargs["content"] = body
+        client = self._client
+        owns_client = client is None
+        if client is None:
+            client = httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
+        try:
+            response = await client.request(method, url, headers=headers, **kwargs)
+        except httpx.HTTPError as exc:
+            raise OmnigentClientError(
+                self._redact(f"Omnigent transport error: {exc!s}"),
+                failure_class="integration_error",
+            ) from exc
+        finally:
+            if owns_client:
+                await client.aclose()
+        if response.status_code < 200 or response.status_code >= 300:
+            raise self._error_from_response(response.status_code, response.text)
+        return (
+            bytes(response.content),
+            str(response.headers.get("content-type") or "application/octet-stream"),
+            response.status_code,
+        )
+
     async def interrupt(self, session_id: str) -> dict[str, Any]:
         return await self.post_event(session_id, {"type": "interrupt"})
 

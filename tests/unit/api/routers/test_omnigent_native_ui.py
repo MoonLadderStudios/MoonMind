@@ -159,6 +159,13 @@ def test_embedded_document_serves_native_app_with_bootstrap() -> None:
     assert (
         f'"apiBase":"/api/workflow-chat-bindings/{_CHAT_BINDING_ID}/omnigent"' in body
     )
+    assert (
+        f'"wsBase":"/api/workflow-chat-bindings/{_CHAT_BINDING_ID}/omnigent"' in body
+    )
+    assert '"schemaVersion":"moonmind.omnigent_native_ui.bootstrap.v2"' in body
+    assert "cross-origin native transport blocked" in body
+    assert "cfg.wsBase" in body
+    assert "XMLHttpRequest.prototype.open" in body
     # Asset URLs are scoped back through the MoonMind route.
     scoped = f"{NATIVE_UI_MOUNT_PATH}/{_CHAT_BINDING_ID}"
     assert f'src="{scoped}/assets/index-abc.js"' in body
