@@ -145,13 +145,59 @@ def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
     )
 
 
-def _managed_workspace(source: Mapping[str, str]) -> dict[str, str]:
-    return {
-        "kind": "managed_runtime",
-        "runtimeId": _required_env(source, "MOONMIND_RUNTIME_ID"),
-        "agentRunId": _required_env(source, "MOONMIND_AGENT_RUN_ID"),
-        "relativePath": "repo",
+def _authorized_workspace(source: Mapping[str, str]) -> dict[str, str]:
+    workspace_kind = str(
+        source.get("MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND") or "managed_runtime"
+    ).strip()
+    relative_path = str(
+        source.get("MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH") or "repo"
+    ).strip()
+    if workspace_kind == "managed_runtime":
+        return {
+            "kind": "managed_runtime",
+            "runtimeId": _required_env(source, "MOONMIND_RUNTIME_ID"),
+            "agentRunId": _required_env(source, "MOONMIND_AGENT_RUN_ID"),
+            "relativePath": relative_path,
+        }
+    if workspace_kind == "sandbox":
+        return {
+            "kind": "sandbox",
+            "workspaceId": _required_env(
+                source, "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID"
+            ),
+            "relativePath": relative_path,
+        }
+    raise ContainerJobCliError(
+        f"unsupported container-job workspace kind: {workspace_kind}"
+    )
+
+
+def _source_correlation(source: Mapping[str, str]) -> dict[str, str]:
+    agent_run_id = _required_env(source, "MOONMIND_AGENT_RUN_ID")
+    workflow_id = str(
+        source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id
+    ).strip()
+    session_id = _required_env(source, "MOONMIND_CONTAINER_JOBS_SESSION_ID")
+    source_kind = str(
+        source.get("MOONMIND_CONTAINER_JOBS_SOURCE_KIND") or "managed_session"
+    ).strip()
+    correlation = {
+        "source": source_kind,
+        "workflowId": workflow_id,
+        "agentRunId": agent_run_id,
     }
+    if source_kind == "managed_session":
+        correlation["managedSessionId"] = session_id
+    elif source_kind == "omnigent":
+        correlation["omnigentConversationId"] = session_id
+    else:
+        raise ContainerJobCliError(
+            f"unsupported container-job source kind: {source_kind}"
+        )
+    step_id = str(source.get("MOONMIND_STEP_ID") or "").strip()
+    if step_id:
+        correlation["stepId"] = step_id
+    return correlation
 
 
 def container_job_submission(
@@ -172,14 +218,8 @@ def container_job_submission(
     normalized_request_id = str(request_id or uuid4().hex).strip()
     if not normalized_request_id:
         raise ContainerJobCliError("container job request id must not be empty")
-    workflow_id = str(source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id).strip()
-    managed_session_id = str(
-        source.get("MOONMIND_CONTAINER_JOBS_SESSION_ID") or ""
-    ).strip()
-    step_id = str(source.get("MOONMIND_STEP_ID") or "").strip()
-
     normalized_spec = dict(spec)
-    normalized_spec["workspaceRef"] = _managed_workspace(source)
+    normalized_spec["workspaceRef"] = _authorized_workspace(source)
     try:
         validated_spec = ContainerJobSpec.model_validate(normalized_spec)
         idempotency_components = (
@@ -196,13 +236,7 @@ def container_job_submission(
             {
                 "contractVersion": "v1",
                 "idempotencyKey": idempotency_key,
-                "source": {
-                    "source": "managed_session",
-                    "workflowId": workflow_id,
-                    "managedSessionId": managed_session_id or None,
-                    "agentRunId": agent_run_id,
-                    "stepId": step_id or None,
-                },
+                "source": _source_correlation(source),
                 "spec": validated_spec.model_dump(
                     mode="json", by_alias=True, exclude_none=True
                 ),
@@ -247,7 +281,6 @@ def python_test_submission(
 
     source = os.environ if env is None else env
     agent_run_id = _required_env(source, "MOONMIND_AGENT_RUN_ID")
-    workflow_id = str(source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id).strip()
     test_targets = [str(target).strip() for target in targets if str(target).strip()]
     command = [
         "bash",
@@ -259,18 +292,10 @@ def python_test_submission(
     return {
         "contractVersion": "v1",
         "idempotencyKey": f"python-tests:{agent_run_id}:{uuid4().hex}",
-        "source": {
-            "source": "managed_session",
-            "workflowId": workflow_id,
-            "managedSessionId": str(
-                source.get("MOONMIND_CONTAINER_JOBS_SESSION_ID") or ""
-            ).strip()
-            or None,
-            "agentRunId": agent_run_id,
-        },
+        "source": _source_correlation(source),
         "spec": {
             "imageSourceRef": "moonmind-python-tests",
-            "workspaceRef": _managed_workspace(source),
+            "workspaceRef": _authorized_workspace(source),
             "command": command,
             "workdir": "/workspace",
             "networkMode": "bridge",

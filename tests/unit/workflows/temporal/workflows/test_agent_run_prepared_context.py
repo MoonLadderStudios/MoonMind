@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentRuntimeStepExecutionLaunch,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -93,6 +97,35 @@ def test_result_metadata_preserves_parent_prepared_context_authority(monkeypatch
         ),
     )
 
+
+def test_result_metadata_carries_parent_execution_for_artifact_handoff(monkeypatch):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _request().model_copy(
+        update={
+            "step_execution": AgentRuntimeStepExecutionLaunch(
+                workflowId="mm:parent-workflow",
+                runId="parent-run-id",
+                logicalStepId="assess",
+                executionOrdinal=1,
+                stepExecutionId=(
+                    "mm:parent-workflow:parent-run-id:assess:execution:1"
+                ),
+                runtimeContextPolicy="fresh_agent_run",
+            )
+        }
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done"),
+        include_parent_execution=True,
+    )
+
+    assert result is not None
+    assert result.metadata["parentWorkflowId"] == "mm:parent-workflow"
+    assert result.metadata["parentRunId"] == "parent-run-id"
+
     assert result is not None
     moonmind_metadata = result.metadata["moonmind"]
     assert moonmind_metadata["preparedContext"]["logicalStepId"] == "collect-evidence"
@@ -144,6 +177,7 @@ def test_result_metadata_carries_assessment_artifact_path(monkeypatch):
         idempotencyKey="idem-assess",
         parameters={
             "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
+            "brief_artifact_path": "artifacts/jira-implement-brief.json",
         },
     )
 
@@ -155,6 +189,9 @@ def test_result_metadata_carries_assessment_artifact_path(monkeypatch):
     assert result is not None
     assert result.metadata["assessment_artifact_path"] == (
         "artifacts/jira-implement-assessment.json"
+    )
+    assert result.metadata["brief_artifact_path"] == (
+        "artifacts/jira-implement-brief.json"
     )
 
 

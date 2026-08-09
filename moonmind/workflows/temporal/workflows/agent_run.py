@@ -94,6 +94,9 @@ PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
     "agent-run-pr-resolver-continuation-observability-v1"
 )
 RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
+PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
+    "agent-run-parent-execution-artifact-handoff-v1"
+)
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
     {
@@ -1215,6 +1218,7 @@ class MoonMindAgentRun:
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult | None,
+        include_parent_execution: bool = False,
     ) -> AgentRunResult | None:
         if result is None:
             return result
@@ -1222,6 +1226,15 @@ class MoonMindAgentRun:
         metadata = dict(result.metadata or {})
         metadata.setdefault("childWorkflowId", workflow.info().workflow_id)
         metadata.setdefault("childRunId", workflow.info().run_id)
+        if include_parent_execution and request.step_execution is not None:
+            metadata.setdefault(
+                "parentWorkflowId",
+                request.step_execution.workflow_id,
+            )
+            metadata.setdefault(
+                "parentRunId",
+                request.step_execution.run_id,
+            )
         self._record_provider_native_pr_metadata(
             request=request,
             metadata=metadata,
@@ -1340,6 +1353,11 @@ class MoonMindAgentRun:
             value = request_params.get(key)
             if isinstance(value, str) and value.strip():
                 metadata["assessment_artifact_path"] = value.strip()
+                break
+        for key in ("brief_artifact_path", "briefArtifactPath"):
+            value = request_params.get(key)
+            if isinstance(value, str) and value.strip():
+                metadata["brief_artifact_path"] = value.strip()
                 break
         request_metadata = request_params.get("metadata")
         request_moonmind = (
@@ -1495,6 +1513,9 @@ class MoonMindAgentRun:
         self.final_result = self._enrich_result_metadata(
             request=request,
             result=result,
+            include_parent_execution=workflow.patched(
+                PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID
+            ),
         )
         publish_payload = self.final_result.model_dump(mode="json", by_alias=True)
         try:
@@ -5524,6 +5545,9 @@ class MoonMindAgentRun:
                 self.final_result = self._enrich_result_metadata(
                     request=request,
                     result=self.final_result,
+                    include_parent_execution=workflow.patched(
+                        PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID
+                    ),
                 )
                 if (
                     workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)

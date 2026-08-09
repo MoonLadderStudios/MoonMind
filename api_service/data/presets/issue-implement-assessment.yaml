@@ -41,6 +41,7 @@ inputs:
   default: ''
 steps:
 - title: Assess existing implementation state
+  repositoryOperation: read
   annotations:
     issueImplementRole: initial-assessment
   instructions: 'Before changing Jira or writing any code, assess whether {{ inputs.issue_provider
@@ -134,6 +135,7 @@ steps:
   skill:
     id: auto
     args:
+      brief_artifact_path: '{{ inputs.brief_artifact_path }}'
       assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
     requiredCapabilities:
     - git

@@ -1,11 +1,11 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
-from pathlib import Path
 import runpy
 import subprocess
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,7 +23,7 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
-
+from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
@@ -34,20 +34,20 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
     validate_restore_material,
 )
+from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.execution_profiles import (
+    compile_effective_launch,
+    validate_effective_launch_snapshot,
+)
+from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
     HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
-from moonmind.omnigent.execution_profiles import (
-    compile_effective_launch,
-    validate_effective_launch_snapshot,
-)
-from moonmind.omnigent.execute import OmnigentSessionStillRunningError
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
-from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
+from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
     _bind_candidate_workspace,
@@ -55,17 +55,16 @@ from moonmind.omnigent.profile_bound_execution import (
     _compile_persisted_effective_launch,
     _failure_evidence,
 )
-from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.omnigent.workspace_intent import compile_workspace_intent
-from moonmind.repositories.lore_adapter import (
-    LORE_UNSUPPORTED_RUNTIME_LANE,
-    LoreWorkspaceError,
-)
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
     deterministic_lease_owner_id,
+)
+from moonmind.repositories.lore_adapter import (
+    LORE_UNSUPPORTED_RUNTIME_LANE,
+    LoreWorkspaceError,
 )
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -86,6 +85,10 @@ from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WorkspaceLocatorResolutionError,
 )
+from moonmind.security.container_job_capabilities import (
+    verify_container_job_session_capability,
+)
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -1126,6 +1129,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         workspace_root=tmp_path / "workspaces",
     )
     runtime._prepare_workspace = AsyncMock(return_value=workspace)  # type: ignore[method-assign]
+    runtime._resolve_daemon_workspace_root = AsyncMock(return_value=tmp_path)  # type: ignore[method-assign]
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
     runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=tmp_path / "runtime-scripts"
@@ -1140,7 +1144,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
-        Path,
+        lambda path, **_kwargs: Path(path),
     )
 
     state = {
@@ -1260,6 +1264,72 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
 
 
 @pytest.mark.asyncio
+async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+    monkeypatch.setenv("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(
+        return_value=(
+            0,
+            "/mnt/data/docker/volumes/agent_workspaces/_data\n",
+            "",
+        )
+    )
+
+    resolved = await runtime._resolve_daemon_workspace_root()
+
+    assert resolved == Path(
+        "/mnt/data/docker/volumes/agent_workspaces/_data"
+    )
+    runtime._run.assert_awaited_once_with(
+        "docker",
+        "volume",
+        "inspect",
+        "--format",
+        "{{.Mountpoint}}",
+        "agent_workspaces",
+        check=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_daemon_workspace_root_fails_when_volume_inspect_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(1, "", "volume not found"))
+
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._resolve_daemon_workspace_root()
+
+    assert raised.value.code == "OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_daemon_workspace_root_skips_inspection_for_local_daemon(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock()
+
+    assert await runtime._resolve_daemon_workspace_root() is None
+    runtime._run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     tmp_path, monkeypatch
 ) -> None:
@@ -1307,6 +1377,10 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         skill_projection=tmp_path / "skills",
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
+        container_job_environment={
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "scoped-test-token",
+            "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
+        },
         effective_launch=effective_launch,
     )
 
@@ -1355,8 +1429,19 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert (
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
-        "MOONMIND_STEP_EXECUTION_ID"
+        "MOONMIND_STEP_EXECUTION_ID,MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
+        "MOONMIND_CONTAINER_JOBS_MCP_URL"
     ) in commands[2]
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in commands[2]
+    assert "scoped-test-token" not in commands[2]
+    assert (
+        "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container"
+        in commands[2]
+    )
+    launch_environment = runtime._run.await_args_list[2].kwargs["env"]
+    assert launch_environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"] == (
+        "scoped-test-token"
+    )
     assert "NO_PROXY=localhost,127.0.0.1" in commands[2]
     assert "no_proxy=localhost,127.0.0.1" in commands[2]
     assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
@@ -1373,6 +1458,50 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
+
+
+def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    monkeypatch.setattr(
+        settings.security, "JWT_SECRET_KEY", "test-container-capability-secret"
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+
+    environment = runtime._container_job_environment(
+        binding=binding,
+        host_lease=_host_lease(),
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": "sandbox-1",
+            "relativePath": "repo",
+        },
+        current_workflow_id="workflow-1",
+        current_step_execution_id="agent-run-1",
+        timeout_seconds=3600,
+    )
+
+    assert environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] == (
+        "http://api:8000/mcp/container"
+    )
+    assert environment["MOONMIND_CONTAINER_JOBS_SOURCE_KIND"] == "omnigent"
+    assert environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] == "sandbox"
+    assert environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_ID"] == "sandbox-1"
+    capability = verify_container_job_session_capability(
+        environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
+        secret="test-container-capability-secret",
+    )
+    assert capability.agent_run_id == "agent-run-1"
+    assert capability.session_id == "host-lease-1"
+    assert capability.workspace_id == "sandbox-1"
 
 
 @pytest.mark.asyncio
@@ -2121,6 +2250,8 @@ def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) ->
     )
     assert installed.returncode == 0, installed.stderr
     assert json.loads((output / "manifest.json").read_text())["tools"][0]["name"] == "gh"
+    assert (output / "bin" / "moonmind").is_file()
+    assert (output / "bin" / "moonmind").stat().st_mode & 0o222 == 0
     assert (output / "bin" / "gh").stat().st_mode & 0o222 == 0
     fake_gh.write_text("#!/bin/sh\necho 'gh version 2.77.0 (fixture)'\n", encoding="utf-8")
     env["MOONMIND_GH_VERSION"] = "2.77.0"
@@ -2890,6 +3021,7 @@ async def _drive_authority_chain_coordinator(
     *,
     publication: dict | None = None,
     completion_evidence: list[dict] | None = None,
+    request_parameters: dict | None = None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -3116,6 +3248,7 @@ async def _drive_authority_chain_coordinator(
                 "publishMode": "branch",
                 "repository": "owner/repo",
                 "omnigent": {"session": {"workspace": "owner/repo"}},
+                **dict(request_parameters or {}),
             },
         )
     )
@@ -3209,6 +3342,146 @@ async def test_coordinator_rejects_false_success_without_publishable_commits() -
 
 
 @pytest.mark.asyncio
+async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None:
+    """A trusted assessment may authorize an exact verified unchanged base."""
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="issue is already implemented",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    _ordered, authority_metadata, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            publication={
+                "push_status": "no_commits",
+                "push_branch": "main",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 0,
+                "remote_verified": True,
+            },
+            request_parameters={
+                "repositoryOutcomePolicy": {
+                    "schemaVersion": "repository-outcome-policy/v2",
+                    "allowNoCommit": True,
+                    "authority": "trusted_assessment",
+                    "assessmentVerdict": "FULLY_IMPLEMENTED",
+                    "assessmentArtifactRef": "art_assessment_1",
+                    "assessedRepository": "owner/repo",
+                    "assessedBranch": "main",
+                }
+            },
+        )
+    )
+
+    assert result.failure_class is None
+    assert metadata["push_status"] == "no_commits"
+    assert metadata["repositoryContinuationCount"] == 0
+    assert metadata["acceptedRepositoryEvidence"] == {
+        "schemaVersion": "accepted-repository-evidence/v1",
+        "pushStatus": "no_commits",
+        "branch": "main",
+        "baseBranch": "main",
+        "headSha": "a" * 40,
+        "commitsAheadOfBase": 0,
+        "repositoryChanged": False,
+        "publicationAuthorized": True,
+        "candidateContaminated": False,
+        "remoteVerified": True,
+        "authority": "omnigent.profile_bound_execution",
+    }
+    assert authority_metadata[0]["terminal"]["harvestState"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rejects_no_commit_policy_for_another_repository() -> None:
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="issue is already implemented",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    _ordered, _authority_metadata, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            publication={
+                "push_status": "no_commits",
+                "push_branch": "main",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 0,
+                "remote_verified": True,
+            },
+            request_parameters={
+                "repositoryOutcomePolicy": {
+                    "schemaVersion": "repository-outcome-policy/v2",
+                    "allowNoCommit": True,
+                    "authority": "trusted_assessment",
+                    "assessmentVerdict": "FULLY_IMPLEMENTED",
+                    "assessmentArtifactRef": "art_assessment_1",
+                    "assessedRepository": "another/repository",
+                    "assessedBranch": "main",
+                }
+            },
+        )
+    )
+
+    assert result.provider_error_code == "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
+    assert metadata["repositoryContinuationCount"] == 8
+
+
+@pytest.mark.asyncio
+async def test_no_commit_publication_requires_exact_remote_base_head() -> None:
+    """No-commit evidence names only the remote base whose SHA was verified."""
+
+    head_sha = "a" * 40
+    run_command = AsyncMock(
+        side_effect=[
+            SimpleNamespace(stdout=f"{head_sha}\n", returncode=0),
+            SimpleNamespace(
+                stdout=f"{head_sha}\trefs/heads/main\n", returncode=0
+            ),
+        ]
+    )
+
+    evidence = await OmnigentOAuthHostRuntime._verified_no_commit_publication(
+        run_command=run_command,
+        base_branch="main",
+    )
+
+    assert evidence == {
+        "push_status": "no_commits",
+        "push_branch": "main",
+        "push_base_branch": "main",
+        "push_head_sha": head_sha,
+        "push_commit_count": 0,
+        "remote_verified": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_no_commit_publication_rejects_remote_head_mismatch() -> None:
+    run_command = AsyncMock(
+        side_effect=[
+            SimpleNamespace(stdout=f"{'a' * 40}\n", returncode=0),
+            SimpleNamespace(
+                stdout=f"{'b' * 40}\trefs/heads/main\n", returncode=0
+            ),
+        ]
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await OmnigentOAuthHostRuntime._verified_no_commit_publication(
+            run_command=run_command,
+            base_branch="main",
+        )
+
+    assert exc.value.code == "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+
+
+@pytest.mark.asyncio
 async def test_coordinator_continues_same_session_until_terminal_answer() -> None:
     """A tool-output-only turn is continued before any branch is published."""
 
@@ -3257,6 +3530,38 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert checkpoint["idempotencyKey"].endswith(
         ":repository-continuation:1"
     )
+
+
+@pytest.mark.asyncio
+async def test_coordinator_projects_verified_pull_request_url() -> None:
+    """Remote PR identity survives the runtime-to-finalizer handoff."""
+
+    pull_request_url = "https://github.com/MoonLadderStudios/MoonMind/pull/3652"
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            summary="done",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    _ordered, _authority, metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            publication={
+                "push_status": "pushed",
+                "push_branch": "moonmind-job-00000000",
+                "push_base_branch": "main",
+                "push_head_sha": "a" * 40,
+                "push_commit_count": 1,
+                "remote_verified": True,
+                "pushRef": "artifact://push-1",
+                "pull_request_url": pull_request_url,
+            },
+        )
+    )
+
+    assert result.failure_class is None
+    assert metadata["pull_request_url"] == pull_request_url
 
 
 @pytest.mark.asyncio
@@ -3940,6 +4245,9 @@ async def _run_coordinator_failure_case(
     runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
     runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=Path("/tmp/runtime-scripts")
+    )
+    runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
+        return_value=None
     )
     runtime._initialize_required_tools = AsyncMock()  # type: ignore[method-assign]
     runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
@@ -4689,6 +4997,60 @@ async def test_prepare_workspace_rejects_attachment_not_linked_to_workflow(
     runtime = _runtime_for(tmp_path)
     service = _FakeArtifactService(
         {"attachments/foreign": b"private"}, workflow_id="foreign-workflow"
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source=str(source),
+            starting_branch="main",
+            attachment_refs=("artifact://attachments/foreign",),
+            artifact_gateway=service,
+        )
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+    assert service.read_calls == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_accepts_attachment_linked_to_child_workflow(
+    tmp_path,
+) -> None:
+    """A parent may consume durable output from its trusted child workflow."""
+
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    ref = "artifact://attachments/verifier-result"
+    service = _FakeArtifactService(
+        {"attachments/verifier-result": b'{"verdict":"FULLY_IMPLEMENTED"}'},
+        workflow_id="workflow-1:agent:verify",
+    )
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch="main",
+        attachment_refs=(ref,),
+        artifact_gateway=service,
+    )
+
+    written = list((resolved / ".moonmind" / "attachments").iterdir())
+    assert len(written) == 1
+    assert written[0].read_bytes() == b'{"verdict":"FULLY_IMPLEMENTED"}'
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_rejects_lookalike_workflow_link(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_source_repo(source)
+    runtime = _runtime_for(tmp_path)
+    service = _FakeArtifactService(
+        {"attachments/foreign": b"private"}, workflow_id="workflow-10:agent:verify"
     )
 
     with pytest.raises(OmnigentOAuthHostError) as exc:

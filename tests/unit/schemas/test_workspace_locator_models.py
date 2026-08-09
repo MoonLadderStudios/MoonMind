@@ -229,6 +229,23 @@ def test_daemon_visible_workspace_remote_mode_remaps_path(tmp_path, monkeypatch)
     )
 
 
+def test_daemon_visible_workspace_explicit_root_overrides_stale_environment(
+    tmp_path, monkeypatch
+):
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    inspected_root = tmp_path / "relocated-docker-data" / "agent_workspaces" / "_data"
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "/var/lib/docker/volumes/stale/_data")
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+
+    assert daemon_visible_workspace_path(
+        workspace,
+        daemon_root=inspected_root,
+    ) == inspected_root / "temporal_sandbox" / "owned" / "repo"
+
+
 def test_daemon_visible_workspace_remote_mode_requires_daemon_root(tmp_path, monkeypatch):
     # A remote selection without a configured daemon root cannot produce a valid
     # bind path; it fails closed rather than leaking a worker-only path.

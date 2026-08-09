@@ -220,11 +220,13 @@ COPY NOTICE /app/NOTICE
 FROM runtime-dependencies AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+COPY api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
+        python /tmp/cache_temporal_test_server.py; \
     fi && \
-    rm -f /tmp/requirements-tests.txt
+    rm -f /tmp/requirements-tests.txt /tmp/cache_temporal_test_server.py
 ENV HOME=/home/app
 USER app
 

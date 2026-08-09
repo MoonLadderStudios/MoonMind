@@ -281,6 +281,11 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         ]
     }
     assert "http_access deny all" in squid_config
+    assert "^/mcp/container/tools/call$" in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_container_tool POST"
+    ) in squid_config
     assert "169.254.0.0/16" in squid_config
     assert "http_access deny forbidden_destination" in squid_config
     assert "dns_nameservers 127.0.0.11" in squid_config
@@ -518,7 +523,10 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
         omnigent_service["depends_on"]["omnigent-db-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert _network_names(omnigent_service) == {"local-network"}
+    assert _network_names(omnigent_service) == {
+        "local-network",
+        "omnigent-egress-network",
+    }
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
     assert _has_volume_mount(omnigent_service, "omnigent-data", "/data")
     assert "omnigent-data" in compose_data.get("volumes", {})

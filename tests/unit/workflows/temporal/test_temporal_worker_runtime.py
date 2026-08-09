@@ -3505,6 +3505,39 @@ def test_runtime_planner_multi_step_step_fallback_instructions():
     assert plan["nodes"][0]["inputs"]["instructions"] == "Explicit step A"
     assert plan["nodes"][1]["inputs"]["instructions"] == "Task-level fallback"
 
+
+def test_runtime_planner_read_repository_step_removes_publish_authority():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement and verify",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "implement",
+                        "instructions": "Implement the change.",
+                        "repositoryOperation": "write",
+                    },
+                    {
+                        "id": "verify",
+                        "instructions": "Verify without modifying the repository.",
+                        "repositoryOperation": "read",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["inputs"]["publishMode"] == "pr"
+    assert plan["nodes"][1]["inputs"]["repositoryOperation"] == "read"
+    assert plan["nodes"][1]["inputs"]["publishMode"] == "none"
+
 def test_runtime_planner_multi_step_auto_generated_ids():
     """When steps lack explicit IDs, sequential IDs are generated."""
     planner = _build_runtime_planner()

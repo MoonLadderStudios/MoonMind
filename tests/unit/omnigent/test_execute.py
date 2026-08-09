@@ -123,6 +123,48 @@ def test_marked_tool_progress_requires_terminal_assistant_evidence() -> None:
     )
 
 
+def test_terminal_assistant_closes_stale_call_before_turn_diff() -> None:
+    """Regression for the stalled implementation turn in workflow db2c38f9."""
+
+    marker = """MoonMind-Omnigent-Run:
+  correlationId: workflow-1
+  idempotencyKey: implementation-1"""
+    snapshot = {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": marker}],
+                },
+            },
+            {
+                "type": "function_call",
+                "data": {"name": "shell", "call_id": "npm-without-output"},
+            },
+            {
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Completed."}],
+                },
+            },
+            {
+                "type": "function_call",
+                "data": {"name": "turn_diff", "call_id": "turn-diff-1"},
+            },
+            {
+                "type": "function_call_output",
+                "data": {"call_id": "turn-diff-1", "output": "diff"},
+            },
+        ],
+    }
+
+    assert _snapshot_confirms_current_turn_terminal(snapshot, marker=marker)
+
+
 @pytest.mark.asyncio
 async def test_stream_queue_marks_pre_post_terminal_as_stale() -> None:
     release_current_event = asyncio.Event()
@@ -527,6 +569,83 @@ async def test_snapshot_polling_waits_for_quiet_after_stale_idle_tool_output() -
     assert status == "completed"
     assert snapshot["items"][-1]["id"] == "output-2"
     assert client.calls >= 6
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_does_not_count_slow_stale_read_as_quiet() -> None:
+    """Provider read latency cannot hide tools produced during that read."""
+
+    marker = "MoonMind-Omnigent-Run: slow-snapshot-race"
+    marked_user = {
+        "id": "item-user",
+        "type": "message",
+        "status": "completed",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": marker}],
+        },
+    }
+    assistant_snapshot = {
+        "status": "idle",
+        "items": [
+            marked_user,
+            {
+                "id": "assistant-preamble",
+                "type": "message",
+                "status": "completed",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Inspecting"}],
+                },
+            },
+        ],
+    }
+    tool_snapshot = {
+        "status": "idle",
+        "items": [
+            *assistant_snapshot["items"],
+            {
+                "id": "call-late",
+                "type": "function_call",
+                "status": "completed",
+                "data": {"call_id": "call-late"},
+            },
+            {
+                "id": "output-late",
+                "type": "function_call_output",
+                "status": "completed",
+                "data": {"call_id": "call-late"},
+            },
+        ],
+    }
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls == 2:
+                # This stale response arrives after the entire quiet period.
+                await asyncio.sleep(0.03)
+                return assistant_snapshot
+            return assistant_snapshot if self.calls == 1 else tool_snapshot
+
+    client = Client()
+    status, snapshot = await _await_marked_turn_terminal(
+        client=client,
+        session_id="session-1",
+        marker=marker,
+        event_count=4,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.02,
+        tool_only_quiet_period_seconds=0.02,
+    )
+
+    assert status == "completed"
+    assert snapshot["items"][-1]["id"] == "output-late"
+    assert client.calls >= 4
 
 
 @pytest.mark.asyncio
