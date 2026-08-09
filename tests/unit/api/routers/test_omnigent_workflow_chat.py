@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers.omnigent_bridge import (
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
@@ -812,7 +813,118 @@ def test_liveness_probe_is_local() -> None:
     assert proxy.resources == []  # never touched upstream
 
 
-# --- SSE replay / reconnect / revocation ------------------------------------
+# --- SSE/WebSocket replay, reconnect, and revocation -------------------------
+
+
+def _websocket_headers(*, origin: str = "http://testserver") -> dict[str, str]:
+    return {"Origin": origin}
+
+
+def test_websocket_stream_delivers_virtualized_events_and_terminal_close() -> None:
+    event = _event(
+        1,
+        metadata={
+            "providerSession": _PROVIDER_SESSION_ID,
+            "nested": {"session_id": _PROVIDER_SESSION_ID},
+        },
+    )
+    store = _FakeStore(row=_row(status="completed"), events=[event])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        delivered = websocket.receive_json()
+        terminal = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert delivered["type"] == "bridge_event"
+    assert delivered["sequence"] == 1
+    assert delivered["data"]["bridgeSessionId"] == _CHAT_BINDING_ID
+    assert delivered["data"]["sessionId"] == _CHAT_BINDING_ID
+    assert delivered["data"]["session_id"] == _CHAT_BINDING_ID
+    assert _PROVIDER_SESSION_ID not in str(delivered)
+    assert terminal["type"] == "terminal"
+    assert terminal["data"]["status"] == "completed"
+    assert closed.value.code == 1000
+    assert store.event_query_keys == [_BRIDGE_SESSION_ID]
+
+
+def test_websocket_reconnect_resumes_after_cursor() -> None:
+    store = _FakeStore(row=_row(status="completed"), events=[_event(1), _event(2)])
+    client, _proxy, _store = _build(store=store)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream?cursor=1"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        delivered = websocket.receive_json()
+        terminal = websocket.receive_json()
+
+    assert delivered["sequence"] == 2
+    assert terminal["type"] == "terminal"
+
+
+@pytest.mark.parametrize("origin", ["", "https://foreign.example"])
+def test_websocket_rejects_missing_or_foreign_origin(origin: str) -> None:
+    client, _proxy, _store = _build()
+    headers = {} if not origin else _websocket_headers(origin=origin)
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect(
+            _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"), headers=headers
+        ):
+            pass
+
+    assert closed.value.code == 4403
+    assert closed.value.reason == "omnigent_chat_origin_denied"
+
+
+@pytest.mark.parametrize(
+    ("owner_id", "suffix"),
+    [
+        (uuid4(), f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        (_USER_ID, "v1/sessions/other-binding/stream"),
+        (
+            _USER_ID,
+            f"v1/sessions/{_CHAT_BINDING_ID}/stream?endpoint=https://upstream.invalid",
+        ),
+    ],
+)
+def test_websocket_rejects_unauthorized_or_substituted_identity(
+    owner_id: Any, suffix: str
+) -> None:
+    client, _proxy, _store = _build(owner_id=owner_id)
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect(
+            _path(suffix), headers=_websocket_headers()
+        ):
+            pass
+
+    assert closed.value.code == 4404
+
+
+def test_websocket_closes_when_authority_is_revoked_midstream(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
+        1,
+    )
+    service = _FakeService(_USER_ID, deny_after=1)
+    client, _proxy, _store = _build(service=service)
+
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
+        headers=_websocket_headers(),
+    ) as websocket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert closed.value.code == 4403
+    assert closed.value.reason == "omnigent_chat_binding_unknown"
+    assert service.calls == 2
 
 
 def test_stream_replays_from_cursor_and_terminates() -> None:
