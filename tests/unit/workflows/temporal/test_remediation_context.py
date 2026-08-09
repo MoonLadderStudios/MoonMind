@@ -2986,6 +2986,14 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert pending.reason == "approval_gated_requires_approval"
         assert pending.executable is False
 
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        assert link.approval_state["status"] == "pending"
+        assert link.approval_state["requestingActor"] == "user:operator"
+
         forged = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind="workload.restart_helper_container",
