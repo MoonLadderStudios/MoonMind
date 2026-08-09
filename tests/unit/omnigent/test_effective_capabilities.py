@@ -71,12 +71,14 @@ def test_missing_and_stale_immutable_authority_fail_closed():
     assert set(stale.disabled_reasons.values()) == {"provider_generation_stale"}
 
 
-def test_terminal_session_preserves_reads_but_denies_mutations():
+def test_terminal_session_preserves_reads_and_post_terminal_lifecycle():
     result = _resolve(session_status="completed")
     assert result.capabilities["viewTranscript"] is True
     assert result.capabilities["readResources"] is True
     assert result.capabilities["sendMessage"] is False
     assert result.decisions["sendMessage"].reason == "session_terminal"
+    assert result.capabilities["harvestEvidence"] is True
+    assert result.capabilities["cleanupSession"] is True
 
 
 def test_missing_source_entry_cannot_be_inferred_or_granted():

@@ -630,7 +630,7 @@ def test_message_forwarded_to_bound_provider_session() -> None:
     assert _PROVIDER_SESSION_ID not in response.text
 
 
-def test_stop_control_denied_without_distinct_authority() -> None:
+def test_stop_control_uses_distinct_authority() -> None:
     # The browser facade carries message/interrupt authority only. Destructive
     # session controls (stop/clear/cleanup/terminal_cleanup) need their own
     # authority the facade does not grant, so a caller with sendMessage cannot
@@ -643,19 +643,27 @@ def test_stop_control_denied_without_distinct_authority() -> None:
         json={"type": "stop"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
-    # The destructive control never reached the revocation/forward path.
-    registry.revoke_scope.assert_not_called()
-    assert proxy.posted == []
+    assert response.status_code == 200
+    registry.revoke_scope.assert_called_once()
+    assert proxy.posted == [
+        {"session_id": _PROVIDER_SESSION_ID, "type": "stop", "actor": None}
+    ]
 
 
 @pytest.mark.parametrize(
     "event_type",
     ["stop", "stop_session", "clear_session", "cleanup_session", "terminal_cleanup"],
 )
-def test_destructive_controls_denied(event_type: str) -> None:
-    client, proxy, _store = _build()
+def test_destructive_controls_denied_without_distinct_grant(
+    event_type: str,
+) -> None:
+    grants = {name: True for name in CAPABILITY_NAMES}
+    grants[required_capability_for_event(event_type)] = False
+    row = _row(metadata_={
+        **_row().metadata_,
+        "callerAuthorities": {str(_USER_ID): grants},
+    })
+    client, proxy, _store = _build(store=_FakeStore(row=row))
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
@@ -994,9 +1002,11 @@ def test_required_capability_for_event_allowlist() -> None:
     assert required_capability_for_event("message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("user.message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("interrupt") == CAP_INTERRUPT_TURN
-    # Destructive/unknown controls map to a capability the facade never grants.
-    for control in ("stop_session", "cleanup_session", "terminal_cleanup", "weird"):
-        assert required_capability_for_event(control) == CAP_CONTROL_UNSUPPORTED
+    assert required_capability_for_event("stop_session") == "stopSession"
+    assert required_capability_for_event("clear_session") == "replaceSession"
+    assert required_capability_for_event("harvest_session") == "harvestEvidence"
+    assert required_capability_for_event("cleanup_session") == "cleanupSession"
+    assert required_capability_for_event("weird") == CAP_CONTROL_UNSUPPORTED
 
 
 def test_interrupt_is_forwarded() -> None:
@@ -1330,6 +1340,10 @@ def test_message_receipt_retains_caller_compare_and_set_values() -> None:
             "type": "message",
             "expectedSessionEpoch": 2,
             "expectedTerminalState": "active",
+            "expectedAgentProfileDigest": "sha256:agent",
+            "expectedProviderProfileGeneration": 4,
+            "expectedLaunchSnapshotRef": "artifact://launch",
+            "expectedPolicyDigest": "sha256:policy",
             "data": {"content": [{"type": "text", "text": "hi"}]},
         },
     )
@@ -1343,6 +1357,17 @@ def test_message_receipt_retains_caller_compare_and_set_values() -> None:
     assert receipts
     assert all(item["expectedSessionEpoch"] == 2 for item in receipts)
     assert all(item["expectedTerminalState"] == "active" for item in receipts)
+    assert all(
+        item["expectedAgentProfileDigest"] == "sha256:agent" for item in receipts
+    )
+    assert all(
+        item["expectedProviderProfileGeneration"] == 4 for item in receipts
+    )
+    assert all(
+        item["expectedLaunchSnapshotRef"] == "artifact://launch"
+        for item in receipts
+    )
+    assert all(item["expectedPolicyDigest"] == "sha256:policy" for item in receipts)
 
 
 # --- Mutation-handoff revalidation (compare-and-set) -------------------------
@@ -1373,6 +1398,32 @@ def test_message_rejects_caller_supplied_stale_session_epoch() -> None:
         json={
             "type": "message",
             "expectedSessionEpoch": 1,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expectedAgentProfileDigest", "sha256:stale"),
+        ("expectedProviderProfileGeneration", 3),
+        ("expectedLaunchSnapshotRef", "artifact://stale-launch"),
+        ("expectedPolicyDigest", "sha256:stale-policy"),
+    ],
+)
+def test_message_rejects_stale_immutable_authority(field: str, value: Any) -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            field: value,
             "data": {"content": [{"type": "text", "text": "hi"}]},
         },
     )

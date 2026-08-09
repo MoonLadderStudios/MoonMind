@@ -1673,7 +1673,12 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    store = _FakeStore()
+    store = _FakeStore(
+        session_overrides={
+            "host_lease_ref": "lease-1",
+            "terminal_refs": {"cleanupState": "runner_exited"},
+        }
+    )
     registry = SimpleNamespace(
         revoke_scope=Mock(return_value=["cap-1"]),
         has_live_session_authority=Mock(return_value=True),
@@ -1687,6 +1692,39 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     assert response.status_code == 200
     assert facade.control_payloads[0]["idempotencyKey"] == "cleanup-1"
     registry.revoke_scope.assert_called_once()
+
+
+def test_cleanup_session_rejects_missing_terminal_lease_evidence() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config({
+        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        "hostConnection": {"embedded": {
+            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+        }},
+    })
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = _FakeStore
+    app.dependency_overrides[get_capability_registry] = lambda: SimpleNamespace(
+        revoke_scope=Mock(return_value=[]),
+        has_live_session_authority=Mock(return_value=True),
+    )
+
+    response = TestClient(app).post(
+        _EVENTS_PATH,
+        json={"type": "cleanup_session", "idempotencyKey": "cleanup-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_cleanup_not_ready"
+    assert facade.control_payloads == []
 
 
 def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:

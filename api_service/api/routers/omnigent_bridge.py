@@ -1970,6 +1970,22 @@ async def _apply_owned_session_control(
                 code="omnigent_bridge_capability_unavailable",
             )
         assert embedded_facade is not None
+        cleanup_row = await store.get_session_by_provider_session_id(session_id)
+        cleanup_refs = dict(getattr(cleanup_row, "terminal_refs", None) or {})
+        cleanup_lease = str(
+            getattr(cleanup_row, "host_lease_ref", None) or ""
+        ).strip()
+        if (
+            cleanup_row is None
+            or not cleanup_lease
+            or cleanup_refs.get("cleanupState") not in {"runner_exited", "failed"}
+        ):
+            raise OmnigentBridgeError(
+                "Cleanup requires durable terminal evidence and lease authority.",
+                failure_class="user_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code="omnigent_cleanup_not_ready",
+            )
         await _revoke_session_retrieval_authority(
             session_id=session_id,
             registry=registry,
@@ -3142,6 +3158,11 @@ async def _revalidate_binding_before_mutation(
     expected_active_turn: Any = None,
     expected_elicitation: Any = None,
     expected_terminal_state: Any = None,
+    expected_agent_profile_digest: Any = None,
+    expected_provider_generation: Any = None,
+    expected_launch_snapshot_ref: Any = None,
+    expected_policy_digest: Any = None,
+    allow_terminal_mutation: bool = False,
 ) -> tuple[Any, str, dict[str, bool]]:
     """Re-read and compare-and-set the binding state at the mutation handoff.
 
@@ -3168,7 +3189,7 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    if is_read_only(fresh_status):
+    if is_read_only(fresh_status) and not allow_terminal_mutation:
         raise WorkflowChatFacadeError(
             "This Workflow Chat session is terminal and read-only.",
             failure_class="user_error",
@@ -3200,6 +3221,10 @@ async def _revalidate_binding_before_mutation(
         expected_session_epoch=expected_session_epoch,
         expected_active_turn=expected_active_turn,
         expected_elicitation=expected_elicitation,
+        expected_agent_profile_digest=expected_agent_profile_digest,
+        expected_provider_generation=expected_provider_generation,
+        expected_launch_snapshot_ref=expected_launch_snapshot_ref,
+        expected_policy_digest=expected_policy_digest,
     )
     has_request_precondition = any(
         value is not None
@@ -3207,10 +3232,18 @@ async def _revalidate_binding_before_mutation(
             expected_session_epoch,
             expected_active_turn,
             expected_elicitation,
+            expected_agent_profile_digest,
+            expected_provider_generation,
+            expected_launch_snapshot_ref,
+            expected_policy_digest,
         )
     )
     if has_request_precondition:
-        stale_reasons = {"session_epoch_stale", "active_turn_stale", "elicitation_stale"}
+        stale_reasons = {
+            "session_epoch_stale", "active_turn_stale", "elicitation_stale",
+            "agent_profile_stale", "provider_generation_stale",
+            "launch_snapshot_stale", "policy_snapshot_stale",
+        }
         if any(
             item.reason in stale_reasons
             for item in fresh_capabilities.decisions.values()
@@ -3233,6 +3266,12 @@ def _mutation_preconditions(body: Mapping[str, Any] | None) -> dict[str, Any]:
         "expected_active_turn": payload.get("expectedActiveTurn"),
         "expected_elicitation": payload.get("expectedElicitation"),
         "expected_terminal_state": payload.get("expectedTerminalState"),
+        "expected_agent_profile_digest": payload.get("expectedAgentProfileDigest"),
+        "expected_provider_generation": payload.get(
+            "expectedProviderProfileGeneration"
+        ),
+        "expected_launch_snapshot_ref": payload.get("expectedLaunchSnapshotRef"),
+        "expected_policy_digest": payload.get("expectedPolicyDigest"),
     }
 
 
@@ -3376,6 +3415,10 @@ async def _record_facade_mutation_audit(
         ("expectedActiveTurn", "expected_active_turn"),
         ("expectedElicitation", "expected_elicitation"),
         ("expectedTerminalState", "expected_terminal_state"),
+        ("expectedAgentProfileDigest", "expected_agent_profile_digest"),
+        ("expectedProviderProfileGeneration", "expected_provider_generation"),
+        ("expectedLaunchSnapshotRef", "expected_launch_snapshot_ref"),
+        ("expectedPolicyDigest", "expected_policy_digest"),
     ):
         if supplied.get(argument_key) is not None:
             metadata[receipt_key] = supplied[argument_key]
@@ -3834,14 +3877,15 @@ async def _dispatch_workflow_chat_facade(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 code=CODE_MALFORMED_PAYLOAD,
             ) from exc
-        if is_read_only(session_status):
+        required = required_capability_for_event(event.type)
+        allow_terminal_mutation = required in {"harvestEvidence", "cleanupSession"}
+        if is_read_only(session_status) and not allow_terminal_mutation:
             raise WorkflowChatFacadeError(
                 "This Workflow Chat session is terminal and read-only.",
                 failure_class="user_error",
                 status_code=status.HTTP_409_CONFLICT,
                 code=CODE_SESSION_READ_ONLY,
             )
-        required = required_capability_for_event(event.type)
         if not capabilities.get(required, False):
             _audit_facade(
                 outcome="denied",
@@ -3886,6 +3930,7 @@ async def _dispatch_workflow_chat_facade(
                 expected_provider_session_id=provider_session_id,
                 expected_authority_digest=capability_set.authority_digest,
                 user=user,
+                allow_terminal_mutation=allow_terminal_mutation,
                 **request_preconditions,
             )
         )

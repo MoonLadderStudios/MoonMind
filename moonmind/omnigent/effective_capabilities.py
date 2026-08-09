@@ -44,6 +44,10 @@ CAPABILITY_NAMES: tuple[str, ...] = (
 MUTATION_CAPABILITIES = frozenset(CAPABILITY_NAMES) - frozenset(
     {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
 )
+# Evidence harvest and cleanup are post-terminal lifecycle operations. They are
+# still gated by every authority source and operation-specific durable state;
+# terminal status alone must not make them unreachable.
+POST_TERMINAL_MUTATIONS = frozenset({"harvestEvidence", "cleanupSession"})
 TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "canceled", "cancelled", "timed_out", "stopped"}
 )
@@ -145,7 +149,12 @@ def resolve_effective_capabilities(
     for name in CAPABILITY_NAMES:
         upstream_supported = upstream_capabilities.get(name) is True
         reason = authority_reason
-        if reason is None and terminal and name in MUTATION_CAPABILITIES:
+        if (
+            reason is None
+            and terminal
+            and name in MUTATION_CAPABILITIES
+            and name not in POST_TERMINAL_MUTATIONS
+        ):
             reason = "session_terminal"
         if reason is None:
             for source, denied_reason in sources:
@@ -179,6 +188,10 @@ def resolve_bridge_row_capabilities(
     expected_session_epoch: Any = None,
     expected_active_turn: Any = None,
     expected_elicitation: Any = None,
+    expected_agent_profile_digest: Any = None,
+    expected_provider_generation: Any = None,
+    expected_launch_snapshot_ref: Any = None,
+    expected_policy_digest: Any = None,
 ) -> EffectiveCapabilitySet:
     """Resolve the canonical capability set from one durable bridge row.
 
@@ -212,6 +225,32 @@ def resolve_bridge_row_capabilities(
         "expectedSessionEpoch": expected_session_epoch,
     }
     stale_reason = None
+    immutable_preconditions = (
+        (
+            expected_agent_profile_digest,
+            launch.get("executionProfileDigest"),
+            "agent_profile_stale",
+        ),
+        (
+            expected_provider_generation,
+            getattr(row, "credential_generation", None),
+            "provider_generation_stale",
+        ),
+        (
+            expected_launch_snapshot_ref,
+            launch.get("snapshotRef"),
+            "launch_snapshot_stale",
+        ),
+        (
+            expected_policy_digest,
+            policy.get("policyDigest"),
+            "policy_snapshot_stale",
+        ),
+    )
+    for expected, actual, reason in immutable_preconditions:
+        if expected is not None and str(expected) != str(actual):
+            stale_reason = reason
+            break
     if expected_active_turn is not None and str(expected_active_turn) != str(
         state.get("activeTurnId")
     ):
