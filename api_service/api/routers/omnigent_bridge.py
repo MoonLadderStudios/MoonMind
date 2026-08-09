@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from hashlib import sha256
 import json
 import logging
 import os
@@ -25,8 +26,15 @@ from uuid import uuid4
 
 import aiohttp
 from fastapi import (
-    APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
-    WebSocketDisconnect, status,
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
 )
 from fastapi.responses import Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
@@ -116,6 +124,7 @@ from moonmind.omnigent.settings import (
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
+    resolved_host_runner_token,
     resolved_native_ui_serving_enabled,
     resolved_native_ui_version,
     resolved_proxy_forward_headers,
@@ -141,6 +150,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     CODE_ROUTE_NOT_ALLOWLISTED,
     CODE_SESSION_NOT_READY,
     CODE_SESSION_READ_ONLY,
+    CODE_SESSION_SUBSTITUTION,
     CODE_UNSUPPORTED_MEDIA_TYPE,
     WorkflowChatFacadeError,
     assert_no_identity_substitution,
@@ -416,10 +426,14 @@ def _compatibility_diagnostics(
         if item.get("status") == "passed" and isinstance(item.get("images"), dict)
     ]
     authority_host = (policy_authority or {}).get("boundaries", {}).get("host", {})
-    images = image_sets[0] if image_sets else {
-        "server": authority_host.get("serverImageRef"),
-        "host": authority_host.get("hostImageRef"),
-    }
+    images = (
+        image_sets[0]
+        if image_sets
+        else {
+            "server": authority_host.get("serverImageRef"),
+            "host": authority_host.get("hostImageRef"),
+        }
+    )
     projection = {
         "bridgeMode": config.host_protocol_mode,
         "compatibilityProfile": readiness.get("protocolProfile"),
@@ -1676,7 +1690,8 @@ async def resolve_omnigent_bridge_session_projection(
                 )
             ),
             "rollbackRecommendation": (
-                str(launch.get("rollbackRecommendation") or "") or None
+                str(launch.get("rollbackRecommendation") or "")
+                or None
                 or (
                     _PROXY_ROLLBACK_RECOMMENDATION
                     if historical_embedded and not compatibility_evidence_ref
@@ -1772,8 +1787,9 @@ async def get_omnigent_bridge_session_resources(
             "pending" if row.status not in _BRIDGE_TERMINAL_STATUSES else "degraded"
         ),
         "unavailableReasons": (
-            {} if row.status not in _BRIDGE_TERMINAL_STATUSES else
-            {"resourceProjection": "Terminal resource evidence was not published."}
+            {}
+            if row.status not in _BRIDGE_TERMINAL_STATUSES
+            else {"resourceProjection": "Terminal resource evidence was not published."}
         ),
         "groups": [],
     }
@@ -1966,6 +1982,7 @@ async def post_omnigent_session_event(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": CODE_OPERATION_DENIED, "message": "Capability revoked."},
         )
+    request_time = datetime.now(tz=UTC).isoformat()
     try:
         claimed = await _claim_facade_message(
             store=store,
@@ -1974,6 +1991,9 @@ async def post_omnigent_session_event(
             actor=str(user.id),
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,
+            scan_evidence=scan_evidence,
+            request_time=request_time,
+            request_preconditions=preconditions,
         )
     except WorkflowChatFacadeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1999,16 +2019,6 @@ async def post_omnigent_session_event(
                 "message": "Prior delivery is not yet reconcilable.",
             },
         )
-    request_time = await _record_facade_mutation_audit(
-        store=store,
-        row=fresh_row,
-        control_type=payload.type,
-        outcome="pending",
-        actor=str(user.id),
-        idempotency_key=effective_key,
-        scan_evidence=scan_evidence,
-        request_preconditions=preconditions,
-    )
     dispatch_time = datetime.now(tz=UTC).isoformat()
     try:
         result = await _apply_owned_session_control(
@@ -2112,15 +2122,14 @@ async def _apply_owned_session_control(
         if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             raise OmnigentBridgeError(
                 "Typed owned-resource cleanup is unavailable in this mode.",
-                failure_class="user_error", status_code=501,
+                failure_class="user_error",
+                status_code=501,
                 code="omnigent_bridge_capability_unavailable",
             )
         assert embedded_facade is not None
         cleanup_row = await store.get_session_by_provider_session_id(session_id)
         cleanup_refs = dict(getattr(cleanup_row, "terminal_refs", None) or {})
-        cleanup_lease = str(
-            getattr(cleanup_row, "host_lease_ref", None) or ""
-        ).strip()
+        cleanup_lease = str(getattr(cleanup_row, "host_lease_ref", None) or "").strip()
         if (
             cleanup_row is None
             or not cleanup_lease
@@ -2193,9 +2202,7 @@ async def resolve_omnigent_elicitation(
     """Resolve a pending Omnigent elicitation through the bridge surface."""
 
     facade = (
-        embedded
-        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-        else proxy
+        embedded if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED else proxy
     )
     if facade is None:
         raise HTTPException(
@@ -2216,7 +2223,11 @@ async def resolve_omnigent_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
-            **({"actor": str(user.id)} if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED else {}),
+            **(
+                {"actor": str(user.id)}
+                if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+                else {}
+            ),
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -2320,8 +2331,7 @@ async def list_omnigent_hosts(
                     **diagnostics,
                     "lifecycleState": host.get("status"),
                     "supportedCapabilities": sorted(
-                        str(item)
-                        for item in host.get("capabilities", [])
+                        str(item) for item in host.get("capabilities", [])
                     ),
                 },
             }
@@ -2589,7 +2599,9 @@ async def get_omnigent_session_file(
 
 def _require_host_auth_operator(user: User) -> None:
     if not bool(getattr(user, "is_superuser", False)):
-        raise HTTPException(status_code=403, detail={"code": "host_auth_operator_required"})
+        raise HTTPException(
+            status_code=403, detail={"code": "host_auth_operator_required"}
+        )
 
 
 def _host_auth_http_error(exc: HostAuthProfileError) -> HTTPException:
@@ -2643,6 +2655,7 @@ async def rotate_embedded_host_auth_profile(
     if current is None:
         raise HTTPException(status_code=409, detail={"code": "host_auth_unconfigured"})
     from moonmind.omnigent.host_auth_profile import rotate_host_auth_profile
+
     try:
         candidate = rotate_host_auth_profile(
             current,
@@ -2671,7 +2684,9 @@ async def revoke_embedded_host_auth_profile(
     try:
         stored = await _host_auth_store().revoke()
     except LookupError as exc:
-        raise HTTPException(status_code=409, detail={"code": "host_auth_unconfigured"}) from exc
+        raise HTTPException(
+            status_code=409, detail={"code": "host_auth_unconfigured"}
+        ) from exc
     return stored.metadata()
 
 
@@ -2697,7 +2712,10 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
 
     try:
         config = get_bridge_config()
-        if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        if (
+            not config.enabled
+            or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
+        ):
             await websocket.close(code=4404)
             return
         try:
@@ -2719,9 +2737,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             return
     except HostAuthProfileError as exc:
         close_code = (
-            4403
-            if exc.code in {"host_auth_revoked", "host_auth_disabled"}
-            else 1013
+            4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
         )
         await websocket.close(code=close_code, reason=exc.code)
         return
@@ -2756,7 +2772,9 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
                 )
                 embedded_host_channels.revoke_runner_binding(frame.runner_id)
     except HostAuthProfileError as exc:
-        close_code = 4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
+        close_code = (
+            4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
+        )
         await websocket.close(code=close_code, reason=exc.code)
     except WebSocketDisconnect:
         pass
@@ -2773,9 +2791,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
 
 
 @router.websocket("/v1/runners/{runner_id}/tunnel")
-async def embedded_omnigent_runner_tunnel(
-    websocket: WebSocket, runner_id: str
-) -> None:
+async def embedded_omnigent_runner_tunnel(websocket: WebSocket, runner_id: str) -> None:
     """Accept the stock runner tunnel created by an embedded host launch."""
 
     config = get_bridge_config()
@@ -2811,7 +2827,8 @@ async def embedded_omnigent_runner_tunnel(
             ),
         )
         embedded_host_channels.authenticate_runner(
-            runner_id=runner_id, headers=websocket.headers,
+            runner_id=runner_id,
+            headers=websocket.headers,
             binding_token=binding_token,
         )
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
@@ -3228,7 +3245,7 @@ def _facade_idempotency_key(request: Request) -> str | None:
 def _enforce_native_outbound_scan(
     *,
     surface: NativeScanSurface,
-    body: dict[str, Any] | None,
+    body: Any,
     idempotency_key: str | None,
     chat_binding_id: str,
     user: Any,
@@ -3321,7 +3338,9 @@ async def _revalidate_binding_before_mutation(
     to forward with and re-check.
     """
 
-    fresh = await _resolve_chat_binding_row(chat_binding_id=chat_binding_id, store=store)
+    fresh = await _resolve_chat_binding_row(
+        chat_binding_id=chat_binding_id, store=store
+    )
     if fresh is None:
         raise _binding_unknown_error()
     fresh_status = str(getattr(fresh, "status", "") or "")
@@ -3386,9 +3405,13 @@ async def _revalidate_binding_before_mutation(
     )
     if has_request_precondition:
         stale_reasons = {
-            "session_epoch_stale", "active_turn_stale", "elicitation_stale",
-            "agent_profile_stale", "provider_generation_stale",
-            "launch_snapshot_stale", "policy_snapshot_stale",
+            "session_epoch_stale",
+            "active_turn_stale",
+            "elicitation_stale",
+            "agent_profile_stale",
+            "provider_generation_stale",
+            "launch_snapshot_stale",
+            "policy_snapshot_stale",
         }
         if any(
             item.reason in stale_reasons
@@ -3429,6 +3452,9 @@ async def _claim_facade_message(
     actor: str,
     idempotency_key: str,
     payload_digest: str,
+    scan_evidence: NativeScanEvidence | None = None,
+    request_time: str | None = None,
+    request_preconditions: Mapping[str, Any] | None = None,
 ) -> bool:
     """Atomically claim a native message submission for exactly-once forwarding.
 
@@ -3446,19 +3472,69 @@ async def _claim_facade_message(
     """
 
     event_identity = f"workflow-chat-message:{idempotency_key}"
+    now = request_time or datetime.now(tz=UTC).isoformat()
+    launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
+    policy = dict(launch.get("policyAuthority") or {})
+    authority = dict(
+        dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority") or {}
+    )
+    state = dict(authority.get("state") or {})
+    pending_receipt: dict[str, Any] = {
+        "receiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1",
+        "actor": actor,
+        "controlType": event_type,
+        "controlOutcome": "pending",
+        "moonmindRequestId": idempotency_key,
+        "workflowId": str(getattr(row, "moonmind_workflow_id", "") or ""),
+        "runId": str(getattr(row, "moonmind_run_id", "") or ""),
+        "stepExecutionId": str(getattr(row, "step_execution_id", "") or ""),
+        "agentRunId": str(getattr(row, "moonmind_agent_run_id", "") or ""),
+        "bridgeSessionId": str(getattr(row, "bridge_session_id", "") or ""),
+        "providerSessionId": str(getattr(row, "omnigent_session_id", "") or ""),
+        "providerProfileId": str(getattr(row, "provider_profile_id", "") or ""),
+        "providerProfileGeneration": getattr(row, "credential_generation", None),
+        "agentProfileRef": str(launch.get("executionProfileRef") or ""),
+        "agentProfileDigest": str(launch.get("executionProfileDigest") or ""),
+        "launchPolicyRef": str(launch.get("launchPolicyRef") or ""),
+        "effectiveLaunchSnapshotRef": str(launch.get("snapshotRef") or ""),
+        "policySnapshotRef": str(policy.get("snapshotRef") or ""),
+        "policyDigest": str(policy.get("policyDigest") or ""),
+        "expectedSessionEpoch": state.get("sessionEpoch"),
+        "expectedActiveTurn": state.get("activeTurnId"),
+        "expectedElicitation": state.get("elicitationId"),
+        "expectedTerminalState": str(getattr(row, "status", "") or ""),
+        "requestTime": now,
+        "dispatchTime": None,
+        "completionTime": None,
+        "durableAuditRef": (
+            f"omnigent-bridge-event://{getattr(row, 'bridge_session_id', '')}/"
+            f"workflow-chat-control/{idempotency_key}"
+        ),
+        "controlIdempotencyKey": idempotency_key,
+        "scannedPayloadDigest": payload_digest,
+        "sourceMode": "workflow_chat_facade",
+    }
+    for receipt_key, argument_key in (
+        ("expectedSessionEpoch", "expected_session_epoch"),
+        ("expectedActiveTurn", "expected_active_turn"),
+        ("expectedElicitation", "expected_elicitation"),
+        ("expectedTerminalState", "expected_terminal_state"),
+        ("expectedAgentProfileDigest", "expected_agent_profile_digest"),
+        ("expectedProviderProfileGeneration", "expected_provider_generation"),
+        ("expectedLaunchSnapshotRef", "expected_launch_snapshot_ref"),
+        ("expectedPolicyDigest", "expected_policy_digest"),
+    ):
+        supplied = dict(request_preconditions or {}).get(argument_key)
+        if supplied is not None:
+            pending_receipt[receipt_key] = supplied
+    if scan_evidence is not None:
+        pending_receipt.update(scan_evidence.audit_metadata())
     claimed = await store.claim_lifecycle_event(
         row.idempotency_key,
         event_type="workflow_chat_message",
         event_identity=event_identity,
         summary=f"native chat {event_type}",
-        metadata={
-            "actor": actor,
-            "controlType": event_type,
-            "controlOutcome": "posting",
-            "controlIdempotencyKey": idempotency_key,
-            "scannedPayloadDigest": payload_digest,
-            "sourceMode": "workflow_chat_facade",
-        },
+        metadata=pending_receipt,
     )
     if claimed:
         return True
@@ -3534,17 +3610,20 @@ async def _record_facade_mutation_audit(
         "policySnapshotRef": str(policy.get("snapshotRef") or ""),
         "policyDigest": str(policy.get("policyDigest") or ""),
         "expectedSessionEpoch": dict(
-            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
-            or {}
-        ).get("state", {}).get("sessionEpoch"),
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority") or {}
+        )
+        .get("state", {})
+        .get("sessionEpoch"),
         "expectedActiveTurn": dict(
-            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
-            or {}
-        ).get("state", {}).get("activeTurnId"),
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority") or {}
+        )
+        .get("state", {})
+        .get("activeTurnId"),
         "expectedElicitation": dict(
-            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority")
-            or {}
-        ).get("state", {}).get("elicitationId"),
+            dict(getattr(row, "metadata_", None) or {}).get("capabilityAuthority") or {}
+        )
+        .get("state", {})
+        .get("elicitationId"),
         "expectedTerminalState": str(getattr(row, "status", "") or ""),
         "requestTime": request_time or now,
         "dispatchTime": dispatch_time,
@@ -3576,12 +3655,15 @@ async def _record_facade_mutation_audit(
         )
         metadata["normalizedResult"] = normalized
         if isinstance(upstream_result, dict):
-            metadata["upstreamCorrelation"] = str(
-                upstream_result.get("request_id")
-                or upstream_result.get("requestId")
-                or upstream_result.get("id")
-                or ""
-            ) or None
+            metadata["upstreamCorrelation"] = (
+                str(
+                    upstream_result.get("request_id")
+                    or upstream_result.get("requestId")
+                    or upstream_result.get("id")
+                    or ""
+                )
+                or None
+            )
     if idempotency_key:
         metadata["controlIdempotencyKey"] = idempotency_key
     if scan_evidence is not None:
@@ -3625,9 +3707,7 @@ async def _reconcile_facade_mutation(
     they are never retried speculatively.
     """
 
-    posted_identity = (
-        f"workflow-chat-control:{control_type}:posted:{idempotency_key}"
-    )
+    posted_identity = f"workflow-chat-control:{control_type}:posted:{idempotency_key}"
     prior = await store.get_lifecycle_event_metadata(
         row.idempotency_key, event_identity=posted_identity
     )
@@ -3728,13 +3808,28 @@ async def _stream_workflow_chat_events(
         if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
             polls_since_reauth = 0
             try:
-                await _resolve_and_authorize_chat_binding(
+                refreshed = await _resolve_and_authorize_chat_binding(
                     chat_binding_id=chat_binding_id,
                     operation="stream_events",
                     user=user,
                     service=service,
                     store=store,
                 )
+                if (
+                    not _effective_capabilities(refreshed, user).capabilities.get(
+                        "viewTranscript", False
+                    )
+                    or str(getattr(refreshed, "bridge_session_id", "") or "")
+                    != bridge_session_id
+                    or str(getattr(refreshed, "omnigent_session_id", "") or "")
+                    != provider_session_id
+                ):
+                    raise WorkflowChatFacadeError(
+                        "Workflow Chat transcript authority is no longer valid.",
+                        failure_class="user_error",
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        code=CODE_OPERATION_DENIED,
+                    )
             except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
                 payload = {
                     "code": CODE_BINDING_UNKNOWN,
@@ -3927,6 +4022,83 @@ def _validate_native_resource_path(value: str | None) -> None:
         )
 
 
+def _validate_native_match_paths(match: Any) -> None:
+    """Validate every caller-controlled captured or wildcard path segment."""
+
+    for name, value in match.params.items():
+        if name in {"session_id", "runner_id"}:
+            continue
+        _validate_native_resource_path(value)
+
+
+def _identity_query_values(query_params: Any) -> list[dict[str, str]]:
+    """Preserve duplicate query values while scanning server-owned identities."""
+
+    return [{str(key): str(value)} for key, value in query_params.multi_items()]
+
+
+def _rewrite_native_facade_location(
+    location: str, *, chat_binding_id: str, provider_session_id: str
+) -> str:
+    """Keep an upstream native API redirect inside the binding-scoped facade."""
+
+    import posixpath
+    from urllib.parse import urlsplit
+
+    base = (f"{WORKFLOW_CHAT_BINDINGS_MOUNT_PATH}/{chat_binding_id}/omnigent").rstrip(
+        "/"
+    )
+    target = str(location or "").strip()
+    if not target:
+        return base + "/"
+    split = urlsplit(target)
+    suffix = (f"?{split.query}" if split.query else "") + (
+        f"#{split.fragment}" if split.fragment else ""
+    )
+    path_segments = [
+        chat_binding_id if segment == provider_session_id else segment
+        for segment in split.path.split("/")
+    ]
+    scoped_path = "/".join(path_segments)
+    if split.scheme or split.netloc or scoped_path.startswith("/"):
+        combined = base + "/" + scoped_path.lstrip("/")
+    else:
+        combined = base + "/" + scoped_path
+    normalized = posixpath.normpath(combined)
+    if normalized != base and not normalized.startswith(base + "/"):
+        return base + "/"
+    return normalized + suffix
+
+
+def _native_response_from_receipt(value: Any) -> Response | None:
+    """Rebuild a bounded native mutation response from its durable receipt."""
+
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        status_code = int(value.get("statusCode"))
+    except (TypeError, ValueError):
+        return None
+    media_type = str(value.get("mediaType") or "application/json")
+    headers = {
+        str(key): str(item)
+        for key, item in dict(value.get("headers") or {}).items()
+        if key in {"Content-Disposition", "Location"}
+    }
+    json_value = value.get("json")
+    content = (
+        json.dumps(json_value, separators=(",", ":")).encode()
+        if "json" in value
+        else b""
+    )
+    return Response(
+        content=content,
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
 async def _dispatch_native_ui_http(
     *,
     match: Any,
@@ -3935,6 +4107,7 @@ async def _dispatch_native_ui_http(
     chat_binding_id: str,
     user: Any,
     store: OmnigentBridgeSessionStore,
+    config: OmnigentBridgeConfig,
 ):
     """Relay one explicitly inventoried HTTP operation through its binding."""
 
@@ -3951,13 +4124,15 @@ async def _dispatch_native_ui_http(
                 parsed_body = json.loads(body)
             except (json.JSONDecodeError, ValueError) as exc:
                 raise WorkflowChatFacadeError(
-                    "The request body is not valid JSON.", failure_class="user_error",
-                    status_code=400, code=CODE_MALFORMED_PAYLOAD,
+                    "The request body is not valid JSON.",
+                    failure_class="user_error",
+                    status_code=400,
+                    code=CODE_MALFORMED_PAYLOAD,
                 ) from exc
     assert_no_identity_substitution(
         chat_binding_id=chat_binding_id,
         path_session_id=match.params.get("session_id"),
-        query=dict(request.query_params),
+        query=_identity_query_values(request.query_params),
         body=parsed_body,
         headers=request.headers,
     )
@@ -3969,7 +4144,15 @@ async def _dispatch_native_ui_http(
             status_code=403,
             code=CODE_OPERATION_DENIED,
         )
-    _validate_native_resource_path(match.params.get("res_path"))
+    _validate_native_match_paths(match)
+
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+        raise WorkflowChatFacadeError(
+            "The selected Omnigent host mode does not support this native route.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code="omnigent_bridge_mode_unsupported",
+        )
 
     capability_set = _effective_capabilities(row, user)
     capabilities = capability_set.capabilities
@@ -3992,9 +4175,7 @@ async def _dispatch_native_ui_http(
     # browser-provided host, runner, profile, or endpoint identity is never used.
     if route.name == "host_liveness":
         return {
-            "hosts": [
-                {"id": chat_binding_id, "state": _facade_reconnect_state(row)}
-            ]
+            "hosts": [{"id": chat_binding_id, "state": _facade_reconnect_state(row)}]
         }
     if route.name in {"runner_liveness", "session_reconnect"}:
         return {
@@ -4010,13 +4191,36 @@ async def _dispatch_native_ui_http(
             code=CODE_SESSION_NOT_READY,
         )
 
+    fresh_row = row
+    scan_evidence: NativeScanEvidence | None = None
+    effective_key: str | None = None
+    request_time: str | None = None
+    request_preconditions: dict[str, Any] = {}
     if route.mutation:
-        _, fresh_provider, fresh_capabilities = await _revalidate_binding_before_mutation(
-            store=store,
+        effective_key = _facade_idempotency_key(request) or f"mm-{uuid4().hex}"
+        scan_payload: Any = (
+            parsed_body if parsed_body is not None else body if body else {}
+        )
+        scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.NATIVE_MUTATION,
+            body=scan_payload,
+            idempotency_key=effective_key,
             chat_binding_id=chat_binding_id,
-            expected_provider_session_id=provider_session_id,
-            expected_authority_digest=capability_set.authority_digest,
             user=user,
+            operation=route.name,
+        )
+        request_preconditions = _mutation_preconditions(
+            parsed_body if isinstance(parsed_body, Mapping) else None
+        )
+        fresh_row, fresh_provider, fresh_capabilities = (
+            await _revalidate_binding_before_mutation(
+                store=store,
+                chat_binding_id=chat_binding_id,
+                expected_provider_session_id=provider_session_id,
+                expected_authority_digest=capability_set.authority_digest,
+                user=user,
+                **request_preconditions,
+            )
         )
         if route.capability and not fresh_capabilities.get(route.capability, False):
             raise WorkflowChatFacadeError(
@@ -4025,7 +4229,44 @@ async def _dispatch_native_ui_http(
                 status_code=403,
                 code=CODE_OPERATION_DENIED,
             )
+        if canonical_payload_digest(scan_payload) != scan_evidence.payload_digest:
+            raise WorkflowChatFacadeError(
+                "The security scan required for this request is unavailable.",
+                failure_class="system_error",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=CODE_ENFORCEMENT_UNAVAILABLE,
+            )
         provider_session_id = fresh_provider
+        request_time = datetime.now(tz=UTC).isoformat()
+        claimed = await _claim_facade_message(
+            store=store,
+            row=fresh_row,
+            event_type=route.name,
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            payload_digest=scan_evidence.payload_digest,
+            scan_evidence=scan_evidence,
+            request_time=request_time,
+            request_preconditions=request_preconditions,
+        )
+        if not claimed:
+            prior = await store.get_lifecycle_event_metadata(
+                fresh_row.idempotency_key,
+                event_identity=(
+                    f"workflow-chat-control:{route.name}:posted:{effective_key}"
+                ),
+            )
+            replay = _native_response_from_receipt(
+                prior.get("normalizedResult") if isinstance(prior, dict) else None
+            )
+            if replay is not None:
+                return replay
+            raise WorkflowChatFacadeError(
+                "The prior request is still pending or its delivery is unknown.",
+                failure_class="system_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_NOT_READY,
+            )
 
     from urllib.parse import urlencode, urlsplit
 
@@ -4046,6 +4287,8 @@ async def _dispatch_native_ui_http(
     if idempotency_key:
         headers["Idempotency-Key"] = str(idempotency_key)[:256]
 
+    dispatch_time = datetime.now(tz=UTC).isoformat() if route.mutation else None
+    receipt_result: dict[str, Any] | None = None
     try:
         async with aiohttp.ClientSession(headers=headers) as client:
             async with client.request(
@@ -4064,9 +4307,9 @@ async def _dispatch_native_ui_http(
                         code=CODE_PAYLOAD_TOO_LARGE,
                     )
                 response_type = str(
-                    upstream.headers.get("content-type")
-                    or "application/octet-stream"
+                    upstream.headers.get("content-type") or "application/octet-stream"
                 )
+                normalized_json: Any = None
                 if "json" in response_type.lower() and payload:
                     try:
                         value = json.loads(payload)
@@ -4074,21 +4317,52 @@ async def _dispatch_native_ui_http(
                         value = None
                     if value is not None:
                         value = _virtualize_facade_payload(
-                            value, provider_session_id=provider_session_id,
+                            value,
+                            provider_session_id=provider_session_id,
                             chat_binding_id=chat_binding_id,
                         )
+                        normalized_json = value
                         payload = json.dumps(value, separators=(",", ":")).encode()
                 response_headers: dict[str, str] = {}
                 disposition = str(upstream.headers.get("content-disposition") or "")
                 if disposition and "\r" not in disposition and "\n" not in disposition:
                     response_headers["Content-Disposition"] = disposition[:512]
+                location = str(upstream.headers.get("location") or "")
+                if location and "\r" not in location and "\n" not in location:
+                    response_headers["Location"] = _rewrite_native_facade_location(
+                        location,
+                        chat_binding_id=chat_binding_id,
+                        provider_session_id=provider_session_id,
+                    )
                 result = Response(
                     content=payload,
                     status_code=upstream.status,
                     media_type=response_type.split(";", 1)[0],
                     headers=response_headers,
                 )
+                receipt_result = {
+                    "statusCode": upstream.status,
+                    "mediaType": response_type.split(";", 1)[0],
+                    "headers": response_headers,
+                    "bodyDigest": sha256(payload).hexdigest(),
+                }
+                if normalized_json is not None:
+                    receipt_result["json"] = normalized_json
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        if route.mutation:
+            assert effective_key and scan_evidence and request_time
+            await _record_facade_mutation_audit(
+                store=store,
+                row=fresh_row,
+                control_type=route.name,
+                outcome="delivery_unknown",
+                actor=str(user.id),
+                idempotency_key=effective_key,
+                scan_evidence=scan_evidence,
+                request_time=request_time,
+                dispatch_time=dispatch_time,
+                request_preconditions=request_preconditions,
+            )
         raise WorkflowChatFacadeError(
             "The upstream Omnigent route is unavailable.",
             failure_class="integration_error",
@@ -4097,6 +4371,20 @@ async def _dispatch_native_ui_http(
         ) from exc
 
     if route.mutation:
+        assert effective_key and scan_evidence and request_time and receipt_result
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=route.name,
+            outcome="posted",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+            upstream_result=receipt_result,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
+            request_preconditions=request_preconditions,
+        )
         _audit_facade(
             outcome="mutation",
             operation=route.name,
@@ -4140,7 +4428,9 @@ async def _dispatch_workflow_chat_facade(
     # 1. Resolve + authorize the durable binding first, so an unauthorized
     #    caller cannot even probe which routes exist (fully non-enumerating).
     match = match_facade_operation(request.method, omnigent_path)
-    native_match = None if match else classify_native_ui_http(request.method, omnigent_path)
+    native_match = (
+        None if match else classify_native_ui_http(request.method, omnigent_path)
+    )
     operation_name = (
         match.operation.name
         if match
@@ -4177,6 +4467,7 @@ async def _dispatch_workflow_chat_facade(
             chat_binding_id=chat_binding_id,
             user=user,
             store=store,
+            config=config,
         )
     assert match is not None
     operation = match.operation
@@ -4204,7 +4495,7 @@ async def _dispatch_workflow_chat_facade(
         assert_no_identity_substitution(
             chat_binding_id=chat_binding_id,
             path_session_id=params.get("session_id"),
-            query=dict(request.query_params),
+            query=_identity_query_values(request.query_params),
             body=body,
             headers=request.headers,
         )
@@ -4426,6 +4717,7 @@ async def _dispatch_workflow_chat_facade(
                 code=CODE_ENFORCEMENT_UNAVAILABLE,
             )
 
+        request_time = datetime.now(tz=UTC).isoformat()
         claimed = await _claim_facade_message(
             store=store,
             row=fresh_row,
@@ -4433,6 +4725,9 @@ async def _dispatch_workflow_chat_facade(
             actor=str(user.id),
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,
+            scan_evidence=scan_evidence,
+            request_time=request_time,
+            request_preconditions=request_preconditions,
         )
         if not claimed:
             # Replay of a previously accepted key: reconcile without re-posting.
@@ -4470,19 +4765,6 @@ async def _dispatch_workflow_chat_facade(
                 status_code=status.HTTP_409_CONFLICT,
                 code=CODE_SESSION_NOT_READY,
             )
-
-
-        # The canonical pending receipt is durable before provider dispatch.
-        request_time = await _record_facade_mutation_audit(
-            store=store,
-            row=fresh_row,
-            control_type=event.type,
-            outcome="pending",
-            actor=str(user.id),
-            idempotency_key=effective_key,
-            scan_evidence=scan_evidence,
-            request_preconditions=request_preconditions,
-        )
         dispatch_time = datetime.now(tz=UTC).isoformat()
 
         try:
@@ -4614,6 +4896,7 @@ async def _dispatch_workflow_chat_facade(
             else {}
         )
         elicitation_key = _facade_idempotency_key(request) or f"mm-{uuid4().hex}"
+        request_time = datetime.now(tz=UTC).isoformat()
         claimed = await _claim_facade_message(
             store=store,
             row=fresh_row,
@@ -4621,6 +4904,9 @@ async def _dispatch_workflow_chat_facade(
             actor=str(user.id),
             idempotency_key=elicitation_key,
             payload_digest=elicitation_scan_evidence.payload_digest,
+            scan_evidence=elicitation_scan_evidence,
+            request_time=request_time,
+            request_preconditions=request_preconditions,
         )
         if not claimed:
             prior = await store.get_lifecycle_event_metadata(
@@ -4638,16 +4924,6 @@ async def _dispatch_workflow_chat_facade(
                 status_code=status.HTTP_409_CONFLICT,
                 code=CODE_SESSION_NOT_READY,
             )
-        request_time = await _record_facade_mutation_audit(
-            store=store,
-            row=fresh_row,
-            control_type="resolve_elicitation",
-            outcome="pending",
-            actor=str(user.id),
-            idempotency_key=elicitation_key,
-            scan_evidence=elicitation_scan_evidence,
-            request_preconditions=request_preconditions,
-        )
         dispatch_time = datetime.now(tz=UTC).isoformat()
         try:
             result = await facade.resolve_elicitation(
@@ -4819,6 +5095,8 @@ async def _relay_native_websocket(
     still_authorized: Any,
     browser_frame_filter: Any | None = None,
     upstream_frame_filter: Any | None = None,
+    browser_frame_guard: Any | None = None,
+    browser_frame_audit: Any | None = None,
 ) -> None:
     """Relay one reviewed native transport with bounded, renewable authority."""
 
@@ -4835,15 +5113,16 @@ async def _relay_native_websocket(
                 protocols=([subprotocol] if subprotocol else ()),
                 max_msg_size=_NATIVE_WS_MAX_MESSAGE_BYTES,
                 heartbeat=_NATIVE_WS_IDLE_SECONDS / 2,
-                receive_timeout=_NATIVE_WS_IDLE_SECONDS,
+                receive_timeout=None,
             ) as upstream:
                 await browser.accept(subprotocol=subprotocol)
 
                 async def browser_to_upstream() -> None:
                     while True:
-                        message = await asyncio.wait_for(
-                            browser.receive(), timeout=_NATIVE_WS_IDLE_SECONDS
-                        )
+                        # Server-to-browser sockets can be healthy indefinitely
+                        # without browser input. Lifetime and authority monitors,
+                        # plus the upstream heartbeat, own bounded termination.
+                        message = await browser.receive()
                         kind = message.get("type")
                         if kind == "websocket.disconnect":
                             await upstream.close()
@@ -4861,18 +5140,55 @@ async def _relay_native_websocket(
                         recent_messages.append(now)
                         if message.get("text") is not None:
                             payload = str(message["text"])
-                            if len(payload.encode("utf-8")) > _NATIVE_WS_MAX_MESSAGE_BYTES:
+                            if (
+                                len(payload.encode("utf-8"))
+                                > _NATIVE_WS_MAX_MESSAGE_BYTES
+                            ):
                                 raise ValueError("message too large")
                             if browser_frame_filter is not None:
                                 payload = browser_frame_filter(payload)
                                 if payload is None:
                                     continue
-                            await upstream.send_str(payload)
+                            receipt = None
+                            if browser_frame_guard is not None:
+                                payload, receipt = await browser_frame_guard(
+                                    payload, False
+                                )
+                            try:
+                                await upstream.send_str(payload)
+                            except Exception:
+                                if (
+                                    browser_frame_audit is not None
+                                    and receipt is not None
+                                ):
+                                    await browser_frame_audit(
+                                        receipt, "delivery_unknown"
+                                    )
+                                raise
+                            if browser_frame_audit is not None and receipt is not None:
+                                await browser_frame_audit(receipt, "posted")
                         elif message.get("bytes") is not None:
                             payload = bytes(message["bytes"])
                             if len(payload) > _NATIVE_WS_MAX_MESSAGE_BYTES:
                                 raise ValueError("message too large")
-                            await upstream.send_bytes(payload)
+                            receipt = None
+                            if browser_frame_guard is not None:
+                                payload, receipt = await browser_frame_guard(
+                                    payload, True
+                                )
+                            try:
+                                await upstream.send_bytes(payload)
+                            except Exception:
+                                if (
+                                    browser_frame_audit is not None
+                                    and receipt is not None
+                                ):
+                                    await browser_frame_audit(
+                                        receipt, "delivery_unknown"
+                                    )
+                                raise
+                            if browser_frame_audit is not None and receipt is not None:
+                                await browser_frame_audit(receipt, "posted")
 
                 async def upstream_to_browser() -> None:
                     async for message in upstream:
@@ -4926,7 +5242,9 @@ async def _relay_native_websocket(
                 try:
                     await browser.close(code=1000)
                 except RuntimeError:
-                    pass
+                    # Another relay task may already have closed the browser;
+                    # closing a WebSocket is intentionally idempotent here.
+                    return
     except (aiohttp.ClientError, asyncio.TimeoutError):
         await browser.close(
             code=WS_CLOSE_UPSTREAM_UNAVAILABLE,
@@ -4936,6 +5254,11 @@ async def _relay_native_websocket(
         await browser.close(
             code=WS_CLOSE_IDENTITY_SUBSTITUTION,
             reason=CODE_SESSION_SUBSTITUTION,
+        )
+    except WorkflowChatFacadeError as exc:
+        await browser.close(
+            code=WS_CLOSE_CAPABILITY_DENIED,
+            reason=exc.code,
         )
     except ValueError:
         await browser.close(
@@ -5065,7 +5388,7 @@ async def workflow_chat_binding_facade_ws(
         assert_no_identity_substitution(
             chat_binding_id=chat_binding_id,
             path_session_id=(match.params.get("session_id") if match else None),
-            query=dict(websocket.query_params),
+            query=_identity_query_values(websocket.query_params),
             headers=websocket.headers,
         )
     except WorkflowChatFacadeError as exc:
@@ -5076,9 +5399,7 @@ async def workflow_chat_binding_facade_ws(
             user=user,
             reason="identity_substitution",
         )
-        await websocket.close(
-            code=WS_CLOSE_IDENTITY_SUBSTITUTION, reason=exc.code
-        )
+        await websocket.close(code=WS_CLOSE_IDENTITY_SUBSTITUTION, reason=exc.code)
         return
 
     # 3. Unknown transport class fails closed with a compatibility diagnostic;
@@ -5096,6 +5417,20 @@ async def workflow_chat_binding_facade_ws(
         )
         return
     route = match.route
+    try:
+        _validate_native_match_paths(match)
+    except WorkflowChatFacadeError:
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
+        )
+        return
+
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+        await websocket.close(
+            code=WS_CLOSE_TRANSPORT_UNSUPPORTED,
+            reason="omnigent_bridge_mode_unsupported",
+        )
+        return
 
     if route.disposition != DISPOSITION_SERVED:
         await websocket.close(
@@ -5141,8 +5476,7 @@ async def workflow_chat_binding_facade_ws(
             else ("attachTerminal", "writeTerminal")
         )
     if any(
-        not capabilities.get(capability, False)
-        for capability in required_capabilities
+        not capabilities.get(capability, False) for capability in required_capabilities
     ):
         _audit_facade(
             outcome="denied",
@@ -5159,7 +5493,9 @@ async def workflow_chat_binding_facade_ws(
     # 6. Negotiate only an allowlisted subprotocol before upgrade.
     offered = [
         part.strip()
-        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(
+            ","
+        )
         if part.strip()
     ]
     try:
@@ -5199,6 +5535,7 @@ async def workflow_chat_binding_facade_ws(
     browser_frame_filter = None
     upstream_frame_filter = None
     if operation == "ws_session_updates":
+
         def browser_frame_filter(payload: str) -> str:
             return _filter_session_updates_watch_frame(
                 payload,
@@ -5212,6 +5549,7 @@ async def workflow_chat_binding_facade_ws(
                 chat_binding_id=chat_binding_id,
                 provider_session_id=provider_session_id,
             )
+
     if operation == "terminal_attach":
         from urllib.parse import urlencode
 
@@ -5251,6 +5589,95 @@ async def workflow_chat_binding_facade_ws(
             for capability in required_capabilities
         )
 
+    browser_frame_guard = None
+    browser_frame_audit = None
+    if route.mutation:
+
+        async def browser_frame_guard(
+            payload: str | bytes, is_binary: bool
+        ) -> tuple[str | bytes, dict[str, Any]]:
+            refreshed = await _resolve_and_authorize_chat_binding(
+                chat_binding_id=chat_binding_id,
+                operation=operation,
+                user=user,
+                service=service,
+                store=store,
+            )
+            refreshed_capabilities = _effective_capabilities(
+                refreshed, user
+            ).capabilities
+            if (
+                is_read_only(str(getattr(refreshed, "status", "") or ""))
+                or str(getattr(refreshed, "omnigent_session_id", "") or "").strip()
+                != provider_session_id
+                or any(
+                    not refreshed_capabilities.get(capability, False)
+                    for capability in required_capabilities
+                )
+            ):
+                raise WorkflowChatFacadeError(
+                    "The WebSocket frame is no longer authorized.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    code=CODE_OPERATION_DENIED,
+                )
+            scan_payload: Any = payload if is_binary else {"frame": payload}
+            frame_key = f"ws-{uuid4().hex}"
+            evidence = _enforce_native_outbound_scan(
+                surface=NativeScanSurface.WEBSOCKET_FRAME,
+                body=scan_payload,
+                idempotency_key=frame_key,
+                chat_binding_id=chat_binding_id,
+                user=user,
+                operation=f"{operation}:frame",
+            )
+            if canonical_payload_digest(scan_payload) != evidence.payload_digest:
+                raise WorkflowChatFacadeError(
+                    "The security scan required for this frame is unavailable.",
+                    failure_class="system_error",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    code=CODE_ENFORCEMENT_UNAVAILABLE,
+                )
+            request_time = datetime.now(tz=UTC).isoformat()
+            claimed = await _claim_facade_message(
+                store=store,
+                row=refreshed,
+                event_type=f"{operation}_frame",
+                actor=str(user.id),
+                idempotency_key=frame_key,
+                payload_digest=evidence.payload_digest,
+                scan_evidence=evidence,
+                request_time=request_time,
+            )
+            if not claimed:
+                raise WorkflowChatFacadeError(
+                    "The WebSocket frame could not be durably claimed.",
+                    failure_class="system_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code=CODE_SESSION_NOT_READY,
+                )
+            return payload, {
+                "row": refreshed,
+                "key": frame_key,
+                "evidence": evidence,
+                "requestTime": request_time,
+                "dispatchTime": datetime.now(tz=UTC).isoformat(),
+            }
+
+        async def browser_frame_audit(receipt: Mapping[str, Any], outcome: str) -> None:
+            await _record_facade_mutation_audit(
+                store=store,
+                row=receipt["row"],
+                control_type=f"{operation}_frame",
+                outcome=outcome,
+                actor=str(user.id),
+                idempotency_key=str(receipt["key"]),
+                scan_evidence=receipt["evidence"],
+                upstream_result=({"accepted": True} if outcome == "posted" else None),
+                request_time=str(receipt["requestTime"]),
+                dispatch_time=str(receipt["dispatchTime"]),
+            )
+
     _audit_facade(
         outcome="connected",
         operation=f"{operation}:{_facade_reconnect_state(row)}",
@@ -5265,6 +5692,8 @@ async def workflow_chat_binding_facade_ws(
         still_authorized=still_authorized,
         browser_frame_filter=browser_frame_filter,
         upstream_frame_filter=upstream_frame_filter,
+        browser_frame_guard=browser_frame_guard,
+        browser_frame_audit=browser_frame_audit,
     )
 
 
@@ -5295,7 +5724,7 @@ async def _stream_workflow_chat_events_websocket(
         assert_no_identity_substitution(
             chat_binding_id=chat_binding_id,
             path_session_id=match.params.get("session_id"),
-            query=dict(websocket.query_params),
+            query=_identity_query_values(websocket.query_params),
             headers=websocket.headers,
         )
     except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException) as exc:
@@ -5307,10 +5736,15 @@ async def _stream_workflow_chat_events_websocket(
 
     bridge_session_id = str(getattr(row, "bridge_session_id", "") or "")
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "")
+    if not _effective_capabilities(row, user).capabilities.get("viewTranscript", False):
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
+        )
+        return
     try:
-        cursor = _strict_query_cursor(
-            websocket.query_params.get("cursor"), "cursor"
-        ) or 0
+        cursor = (
+            _strict_query_cursor(websocket.query_params.get("cursor"), "cursor") or 0
+        )
     except WorkflowChatFacadeError as exc:
         await websocket.close(code=WS_CLOSE_TRANSPORT_UNSUPPORTED, reason=exc.code)
         return
@@ -5322,18 +5756,49 @@ async def _stream_workflow_chat_events_websocket(
             polls_since_reauth += 1
             if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
                 polls_since_reauth = 0
-                await _resolve_and_authorize_chat_binding(
+                refreshed = await _resolve_and_authorize_chat_binding(
                     chat_binding_id=chat_binding_id,
                     operation=match.operation.name,
                     user=user,
                     service=service,
                     store=store,
                 )
+                if (
+                    not _effective_capabilities(refreshed, user).capabilities.get(
+                        "viewTranscript", False
+                    )
+                    or str(getattr(refreshed, "bridge_session_id", "") or "")
+                    != bridge_session_id
+                    or str(getattr(refreshed, "omnigent_session_id", "") or "")
+                    != provider_session_id
+                ):
+                    raise WorkflowChatFacadeError(
+                        "Workflow Chat transcript authority is no longer valid.",
+                        failure_class="user_error",
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        code=CODE_OPERATION_DENIED,
+                    )
             page = await store.list_event_page(
                 bridge_session_id,
                 after=cursor,
                 limit=_BRIDGE_STREAM_PAGE_SIZE,
             )
+            if (
+                page.earliest_sequence is not None
+                and cursor + 1 < page.earliest_sequence
+            ):
+                gap = BridgeRetentionGap(
+                    requested_after=cursor,
+                    earliest_available=page.earliest_sequence,
+                )
+                await websocket.send_json(
+                    {
+                        "type": "retention_gap",
+                        "data": gap.model_dump(by_alias=True),
+                    }
+                )
+                await websocket.close(code=1000)
+                return
             for event in page.rows:
                 cursor = event.sequence
                 if not _event_is_chat_visible(event):
@@ -5355,7 +5820,16 @@ async def _stream_workflow_chat_events_websocket(
                 )
             session_row = await store.get_bridge_session(bridge_session_id)
             envelope = _terminal_envelope(session_row)
-            if envelope is not None and not page.has_more:
+            if (
+                envelope is not None
+                and cursor >= page.latest_sequence
+                and not page.has_more
+            ):
+                confirmation = await store.list_event_page(
+                    bridge_session_id, after=cursor, limit=1
+                )
+                if confirmation.rows or confirmation.latest_sequence > cursor:
+                    continue
                 await websocket.send_json(
                     {"type": "terminal", "data": envelope.model_dump(by_alias=True)}
                 )
@@ -5369,7 +5843,12 @@ async def _stream_workflow_chat_events_websocket(
                 continue
     except WebSocketDisconnect:
         return
-    except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+    except WorkflowChatFacadeError as exc:
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED,
+            reason=exc.code,
+        )
+    except (OmnigentBridgeError, HTTPException):
         await websocket.close(
             code=WS_CLOSE_CAPABILITY_DENIED,
             reason=CODE_BINDING_UNKNOWN,

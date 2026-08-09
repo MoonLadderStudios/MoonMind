@@ -87,13 +87,46 @@ EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
     "launch_reserved": frozenset({"launch_sent", "failed", "stale"}),
     "launch_sent": frozenset({"launch_acknowledged", "failed", "stale"}),
     "launch_acknowledged": frozenset({"runner_identity_bound", "failed", "stale"}),
-    "runner_identity_bound": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "failed", "stale"}),
-    "runner_tunnel_waiting": frozenset({"runner_tunnel_ready", "first_message_prepared", "draining", "failed", "stale"}),
-    "runner_tunnel_ready": frozenset({"runner_tunnel_waiting", "first_message_prepared", "draining", "failed", "stale"}),
-    "first_message_prepared": frozenset({"first_message_posting", "runner_tunnel_waiting", "draining", "failed", "stale"}),
-    "first_message_posting": frozenset({"first_message_posted", "runner_tunnel_waiting", "draining", "failed", "stale"}),
-    "first_message_posted": frozenset({"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
-    "running": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "draining", "stopped", "failed", "stale"}),
+    "runner_identity_bound": frozenset(
+        {"runner_tunnel_waiting", "runner_tunnel_ready", "failed", "stale"}
+    ),
+    "runner_tunnel_waiting": frozenset(
+        {"runner_tunnel_ready", "first_message_prepared", "draining", "failed", "stale"}
+    ),
+    "runner_tunnel_ready": frozenset(
+        {
+            "runner_tunnel_waiting",
+            "first_message_prepared",
+            "draining",
+            "failed",
+            "stale",
+        }
+    ),
+    "first_message_prepared": frozenset(
+        {
+            "first_message_posting",
+            "runner_tunnel_waiting",
+            "draining",
+            "failed",
+            "stale",
+        }
+    ),
+    "first_message_posting": frozenset(
+        {"first_message_posted", "runner_tunnel_waiting", "draining", "failed", "stale"}
+    ),
+    "first_message_posted": frozenset(
+        {"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}
+    ),
+    "running": frozenset(
+        {
+            "runner_tunnel_waiting",
+            "runner_tunnel_ready",
+            "draining",
+            "stopped",
+            "failed",
+            "stale",
+        }
+    ),
     "draining": frozenset({"stopped", "failed", "stale"}),
     "stale": frozenset({"draining", "stopped", "failed", "launch_reserved"}),
     "failed": frozenset({"launch_reserved"}),
@@ -212,6 +245,7 @@ def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
     text = str(value or "").strip()
     return text or None
 
+
 # Bridge lifecycle states owned by the bridge before the provider reports a
 # normalized status (§7.1). ``active`` is the coalesced non-terminal value.
 STATUS_DECLARED = "declared"
@@ -292,7 +326,9 @@ def _advance_embedded_lifecycle(
         **identity,
     }
     timeline = list(lifecycle.get("timeline") or [])
-    if not timeline or any(timeline[-1].get(k) != transition.get(k) for k in ("state", "code")):
+    if not timeline or any(
+        timeline[-1].get(k) != transition.get(k) for k in ("state", "code")
+    ):
         timeline.append(transition)
     lifecycle.update(
         {
@@ -557,9 +593,10 @@ class OmnigentBridgeSessionStore:
             )
             refs: set[str] = set()
             for host_lease_ref, terminal_refs in result.all():
-                if host_lease_ref and (terminal_refs or {}).get(
-                    "cleanupState"
-                ) in {"runner_exited", "failed"}:
+                if host_lease_ref and (terminal_refs or {}).get("cleanupState") in {
+                    "runner_exited",
+                    "failed",
+                }:
                     refs.add(str(host_lease_ref))
             return refs
 
@@ -632,7 +669,8 @@ class OmnigentBridgeSessionStore:
                 f"{'completed' if completed else 'failed'}"
             ),
             code=safe_code,
-            summary=safe_summary or (
+            summary=safe_summary
+            or (
                 "Embedded terminal cleanup completed"
                 if completed
                 else "Embedded terminal cleanup failed"
@@ -646,6 +684,7 @@ class OmnigentBridgeSessionStore:
             },
         )
         return detached
+
     async def embedded_reconciliation_host_lease_refs(
         self, *, abandoned_before: datetime
     ) -> dict[str, str]:
@@ -678,7 +717,12 @@ class OmnigentBridgeSessionStore:
                 )
             )
             required: dict[str, str] = {}
-            for lease_ref, metadata, bound_generation, current_generation in result.all():
+            for (
+                lease_ref,
+                metadata,
+                bound_generation,
+                current_generation,
+            ) in result.all():
                 lifecycle = dict((metadata or {}).get(EMBEDDED_LIFECYCLE_KEY) or {})
                 state = str(lifecycle.get("state") or "")
                 updated_raw = lifecycle.get("updatedAt")
@@ -691,11 +735,23 @@ class OmnigentBridgeSessionStore:
                     and bound_generation != current_generation
                 ):
                     required[str(lease_ref)] = "credential_generation_cleanup"
-                elif state == "launch_acknowledged" and updated_at and updated_at <= abandoned_before:
+                elif (
+                    state == "launch_acknowledged"
+                    and updated_at
+                    and updated_at <= abandoned_before
+                ):
                     required[str(lease_ref)] = "acknowledgement_without_binding_cleanup"
-                elif state in {"runner_identity_bound", "runner_tunnel_waiting"} and updated_at and updated_at <= abandoned_before:
+                elif (
+                    state in {"runner_identity_bound", "runner_tunnel_waiting"}
+                    and updated_at
+                    and updated_at <= abandoned_before
+                ):
                     required[str(lease_ref)] = "binding_without_tunnel_cleanup"
-                elif state == "launch_reserved" and updated_at and updated_at <= abandoned_before:
+                elif (
+                    state == "launch_reserved"
+                    and updated_at
+                    and updated_at <= abandoned_before
+                ):
                     required[str(lease_ref)] = "abandoned_launch_cleanup"
                 elif state in {"stopped", "failed", "stale"}:
                     required[str(lease_ref)] = "stale_binding_cleanup"
@@ -995,7 +1051,8 @@ class OmnigentBridgeSessionStore:
                     "embedded runner does not match the reserved launch generation"
                 )
             if launch.get("credentialGeneration") not in {
-                None, row.credential_generation
+                None,
+                row.credential_generation,
             }:
                 raise OmnigentIdempotencyError(
                     "embedded runner callback uses a stale credential generation"
@@ -1014,18 +1071,28 @@ class OmnigentBridgeSessionStore:
             metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
             _advance_embedded_lifecycle(
-                row, "runner_identity_bound", code="runner_identity_bound", runner_id=runner_id
+                row,
+                "runner_identity_bound",
+                code="runner_identity_bound",
+                runner_id=runner_id,
             )
             _advance_embedded_lifecycle(
-                row, "runner_tunnel_waiting", code="runner_tunnel_pending", runner_id=runner_id
+                row,
+                "runner_tunnel_waiting",
+                code="runner_tunnel_pending",
+                runner_id=runner_id,
             )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
 
     async def begin_embedded_runner_launch(
-        self, idempotency_key: str, *, host_id: str,
-        runner_id: str | None = None, generation: int | None = None,
+        self,
+        idempotency_key: str,
+        *,
+        host_id: str,
+        runner_id: str | None = None,
+        generation: int | None = None,
         credential_generation: int | None = None,
         launch_generation: int | None = None,
     ) -> OmnigentBridgeSession:
@@ -1883,7 +1950,9 @@ class OmnigentBridgeSessionStore:
         if not supported:
             return self._unavailable_binding(workflow, run, "unsupported_runtime")
 
-        active = [row for row in supported if not _is_terminal_bridge_status(row.status)]
+        active = [
+            row for row in supported if not _is_terminal_bridge_status(row.status)
+        ]
         active_capable = [row for row in active if _is_provider_bound(row)]
         if len(active_capable) > 1:
             raise BridgeChatBindingAmbiguousError(
@@ -1923,9 +1992,7 @@ class OmnigentBridgeSessionStore:
             latest_terminal
         ):
             return self._unavailable_binding(workflow, run, "session_cleaned_up")
-        return await self._live_binding(
-            latest_terminal, workflow, run, terminal=True
-        )
+        return await self._live_binding(latest_terminal, workflow, run, terminal=True)
 
     async def _live_binding(
         self,
@@ -1947,9 +2014,7 @@ class OmnigentBridgeSessionStore:
         read_only = terminal or capabilities.get("sendMessage") is not True
         return ChatBindingResolution(
             state=(
-                CHAT_BINDING_STATE_ENDED
-                if terminal
-                else CHAT_BINDING_STATE_AVAILABLE
+                CHAT_BINDING_STATE_ENDED if terminal else CHAT_BINDING_STATE_AVAILABLE
             ),
             read_only=read_only,
             chat_binding_id=chat_binding_id,
@@ -2050,8 +2115,14 @@ class OmnigentBridgeSessionStore:
                 for entry in (metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
                 if isinstance(entry, dict)
             ]
+            prior_created_events = [
+                entry
+                for entry in journal
+                if entry.get("type") == SESSION_CREATED_EVENT_TYPE
+            ]
             already_recorded = any(
-                entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
+                str(entry.get("omnigentSessionId") or "") == session_id
+                for entry in prior_created_events
             )
             changed = False
             # MoonLadderStudios/MoonMind#3633: allocate the opaque chat-binding
@@ -2063,13 +2134,19 @@ class OmnigentBridgeSessionStore:
             if session_id and not row.chat_binding_id:
                 row.chat_binding_id = _generate_chat_binding_id()
                 changed = True
+            previous_authority = dict(metadata.get("capabilityAuthority") or {})
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
+            if capabilities is not None or previous_authority:
                 from moonmind.omnigent.effective_capabilities import (
                     adapt_provider_capabilities,
                 )
 
-                canonical_upstream = adapt_provider_capabilities(capabilities)
+                canonical_upstream = (
+                    adapt_provider_capabilities(capabilities)
+                    if capabilities is not None
+                    else dict(previous_authority.get("upstream") or {})
+                )
                 launch = dict(row.effective_launch_snapshot_json or {})
                 # Each intersection layer comes from its own immutable launch
                 # evidence.  Never clone the provider-reported map into policy
@@ -2078,25 +2155,63 @@ class OmnigentBridgeSessionStore:
                     launch.get("agentProfileCapabilities") or {}
                 )
                 launch_capabilities = dict(launch.get("capabilities") or {})
+                previous_state = dict(previous_authority.get("state") or {})
+                previous_session_id = str(
+                    previous_authority.get("providerSessionId")
+                    or (
+                        prior_created_events[-1].get("omnigentSessionId")
+                        if prior_created_events
+                        else ""
+                    )
+                    or ""
+                )
+                try:
+                    previous_epoch = max(
+                        int(previous_state.get("sessionEpoch") or 0), 0
+                    )
+                except (TypeError, ValueError):
+                    previous_epoch = 0
+                replacing_session = bool(
+                    previous_session_id and previous_session_id != session_id
+                )
+                if replacing_session:
+                    state = {
+                        "sessionEpoch": previous_epoch + 1,
+                        "activeTurnId": None,
+                        "elicitationId": None,
+                        "capabilities": dict(
+                            launch.get("sessionStateCapabilities") or {}
+                        ),
+                    }
+                elif previous_state:
+                    # A retry/reuse of the same provider session must not erase
+                    # active-turn or elicitation state already synchronized by
+                    # append_events(). Refresh only the immutable state policy.
+                    state = previous_state
+                    state["capabilities"] = dict(
+                        launch.get("sessionStateCapabilities")
+                        or state.get("capabilities")
+                        or {}
+                    )
+                    state["sessionEpoch"] = previous_epoch or 1
+                else:
+                    state = {
+                        "sessionEpoch": 1,
+                        "activeTurnId": None,
+                        "elicitationId": None,
+                        "capabilities": dict(
+                            launch.get("sessionStateCapabilities") or {}
+                        ),
+                    }
                 metadata["capabilityAuthority"] = {
                     "schemaVersion": "moonmind.omnigent.capability-authority.v1",
                     "fresh": True,
                     "providerProfileGeneration": row.credential_generation,
+                    "providerSessionId": session_id,
                     "upstream": canonical_upstream,
                     "agentProfile": profile_capabilities,
                     "launchPolicy": launch_capabilities,
-                    "state": {
-                        "sessionEpoch": 1,
-                        "activeTurnId": None,
-                        "elicitationId": None,
-                        # At creation the live session is active.  This layer
-                        # expresses state availability only; upstream support
-                        # remains an independent intersection input above.
-                        "capabilities": dict(
-                            launch.get("sessionStateCapabilities")
-                            or {}
-                        ),
-                    },
+                    "state": state,
                 }
                 changed = True
             if not already_recorded:
@@ -2190,18 +2305,12 @@ class OmnigentBridgeSessionStore:
         """Persist the bounded pre-dispatch item frontier exactly once."""
 
         normalized = sorted(
-            {
-                str(item_id).strip()
-                for item_id in item_ids
-                if str(item_id).strip()
-            }
+            {str(item_id).strip() for item_id in item_ids if str(item_id).strip()}
         )
         if len(normalized) > 256:
             raise ValueError("pre-dispatch item frontier exceeds 256 items")
         if any(len(item_id) > 255 for item_id in normalized):
-            raise ValueError(
-                "pre-dispatch item frontier contains an oversized item id"
-            )
+            raise ValueError("pre-dispatch item frontier contains an oversized item id")
         if len(json.dumps(normalized).encode("utf-8")) > 32_768:
             raise ValueError("pre-dispatch item frontier exceeds the 32 KiB limit")
 
@@ -2237,13 +2346,32 @@ class OmnigentBridgeSessionStore:
         """Persist bounded initial-retrieval evidence before message commitment."""
 
         allowed_keys = {
-            "state", "contextPackRef", "contextPackDigest", "queryDigest",
-            "queryPreview", "transport", "resultCount", "sources", "collections",
-            "scope", "budgets", "usage", "overlay", "embeddingConfigRef",
-            "durationMs", "failureClass", "truncated", "mode", "reason",
-            "initiationMode", "durabilityAuthority", "required",
-            "preparedMessageDigest", "preparedMessageRef",
-            "firstMessageConsumedContextRef", "firstMessageDigest",
+            "state",
+            "contextPackRef",
+            "contextPackDigest",
+            "queryDigest",
+            "queryPreview",
+            "transport",
+            "resultCount",
+            "sources",
+            "collections",
+            "scope",
+            "budgets",
+            "usage",
+            "overlay",
+            "embeddingConfigRef",
+            "durationMs",
+            "failureClass",
+            "truncated",
+            "mode",
+            "reason",
+            "initiationMode",
+            "durabilityAuthority",
+            "required",
+            "preparedMessageDigest",
+            "preparedMessageRef",
+            "firstMessageConsumedContextRef",
+            "firstMessageDigest",
         }
         unknown = set(evidence) - allowed_keys
         if unknown:
@@ -2252,7 +2380,9 @@ class OmnigentBridgeSessionStore:
                 f"{sorted(unknown)}"
             )
         if len(json.dumps(evidence, default=str).encode("utf-8")) > 16_384:
-            raise ValueError("initial retrieval evidence exceeds the 16 KiB durable limit")
+            raise ValueError(
+                "initial retrieval evidence exceeds the 16 KiB durable limit"
+            )
 
         async with self._session_factory() as session:
             row = await self._require(session, idempotency_key)
@@ -2274,9 +2404,7 @@ class OmnigentBridgeSessionStore:
         retrieval_mode = str(evidence.get("mode") or "unknown")[:64]
         retrieval_reason = str(evidence.get("reason") or "")[:256]
         failure_class = str(evidence.get("failureClass") or "").strip() or None
-        context_pack_ref = (
-            str(evidence.get("contextPackRef") or "").strip() or None
-        )
+        context_pack_ref = str(evidence.get("contextPackRef") or "").strip() or None
         await self.record_lifecycle_event(
             idempotency_key,
             event_type="initial_retrieval",
@@ -2305,7 +2433,9 @@ class OmnigentBridgeSessionStore:
                 row.status = STATUS_ACTIVE
             if row.omnigent_endpoint_ref == "embedded":
                 _advance_embedded_lifecycle(
-                    row, "first_message_posting", code="first_message_side_effect_started"
+                    row,
+                    "first_message_posting",
+                    code="first_message_side_effect_started",
                 )
             await session.commit()
             await session.refresh(row)
@@ -2362,9 +2492,7 @@ class OmnigentBridgeSessionStore:
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if row.omnigent_endpoint_ref == "embedded":
                 lifecycle_state = (
-                    "stopped"
-                    if row.status in {"completed", "canceled"}
-                    else "failed"
+                    "stopped" if row.status in {"completed", "canceled"} else "failed"
                 )
                 _advance_embedded_lifecycle(
                     row, lifecycle_state, code=f"terminal_{row.status}"
@@ -2550,9 +2678,7 @@ class OmnigentBridgeSessionStore:
             # provider event journal.  Requests can then bind to the exact live
             # turn/elicitation instead of comparing against creation-time nulls.
             row_metadata = dict(row.metadata_ or {})
-            capability_authority = dict(
-                row_metadata.get("capabilityAuthority") or {}
-            )
+            capability_authority = dict(row_metadata.get("capabilityAuthority") or {})
             authority_state = dict(capability_authority.get("state") or {})
             for event in prepared_events:
                 event_type = str(event.get("type") or event.get("eventType") or "")
@@ -2562,21 +2688,25 @@ class OmnigentBridgeSessionStore:
                 elicitation_id = _string_or_none(
                     event.get("elicitationId") or event.get("requestId")
                 )
-                if event_type in {
-                    "response.created", "response.started", "turn.started"
-                } and turn_id:
+                if (
+                    event_type
+                    in {"response.created", "response.started", "turn.started"}
+                    and turn_id
+                ):
                     authority_state["activeTurnId"] = turn_id
                 elif event_type in {
-                    "response.completed", "response.failed", "turn.completed"
+                    "response.completed",
+                    "response.failed",
+                    "turn.completed",
                 }:
                     authority_state["activeTurnId"] = None
-                if event_type in {
-                    "response.elicitation_request", "elicitation_request"
-                } and elicitation_id:
+                if (
+                    event_type
+                    in {"response.elicitation_request", "elicitation_request"}
+                    and elicitation_id
+                ):
                     authority_state["elicitationId"] = elicitation_id
-                elif event_type in {
-                    "elicitation.resolved", "elicitation.cancelled"
-                }:
+                elif event_type in {"elicitation.resolved", "elicitation.cancelled"}:
                     authority_state["elicitationId"] = None
             if capability_authority:
                 capability_authority["state"] = authority_state

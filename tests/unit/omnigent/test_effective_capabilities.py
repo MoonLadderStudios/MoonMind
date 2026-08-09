@@ -155,7 +155,7 @@ def test_caller_authority_separates_owner_from_approver_and_viewer():
     owner = SimpleNamespace(id="owner", is_superuser=False)
     row = SimpleNamespace(metadata_={})
     owner_grants = caller_capabilities_for_bridge(row, owner)
-    assert owner_grants["sendMessage"] is False
+    assert owner_grants["sendMessage"] is True
     assert owner_grants["viewTranscript"] is True
     assert owner_grants["resolveElicitation"] is False
     assert owner_grants["cleanupSession"] is False
@@ -180,3 +180,21 @@ def test_caller_authority_separates_owner_from_approver_and_viewer():
         SimpleNamespace(id="admin", is_superuser=True),
     )
     assert approver_grants["resolveElicitation"] is True
+
+
+def test_provider_control_adapter_preserves_reads_and_distinct_cleanup_authority():
+    adapted = adapt_provider_capabilities(
+        {"sendFollowUp": True, "clearSession": True, "terminalCleanup": False}
+    )
+
+    assert adapted["viewTranscript"] is True
+    assert adapted["readResources"] is True
+    assert adapted["viewTerminal"] is True
+    assert adapted["viewSubagents"] is True
+    assert adapted["sendMessage"] is True
+    assert adapted["replaceSession"] is True
+    assert adapted["cleanupSession"] is False
+
+    cleanup = adapt_provider_capabilities({"terminalCleanup": True})
+    assert cleanup["cleanupSession"] is True
+    assert cleanup["replaceSession"] is False

@@ -427,9 +427,7 @@ _FORBIDDEN_IDENTITY_KEYS: frozenset[str] = frozenset(
     }
 )
 # Keys that name a session id. Their value may only be the bound chatBindingId.
-_SESSION_ID_KEYS: frozenset[str] = frozenset(
-    {"session_id", "sessionid", "session"}
-)
+_SESSION_ID_KEYS: frozenset[str] = frozenset({"session_id", "sessionid", "session"})
 # Request headers that attempt to name an upstream identity. sanitize_proxy
 # already prevents credential headers from crossing the boundary; these are
 # rejected outright (and audited) rather than silently dropped, because their
@@ -499,7 +497,7 @@ def assert_no_identity_substitution(
     *,
     chat_binding_id: str,
     path_session_id: str | None,
-    query: Mapping[str, Any] | None = None,
+    query: Any | None = None,
     body: Any | None = None,
     headers: Mapping[str, Any] | None = None,
 ) -> None:

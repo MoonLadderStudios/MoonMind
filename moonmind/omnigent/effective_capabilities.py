@@ -49,16 +49,30 @@ PROVIDER_CAPABILITY_ALIASES: Mapping[str, tuple[str, ...]] = {
     "sendFollowUp": ("sendMessage",),
     "stop": ("stopSession",),
     "harvest": ("harvestEvidence",),
-    "clearSession": ("cleanupSession",),
+    "clearSession": ("replaceSession",),
+    "terminalCleanup": ("cleanupSession",),
     "newSession": ("replaceSession", "reconnectSession"),
     "interrupt": ("interruptTurn",),
 }
+
+_PROVIDER_PRESENTATION_CAPABILITIES = frozenset(
+    {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
+)
+
+_OWNER_CAPABILITIES = frozenset(CAPABILITY_NAMES) - frozenset(
+    {"resolveElicitation", "harvestEvidence", "cleanupSession"}
+)
 
 
 def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bool]:
     """Adapt bounded provider evidence to the complete canonical namespace."""
 
-    adapted = dict.fromkeys(CAPABILITY_NAMES, False)
+    # Intervention capability maps describe provider controls, not the complete
+    # presentation surface. The binding facade owns these read projections and
+    # the pinned compatibility contract proves their support independently.
+    adapted = {
+        name: name in _PROVIDER_PRESENTATION_CAPABILITIES for name in CAPABILITY_NAMES
+    }
     for name in CAPABILITY_NAMES:
         if capabilities.get(name) is True:
             adapted[name] = True
@@ -67,6 +81,7 @@ def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bo
             for canonical_name in canonical_names:
                 adapted[canonical_name] = True
     return adapted
+
 
 MUTATION_CAPABILITIES = frozenset(CAPABILITY_NAMES) - frozenset(
     {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
@@ -130,9 +145,15 @@ def _text(value: Any) -> str:
 
 def _authority_reason(authority: Mapping[str, Any]) -> str | None:
     required = (
-        "agentProfileRef", "agentProfileDigest", "providerProfileId",
-        "providerProfileGeneration", "launchPolicyRef", "policySnapshotRef",
-        "policyDigest", "effectiveLaunchSnapshotRef", "sessionEpoch",
+        "agentProfileRef",
+        "agentProfileDigest",
+        "providerProfileId",
+        "providerProfileGeneration",
+        "launchPolicyRef",
+        "policySnapshotRef",
+        "policyDigest",
+        "effectiveLaunchSnapshotRef",
+        "sessionEpoch",
     )
     if any(not _text(authority.get(key)) for key in required):
         return "immutable_authority_missing"
@@ -246,9 +267,7 @@ def resolve_bridge_row_capabilities(
         "effectiveLaunchSnapshotRef": launch.get("snapshotRef"),
         "sessionEpoch": state.get("sessionEpoch"),
         "authorityFresh": evidence.get("fresh") is True,
-        "expectedProviderProfileGeneration": evidence.get(
-            "providerProfileGeneration"
-        ),
+        "expectedProviderProfileGeneration": evidence.get("providerProfileGeneration"),
         "expectedSessionEpoch": expected_session_epoch,
     }
     stale_reason = None
@@ -303,7 +322,9 @@ def resolve_bridge_row_capabilities(
             name: CapabilityDecision(False, stale_reason, item.upstream_supported)
             for name, item in result.decisions.items()
         }
-        return EffectiveCapabilitySet(result.schema_version, result.authority_digest, decisions)
+        return EffectiveCapabilitySet(
+            result.schema_version, result.authority_digest, decisions
+        )
     return result
 
 
@@ -327,10 +348,8 @@ def caller_capabilities_for_bridge(row: Any, caller: Any) -> dict[str, bool]:
     if bool(getattr(caller, "is_superuser", False)):
         return {name: True for name in CAPABILITY_NAMES}
 
-    # Ownership is an object-discovery boundary, not mutation authority.  With
-    # no execution-bound per-principal grant, an ordinary owner receives only
-    # presentation/read capabilities.  Every mutation must be explicitly
-    # granted in ``callerAuthorities`` so a newly added capability cannot become
-    # writable merely because it was added to CAPABILITY_NAMES.
-    read_only = {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
-    return {name: name in read_only for name in CAPABILITY_NAMES}
+    # The execution owner receives the ordinary presentation-client controls
+    # needed for a functional chat session. Approval and post-terminal lifecycle
+    # authority remain explicit/superuser-only; the other immutable provider,
+    # profile, launch-policy, and state layers still have to grant every action.
+    return {name: name in _OWNER_CAPABILITIES for name in CAPABILITY_NAMES}
