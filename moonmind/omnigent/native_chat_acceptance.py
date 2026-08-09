@@ -215,6 +215,86 @@ def _validate_scenario_evidence(
     assert_secret_free(evidence)
 
 
+def assemble_native_chat_acceptance_input(
+    producer_root: Path, *, output_root: Path
+) -> dict[str, Any]:
+    """Assemble validator input from complete repository-producer evidence.
+
+    The producer directory is an interchange contract, not a source of trusted
+    booleans.  Every required scenario must already exist as its own objective
+    scenario-evidence document.  This function only validates provenance,
+    copies no bytes, derives digest-bound lane observations, and wires the
+    remaining evidence records from ``manifest.json``.
+    """
+
+    producer_root = producer_root.resolve()
+    output_root = output_root.resolve()
+    manifest_path = producer_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConformanceContractError("producer manifest is unreadable") from exc
+    if not isinstance(manifest, Mapping):
+        raise ConformanceContractError("producer manifest must be an object")
+    identity = manifest.get("identity")
+    if not isinstance(identity, Mapping):
+        raise ConformanceContractError("producer manifest identity is required")
+
+    scenario_root = producer_root / "scenarios"
+    lanes: dict[str, Any] = {}
+    output_root.mkdir(parents=True, exist_ok=True)
+    lane_root = output_root / "lanes"
+    lane_root.mkdir(parents=True, exist_ok=True)
+    for lane, required_scenarios in REQUIRED_SCENARIOS.items():
+        scenarios: list[dict[str, Any]] = []
+        for scenario_id in required_scenarios:
+            path = scenario_root / lane / f"{scenario_id}.json"
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ConformanceContractError(
+                    f"producer scenario is unreadable: {lane}/{scenario_id}"
+                ) from exc
+            relative = path.relative_to(output_root) if output_root in path.parents else None
+            if relative is None:
+                raise ConformanceContractError(
+                    "producer scenarios must be contained by the evidence root"
+                )
+            record = {
+                "id": scenario_id,
+                "outcome": "passed",
+                "upstreamSideEffects": len(payload.get("upstreamRequests", []))
+                if isinstance(payload.get("upstreamRequests"), list) else -1,
+                "evidenceRef": f"artifact://{relative.as_posix()}",
+                "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            _validate_scenario_evidence(
+                output_root, record, lane=lane, scenario_id=scenario_id
+            )
+            scenarios.append(record)
+        lane_payload = {
+            "schemaVersion": OBSERVATION_VERSION,
+            "lane": lane,
+            "status": "passed",
+            "identity": dict(identity),
+            "scenarios": scenarios,
+        }
+        lane_path = lane_root / f"{lane}.json"
+        lane_path.write_text(
+            json.dumps(lane_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        lanes[lane] = {
+            "status": "passed",
+            "evidenceRef": f"artifact://lanes/{lane}.json",
+            "sha256": "sha256:" + hashlib.sha256(lane_path.read_bytes()).hexdigest(),
+        }
+
+    assembled = dict(manifest)
+    assembled.pop("schemaVersion", None)
+    assembled["lanes"] = lanes
+    return assembled
+
+
 def build_native_chat_acceptance_report(
     source: Mapping[str, Any], *, evidence_root: Path, expected_commit: str | None = None,
     now: datetime | None = None,

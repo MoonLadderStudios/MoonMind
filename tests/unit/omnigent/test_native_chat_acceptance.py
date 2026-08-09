@@ -13,6 +13,7 @@ from moonmind.omnigent.native_chat_acceptance import (
     REQUIRED_CHANNELS, REQUIRED_FEATURES, REQUIRED_LANES, REQUIRED_SCENARIOS,
     REQUIRED_SECURITY_CONTROLS, REQUIRED_TELEMETRY, REQUIRED_TRANSPORTS,
     PRODUCER_VERSION, SCENARIO_EVIDENCE_VERSION,
+    assemble_native_chat_acceptance_input,
     build_native_chat_acceptance_report,
 )
 
@@ -48,7 +49,7 @@ def _fixture(root: Path) -> dict:
             "outcome": "passed",
             "upstreamSideEffects": 0,
             **evidence_record(
-                f"scenario/{lane}/{scenario}.json",
+                f"scenarios/{lane}/{scenario}.json",
                 json.dumps(payload, sort_keys=True),
             ),
         }
@@ -121,6 +122,38 @@ def test_complete_protected_native_chat_matrix_builds_report(tmp_path: Path) -> 
     assert set(report["lanes"]) == set(REQUIRED_LANES)
 
 
+def test_repository_producer_evidence_assembles_without_fixture_lane_synthesis(
+    tmp_path: Path,
+) -> None:
+    source = _fixture(tmp_path)
+    manifest = dict(source)
+    manifest.pop("lanes")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+    assembled = assemble_native_chat_acceptance_input(
+        tmp_path, output_root=tmp_path
+    )
+
+    report = _build(assembled, tmp_path)
+    assert report["status"] == "passed"
+    assert set(report["lanes"]) == set(REQUIRED_LANES)
+
+
+def test_repository_producer_assembler_rejects_missing_scenario(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    manifest = dict(source)
+    manifest.pop("lanes")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    (tmp_path / "scenarios" / "authority-isolation" / "owner.json").unlink()
+
+    with pytest.raises(ConformanceContractError, match="producer scenario is unreadable"):
+        assemble_native_chat_acceptance_input(tmp_path, output_root=tmp_path)
+
+
 @pytest.mark.parametrize("lane", REQUIRED_LANES)
 def test_any_missing_or_failed_lane_closes_gate(tmp_path: Path, lane: str) -> None:
     source = _fixture(tmp_path)
@@ -154,7 +187,7 @@ def test_status_only_observation_cannot_claim_a_lane(tmp_path: Path) -> None:
 
 def test_fixture_authored_pass_without_producer_provenance_closes_gate(tmp_path: Path) -> None:
     source = _fixture(tmp_path)
-    path = tmp_path / "scenario" / "authority-isolation" / "owner.json"
+    path = tmp_path / "scenarios" / "authority-isolation" / "owner.json"
     payload = json.loads(path.read_text())
     payload.pop("producer")
     path.write_text(json.dumps(payload), encoding="utf-8")

@@ -42,6 +42,7 @@ jobs:
           python tools/build_omnigent_native_chat_acceptance.py \
             artifacts/omnigent-native-chat-acceptance/input/native-chat-acceptance-input.json \
             artifacts/omnigent-native-chat-acceptance/report.json \
+            --producer-root artifacts/omnigent-native-chat-acceptance/input/evidence \
             --evidence-root artifacts/omnigent-native-chat-acceptance/input/evidence \
             --expected-commit "${{ github.sha }}"
       - name: Upload passing report

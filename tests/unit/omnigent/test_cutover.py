@@ -521,6 +521,67 @@ def test_effective_phase_requires_evidence_to_match_deployed_phase(tmp_path) -> 
     assert "evidence_current_phase_mismatch" in status.blockers
 
 
+def test_broad_default_consumes_matching_native_chat_evidence_root(
+    tmp_path, monkeypatch,
+) -> None:
+    evidence = _evidence(tmp_path)
+    evidence["authorizedPhase"] = "BROAD_DEFAULT"
+    evidence["currentPhase"] = "SCHEDULE_DEFAULT"
+    conformance_path = tmp_path / "release.json"
+    conformance_path.write_text(json.dumps(evidence), encoding="utf-8")
+    native_path = tmp_path / "native-chat.json"
+    native_path.write_text("{}", encoding="utf-8")
+    native_root = tmp_path / "native-evidence"
+    native_root.mkdir()
+    observed = {}
+
+    def validate(source, *, evidence_root, expected_commit, now):
+        observed.update(source=source, evidence_root=evidence_root,
+                        expected_commit=expected_commit, now=now)
+        return {"status": "passed"}
+
+    monkeypatch.setattr("moonmind.omnigent.cutover.build_native_chat_acceptance_report", validate)
+    status = effective_phase(env={
+        "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "broad_default",
+        "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": "schedule_default",
+        "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(conformance_path),
+        "MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF": str(native_path),
+        "MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_EVIDENCE_ROOT": str(native_root),
+        "MOONMIND_BUILD_COMMIT": "candidate-commit",
+    }, now=NOW)
+
+    assert status.phase is CutoverPhase.BROAD_DEFAULT
+    assert status.blockers == ()
+    assert observed == {"source": {}, "evidence_root": native_root,
+                        "expected_commit": "candidate-commit", "now": NOW}
+
+
+def test_broad_default_rejects_structurally_invalid_native_chat_evidence(
+    tmp_path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    evidence["authorizedPhase"] = "BROAD_DEFAULT"
+    evidence["currentPhase"] = "SCHEDULE_DEFAULT"
+    conformance_path = tmp_path / "release.json"
+    conformance_path.write_text(json.dumps(evidence), encoding="utf-8")
+    native_path = tmp_path / "native-chat.json"
+    native_path.write_text("{}", encoding="utf-8")
+    native_root = tmp_path / "native-evidence"
+    native_root.mkdir()
+
+    status = effective_phase(env={
+        "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": "broad_default",
+        "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": "schedule_default",
+        "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": str(conformance_path),
+        "MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF": str(native_path),
+        "MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_EVIDENCE_ROOT": str(native_root),
+        "MOONMIND_BUILD_COMMIT": "candidate-commit",
+    }, now=NOW)
+
+    assert status.phase is CutoverPhase.SCHEDULE_DEFAULT
+    assert "native_chat_acceptance_evidence_invalid" in status.blockers
+
+
 def test_denied_promotion_preserves_deployed_phase_instead_of_resetting_defaults(
     tmp_path,
 ) -> None:

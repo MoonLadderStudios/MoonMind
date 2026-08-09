@@ -5,7 +5,10 @@ import argparse, json, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from moonmind.omnigent.native_chat_acceptance import build_native_chat_acceptance_report
+from moonmind.omnigent.native_chat_acceptance import (
+    assemble_native_chat_acceptance_input,
+    build_native_chat_acceptance_report,
+)
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -13,9 +16,19 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--expected-commit")
+    parser.add_argument(
+        "--producer-root", type=Path,
+        help="assemble source from complete repository-owned producer evidence",
+    )
     args = parser.parse_args()
+    source = (
+        assemble_native_chat_acceptance_input(
+            args.producer_root, output_root=args.evidence_root
+        )
+        if args.producer_root else json.loads(args.source.read_text(encoding="utf-8"))
+    )
     report = build_native_chat_acceptance_report(
-        json.loads(args.source.read_text(encoding="utf-8")),
+        source,
         evidence_root=args.evidence_root, expected_commit=args.expected_commit,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
