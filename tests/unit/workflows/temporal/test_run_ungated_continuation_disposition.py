@@ -131,31 +131,80 @@ def test_gated_runtime_instruction_names_validated_authority() -> None:
     assert "reenter_gate" in instruction
 
 
+def test_continuation_authority_is_exposed_to_runtime_adapter_metadata() -> None:
+    request = _agent_request(
+        parameters={
+            "metadata": {"moonmind": {"latestContextPackRef": "artifact://context"}},
+            "title": "Resolve PR",
+        }
+    )
+    authority_instruction = (
+        MoonMindRunWorkflow._terminal_continuation_authority_instruction(request)
+    )
+
+    parameters = (
+        MoonMindRunWorkflow._parameters_with_terminal_continuation_authority_instruction(
+            request,
+            authority_instruction=authority_instruction,
+        )
+    )
+
+    assert parameters["title"] == "Resolve PR"
+    assert (
+        parameters["metadata"]["moonmind"]["latestContextPackRef"]
+        == "artifact://context"
+    )
+    assert (
+        parameters["metadata"]["moonmind"][
+            "terminalContinuationAuthorityInstruction"
+        ]
+        == authority_instruction
+    )
+
+
 @pytest.mark.parametrize(
-    ("terminal_outcome", "recovery_outcome"),
+    ("metadata", "provider_error_code"),
     [
-        ("terminal_failure", "unsupported_or_exhausted"),
-        ("continuation_requested", "continuation_rejected_unowned"),
         (
-            "continuation_requested",
-            "continuation_rejected_failure_provenance",
+            {
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "mergeAutomationDisposition": "manual_review",
+            },
+            None,
+        ),
+        (
+            {
+                "terminalContractOutcome": "terminal_failure",
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "mergeAutomationDisposition": "failed",
+            },
+            None,
+        ),
+        (
+            {
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractRecoveryOutcome": "continuation_rejected_unowned",
+                "mergeAutomationDisposition": "reenter_gate",
+            },
+            "PR_RESOLVER_REENTER_GATE",
         ),
     ],
 )
 def test_terminal_contract_decisions_do_not_trigger_generic_runtime_retry(
-    terminal_outcome: str,
-    recovery_outcome: str,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, str],
+    provider_error_code: str | None,
 ) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
     result = {
         "status": "FAILED",
         "outputs": {
             "error": "execution_error",
             "failureClass": "execution_error",
-            "metadata": {
-                "terminalContractOutcome": terminal_outcome,
-                "terminalContractRecoveryOutcome": recovery_outcome,
-            },
+            "providerErrorCode": provider_error_code,
+            "metadata": metadata,
         },
     }
 
@@ -169,7 +218,10 @@ def test_terminal_contract_decisions_do_not_trigger_generic_runtime_retry(
     )
 
 
-def test_missing_terminal_evidence_remains_retryable() -> None:
+def test_missing_terminal_evidence_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
     workflow = MoonMindRunWorkflow()
     result = {
         "status": "FAILED",
@@ -177,8 +229,62 @@ def test_missing_terminal_evidence_remains_retryable() -> None:
             "error": "execution_error",
             "failureClass": "execution_error",
             "metadata": {
+                "terminalContractOutcome": "terminal_failure",
                 "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
                 "terminalContractMissingEvidence": ["var/pr_resolver/result.json"],
+            },
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_real_provider_failure_with_rejected_continuation_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "providerErrorCode": "RATE_LIMITED",
+            "retryRecommendation": "retry",
+            "metadata": {
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractRecoveryOutcome": (
+                    "continuation_rejected_failure_provenance"
+                ),
+                "mergeAutomationDisposition": "reenter_gate",
+            },
+        },
+    }
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+
+
+def test_existing_history_preserves_provider_retry_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: False)
+    workflow = MoonMindRunWorkflow()
+    result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "failureClass": "execution_error",
+            "metadata": {
+                "terminalContractOutcome": "terminal_failure",
+                "mergeAutomationDisposition": "manual_review",
             },
         },
     }

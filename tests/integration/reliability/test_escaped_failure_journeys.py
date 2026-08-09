@@ -936,6 +936,7 @@ async def test_invalid_batch_range_records_terminal_failure_without_retry(
 
 
 async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replay mm:7f52b94b at the runtime-instruction and retry boundaries."""
 
@@ -944,6 +945,10 @@ async def test_standalone_omnigent_resolver_rejects_unowned_continuation_without
     expected = load_replay(replay_id, "expected-outcome.json")
     request = AgentExecutionRequest.model_validate(manifest["request"])
     assert request.terminal_continuation_authority is None
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        lambda _patch: True,
+    )
 
     parent = MoonMindRunWorkflow()
     instruction = parent._terminal_continuation_authority_instruction(request)
