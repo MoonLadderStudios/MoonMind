@@ -1,0 +1,45 @@
+{
+  "failureShapeId": "omnigent-pr-resolver-unowned-continuation",
+  "incidentWorkflowId": "mm:7f52b94b-ad08-4e9d-a02a-772c72ae7964",
+  "incidentRunId": "019fe3a3-1f33-7e02-b6b2-a954c3ca3111",
+  "runtime": "omnigent",
+  "boundary": "standalone UserWorkflow AgentRun result to parent retry classification",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "correlationId": "mm:7f52b94b-ad08-4e9d-a02a-772c72ae7964",
+    "idempotencyKey": "mm:7f52b94b-ad08-4e9d-a02a-772c72ae7964:node-1:execution:4",
+    "instructionRef": "Execute the resolved pr-resolver Skill.",
+    "terminalContract": {
+      "contractId": "pr_resolver_terminal.v1",
+      "owner": "agent",
+      "evidenceKind": "workspace_json",
+      "relativePath": "var/pr_resolver/result.json",
+      "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+      "executionRef": "mm:7f52b94b-ad08-4e9d-a02a-772c72ae7964:019fe3a3-1f33-7e02-b6b2-a954c3ca3111:node-1:execution:4"
+    }
+  },
+  "childResult": {
+    "status": "FAILED",
+    "outputs": {
+      "error": "execution_error",
+      "summary": "Agent completed an authoritative durable continuation handoff.",
+      "failureClass": "execution_error",
+      "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
+      "metadata": {
+        "terminalContractOutcome": "continuation_requested",
+        "terminalContractRecoveryOutcome": "continuation_rejected_unowned",
+        "mergeAutomationDisposition": "reenter_gate",
+        "gatedContinuation": {
+          "schemaVersion": "gated-continuation/v1",
+          "gateType": "merge_automation",
+          "action": "reenter_gate",
+          "reason": "ci_running",
+          "headSha": "99cf91833869bbbf2617d90479fc6f35c9dfeb9f",
+          "retryAfterSeconds": 60
+        }
+      }
+    }
+  },
+  "invariant": "A standalone one-shot runtime is told it has no durable continuation owner, and a rejected parent-owned handoff is terminal instead of retried as a provider failure"
+}

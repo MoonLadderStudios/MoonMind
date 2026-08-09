@@ -167,6 +167,20 @@ async def _build_omnigent_first_message(
             parts.append("Input refs: " + ", ".join(request.input_refs))
         text = "\n\n".join(parts)
 
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+    if not isinstance(moonmind, dict):
+        moonmind = {}
+    continuation_authority_instruction = str(
+        moonmind.get("terminalContinuationAuthorityInstruction") or ""
+    ).strip()
+    if (
+        continuation_authority_instruction
+        and continuation_authority_instruction not in text
+    ):
+        text = f"{text}\n\n{continuation_authority_instruction}"
+
     return {
         "type": "message",
         "data": {
