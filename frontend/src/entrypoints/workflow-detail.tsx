@@ -1084,6 +1084,10 @@ const RemediationLinkSchema = z
     selectedSteps: z.array(z.string()).nullable().optional(),
     currentTargetState: z.string().nullable().optional(),
     allowedActions: z.array(z.string()).nullable().optional(),
+    actionCapabilities: z.array(z.object({ action: z.string(), ready: z.boolean(), reason: z.string() }).passthrough()).default([]),
+    authoredIntent: z.record(z.string(), z.unknown()).nullable().optional(),
+    operatorControls: z.array(z.object({ action: z.string(), ready: z.boolean(), reason: z.string() }).passthrough()).default([]),
+    lifecycle: z.record(z.string(), z.unknown()).nullable().optional(),
     evidenceDegraded: z.boolean().nullable().optional(),
     unavailableEvidenceClasses: z.array(z.string()).nullable().optional(),
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
@@ -7681,6 +7685,7 @@ function RemediationRelationshipsPanel({
   outboundError,
   onApprovalDecision,
   approvalBusy,
+  onCancelRemediation,
   showEmpty,
 }: {
   inbound: z.infer<typeof RemediationLinksSchema> | undefined;
@@ -7689,6 +7694,7 @@ function RemediationRelationshipsPanel({
   outboundError: Error | null;
   onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected', comment?: string) => void;
   approvalBusy: boolean;
+  onCancelRemediation: (workflowId: string) => void;
   showEmpty: boolean;
 }) {
   const [approvalComments, setApprovalComments] = useState<Record<string, string>>({});
@@ -7797,6 +7803,24 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
+                </div>
+                {item.authoredIntent ? (
+                  <details><summary>Authored remediation intent</summary><pre className="text-xs break-all">{JSON.stringify(item.authoredIntent, null, 2)}</pre></details>
+                ) : null}
+                {item.lifecycle ? (
+                  <details><summary>Authoritative lifecycle</summary><pre className="text-xs break-all">{JSON.stringify(item.lifecycle, null, 2)}</pre></details>
+                ) : null}
+                {item.actionCapabilities.length ? (
+                  <div><strong>Action readiness</strong><ul className="td-remediation-list">{item.actionCapabilities.map((capability) => (
+                    <li key={capability.action}><code>{capability.action}</code>: {capability.ready ? 'Ready' : `Unavailable — ${capability.reason}`}</li>
+                  ))}</ul></div>
+                ) : null}
+                <div className="actions" aria-label="Remediation operator controls">
+                  {item.operatorControls.map((control) => control.action === 'cancel' ? (
+                    <button key={control.action} type="button" className="secondary" disabled={!control.ready || approvalBusy} title={control.reason} onClick={() => onCancelRemediation(item.remediationWorkflowId)}>Cancel remediation</button>
+                  ) : (
+                    <button key={control.action} type="button" className="secondary" disabled title={control.reason}>Take over remediation</button>
+                  ))}
                 </div>
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
@@ -10489,6 +10513,17 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               onApprovalDecision={(remediationWorkflowId, requestId, decision, comment) => {
                 setActionError(null);
                 remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision, comment });
+              }}
+              onCancelRemediation={(remediationWorkflowId) => {
+                setActionError(null);
+                fetch(`${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/cancel`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                  body: JSON.stringify({ action: 'cancel', graceful: true }),
+                }).then((response) => {
+                  if (!response.ok) throw new Error(response.statusText);
+                  invalidate();
+                }).catch((error: Error) => setActionError(error.message));
               }}
             />
           ) : null}

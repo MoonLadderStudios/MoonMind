@@ -5443,7 +5443,24 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
     )
 
     assert response.status_code == 200
-    assert response.json() == {
+    response_json = response.json()
+    projected = response_json["items"][0]
+    assert projected.pop("actionCapabilities") == []
+    assert projected.pop("authoredIntent") is None
+    assert projected.pop("lifecycle") is None
+    assert projected.pop("operatorControls") == [
+        {
+            "action": "cancel",
+            "ready": True,
+            "reason": "Uses the authorized workflow cancellation boundary.",
+        },
+        {
+            "action": "takeover",
+            "ready": False,
+            "reason": "No bounded takeover capability is available for this remediation.",
+        },
+    ]
+    assert response_json == {
         "direction": "inbound",
         "items": [
             {
@@ -5525,7 +5542,16 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
 
     assert response.status_code == 200
     assert response.json()["direction"] == "outbound"
-    assert response.json()["items"][0] == {
+    projected = response.json()["items"][0]
+    assert projected.pop("actionCapabilities") == []
+    assert projected.pop("authoredIntent") is None
+    assert projected.pop("lifecycle") is None
+    assert projected.pop("operatorControls")[1] == {
+        "action": "takeover",
+        "ready": False,
+        "reason": "No bounded takeover capability is available for this remediation.",
+    }
+    assert projected == {
         "remediationWorkflowId": "mm:remediation-1",
         "remediationRunId": "run-remediation-1",
         "targetWorkflowId": "mm:target-workflow",

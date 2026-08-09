@@ -680,6 +680,10 @@ class RemediationLinkSummaryModel(BaseModel):
     selectedSteps: list[str] | None = None
     currentTargetState: str | None = None
     allowedActions: list[str] | None = None
+    actionCapabilities: list[dict[str, str | bool]] = Field(default_factory=list)
+    authoredIntent: dict[str, Any] | None = None
+    operatorControls: list[dict[str, str | bool]] = Field(default_factory=list)
+    lifecycle: dict[str, Any] | None = None
     evidenceDegraded: bool | None = None
     unavailableEvidenceClasses: list[str] | None = None
     liveObservation: RemediationLiveObservationModel | None = None
@@ -11786,6 +11790,37 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         status_value=status_value,
     )
 
+    allowed_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
+    action_capabilities = getattr(link, "action_capabilities", None)
+    if not isinstance(action_capabilities, list):
+        # An allowed action is not automatically executable.  Unless the
+        # authoritative action service projected readiness, fail closed.
+        action_capabilities = [
+            {
+                "action": action,
+                "ready": False,
+                "reason": "Execution and verification readiness has not been established.",
+            }
+            for action in (allowed_actions or [])
+        ]
+    operator_controls = getattr(link, "operator_controls", None)
+    if not isinstance(operator_controls, list):
+        operator_controls = [
+            {
+                "action": "cancel",
+                "ready": status_value not in {"completed", "failed", "canceled"},
+                "reason": (
+                    "Uses the authorized workflow cancellation boundary."
+                    if status_value not in {"completed", "failed", "canceled"}
+                    else "The remediation workflow is already terminal."
+                ),
+            },
+            {
+                "action": "takeover",
+                "ready": False,
+                "reason": "No bounded takeover capability is available for this remediation.",
+            },
+        ]
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
         remediationRunId=str(getattr(link, "remediation_run_id", "")),
@@ -11803,7 +11838,11 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
         currentTargetState=getattr(link, "current_target_state", None),
-        allowedActions=_bounded_string_list(getattr(link, "allowed_actions", None)),
+        allowedActions=allowed_actions,
+        actionCapabilities=action_capabilities[:25],
+        authoredIntent=getattr(link, "authored_intent", None),
+        operatorControls=operator_controls[:10],
+        lifecycle=getattr(link, "lifecycle_projection", None),
         evidenceDegraded=getattr(link, "evidence_degraded", None),
         unavailableEvidenceClasses=_bounded_string_list(
             getattr(link, "unavailable_evidence_classes", None)

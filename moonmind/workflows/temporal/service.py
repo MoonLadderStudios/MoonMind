@@ -945,6 +945,14 @@ class TemporalExecutionService:
         }
         if not remediation_ids or not target_ids:
             return
+        remediation_records_result = await self._session.execute(
+            select(TemporalExecutionCanonicalRecord).where(
+                TemporalExecutionCanonicalRecord.workflow_id.in_(remediation_ids)
+            )
+        )
+        remediation_records = {
+            record.workflow_id: record for record in remediation_records_result.scalars()
+        }
         result = await self._session.execute(
             select(WorkflowCheckpointBranchOperation).where(
                 WorkflowCheckpointBranchOperation.workflow_id.in_(target_ids),
@@ -1027,6 +1035,37 @@ class TemporalExecutionService:
                 "checkpoint_branch_links",
                 branch_links_by_remediation.get(link.remediation_workflow_id, []),
             )
+            record = remediation_records.get(link.remediation_workflow_id)
+            parameters = record.parameters if record is not None else None
+            workflow = _workflow_payload(parameters) if isinstance(parameters, Mapping) else None
+            remediation = workflow.get("remediation") if isinstance(workflow, Mapping) else None
+            if isinstance(workflow, Mapping) and isinstance(remediation, Mapping):
+                runtime = workflow.get("runtime")
+                setattr(link, "authored_intent", {
+                    "instructions": workflow.get("instructions"),
+                    "runtime": runtime if isinstance(runtime, Mapping) else None,
+                    "agentProfile": workflow.get("agentProfile"),
+                    "providerProfileRef": workflow.get("providerProfileRef"),
+                    "launchPolicy": workflow.get("launchPolicy"),
+                    "actionPolicyRef": remediation.get("actionPolicyRef"),
+                    "evidencePolicy": remediation.get("evidencePolicy"),
+                    "approvalPolicy": remediation.get("approvalPolicy"),
+                    "lockPolicy": remediation.get("lockPolicy"),
+                    "verificationPolicy": remediation.get("verificationPolicy"),
+                    "checkpointBranchPolicy": remediation.get("checkpointBranchPolicy"),
+                })
+            branches = branch_links_by_remediation.get(link.remediation_workflow_id, [])
+            setattr(link, "lifecycle_projection", {
+                "diagnosis": getattr(link, "latest_action_summary", None),
+                "delivery": getattr(link, "outcome", None),
+                "verification": getattr(link, "verification_outcome", None),
+                "resolution": getattr(link, "resolution", None),
+                "attemptCount": len(branches),
+                "workspaceHead": branches[-1].get("headCheckpointRef") if branches else None,
+                "cleanup": "lock_released" if not getattr(link, "active_lock_scope", None) else "pending",
+                "leaseRelease": "not_projected",
+                "unresolvedWorkRef": branches[-1].get("remainingWorkRef") if branches else None,
+            })
 
     async def record_remediation_approval_decision(
         self,

@@ -6572,6 +6572,25 @@ describe('Workflow Detail Entrypoint', () => {
                 authorityMode: 'observe_only',
                 status: 'created',
                 contextArtifactRef: null,
+                authoredIntent: {
+                  instructions: 'Repair the pinned failure.',
+                  providerProfileRef: 'provider-profile@4',
+                  actionPolicyRef: 'standard_remediation_v1',
+                },
+                lifecycle: {
+                  attemptCount: 1,
+                  workspaceHead: 'artifact://workspace/C2',
+                  cleanup: 'pending',
+                  leaseRelease: 'not_projected',
+                  unresolvedWorkRef: 'artifact://verification/V2#remainingWork',
+                },
+                actionCapabilities: [
+                  { action: 'session.interrupt', ready: false, reason: 'Verification backend unavailable.' },
+                ],
+                operatorControls: [
+                  { action: 'cancel', ready: true, reason: 'Uses the authorized workflow cancellation boundary.' },
+                  { action: 'takeover', ready: false, reason: 'No bounded takeover capability is available.' },
+                ],
                 checkpointBranches: [
                   {
                     workflowId: 'mm:target-1',
@@ -6648,6 +6667,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('awaiting external session')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
     expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
+    expect(screen.getByText('Authored remediation intent')).toBeTruthy();
+    expect(screen.getByText('Authoritative lifecycle')).toBeTruthy();
+    expect(screen.getByText(/Unavailable — Verification backend unavailable/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel remediation' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Take over remediation' })).toBeDisabled();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
