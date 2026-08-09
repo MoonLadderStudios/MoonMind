@@ -11,7 +11,7 @@ on:
         description: Decisive environment to observe
         required: true
         type: choice
-        options: [deterministic-fake, protected-stock-image]
+        options: [protected-stock-image]
 
 permissions:
   contents: read
@@ -40,7 +40,15 @@ jobs:
           MOONMIND_OMNIGENT_NATIVE_CHAT_WORKFLOW_ID: ${{ inputs.workflow_id }}
           MOONMIND_OMNIGENT_UPSTREAM_ORIGIN: ${{ vars.OMNIGENT_SERVER_URL }}
           MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
-          MOONMIND_OMNIGENT_NATIVE_CHAT_OBSERVATION: artifacts/omnigent-native-chat-producer/browser-journey.json
+          MOONMIND_OMNIGENT_NATIVE_CHAT_OUTPUT_ROOT: artifacts/omnigent-native-chat-producer
+          MOONMIND_COMMIT: ${{ github.sha }}
+          MOONMIND_BUILD: ${{ github.run_id }}-${{ github.run_attempt }}
+          MOONMIND_SERVER_IMAGE_DIGEST: ${{ vars.MOONMIND_SERVER_IMAGE_DIGEST }}
+          MOONMIND_UI_IMAGE_DIGEST: ${{ vars.MOONMIND_UI_IMAGE_DIGEST }}
+          OMNIGENT_HOST_IMAGE_DIGEST: ${{ vars.OMNIGENT_HOST_IMAGE_DIGEST }}
+          MOONMIND_ARCHITECTURE: ${{ runner.arch }}
+          OMNIGENT_PROFILE_DIGEST: ${{ vars.OMNIGENT_PROFILE_DIGEST }}
+          MOONMIND_POLICY_DIGEST: ${{ vars.MOONMIND_POLICY_DIGEST }}
           PRODUCER_MODE: ${{ inputs.producer_mode }}
         shell: bash
         run: |
@@ -50,10 +58,19 @@ jobs:
             export MOONMIND_OMNIGENT_NATIVE_CHAT_PRODUCER_KIND="deterministic-browser-fake-server"
           fi
           node tools/run_omnigent_native_chat_journey.mjs
+      - name: Validate complete producer contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from moonmind.omnigent.native_chat_acceptance import assemble_native_chat_acceptance_input, build_native_chat_acceptance_report
+          root = Path("artifacts/omnigent-native-chat-producer").resolve()
+          source = assemble_native_chat_acceptance_input(root, output_root=root)
+          build_native_chat_acceptance_report(source, evidence_root=root, expected_commit="${{ github.sha }}")
+          PY
       - name: Upload independently resolvable observation
         uses: actions/upload-artifact@v7
         with:
           name: omnigent-native-chat-${{ inputs.producer_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/omnigent-native-chat-producer/browser-journey.json
+          path: artifacts/omnigent-native-chat-producer
           if-no-files-found: error
           retention-days: 90
