@@ -499,6 +499,7 @@ def test_effective_phase_uses_durable_deployed_phase_for_sequential_promotion(
 
     assert status.phase is CutoverPhase.OPT_IN
     assert "promotion_must_advance_one_phase" in status.blockers
+    assert "native_chat_acceptance_evidence_missing" in status.blockers
 
 
 def test_effective_phase_requires_evidence_to_match_deployed_phase(tmp_path) -> None:

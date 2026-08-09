@@ -48,7 +48,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: omnigent-native-chat-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/omnigent-native-chat-acceptance/report.json
+          path: |
+            artifacts/omnigent-native-chat-acceptance/report.json
+            artifacts/omnigent-native-chat-acceptance/input/evidence
           if-no-files-found: error
           retention-days: 90
       - name: Link passing report from issue 3642

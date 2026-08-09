@@ -26,6 +26,9 @@ from moonmind.omnigent.conformance import (
     ConformanceContractError,
     require_pinned_images,
 )
+from moonmind.omnigent.native_chat_acceptance import (
+    build_native_chat_acceptance_report,
+)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 CUTOVER_POLICY_VERSION = "moonmind.codex-omnigent-cutover/v1"
@@ -832,6 +835,35 @@ def effective_phase(
                     evidence_document_path=evidence_document_path,
                 )
             )
+
+    # Native Workflow Chat becomes primary at BROAD_DEFAULT.  Its controlling
+    # #3642 report is a separate authority from the older runtime-conformance
+    # matrix, so both must be fresh and complete before this handoff.
+    if requested >= CutoverPhase.BROAD_DEFAULT:
+        native_ref = str(
+            values.get("MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", "")
+        ).strip()
+        native_root = str(
+            values.get("MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_EVIDENCE_ROOT", "")
+        ).strip()
+        expected_commit = str(values.get("MOONMIND_BUILD_COMMIT", "")).strip()
+        if not native_ref or not native_root or not expected_commit:
+            blockers.append("native_chat_acceptance_evidence_missing")
+        else:
+            try:
+                native_path = _evidence_path(native_ref)
+                native_source = json.loads(native_path.read_text(encoding="utf-8"))
+                if not isinstance(native_source, Mapping):
+                    raise ValueError("native_chat_acceptance_not_object")
+                build_native_chat_acceptance_report(
+                    native_source,
+                    evidence_root=_evidence_path(native_root),
+                    expected_commit=expected_commit,
+                    now=now,
+                )
+            except (OSError, ValueError, json.JSONDecodeError, UnicodeError,
+                    ConformanceContractError):
+                blockers.append("native_chat_acceptance_evidence_invalid")
 
     unique_blockers = tuple(dict.fromkeys(blockers))
     return EffectivePhase(

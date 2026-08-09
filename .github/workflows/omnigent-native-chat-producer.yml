@@ -1,0 +1,59 @@
+name: Provider / Omnigent Native Chat Evidence Producer
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_id:
+        description: Pre-seeded Workflow whose active Step is bound to Omnigent
+        required: true
+        type: string
+      producer_mode:
+        description: Decisive environment to observe
+        required: true
+        type: choice
+        options: [deterministic-fake, protected-stock-image]
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: [self-hosted, linux, omnigent-provider-verification]
+    environment: omnigent-provider-verification
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - run: npx playwright install --with-deps chromium
+      - name: Materialize browser authentication state
+        env:
+          BROWSER_STORAGE_STATE: ${{ secrets.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE }}
+        run: |
+          python -c 'import os,pathlib; p=pathlib.Path(os.environ["RUNNER_TEMP"])/"moonmind-browser-state.json"; p.write_text(os.environ["BROWSER_STORAGE_STATE"], encoding="utf-8"); p.chmod(0o600)'
+      - name: Observe the native Chat product journey
+        env:
+          MOONMIND_OMNIGENT_DASHBOARD_URL: ${{ vars.MOONMIND_OMNIGENT_DASHBOARD_URL }}
+          MOONMIND_OMNIGENT_NATIVE_CHAT_WORKFLOW_ID: ${{ inputs.workflow_id }}
+          MOONMIND_OMNIGENT_UPSTREAM_ORIGIN: ${{ vars.OMNIGENT_SERVER_URL }}
+          MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
+          MOONMIND_OMNIGENT_NATIVE_CHAT_OBSERVATION: artifacts/omnigent-native-chat-producer/browser-journey.json
+          PRODUCER_MODE: ${{ inputs.producer_mode }}
+        shell: bash
+        run: |
+          if [[ "$PRODUCER_MODE" == "protected-stock-image" ]]; then
+            export MOONMIND_OMNIGENT_NATIVE_CHAT_PRODUCER_KIND="protected-stock-image"
+          else
+            export MOONMIND_OMNIGENT_NATIVE_CHAT_PRODUCER_KIND="deterministic-browser-fake-server"
+          fi
+          node tools/run_omnigent_native_chat_journey.mjs
+      - name: Upload independently resolvable observation
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-native-chat-${{ inputs.producer_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-native-chat-producer/browser-journey.json
+          if-no-files-found: error
+          retention-days: 90

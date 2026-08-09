@@ -15,11 +15,17 @@ the repository contains the fail-closed builder and publication workflow for the
 complete native Workflow Chat protected-live artifact
 (`moonmind.omnigent.native-chat-acceptance/v1`,
 MoonLadderStudios/MoonMind#3642), but no passing protected-live observation is
-checked in. The artifact must be produced by
+checked in. Browser observations are produced by
+`.github/workflows/omnigent-native-chat-producer.yml` and the complete artifact
+is validated and published by
 `.github/workflows/omnigent-native-chat-acceptance.yml`; configured, skipped,
 fixture-generated, unresolved, mutable-image, or partial evidence cannot pass.
-Until such a report is published, promotion to the preselected Codex default
-remains fail-closed. The end-to-end product-path sequence, field
+Before `broad_default`, the deployment must mount the report and its evidence
+root through `MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF` and
+`MOONMIND_OMNIGENT_NATIVE_CHAT_ACCEPTANCE_EVIDENCE_ROOT`, with
+`MOONMIND_BUILD_COMMIT` matching its candidate commit. Until such a report is
+published and resolvable, broad-default promotion remains fail-closed. The
+end-to-end product-path sequence, field
 authority, and complete failure matrix that this support state qualifies are
 reconciled in
 [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).

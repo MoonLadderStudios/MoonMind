@@ -12,6 +12,7 @@ from moonmind.omnigent.native_chat_acceptance import (
     COMPATIBILITY_VERSION, OBSERVATION_VERSION, REQUIRED_ACCESSIBILITY,
     REQUIRED_CHANNELS, REQUIRED_FEATURES, REQUIRED_LANES, REQUIRED_SCENARIOS,
     REQUIRED_SECURITY_CONTROLS, REQUIRED_TELEMETRY, REQUIRED_TRANSPORTS,
+    PRODUCER_VERSION, SCENARIO_EVIDENCE_VERSION,
     build_native_chat_acceptance_report,
 )
 
@@ -23,6 +24,34 @@ def _fixture(root: Path) -> dict:
         path.write_text(content, encoding="utf-8")
         return {"evidenceRef": f"artifact://{relative}",
                 "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    def scenario_record(lane: str, scenario: str) -> dict:
+        payload = {
+            "schemaVersion": SCENARIO_EVIDENCE_VERSION,
+            "lane": lane,
+            "scenarioId": scenario,
+            "producer": {
+                "schemaVersion": PRODUCER_VERSION,
+                "kind": (
+                    "protected-stock-image"
+                    if lane == "protected-stock-image-journey"
+                    else "deterministic-browser-fake-server"
+                ),
+                "command": ["node", "tools/run_omnigent_native_chat_journey.mjs"],
+                "exitCode": 0,
+            },
+            "observedAssertions": [f"{lane}.{scenario}.observed"],
+            "upstreamRequests": [],
+        }
+        return {
+            "id": scenario,
+            "outcome": "passed",
+            "upstreamSideEffects": 0,
+            **evidence_record(
+                f"scenario/{lane}/{scenario}.json",
+                json.dumps(payload, sort_keys=True),
+            ),
+        }
 
     digest = "sha256:" + "a" * 64
     identity = {
@@ -57,10 +86,8 @@ def _fixture(root: Path) -> dict:
         path = root / "lanes" / f"{lane}.json"
         path.write_text(json.dumps({"schemaVersion": OBSERVATION_VERSION,
             "lane": lane, "status": "passed", "identity": identity,
-            "scenarios": [{"id": scenario, "outcome": "passed",
-                "upstreamSideEffects": 0,
-                **evidence_record(f"scenario/{lane}/{scenario}")
-                } for scenario in REQUIRED_SCENARIOS[lane]]
+            "scenarios": [scenario_record(lane, scenario)
+                for scenario in REQUIRED_SCENARIOS[lane]]
             }), encoding="utf-8")
         lanes[lane]["sha256"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     retained = {}
@@ -122,6 +149,40 @@ def test_status_only_observation_cannot_claim_a_lane(tmp_path: Path) -> None:
     source["lanes"]["authority-isolation"]["sha256"] = "sha256:" + hashlib.sha256(
         path.read_bytes()).hexdigest()
     with pytest.raises(ConformanceContractError, match="scenario inventory"):
+        _build(source, tmp_path)
+
+
+def test_fixture_authored_pass_without_producer_provenance_closes_gate(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    path = tmp_path / "scenario" / "authority-isolation" / "owner.json"
+    payload = json.loads(path.read_text())
+    payload.pop("producer")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    scenario = json.loads(
+        (tmp_path / "lanes" / "authority-isolation.json").read_text()
+    )["scenarios"][0]
+    scenario["sha256"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    lane_path = tmp_path / "lanes" / "authority-isolation.json"
+    lane_payload = json.loads(lane_path.read_text())
+    lane_payload["scenarios"][0] = scenario
+    lane_path.write_text(json.dumps(lane_payload), encoding="utf-8")
+    source["lanes"]["authority-isolation"]["sha256"] = (
+        "sha256:" + hashlib.sha256(lane_path.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ConformanceContractError, match="producer provenance"):
+        _build(source, tmp_path)
+
+
+def test_side_effect_counter_must_match_captured_requests(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    lane_path = tmp_path / "lanes" / "browser-network-isolation.json"
+    lane_payload = json.loads(lane_path.read_text())
+    lane_payload["scenarios"][0]["upstreamSideEffects"] = 1
+    lane_path.write_text(json.dumps(lane_payload), encoding="utf-8")
+    source["lanes"]["browser-network-isolation"]["sha256"] = (
+        "sha256:" + hashlib.sha256(lane_path.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ConformanceContractError, match="prove their outcome"):
         _build(source, tmp_path)
 
 

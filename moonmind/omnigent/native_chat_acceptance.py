@@ -20,6 +20,8 @@ from moonmind.omnigent.conformance import ConformanceContractError, assert_secre
 SCHEMA_VERSION = "moonmind.omnigent.native-chat-acceptance/v1"
 OBSERVATION_VERSION = "moonmind.omnigent.native-chat-observation/v1"
 COMPATIBILITY_VERSION = "moonmind.omnigent.native-chat-compatibility/v1"
+SCENARIO_EVIDENCE_VERSION = "moonmind.omnigent.native-chat-scenario-evidence/v1"
+PRODUCER_VERSION = "moonmind.omnigent.native-chat-producer/v1"
 ISSUE = "MoonLadderStudios/MoonMind#3642"
 
 REQUIRED_LANES = (
@@ -59,6 +61,11 @@ REQUIRED_TELEMETRY = (
     "terminalReplay", "continuationCreation", "upstreamHealth",
 )
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+_LANE_PRODUCERS = {
+    "protected-stock-image-journey": "protected-stock-image",
+}
+_PRODUCER_COMMAND = ["node", "tools/run_omnigent_native_chat_journey.mjs"]
 
 # These are observable cases, not prose assertions.  Producers must emit every
 # case with a terminal outcome and objective counters captured at the decisive
@@ -154,6 +161,60 @@ def _validate_evidence_record(root: Path, record: Mapping[str, Any], label: str)
     assert_secret_free(content)
 
 
+def _validate_scenario_evidence(
+    root: Path,
+    record: Mapping[str, Any],
+    *,
+    lane: str,
+    scenario_id: str,
+) -> None:
+    """Validate objective observations instead of trusting result booleans.
+
+    The scenario payload is emitted by a repository-owned runner after it has
+    observed the decisive browser/proxy/provider boundary.  Side-effect counts
+    are derived from the captured request inventory and therefore cannot drift
+    from the referenced bytes.
+    """
+
+    _validate_evidence_record(root, record, f"scenario {scenario_id}")
+    path = _resolve_ref(root, str(record["evidenceRef"]))
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConformanceContractError(
+            f"scenario {scenario_id} evidence is not structured JSON"
+        ) from exc
+    producer = evidence.get("producer")
+    expected_kind = _LANE_PRODUCERS.get(lane, "deterministic-browser-fake-server")
+    if (
+        evidence.get("schemaVersion") != SCENARIO_EVIDENCE_VERSION
+        or evidence.get("lane") != lane
+        or evidence.get("scenarioId") != scenario_id
+        or not isinstance(producer, Mapping)
+        or producer.get("schemaVersion") != PRODUCER_VERSION
+        or producer.get("kind") != expected_kind
+        or producer.get("exitCode") != 0
+        or producer.get("command") != _PRODUCER_COMMAND
+    ):
+        raise ConformanceContractError(
+            f"scenario {scenario_id} lacks trusted producer provenance"
+        )
+    assertions = evidence.get("observedAssertions")
+    requests = evidence.get("upstreamRequests")
+    if (
+        not isinstance(assertions, list)
+        or not assertions
+        or any(not isinstance(item, str) or not item for item in assertions)
+        or not isinstance(requests, list)
+        or any(not isinstance(item, Mapping) for item in requests)
+        or record.get("upstreamSideEffects") != len(requests)
+    ):
+        raise ConformanceContractError(
+            f"scenario {scenario_id} observations do not prove their outcome"
+        )
+    assert_secret_free(evidence)
+
+
 def build_native_chat_acceptance_report(
     source: Mapping[str, Any], *, evidence_root: Path, expected_commit: str | None = None,
     now: datetime | None = None,
@@ -212,12 +273,16 @@ def build_native_chat_acceptance_report(
                     or not isinstance(scenario.get("upstreamSideEffects"), int)
                     or scenario["upstreamSideEffects"] < 0):
                 raise ConformanceContractError(f"lane {lane_name} has an unproven scenario")
-            _validate_evidence_record(root, scenario, f"scenario {scenario['id']}")
+            _validate_scenario_evidence(
+                root, scenario, lane=lane_name, scenario_id=str(scenario["id"])
+            )
         digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         if lane.get("sha256") != digest:
             raise ConformanceContractError(f"lane {lane_name} evidence digest mismatch")
         assert_secret_free(observation)
-        resolved[lane_name] = {"evidenceRef": ref, "sha256": digest}
+        resolved[lane_name] = {
+            "status": "passed", "evidenceRef": ref, "sha256": digest
+        }
 
     compatibility_ref = source.get("compatibilityManifestRef")
     compatibility_path = _resolve_ref(root, compatibility_ref)
