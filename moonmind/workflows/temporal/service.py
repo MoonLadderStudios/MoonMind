@@ -1014,6 +1014,14 @@ class TemporalExecutionService:
                         "latestVerificationRef": branch.latest_verification_ref,
                         "latestVerificationVerdict": branch.latest_verification_verdict,
                         "remainingWorkRef": remaining_work_ref,
+                        "state": branch.state,
+                        "workBranch": branch.git_work_branch,
+                        "outputCommit": branch.current_head_commit,
+                        "publicationStatus": branch.publish_status,
+                        "pullRequestUrl": branch.pull_request_url,
+                        "promotion": branch.promotion_evidence,
+                        "archiveState": "archived" if branch.archived_at else None,
+                        "archiveReason": branch.archive_reason,
                     }
                 )
                 if (
@@ -1054,17 +1062,14 @@ class TemporalExecutionService:
                     "verificationPolicy": remediation.get("verificationPolicy"),
                     "checkpointBranchPolicy": remediation.get("checkpointBranchPolicy"),
                 })
-            branches = branch_links_by_remediation.get(link.remediation_workflow_id, [])
-            setattr(link, "lifecycle_projection", {
-                "diagnosis": getattr(link, "latest_action_summary", None),
-                "delivery": getattr(link, "outcome", None),
-                "verification": getattr(link, "verification_outcome", None),
+            projection = dict(getattr(link, "lifecycle_projection", None) or {})
+            projection.update({
+                "deliveryStatus": getattr(link, "outcome", None),
+                "verificationOutcome": getattr(link, "verification_outcome", None),
                 "resolution": getattr(link, "resolution", None),
-                "attemptCount": len(branches),
-                "workspaceHead": branches[-1].get("headCheckpointRef") if branches else None,
-                "cleanup": "lock_released" if not getattr(link, "active_lock_scope", None) else "pending",
-                "leaseRelease": "not_projected",
-                "unresolvedWorkRef": branches[-1].get("remainingWorkRef") if branches else None,
+            })
+            setattr(link, "lifecycle_projection", {
+                key: value for key, value in projection.items() if value is not None
             })
 
     async def record_remediation_approval_decision(

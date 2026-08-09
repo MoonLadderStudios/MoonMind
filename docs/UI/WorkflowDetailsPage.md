@@ -570,6 +570,12 @@ requests are read-only and direct the operator to refresh evidence and request a
 new decision. Unsupported controls must remain absent or disabled with the
 bounded capability reason supplied by the owning backend.
 
+Both relationship directions render named operator fields from the canonical
+lifecycle projection. Missing values remain visibly unknown; the UI does not
+synthesize attempt counts, cleanup, lease release, or success. Action delivery,
+repair verification, immediate repair, prevention verification, branch
+execution/publication, and cleanup remain distinct states.
+
 The remediation panel is present when remediation data exists or remediation is available.
 
 It contains:

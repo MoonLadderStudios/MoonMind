@@ -5731,6 +5731,14 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                 "headVersion": 3,
             },
             "createdAt": None,
+            "state": None,
+            "workBranch": None,
+            "outputCommit": None,
+            "publicationStatus": None,
+            "pullRequestUrl": None,
+            "promotion": None,
+            "archiveState": None,
+            "archiveReason": None,
         }
     ]
     assert "/var/lib/moonmind/raw-context.json" not in json.dumps(item)

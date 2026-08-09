@@ -2388,6 +2388,10 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert link is not None
         assert link.latest_action_summary == action_kind
         assert link.outcome == "applied"
+        assert link.lifecycle_projection["action"]["kind"] == action_kind
+        assert link.lifecycle_projection["action"]["artifactRefs"]["request"] == result["artifactRefs"]["actionRequest"]
+        assert link.lifecycle_projection["verification"]["state"] == "terminal"
+        assert link.lifecycle_projection["evidence"]["contextArtifactRef"]
 
 
 @pytest.mark.asyncio
@@ -4316,3 +4320,7 @@ async def test_lifecycle_summary_records_resolution_without_clobbering_delivery(
         # Delivery status is preserved; resolution is recorded separately.
         assert link.outcome == "applied"
         assert link.resolution == "resolved_after_action"
+        assert link.lifecycle_projection["repair"]["repairOutcome"] == "not_attempted"
+        assert link.lifecycle_projection["prevention"]["status"] == "no_reviewable_fix"
+        assert link.lifecycle_projection["leaseRelease"] == "released"
+        assert link.lifecycle_projection["audit"]["decisionLogRef"]

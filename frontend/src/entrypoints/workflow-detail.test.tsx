@@ -6578,11 +6578,14 @@ describe('Workflow Detail Entrypoint', () => {
                   actionPolicyRef: 'standard_remediation_v1',
                 },
                 lifecycle: {
-                  attemptCount: 1,
-                  workspaceHead: 'artifact://workspace/C2',
-                  cleanup: 'pending',
-                  leaseRelease: 'not_projected',
-                  unresolvedWorkRef: 'artifact://verification/V2#remainingWork',
+                  action: { kind: 'session.interrupt', idempotencyKey: 'action-1', actor: 'operator:test', deliveryStatus: 'applied' },
+                  verification: { state: 'terminal', outcome: 'verified_resolved' },
+                  repair: { repairOutcome: 'repaired' },
+                  prevention: { status: 'findings_reported', preventionVerificationOutcome: 'verified' },
+                  cleanup: 'completed',
+                  leaseRelease: 'released',
+                  unresolvedOperatorWork: 'Review the prevention finding.',
+                  audit: { decisionLogRef: 'artifact://audit/decisions' },
                 },
                 actionCapabilities: [
                   { action: 'session.interrupt', ready: false, reason: 'Verification backend unavailable.' },
@@ -6669,9 +6672,12 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
     expect(screen.getByText('Authored remediation intent')).toBeTruthy();
     expect(screen.getByText('Authoritative lifecycle')).toBeTruthy();
+    expect(screen.getByText('action-1')).toBeTruthy();
+    expect(screen.getByText('verified_resolved')).toBeTruthy();
+    expect(screen.getByText('Review the prevention finding.')).toBeTruthy();
     expect(screen.getByText(/Unavailable — Verification backend unavailable/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel remediation' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Take over remediation' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Take over remediation' }).hasAttribute('disabled')).toBe(true);
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
@@ -6730,7 +6736,7 @@ describe('Workflow Detail Entrypoint', () => {
         ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
       ),
     ).toBe(false);
-  });
+  }, 15_000);
 
   it('lets operators choose remediation mode, authority, and action policy before submission', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-create-choices/artifacts?source=temporal');

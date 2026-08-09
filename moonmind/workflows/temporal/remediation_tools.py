@@ -1263,6 +1263,33 @@ class RemediationEvidenceToolService:
         # relabels the target as repaired.
         link.outcome = status
         link.verification_outcome = verification_outcome
+        link.lifecycle_projection = {
+            **dict(getattr(link, "lifecycle_projection", None) or {}),
+            "action": {
+                "kind": action_kind,
+                "id": action_request["actionId"],
+                "idempotencyKey": action_request["actionId"],
+                "actor": _string_or_none(action_request.get("requester")),
+                "risk": _string_or_none(action_request.get("riskTier") or authority_result.get("risk")),
+                "policyDecision": _string_or_none(authority_result.get("decision")),
+                "expectedTargetState": _string_or_none(action_request.get("expectedTargetState")),
+                "deliveryStatus": status,
+                "beforeStateRef": result_payload.get("beforeStateRef"),
+                "afterStateRef": result_payload.get("afterStateRef"),
+                "artifactRefs": {
+                    "request": request_artifact.artifact_id,
+                    "result": result_artifact.artifact_id,
+                    "audit": audit_artifact.artifact_id,
+                },
+            },
+            "verification": {
+                "state": "terminal",
+                "outcome": verification_outcome,
+                "reason": verification_reason,
+                "artifactRef": verification_artifact.artifact_id,
+                "resultingIdentity": verification_resulting_identity,
+            },
+        }
         if resolved_approval is not None:
             link.approval_state = {
                 **dict(link.approval_state or {}),
@@ -1358,6 +1385,23 @@ class RemediationEvidenceToolService:
         resolution = _string_or_none(final_summary.get("resolution"))
         if resolution is not None:
             link.resolution = resolution
+        link.lifecycle_projection = {
+            **dict(getattr(link, "lifecycle_projection", None) or {}),
+            "resolution": resolution,
+            "repair": dict(final_summary.get("repair") or {}),
+            "prevention": dict(final_summary.get("prevention") or {}),
+            "cleanup": final_summary.get("cleanup"),
+            "leaseRelease": final_summary.get("lockRelease"),
+            "unresolvedOperatorWork": (
+                final_summary.get("unresolvedOperatorWork")
+                or dict(final_summary.get("repair") or {}).get("remainingOperatorWork")
+            ),
+            "audit": {
+                "decisionLogRef": decision_artifact.artifact_id,
+                "finalAuditRef": final_summary.get("finalAuditRef"),
+                "summaryRef": summary_artifact.artifact_id,
+            },
+        }
         await self._session.commit()
         return {
             "schemaVersion": "v1",

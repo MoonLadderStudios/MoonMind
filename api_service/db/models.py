@@ -1621,6 +1621,12 @@ class TemporalExecutionRemediationLink(Base):
     approval_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
+    # Bounded, canonical operator projection. Values are copied from the
+    # immutable lifecycle artifacts at their publication boundary; readers must
+    # not reconstruct lifecycle authority from logs or branch counts.
+    lifecycle_projection: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

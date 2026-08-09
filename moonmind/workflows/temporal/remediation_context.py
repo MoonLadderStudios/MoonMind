@@ -248,6 +248,33 @@ class RemediationContextBuilder:
         )
 
         link.context_artifact_ref = artifact.artifact_id
+        evidence = payload.get("evidence") if isinstance(payload, Mapping) else None
+        boundedness = payload.get("boundedness") if isinstance(payload, Mapping) else None
+        live_follow = payload.get("liveFollow") if isinstance(payload, Mapping) else None
+        link.lifecycle_projection = {
+            **dict(getattr(link, "lifecycle_projection", None) or {}),
+            "evidence": {
+                "contextArtifactRef": artifact.artifact_id,
+                "classes": list(evidence.get("omnigentIndex") or [])
+                if isinstance(evidence, Mapping)
+                else [],
+                "availability": list(evidence.get("availability") or [])
+                if isinstance(evidence, Mapping)
+                else [],
+                "degraded": bool(evidence.get("evidenceDegraded"))
+                if isinstance(evidence, Mapping)
+                else False,
+                "unavailableClasses": list(evidence.get("unavailableEvidenceClasses") or [])
+                if isinstance(evidence, Mapping)
+                else [],
+                "boundedness": dict(boundedness or {})
+                if isinstance(boundedness, Mapping)
+                else {},
+            },
+            "liveFollow": dict(live_follow or {})
+            if isinstance(live_follow, Mapping)
+            else {},
+        }
         refs = list(remediation_record.artifact_refs or [])
         if artifact.artifact_id not in refs:
             refs.append(artifact.artifact_id)

@@ -1122,6 +1122,14 @@ const RemediationLinkSchema = z
             operation: z.string().nullable().optional(),
             idempotencyKey: z.string().nullable().optional(),
             createdAt: z.string().nullable().optional(),
+            state: z.string().nullable().optional(),
+            workBranch: z.string().nullable().optional(),
+            outputCommit: z.string().nullable().optional(),
+            publicationStatus: z.string().nullable().optional(),
+            pullRequestUrl: z.string().nullable().optional(),
+            promotion: z.record(z.string(), z.unknown()).nullable().optional(),
+            archiveState: z.string().nullable().optional(),
+            archiveReason: z.string().nullable().optional(),
           })
           .passthrough(),
       )
@@ -7614,6 +7622,13 @@ function RemediationCheckpointBranches({
               <Card label="Latest verification">{branch.latestVerificationVerdict || '—'}</Card>
               <Card label="Next attempt baseline"><code className="text-xs break-all">{branch.nextActionBaseline ? `${branch.nextActionBaseline.checkpointRef} @ v${branch.nextActionBaseline.headVersion}` : '—'}</code></Card>
               <Card label="Remaining work"><code className="text-xs break-all">{branch.remainingWorkRef || '—'}</code></Card>
+              <Card label="Branch execution">{branch.state || '—'}</Card>
+              <Card label="Work branch">{branch.workBranch || '—'}</Card>
+              <Card label="Output commit">{branch.outputCommit || '—'}</Card>
+              <Card label="Publication">{branch.publicationStatus || '—'}</Card>
+              <Card label="Pull request">{branch.pullRequestUrl || '—'}</Card>
+              <Card label="Promotion">{remediationProjectionValue(branch.promotion)}</Card>
+              <Card label="Archive">{[branch.archiveState, branch.archiveReason].filter(Boolean).join(' — ') || '—'}</Card>
             </div>
           </li>
         ))}
@@ -7678,6 +7693,51 @@ function RemediationApprovalSummary({
   );
 }
 
+function remediationProjectionValue(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+function RemediationLifecycleProjection({ lifecycle }: { lifecycle: Record<string, unknown> }) {
+  const action = lifecycle.action && typeof lifecycle.action === 'object' ? lifecycle.action as Record<string, unknown> : {};
+  const verification = lifecycle.verification && typeof lifecycle.verification === 'object' ? lifecycle.verification as Record<string, unknown> : {};
+  const repair = lifecycle.repair && typeof lifecycle.repair === 'object' ? lifecycle.repair as Record<string, unknown> : {};
+  const prevention = lifecycle.prevention && typeof lifecycle.prevention === 'object' ? lifecycle.prevention as Record<string, unknown> : {};
+  const audit = lifecycle.audit && typeof lifecycle.audit === 'object' ? lifecycle.audit as Record<string, unknown> : {};
+  const evidence = lifecycle.evidence && typeof lifecycle.evidence === 'object' ? lifecycle.evidence as Record<string, unknown> : {};
+  const evidenceClasses = Array.isArray(evidence.classes) ? evidence.classes.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : [];
+  return (
+    <div className="stack" aria-label="Authoritative remediation lifecycle">
+      <strong>Authoritative lifecycle</strong>
+      <div className="grid-2">
+        <Card label="Action request">{remediationProjectionValue(action.kind)}</Card>
+        <Card label="Action ID / idempotency">{remediationProjectionValue(action.idempotencyKey)}</Card>
+        <Card label="Actor">{remediationProjectionValue(action.actor)}</Card>
+        <Card label="Risk / policy decision">{[action.risk, action.policyDecision].filter(Boolean).map(String).join(' / ') || '—'}</Card>
+        <Card label="Expected state">{remediationProjectionValue(action.expectedTargetState)}</Card>
+        <Card label="Delivery">{remediationProjectionValue(action.deliveryStatus || lifecycle.deliveryStatus)}</Card>
+        <Card label="Before / after refs">{[action.beforeStateRef, action.afterStateRef].filter(Boolean).map(String).join(' → ') || '—'}</Card>
+        <Card label="Verification state">{remediationProjectionValue(verification.state)}</Card>
+        <Card label="Verification outcome">{remediationProjectionValue(verification.outcome || lifecycle.verificationOutcome)}</Card>
+        <Card label="Immediate repair">{remediationProjectionValue(repair.repairOutcome)}</Card>
+        <Card label="Prevention status">{remediationProjectionValue(prevention.status)}</Card>
+        <Card label="Prevention verification">{remediationProjectionValue(prevention.preventionVerificationOutcome)}</Card>
+        <Card label="Cleanup">{remediationProjectionValue(lifecycle.cleanup)}</Card>
+        <Card label="Lease / lock release">{remediationProjectionValue(lifecycle.leaseRelease)}</Card>
+        <Card label="Unresolved operator work">{remediationProjectionValue(lifecycle.unresolvedOperatorWork)}</Card>
+        <Card label="Decision log">{remediationProjectionValue(audit.decisionLogRef)}</Card>
+        <Card label="Final audit">{remediationProjectionValue(audit.finalAuditRef)}</Card>
+      </div>
+      {evidenceClasses.length ? <div><strong>Evidence classes</strong><ul className="td-remediation-list">{evidenceClasses.map((entry, index) => (
+        <li key={`${String(entry.class || 'evidence')}:${index}`}>
+          {remediationProjectionValue(entry.class)}: {remediationProjectionValue(entry.status)}; freshness {remediationProjectionValue(entry.freshness)}; bounded {remediationProjectionValue(entry.bounded)}{entry.degradedReason ? ` — ${String(entry.degradedReason)}` : ''}
+        </li>
+      ))}</ul></div> : null}
+    </div>
+  );
+}
+
 function RemediationRelationshipsPanel({
   inbound,
   outbound,
@@ -7738,6 +7798,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                {item.lifecycle ? <RemediationLifecycleProjection lifecycle={item.lifecycle} /> : null}
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
                   <div className="stack">
@@ -7807,9 +7868,7 @@ function RemediationRelationshipsPanel({
                 {item.authoredIntent ? (
                   <details><summary>Authored remediation intent</summary><pre className="text-xs break-all">{JSON.stringify(item.authoredIntent, null, 2)}</pre></details>
                 ) : null}
-                {item.lifecycle ? (
-                  <details><summary>Authoritative lifecycle</summary><pre className="text-xs break-all">{JSON.stringify(item.lifecycle, null, 2)}</pre></details>
-                ) : null}
+                {item.lifecycle ? <RemediationLifecycleProjection lifecycle={item.lifecycle} /> : null}
                 {item.actionCapabilities.length ? (
                   <div><strong>Action readiness</strong><ul className="td-remediation-list">{item.actionCapabilities.map((capability) => (
                     <li key={capability.action}><code>{capability.action}</code>: {capability.ready ? 'Ready' : `Unavailable — ${capability.reason}`}</li>

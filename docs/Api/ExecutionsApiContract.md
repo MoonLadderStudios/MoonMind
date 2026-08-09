@@ -1086,3 +1086,12 @@ the requested action was delivered/applied; `verificationOutcome` independently
 describes trusted post-action repair verification. Clients must not infer either
 field from logs or model prose. Approval decisions use the owned remediation
 approval endpoint and may include a bounded operator `comment` rationale.
+
+The `lifecycle` object is copied at the same transaction boundary that publishes
+canonical context, action, verification, and final-summary artifacts. It exposes
+per-evidence-class availability/freshness/boundedness, action and audit identity,
+separate delivery and verification states, repair and prevention outcomes,
+cleanup/lease release, and unresolved operator work. Checkpoint branch entries
+separately project execution, output, publication, promotion, and archive state
+from persisted branch records. Clients must not infer these values from artifact
+bodies, logs, or branch counts.

@@ -14,6 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { BootPayload } from "../boot/parseBootPayload";
 import type { components } from "../generated/openapi";
 import { navigateTo } from "../lib/navigation";
+import { buildRemediationCreateDraft } from "../lib/remediationCreateDraft";
 import { requestWorkflowStartRouteChange } from "../lib/workflowStartRouteGuard";
 import {
   buildTemporalArtifactEditUpdatePayload,
@@ -19155,6 +19156,43 @@ describe("Task Create runtime command previews", () => {
         "Ask the selected runtime to review the current task or code state.",
       ),
     ).toHaveLength(2);
+  });
+
+  it.each([
+    ["missing", null, "unavailable in this tab"],
+    ["cleared", null, "unavailable in this tab"],
+    ["malformed", "{not-json", "malformed and was not imported"],
+    ["expired", JSON.stringify({
+      source: "remediation", createdAt: "2020-01-01T00:00:00.000Z",
+      target: { workflowId: "mm:target", runId: "run-1" }, repository: "repo",
+      publishMode: "pr", runtime: {}, remediation: {
+        target: { workflowId: "mm:target", runId: "run-1" }, mode: "snapshot",
+        authorityMode: "observe_only", actionPolicyRef: "operator_review_only",
+        evidencePolicy: {}, checkpointBranchPolicy: {},
+      },
+    }), "expired before import"],
+  ])("renders an actionable %s remediation draft error without clearing stored evidence", async (draftId, stored, message) => {
+    if (stored) window.sessionStorage.setItem(`moonmind.remediation-create-draft.${draftId}`, stored);
+    window.history.pushState({}, "Task Create", `/workflows/new?intent=remediate&draftId=${draftId}`);
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText(new RegExp(message))).toBeTruthy();
+    expect(screen.queryByText("Remediation Draft")).toBeNull();
+    if (stored) expect(window.sessionStorage.getItem(`moonmind.remediation-create-draft.${draftId}`)).toBe(stored);
+  });
+
+  it("clears a valid remediation draft only after explicit discard", async () => {
+    const draft = buildRemediationCreateDraft({ workflowId: "mm:target", runId: "run-1" });
+    window.sessionStorage.setItem("moonmind.remediation-create-draft.discard", JSON.stringify(draft));
+    window.history.pushState({}, "Task Create", "/workflows/new?intent=remediate&draftId=discard");
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    expect(window.sessionStorage.getItem("moonmind.remediation-create-draft.discard")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Discard remediation draft" }));
+    expect(window.sessionStorage.getItem("moonmind.remediation-create-draft.discard")).toBeNull();
+    expect(screen.getByText("Remediation draft discarded. Create remains open as an ordinary workflow.")).toBeTruthy();
   });
 
   it("warns when a remediation draft target run changed before submit", async () => {

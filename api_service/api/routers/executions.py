@@ -627,6 +627,14 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
     remainingWorkRef: str | None = None
     nextActionBaseline: RemediationNextActionBaselineModel | None = None
     createdAt: datetime | str | None = None
+    state: str | None = None
+    workBranch: str | None = None
+    outputCommit: str | None = None
+    publicationStatus: str | None = None
+    pullRequestUrl: str | None = None
+    promotion: dict[str, Any] | None = None
+    archiveState: str | None = None
+    archiveReason: str | None = None
 
     @field_validator(
         "rootCheckpointRef",
