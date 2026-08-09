@@ -13840,19 +13840,34 @@ async def launch_checkpoint_branch_turn(
         return _turn_to_model(turn)
 
     _validate_branch_turn_launch_policy(branch, turn)
-    _validate_branch_source(
-        workflow_id=workflow_id,
-        record=source_record,
-        source=CheckpointBranchApiSourceModel(
-            workflowId=workflow_id,
-            runId=branch.source_run_id,
-            logicalStepId=branch.logical_step_id,
-            executionOrdinal=branch.source_execution_ordinal,
-            checkpointBoundary=branch.source_checkpoint_boundary,
-            checkpointRef=turn.source_checkpoint_ref,
-            checkpointDigest=turn.source_checkpoint_digest,
-        ),
+    # Root turns resolve against the immutable source workflow. Later turns may
+    # instead resolve against the branch's durable cumulative head, which is the
+    # authoritative workspace after a successful prior semantic execution.
+    cumulative_head = (
+        (
+            branch.current_head_checkpoint_ref
+            and turn.source_checkpoint_ref == branch.current_head_checkpoint_ref
+            and turn.source_checkpoint_ref != branch.source_checkpoint_ref
+        )
+        or (
+            branch.parent_branch_id is not None
+            and turn.source_checkpoint_ref == branch.source_checkpoint_ref
+        )
     )
+    if not cumulative_head:
+        _validate_branch_source(
+            workflow_id=workflow_id,
+            record=source_record,
+            source=CheckpointBranchApiSourceModel(
+                workflowId=workflow_id,
+                runId=branch.source_run_id,
+                logicalStepId=branch.logical_step_id,
+                executionOrdinal=branch.source_execution_ordinal,
+                checkpointBoundary=branch.source_checkpoint_boundary,
+                checkpointRef=turn.source_checkpoint_ref,
+                checkpointDigest=turn.source_checkpoint_digest,
+            ),
+        )
 
     # Allocate semantic identities before compiling any launch artifacts.
     launch_namespace = uuid5(NAMESPACE_URL, launch_key)
@@ -14061,7 +14076,9 @@ async def _record_branch_turn_operation(
     branch: WorkflowCheckpointBranch,
     payload: CheckpointBranchContinueRequest,
     operation_name: str,
+    service: TemporalExecutionService,
     session: AsyncSession,
+    user: User,
     parent_turn_id: str | None = None,
 ) -> CheckpointBranchTurnModel:
     _validate_branch_policy(
@@ -14157,7 +14174,20 @@ async def _record_branch_turn_operation(
     )
     await session.commit()
     await session.refresh(turn)
-    return _turn_to_model(turn)
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        branch_turn_id=turn.branch_turn_id,
+    )
+    return await launch_checkpoint_branch_turn(
+        workflow_id=workflow_id,
+        branch_id=branch.branch_id,
+        branch_turn_id=turn.branch_turn_id,
+        payload=CheckpointBranchTurnLaunchRequest(idempotencyKey=launch_key),
+        service=service,
+        session=session,
+        user=user,
+    )
 
 
 @router.post(
@@ -14185,7 +14215,9 @@ async def continue_checkpoint_branch(
         branch=branch,
         payload=payload,
         operation_name="checkpoint_branch.continue",
+        service=service,
         session=session,
+        user=user,
     )
 
 
@@ -14321,6 +14353,21 @@ async def fork_checkpoint_branch(
         )
     )
     await session.commit()
+    await session.refresh(forked)
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id=workflow_id,
+        branch_id=forked.branch_id,
+        branch_turn_id=branch_turn_id,
+    )
+    await launch_checkpoint_branch_turn(
+        workflow_id=workflow_id,
+        branch_id=forked.branch_id,
+        branch_turn_id=branch_turn_id,
+        payload=CheckpointBranchTurnLaunchRequest(idempotencyKey=launch_key),
+        service=service,
+        session=session,
+        user=user,
+    )
     await session.refresh(forked)
     return _branch_to_model(forked)
 

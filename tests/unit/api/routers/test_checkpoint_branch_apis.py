@@ -1323,6 +1323,8 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert (
         first_continue.json()["branchTurnId"] == second_continue.json()["branchTurnId"]
     )
+    assert first_continue.json()["status"] == "running"
+    assert first_continue.json()["createdStepExecutionId"]
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
@@ -1369,6 +1371,11 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     fork_id = first_fork.json()["branchId"]
     assert fork_id == second_fork.json()["branchId"]
     assert first_fork.json()["parentBranchId"] == branch_id
+    fork_turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{fork_id}/turns"
+    )
+    assert fork_turns.json()["items"][0]["status"] == "running"
+    assert fork_turns.json()["items"][0]["createdStepExecutionId"]
     unsupported_fork = await checkpoint_branch_client.post(
         f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/fork",
         json={

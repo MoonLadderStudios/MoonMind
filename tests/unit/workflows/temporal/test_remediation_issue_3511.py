@@ -761,7 +761,17 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     )
     execution_service = AsyncMock()
     execution_service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="target",
         parameters={"repository": {"repository": {"name": "owner/repo"}}},
+        run_id="target-run",
+        memo={
+            "stepExecutions": [{
+                "logicalStepId": "implement",
+                "executionOrdinal": 2,
+                "checkpointRef": "artifact://checkpoint",
+                "checkpointDigest": "sha256:" + ("b" * 64),
+            }]
+        },
         owner_id="owner-1",
         owner_type=SimpleNamespace(value="user"),
     )
@@ -782,6 +792,9 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
                 "remediationWorkflowId": "remediation",
                 "remediationContextRef": "artifact://context",
                 "checkpointRef": "artifact://checkpoint",
+                "checkpointDigest": "sha256:" + ("b" * 64),
+                "logicalStepId": "implement",
+                "executionOrdinal": 2,
                 "instructionRef": "artifact://instructions",
                 "instructionDigest": "sha256:" + ("a" * 64),
             },
@@ -808,6 +821,53 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         "checkpointBranchTurn"
     ]["instructionRef"] == "artifact://instructions"
     checkpoint_service.launch_turn.assert_awaited_once()
+
+
+async def test_checkpoint_branch_adapter_rejects_stale_checkpoint_before_mutation() -> None:
+    checkpoint_service = AsyncMock()
+    execution_service = AsyncMock()
+    execution_service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="target",
+        run_id="target-run",
+        memo={
+            "checkpoint": {
+                "logicalStepId": "implement",
+                "executionOrdinal": 2,
+                "checkpointRef": "artifact://checkpoint",
+                "checkpointDigest": "sha256:" + ("b" * 64),
+            }
+        },
+    )
+    plane = TemporalRemediationControlPlane(
+        execution_service=execution_service,
+        checkpoint_branch_service=checkpoint_service,
+    )
+    result = await plane.handlers()[
+        "checkpoint_branch.create_from_remediation_context"
+    ](
+        {
+            "actionKind": "checkpoint_branch.create_from_remediation_context",
+            "actionId": "stale-checkpoint",
+            "params": {
+                "expectedRunId": "target-run",
+                "remediationWorkflowId": "remediation",
+                "remediationContextRef": "artifact://context",
+                "checkpointRef": "artifact://checkpoint",
+                "checkpointDigest": "sha256:" + ("c" * 64),
+                "logicalStepId": "implement",
+                "executionOrdinal": 2,
+                "instructionRef": "artifact://instructions",
+                "instructionDigest": "sha256:" + ("a" * 64),
+            },
+        },
+        {},
+        _production_target_health(),
+    )
+
+    assert result["status"] == "precondition_failed"
+    assert result["reason"] == "checkpoint_authority_mismatch"
+    checkpoint_service.create_branch_graph.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

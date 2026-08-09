@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from copy import deepcopy
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -31,6 +32,68 @@ ActionHandler = Callable[
     [Mapping[str, Any], Mapping[str, Any], RemediationTargetHealthSnapshot],
     Awaitable[Mapping[str, Any]],
 ]
+
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _validate_remediation_branch_authority(
+    *, source: Any, target: RemediationTargetHealthSnapshot, params: Mapping[str, Any]
+) -> tuple[str, int]:
+    """Validate immutable source lineage before persisting or dispatching a branch."""
+
+    if str(getattr(source, "workflow_id", "") or "") != target.workflow_id:
+        raise ValueError("source_workflow_mismatch")
+    if str(getattr(source, "run_id", "") or "") != target.current_run_id:
+        raise ValueError("source_run_mismatch")
+    logical_step_id = str(params.get("logicalStepId") or "").strip()
+    if not logical_step_id:
+        raise ValueError("source_logical_step_missing")
+    try:
+        execution_ordinal = int(params.get("executionOrdinal"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("source_execution_ordinal_missing") from exc
+    if execution_ordinal < 1:
+        raise ValueError("source_execution_ordinal_invalid")
+
+    checkpoint_ref = str(params.get("checkpointRef") or "").strip()
+    checkpoint_digest = str(params.get("checkpointDigest") or "").strip()
+    if not checkpoint_digest or not _SHA256_RE.fullmatch(checkpoint_digest):
+        raise ValueError("checkpoint_digest_missing_or_invalid")
+    instruction_ref = str(params.get("instructionRef") or "").strip()
+    instruction_digest = str(params.get("instructionDigest") or "").strip()
+    if not instruction_ref.startswith("artifact://"):
+        raise ValueError("instruction_ref_invalid")
+    if not _SHA256_RE.fullmatch(instruction_digest):
+        raise ValueError("instruction_digest_invalid")
+
+    candidates: list[Mapping[str, Any]] = []
+    memo = getattr(source, "memo", None)
+    if isinstance(memo, Mapping):
+        candidates.append(memo)
+    finish = getattr(source, "finish_summary_json", None)
+    if isinstance(finish, Mapping):
+        candidates.append(finish)
+
+    def matches(value: object) -> bool:
+        if isinstance(value, Mapping):
+            ref = value.get("checkpointRef") or value.get("stepCheckpointRef")
+            digest = value.get("checkpointDigest")
+            step = value.get("logicalStepId") or value.get("stepId")
+            ordinal = value.get("executionOrdinal") or value.get("attempt")
+            if ref == checkpoint_ref:
+                return (
+                    digest == checkpoint_digest
+                    and str(step or "") == logical_step_id
+                    and int(ordinal or 0) == execution_ordinal
+                )
+            return any(matches(child) for child in value.values())
+        if isinstance(value, list):
+            return any(matches(child) for child in value)
+        return False
+
+    if not any(matches(candidate) for candidate in candidates):
+        raise ValueError("checkpoint_authority_mismatch")
+    return logical_step_id, execution_ordinal
 
 
 class TemporalRemediationControlPlane:
@@ -177,12 +240,16 @@ class TemporalRemediationControlPlane:
         remediation_workflow_id = self._required(params, "remediationWorkflowId")
         instruction_ref = self._required(params, "instructionRef")
         instruction_digest = self._required(params, "instructionDigest")
-        if not instruction_digest.startswith("sha256:"):
-            raise ValueError("instructionDigest must be a sha256 digest")
         if self._checkpoint_branch_service is None:
             raise RuntimeError("checkpoint branch service is unavailable")
         if self._execution_service is None:
             raise RuntimeError("execution service is unavailable")
+        source = await self._execution_service.describe_execution(target.workflow_id)
+        logical_step_id, execution_ordinal = _validate_remediation_branch_authority(
+            source=source,
+            target=target,
+            params=params,
+        )
         branch_id = f"remediation-{action_id}"
         turn_id = f"{branch_id}-turn-1"
         graph = await self._checkpoint_branch_service.create_branch_graph(
@@ -193,6 +260,8 @@ class TemporalRemediationControlPlane:
                     "workflowId": target.workflow_id,
                     "rootWorkflowId": target.workflow_id,
                     "runId": target.current_run_id,
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": execution_ordinal,
                     "checkpointBoundary": str(
                         params.get("checkpointBoundary") or "after_execution"
                     ),
@@ -215,7 +284,6 @@ class TemporalRemediationControlPlane:
                 "idempotencyKey": action_id,
             }
         )
-        source = await self._execution_service.describe_execution(target.workflow_id)
         launch_key = build_branch_turn_launch_idempotency_key(
             workflow_id=target.workflow_id,
             branch_id=branch_id,
@@ -224,7 +292,6 @@ class TemporalRemediationControlPlane:
         launch_namespace = uuid5(NAMESPACE_URL, launch_key)
         runtime_workflow_id = f"mm:{uuid5(launch_namespace, 'workflow')}"
         runtime_run_id = str(uuid5(launch_namespace, "run"))
-        logical_step_id = str(params.get("logicalStepId") or "checkpoint-branch-turn")
         step_execution_id = (
             f"{runtime_workflow_id}:{runtime_run_id}:{logical_step_id}:execution:1"
         )
@@ -234,8 +301,8 @@ class TemporalRemediationControlPlane:
             "sourceCheckpoint": {
                 "workflowId": target.workflow_id,
                 "runId": target.current_run_id,
-                "logicalStepId": params.get("logicalStepId"),
-                "sourceExecutionOrdinal": params.get("executionOrdinal"),
+                "logicalStepId": logical_step_id,
+                "sourceExecutionOrdinal": execution_ordinal,
                 "checkpointBoundary": str(params.get("checkpointBoundary") or "after_execution"),
                 "checkpointRef": checkpoint_ref,
                 "checkpointDigest": params.get("checkpointDigest"),
