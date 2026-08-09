@@ -9,10 +9,21 @@ be allowlisted.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from moonmind.omnigent import native_ui_compat as compat
 from moonmind.omnigent.workflow_chat_facade import FACADE_OPERATIONS
+
+
+_CONTRACT_FIXTURE = (
+    Path(__file__).parents[2]
+    / "fixtures"
+    / "omnigent"
+    / "native_ui_network_contract_v1.json"
+)
 
 
 def test_compatibility_map_is_versioned_and_inventories_every_route() -> None:
@@ -29,6 +40,17 @@ def test_compatibility_map_is_versioned_and_inventories_every_route() -> None:
     # HTTP + SSE + WebSocket transports are all covered.
     assert set(cmap["transports"]) == {"http", "sse", "websocket"}
     assert cmap["wsSubprotocols"] == list(compat.NATIVE_UI_WS_SUBPROTOCOLS)
+
+
+def test_compatibility_map_exactly_covers_pinned_network_contract_fixture() -> None:
+    """A short declared map can no longer prove its own completeness."""
+
+    fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["compatibilityProfile"] == compat.NATIVE_UI_COMPAT_VERSION
+    declared = [route["name"] for route in compat.compatibility_map()["routes"]]
+    assert declared == fixture["routes"]
+    assert compat.compatibility_map()["payloadClasses"] == fixture["payloadClasses"]
+    assert compat.compatibility_map()["urlBehaviors"] == fixture["urlBehaviors"]
 
 
 def test_served_surface_is_single_sourced_from_facade_operations() -> None:
@@ -52,7 +74,18 @@ def test_every_native_ui_transport_class_is_represented() -> None:
         compat.CLASS_STREAM,
         compat.CLASS_CONTROL,
         compat.CLASS_RESOURCE_READ,
+        compat.CLASS_RESOURCE_MUTATE,
+        compat.CLASS_TERMINAL_VIEW,
+        compat.CLASS_TERMINAL_CREATE,
         compat.CLASS_TERMINAL_ATTACH,
+        compat.CLASS_TERMINAL_INPUT,
+        compat.CLASS_TERMINAL_RESIZE,
+        compat.CLASS_TERMINAL_CLOSE,
+        compat.CLASS_EXEC_LOG,
+        compat.CLASS_BROWSER_PANE,
+        compat.CLASS_SUBAGENT,
+        compat.CLASS_TASK,
+        compat.CLASS_RECONNECT,
     } <= classes
 
 

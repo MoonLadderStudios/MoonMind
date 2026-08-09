@@ -99,6 +99,12 @@ CODE_WS_SUBPROTOCOL_REJECTED = "omnigent_chat_ws_subprotocol_rejected"
 # offered subprotocol outside this allowlist is rejected before upgrade so the
 # browser cannot select an unbounded upstream protocol.
 NATIVE_UI_WS_SUBPROTOCOLS: tuple[str, ...] = ("omnigent.workflow-chat.v1",)
+NATIVE_UI_PAYLOAD_CLASSES: tuple[str, ...] = ("json", "text", "binary", "multipart")
+NATIVE_UI_URL_BEHAVIORS: tuple[str, ...] = (
+    "route_relative_redirect",
+    "asset_base_discovery",
+    "api_base_discovery",
+)
 
 
 class NativeUiCompatibilityError(WorkflowChatFacadeError):
@@ -200,6 +206,62 @@ def _ws(path: str, **kwargs: Any) -> NativeUiRoute:
     )
 
 
+def _reviewed_http(
+    path: str,
+    *,
+    name: str,
+    methods: tuple[str, ...],
+    operation_class: str,
+    capability: str | None = CAP_VIEW_TRANSCRIPT,
+    mutation: bool = False,
+) -> NativeUiRoute:
+    """Inventory a pinned stock route which is not yet exposed by the facade.
+
+    Keeping these entries in the compatibility contract is important even while
+    they fail closed: omission would make an upstream route indistinguishable
+    from an undiscovered route and allowed the old completeness test to pass
+    with a three-entry map.
+    """
+
+    return NativeUiRoute(
+        name=name,
+        transport=TRANSPORT_HTTP,
+        methods=methods,
+        operation_class=operation_class,
+        disposition=DISPOSITION_COMPAT_REVIEW,
+        capability=capability,
+        mutation=mutation,
+        pattern=re.compile("^" + path + "$"),
+    )
+
+
+# Network contract used by the pinned native workspace UI beyond the #3634
+# transcript facade.  The paths are taken from the vendored server route set;
+# each unsupported operation is deliberately visible as review-required rather
+# than disappearing from the inventory or falling through to a generic proxy.
+_PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_READ_RESOURCES),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_READ_RESOURCES),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/transfer", name="terminal_input", methods=("POST",), operation_class=CLASS_TERMINAL_INPUT, capability=CAP_WRITE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_resize", methods=("PATCH",), operation_class=CLASS_TERMINAL_RESIZE, capability=CAP_WRITE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_close", methods=("DELETE",), operation_class=CLASS_TERMINAL_CLOSE, capability=CAP_WRITE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/shell", name="terminal_shell", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/logs", name="execution_logs", methods=("GET",), operation_class=CLASS_EXEC_LOG, capability=CAP_READ_RESOURCES),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_edit", methods=("PUT", "PATCH"), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_delete", methods=("DELETE",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files", name="resource_upload", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/content", name="resource_download", methods=("GET",), operation_class=CLASS_RESOURCE_READ, capability=CAP_READ_RESOURCES),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/files/(?P<file_id>[^/]+)/attach", name="resource_attach", methods=("POST",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/browser(?:/.*)?", name="browser_pane", methods=("GET", "POST", "DELETE"), operation_class=CLASS_BROWSER_PANE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/subagents(?:/.*)?", name="subagent_tree", methods=("GET", "POST"), operation_class=CLASS_SUBAGENT, capability=CAP_VIEW_TRANSCRIPT),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/tasks(?:/.*)?", name="task_todo", methods=("GET", "POST", "PATCH"), operation_class=CLASS_TASK, capability=CAP_VIEW_TRANSCRIPT),
+    _reviewed_http(r"v1/hosts", name="host_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
+    _reviewed_http(r"v1/runners/[^/]+/status", name="runner_liveness", methods=("GET",), operation_class=CLASS_LIVENESS, capability=None),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/reconnect", name="session_reconnect", methods=("POST",), operation_class=CLASS_RECONNECT, capability=CAP_VIEW_TRANSCRIPT),
+)
+
+
 # Reviewed native-UI WebSocket transport classes. Each is authenticated,
 # authorized, capability-checked, binding-validated, and identity-virtualized
 # before the server-owned upstream relay is opened.
@@ -234,7 +296,9 @@ _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
 
 
 # The full versioned inventory: served HTTP/SSE + recognized WebSocket classes.
-NATIVE_UI_ROUTES: tuple[NativeUiRoute, ...] = _SERVED_ROUTES + _WEBSOCKET_ROUTES
+NATIVE_UI_ROUTES: tuple[NativeUiRoute, ...] = (
+    _SERVED_ROUTES + _PINNED_HTTP_ROUTES + _WEBSOCKET_ROUTES
+)
 
 
 def classify_native_ui_websocket(path: str) -> NativeUiRouteMatch | None:
@@ -323,6 +387,8 @@ def compatibility_map() -> dict[str, Any]:
         "version": NATIVE_UI_COMPAT_VERSION,
         "transports": sorted({route.transport for route in NATIVE_UI_ROUTES}),
         "wsSubprotocols": list(NATIVE_UI_WS_SUBPROTOCOLS),
+        "payloadClasses": list(NATIVE_UI_PAYLOAD_CLASSES),
+        "urlBehaviors": list(NATIVE_UI_URL_BEHAVIORS),
         "routes": [
             {
                 "name": route.name,

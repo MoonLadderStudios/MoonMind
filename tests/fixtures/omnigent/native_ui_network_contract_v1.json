@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "moonmind.omnigent.native-ui-network-contract/v1",
+  "compatibilityProfile": "omnigent.server.v1",
+  "source": "vendored pinned omnigent server and native workspace UI",
+  "routes": [
+    "liveness", "list_agents", "get_session", "stream_events", "post_event",
+    "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",
+    "workspace_diff", "session_files", "session_file", "terminal_view",
+    "terminal_create", "terminal_status", "terminal_input", "terminal_resize",
+    "terminal_close", "terminal_shell", "execution_logs", "workspace_edit",
+    "workspace_delete", "resource_upload", "resource_download", "resource_attach",
+    "browser_pane", "subagent_tree", "task_todo", "host_liveness",
+    "runner_liveness", "session_reconnect", "ws_session_updates",
+    "terminal_attach", "dictation_stream"
+  ],
+  "payloadClasses": ["json", "text", "binary", "multipart"],
+  "urlBehaviors": ["route_relative_redirect", "asset_base_discovery", "api_base_discovery"]
+}
