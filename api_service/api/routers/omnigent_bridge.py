@@ -3138,6 +3138,10 @@ async def _revalidate_binding_before_mutation(
     expected_provider_session_id: str,
     expected_authority_digest: str,
     user: User,
+    expected_session_epoch: Any = None,
+    expected_active_turn: Any = None,
+    expected_elicitation: Any = None,
+    expected_terminal_state: Any = None,
 ) -> tuple[Any, str, dict[str, bool]]:
     """Re-read and compare-and-set the binding state at the mutation handoff.
 
@@ -3154,6 +3158,16 @@ async def _revalidate_binding_before_mutation(
     if fresh is None:
         raise _binding_unknown_error()
     fresh_status = str(getattr(fresh, "status", "") or "")
+    if (
+        expected_terminal_state is not None
+        and str(expected_terminal_state) != fresh_status
+    ):
+        raise WorkflowChatFacadeError(
+            "The Workflow Chat session state does not match the request precondition.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_NOT_READY,
+        )
     if is_read_only(fresh_status):
         raise WorkflowChatFacadeError(
             "This Workflow Chat session is terminal and read-only.",
@@ -3169,15 +3183,57 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    fresh_capabilities = _effective_capabilities(fresh, user)
-    if fresh_capabilities.authority_digest != expected_authority_digest:
+    caller_grants = caller_capabilities_for_bridge(fresh, user)
+    current_capabilities = resolve_bridge_row_capabilities(
+        fresh, caller_capabilities=caller_grants
+    )
+    if current_capabilities.authority_digest != expected_authority_digest:
         raise WorkflowChatFacadeError(
             "The Workflow Chat authority changed before the request completed.",
             failure_class="user_error",
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
+    fresh_capabilities = resolve_bridge_row_capabilities(
+        fresh,
+        caller_capabilities=caller_grants,
+        expected_session_epoch=expected_session_epoch,
+        expected_active_turn=expected_active_turn,
+        expected_elicitation=expected_elicitation,
+    )
+    has_request_precondition = any(
+        value is not None
+        for value in (
+            expected_session_epoch,
+            expected_active_turn,
+            expected_elicitation,
+        )
+    )
+    if has_request_precondition:
+        stale_reasons = {"session_epoch_stale", "active_turn_stale", "elicitation_stale"}
+        if any(
+            item.reason in stale_reasons
+            for item in fresh_capabilities.decisions.values()
+        ):
+            raise WorkflowChatFacadeError(
+                "The Workflow Chat request precondition is stale.",
+                failure_class="user_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_NOT_READY,
+            )
     return fresh, fresh_provider, fresh_capabilities.capabilities
+
+
+def _mutation_preconditions(body: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return only caller-supplied canonical compare-and-set fields."""
+
+    payload = body or {}
+    return {
+        "expected_session_epoch": payload.get("expectedSessionEpoch"),
+        "expected_active_turn": payload.get("expectedActiveTurn"),
+        "expected_elicitation": payload.get("expectedElicitation"),
+        "expected_terminal_state": payload.get("expectedTerminalState"),
+    }
 
 
 async def _claim_facade_message(
@@ -3251,6 +3307,7 @@ async def _record_facade_mutation_audit(
     upstream_result: Any = None,
     request_time: str | None = None,
     dispatch_time: str | None = None,
+    request_preconditions: Mapping[str, Any] | None = None,
 ) -> str:
     """Persist durable, secret-safe evidence of a facade mutation (OB-§19).
 
@@ -3313,6 +3370,15 @@ async def _record_facade_mutation_audit(
         ),
         "sourceMode": "workflow_chat_facade",
     }
+    supplied = dict(request_preconditions or {})
+    for receipt_key, argument_key in (
+        ("expectedSessionEpoch", "expected_session_epoch"),
+        ("expectedActiveTurn", "expected_active_turn"),
+        ("expectedElicitation", "expected_elicitation"),
+        ("expectedTerminalState", "expected_terminal_state"),
+    ):
+        if supplied.get(argument_key) is not None:
+            metadata[receipt_key] = supplied[argument_key]
     if upstream_result is not None:
         normalized = _virtualize_facade_payload(
             upstream_result,
@@ -3758,6 +3824,7 @@ async def _dispatch_workflow_chat_facade(
 
     # 10. Message / control events — routed through the shared control path.
     if operation.name == "post_event":
+        request_preconditions = _mutation_preconditions(body)
         try:
             event = BridgeSessionEventRequest.model_validate(body or {})
         except ValidationError as exc:
@@ -3819,6 +3886,7 @@ async def _dispatch_workflow_chat_facade(
                 expected_provider_session_id=provider_session_id,
                 expected_authority_digest=capability_set.authority_digest,
                 user=user,
+                **request_preconditions,
             )
         )
         if not fresh_capabilities.get(required, False):
@@ -3888,6 +3956,7 @@ async def _dispatch_workflow_chat_facade(
             actor=str(user.id),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
+            request_preconditions=request_preconditions,
         )
         dispatch_time = datetime.now(tz=UTC).isoformat()
 
@@ -3917,6 +3986,7 @@ async def _dispatch_workflow_chat_facade(
                 scan_evidence=scan_evidence,
                 request_time=request_time,
                 dispatch_time=dispatch_time,
+                request_preconditions=request_preconditions,
             )
             raise
         await _record_facade_mutation_audit(
@@ -3930,6 +4000,7 @@ async def _dispatch_workflow_chat_facade(
             upstream_result=result,
             request_time=request_time,
             dispatch_time=dispatch_time,
+            request_preconditions=request_preconditions,
         )
         _audit_facade(
             outcome="mutation",
@@ -3945,6 +4016,7 @@ async def _dispatch_workflow_chat_facade(
 
     # 11. Elicitation / approval resolution.
     if operation.name == "resolve_elicitation":
+        request_preconditions = _mutation_preconditions(body)
         if is_read_only(session_status):
             raise WorkflowChatFacadeError(
                 "This Workflow Chat session is terminal and read-only.",
@@ -3994,6 +4066,7 @@ async def _dispatch_workflow_chat_facade(
                 expected_provider_session_id=provider_session_id,
                 expected_authority_digest=capability_set.authority_digest,
                 user=user,
+                **request_preconditions,
             )
         )
         if not fresh_capabilities.get(CAP_RESOLVE_ELICITATION, False):
@@ -4048,6 +4121,7 @@ async def _dispatch_workflow_chat_facade(
             actor=str(user.id),
             idempotency_key=elicitation_key,
             scan_evidence=elicitation_scan_evidence,
+            request_preconditions=request_preconditions,
         )
         dispatch_time = datetime.now(tz=UTC).isoformat()
         try:
@@ -4068,6 +4142,7 @@ async def _dispatch_workflow_chat_facade(
                 scan_evidence=elicitation_scan_evidence,
                 request_time=request_time,
                 dispatch_time=dispatch_time,
+                request_preconditions=request_preconditions,
             )
             raise
         await _record_facade_mutation_audit(
@@ -4081,6 +4156,7 @@ async def _dispatch_workflow_chat_facade(
             upstream_result=result,
             request_time=request_time,
             dispatch_time=dispatch_time,
+            request_preconditions=request_preconditions,
         )
         _audit_facade(
             outcome="mutation",

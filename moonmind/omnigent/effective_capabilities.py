@@ -258,11 +258,13 @@ def caller_capabilities_for_bridge(row: Any, caller: Any) -> dict[str, bool]:
     if isinstance(explicit, Mapping):
         return {name: explicit.get(name) is True for name in CAPABILITY_NAMES}
 
-    grants = {name: True for name in CAPABILITY_NAMES}
-    # These operations cross separate approval/evidence/lease authority
-    # boundaries and therefore require an explicit role or durable grant.
-    privileged = {"resolveElicitation", "harvestEvidence", "cleanupSession"}
-    if not bool(getattr(caller, "is_superuser", False)):
-        for name in privileged:
-            grants[name] = False
-    return grants
+    if bool(getattr(caller, "is_superuser", False)):
+        return {name: True for name in CAPABILITY_NAMES}
+
+    # Ownership is an object-discovery boundary, not mutation authority.  With
+    # no execution-bound per-principal grant, an ordinary owner receives only
+    # presentation/read capabilities.  Every mutation must be explicitly
+    # granted in ``callerAuthorities`` so a newly added capability cannot become
+    # writable merely because it was added to CAPABILITY_NAMES.
+    read_only = {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
+    return {name: name in read_only for name in CAPABILITY_NAMES}

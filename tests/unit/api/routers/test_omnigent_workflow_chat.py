@@ -1321,6 +1321,30 @@ def test_message_records_durable_control_audit() -> None:
     )
 
 
+def test_message_receipt_retains_caller_compare_and_set_values() -> None:
+    client, _proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 2,
+            "expectedTerminalState": "active",
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    receipts = [
+        entry["metadata"]
+        for entry in store.lifecycle
+        if entry["metadata"].get("receiptSchemaVersion")
+    ]
+    assert receipts
+    assert all(item["expectedSessionEpoch"] == 2 for item in receipts)
+    assert all(item["expectedTerminalState"] == "active" for item in receipts)
+
+
 # --- Mutation-handoff revalidation (compare-and-set) -------------------------
 
 
@@ -1339,6 +1363,36 @@ def test_message_rejected_when_session_terminalizes_midrequest() -> None:
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "omnigent_chat_session_read_only"
     assert proxy.posted == []
+
+
+def test_message_rejects_caller_supplied_stale_session_epoch() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 1,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+def test_elicitation_rejects_caller_supplied_wrong_elicitation() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
+        json={"decision": "approve", "expectedElicitation": "el-other"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.resolved == []
 
 
 # --- Terminal durable read after provider cleanup ----------------------------

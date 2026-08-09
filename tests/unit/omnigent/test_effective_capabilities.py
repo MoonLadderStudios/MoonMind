@@ -141,7 +141,8 @@ def test_caller_authority_separates_owner_from_approver_and_viewer():
     owner = SimpleNamespace(id="owner", is_superuser=False)
     row = SimpleNamespace(metadata_={})
     owner_grants = caller_capabilities_for_bridge(row, owner)
-    assert owner_grants["sendMessage"] is True
+    assert owner_grants["sendMessage"] is False
+    assert owner_grants["viewTranscript"] is True
     assert owner_grants["resolveElicitation"] is False
     assert owner_grants["cleanupSession"] is False
 
