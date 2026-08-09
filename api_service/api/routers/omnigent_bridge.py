@@ -4035,6 +4035,8 @@ async def _relay_native_websocket(
     upstream_url: str,
     subprotocol: str | None,
     still_authorized: Any,
+    browser_frame_filter: Any | None = None,
+    upstream_frame_filter: Any | None = None,
 ) -> None:
     """Relay one reviewed native transport with bounded, renewable authority."""
 
@@ -4079,6 +4081,10 @@ async def _relay_native_websocket(
                             payload = str(message["text"])
                             if len(payload.encode("utf-8")) > _NATIVE_WS_MAX_MESSAGE_BYTES:
                                 raise ValueError("message too large")
+                            if browser_frame_filter is not None:
+                                payload = browser_frame_filter(payload)
+                                if payload is None:
+                                    continue
                             await upstream.send_str(payload)
                         elif message.get("bytes") is not None:
                             payload = bytes(message["bytes"])
@@ -4089,7 +4095,12 @@ async def _relay_native_websocket(
                 async def upstream_to_browser() -> None:
                     async for message in upstream:
                         if message.type == aiohttp.WSMsgType.TEXT:
-                            await browser.send_text(message.data)
+                            payload = message.data
+                            if upstream_frame_filter is not None:
+                                payload = upstream_frame_filter(payload)
+                                if payload is None:
+                                    continue
+                            await browser.send_text(payload)
                         elif message.type == aiohttp.WSMsgType.BINARY:
                             await browser.send_bytes(message.data)
                         elif message.type in {
@@ -4139,6 +4150,11 @@ async def _relay_native_websocket(
             code=WS_CLOSE_UPSTREAM_UNAVAILABLE,
             reason="omnigent_chat_upstream_unavailable",
         )
+    except PermissionError:
+        await browser.close(
+            code=WS_CLOSE_IDENTITY_SUBSTITUTION,
+            reason=CODE_SESSION_SUBSTITUTION,
+        )
     except ValueError:
         await browser.close(
             code=WS_CLOSE_LIMIT_EXCEEDED,
@@ -4160,11 +4176,56 @@ def _facade_reconnect_state(row: Any) -> str:
     """
 
     status_value = str(getattr(row, "status", "") or "").strip().lower()
+    metadata = getattr(row, "metadata_", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
     if is_read_only(status_value):
         return "terminal"
+    if metadata.get("compatibilityUnsupported") is True:
+        return "unsupported"
+    if metadata.get("localStranded") is True:
+        return "local-stranded"
+    if metadata.get("hostOnline") is False:
+        return "wakeable" if metadata.get("hostWakeable") is True else "host-offline"
     if not str(getattr(row, "omnigent_session_id", "") or "").strip():
         return "starting"
     return "available"
+
+
+def _filter_session_updates_watch_frame(
+    payload: str, *, chat_binding_id: str, provider_session_id: str
+) -> str:
+    """Validate and virtualize the client-authored updates watch set."""
+
+    try:
+        frame = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise PermissionError("invalid session updates frame") from exc
+    if not isinstance(frame, dict) or frame.get("type") != "watch":
+        raise PermissionError("unrecognized session updates frame")
+    session_ids = frame.get("session_ids")
+    if not isinstance(session_ids, list) or any(
+        item != chat_binding_id for item in session_ids
+    ):
+        raise PermissionError("session updates identity substitution")
+    frame["session_ids"] = [provider_session_id] if session_ids else []
+    return json.dumps(frame, separators=(",", ":"))
+
+
+def _virtualize_session_updates_frame(
+    payload: str, *, chat_binding_id: str, provider_session_id: str
+) -> str | None:
+    """Virtualize provider identity in an updates frame; drop malformed data."""
+
+    try:
+        frame = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    virtualized = _virtualize_facade_payload(
+        frame,
+        provider_session_id=provider_session_id,
+        chat_binding_id=chat_binding_id,
+    )
+    return json.dumps(virtualized, separators=(",", ":"))
 
 
 async def workflow_chat_binding_facade_ws(
@@ -4336,6 +4397,22 @@ async def workflow_chat_binding_facade_ws(
     #    identity and relay through MoonMind. Browser headers, credentials, and
     #    query parameters are never forwarded upstream.
     upstream_path = upstream_websocket_path(match, provider_session_id)
+    browser_frame_filter = None
+    upstream_frame_filter = None
+    if operation == "ws_session_updates":
+        def browser_frame_filter(payload: str) -> str:
+            return _filter_session_updates_watch_frame(
+                payload,
+                chat_binding_id=chat_binding_id,
+                provider_session_id=provider_session_id,
+            )
+
+        def upstream_frame_filter(payload: str) -> str | None:
+            return _virtualize_session_updates_frame(
+                payload,
+                chat_binding_id=chat_binding_id,
+                provider_session_id=provider_session_id,
+            )
     if operation == "terminal_attach":
         from urllib.parse import urlencode
 
@@ -4389,6 +4466,8 @@ async def workflow_chat_binding_facade_ws(
         upstream_url=_upstream_ws_url(upstream_path),
         subprotocol=selected_subprotocol,
         still_authorized=still_authorized,
+        browser_frame_filter=browser_frame_filter,
+        upstream_frame_filter=upstream_frame_filter,
     )
 
 

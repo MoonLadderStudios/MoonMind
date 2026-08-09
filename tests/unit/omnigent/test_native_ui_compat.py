@@ -63,7 +63,9 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
     # HTTP/SSE allowlist, so there is one source of truth for served routes.
     assert served == {
         *(operation.name for operation in FACADE_OPERATIONS),
+        "ws_session_updates",
         "terminal_attach",
+        "dictation_stream",
     }
 
 

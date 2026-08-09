@@ -12,6 +12,7 @@ bindings and read-only viewers cannot open a live/mutating transport.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -34,7 +35,9 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
+    _filter_session_updates_watch_frame,
     _require_bridge_enabled,
+    _virtualize_session_updates_frame,
     workflow_chat_router,
 )
 from api_service.auth_providers import get_current_user
@@ -133,10 +136,49 @@ def _connect_expect_close(client: TestClient, path: str, **kwargs: Any) -> WebSo
 # --- Authorization before upgrade --------------------------------------------
 
 
-def test_global_updates_ws_fails_closed_pending_frame_alias_filtering() -> None:
+def test_global_updates_ws_relays_through_binding_scope() -> None:
     client = _build()
     disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
-    assert disconnect.code == WS_CLOSE_COMPAT_REVIEW
+    assert disconnect.code == 1000
+
+
+def test_global_updates_frames_are_identity_scoped_and_virtualized() -> None:
+    assert json.loads(
+        _filter_session_updates_watch_frame(
+            '{"type":"watch","session_ids":["chatb-1"]}',
+            chat_binding_id=_CHAT_BINDING_ID,
+            provider_session_id=_PROVIDER_SESSION_ID,
+        )
+    )["session_ids"] == [_PROVIDER_SESSION_ID]
+    with pytest.raises(PermissionError):
+        _filter_session_updates_watch_frame(
+            '{"type":"watch","session_ids":["other"]}',
+            chat_binding_id=_CHAT_BINDING_ID,
+            provider_session_id=_PROVIDER_SESSION_ID,
+        )
+    virtualized = _virtualize_session_updates_frame(
+        '{"type":"changed","items":[{"id":"prov-sess-1","hostId":"secret"}]}',
+        chat_binding_id=_CHAT_BINDING_ID,
+        provider_session_id=_PROVIDER_SESSION_ID,
+    )
+    assert json.loads(virtualized or "null") == {
+        "type": "changed",
+        "items": [{"id": _CHAT_BINDING_ID}],
+    }
+
+
+def test_dictation_ws_relays_through_binding_scope() -> None:
+    client = _build()
+    disconnect = _connect_expect_close(client, _ws_path("v1/dictation/stream"))
+    assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
+
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {"mutateWorkspace": True}})
+    )
+    disconnect = _connect_expect_close(
+        _build(store=store), _ws_path("v1/dictation/stream")
+    )
+    assert disconnect.code == 1000
 
 
 def test_non_owner_ws_is_non_enumerating() -> None:

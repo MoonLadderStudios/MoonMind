@@ -273,7 +273,6 @@ _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
         name="ws_session_updates",
         operation_class=CLASS_STREAM,
         capability=CAP_VIEW_TRANSCRIPT,
-        disposition=DISPOSITION_COMPAT_REVIEW,
     ),
     # The only session-scoped WebSocket in the pinned server contract.
     _ws(
@@ -290,7 +289,6 @@ _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
         operation_class=CLASS_CONTROL,
         capability=CAP_MUTATE_WORKSPACE,
         mutation=True,
-        disposition=DISPOSITION_COMPAT_REVIEW,
     ),
 )
 
