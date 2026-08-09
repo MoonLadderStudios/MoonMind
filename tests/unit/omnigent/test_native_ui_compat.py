@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -25,6 +26,7 @@ _CONTRACT_FIXTURE = (
     / "omnigent"
     / "native_ui_network_contract_v1.json"
 )
+_REPO_ROOT = Path(__file__).parents[3]
 
 
 def test_compatibility_map_is_versioned_and_inventories_every_route() -> None:
@@ -61,6 +63,29 @@ def test_compatibility_map_exactly_covers_pinned_network_contract_fixture() -> N
     assert fixture["evidence"]["routeCount"] == len(cmap["routes"])
     assert fixture["evidence"]["capture"] == "stock-ui-and-server-static-analysis"
     assert all(route["pathPattern"] for route in cmap["routes"])
+
+
+def test_network_contract_is_anchored_to_pinned_stock_sources() -> None:
+    """The capture must be independently inspectable, not map-derived metadata."""
+
+    fixture = json.loads(_CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    evidence = fixture["evidence"]
+    pinned_commit = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT / "omnigent"), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert pinned_commit == evidence["sourceCommit"]
+
+    source_files = evidence["sourceFiles"]
+    assert source_files
+    assert any("/server/routes/" in item["path"] for item in source_files)
+    assert any("/web/src/" in item["path"] for item in source_files)
+    for item in source_files:
+        source = _REPO_ROOT / item["path"]
+        assert source.is_file(), item["path"]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == item["sha256"]
 
 
 def test_served_surface_is_single_sourced_from_facade_operations() -> None:
