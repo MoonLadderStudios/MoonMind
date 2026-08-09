@@ -239,3 +239,30 @@ def resolve_bridge_row_capabilities(
         }
         return EffectiveCapabilitySet(result.schema_version, result.authority_digest, decisions)
     return result
+
+
+def caller_capabilities_for_bridge(row: Any, caller: Any) -> dict[str, bool]:
+    """Resolve caller grants from durable sharing/approval authority.
+
+    Workflow ownership authorizes discovery of a binding, but it does not by
+    itself confer approval or administrative lifecycle authority.  Explicit
+    per-principal grants are stored on the binding; absent such a grant an
+    owner receives the ordinary presentation-client controls only.  Superusers
+    retain approval/lifecycle authority through their authenticated role.
+    """
+
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    principal = _text(getattr(caller, "id", None))
+    authorities = metadata.get("callerAuthorities")
+    explicit = authorities.get(principal) if isinstance(authorities, Mapping) else None
+    if isinstance(explicit, Mapping):
+        return {name: explicit.get(name) is True for name in CAPABILITY_NAMES}
+
+    grants = {name: True for name in CAPABILITY_NAMES}
+    # These operations cross separate approval/evidence/lease authority
+    # boundaries and therefore require an explicit role or durable grant.
+    privileged = {"resolveElicitation", "harvestEvidence", "cleanupSession"}
+    if not bool(getattr(caller, "is_superuser", False)):
+        for name in privileged:
+            grants[name] = False
+    return grants

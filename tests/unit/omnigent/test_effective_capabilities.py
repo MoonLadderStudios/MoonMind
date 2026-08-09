@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     CAPABILITY_SCHEMA_VERSION,
+    caller_capabilities_for_bridge,
     resolve_bridge_row_capabilities,
     resolve_effective_capabilities,
 )
@@ -134,3 +135,33 @@ def test_bridge_row_adapter_fails_closed_without_capability_authority():
     )
     result = resolve_bridge_row_capabilities(row, caller_capabilities=_all())
     assert set(result.disabled_reasons.values()) == {"immutable_authority_missing"}
+
+
+def test_caller_authority_separates_owner_from_approver_and_viewer():
+    owner = SimpleNamespace(id="owner", is_superuser=False)
+    row = SimpleNamespace(metadata_={})
+    owner_grants = caller_capabilities_for_bridge(row, owner)
+    assert owner_grants["sendMessage"] is True
+    assert owner_grants["resolveElicitation"] is False
+    assert owner_grants["cleanupSession"] is False
+
+    row.metadata_ = {
+        "callerAuthorities": {
+            "viewer": {
+                "viewTranscript": True,
+                "readResources": True,
+            }
+        }
+    }
+    viewer_grants = caller_capabilities_for_bridge(
+        row, SimpleNamespace(id="viewer", is_superuser=False)
+    )
+    assert viewer_grants["viewTranscript"] is True
+    assert viewer_grants["sendMessage"] is False
+    assert viewer_grants["writeTerminal"] is False
+
+    approver_grants = caller_capabilities_for_bridge(
+        SimpleNamespace(metadata_={}),
+        SimpleNamespace(id="admin", is_superuser=True),
+    )
+    assert approver_grants["resolveElicitation"] is True

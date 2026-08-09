@@ -368,7 +368,7 @@ async def _serve_native_ui(
     # 4. SPA document: inject the browser-safe binding-scoped bootstrap and scope
     #    the asset URLs so every subsequent request stays on the MoonMind origin.
     session_status = str(getattr(row, "status", "") or "")
-    capability_set = _effective_capabilities(row)
+    capability_set = _effective_capabilities(row, user)
     bootstrap = build_chat_bootstrap(
         chat_binding_id=chat_binding_id,
         mode=mode,

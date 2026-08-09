@@ -82,6 +82,7 @@ def _row(**overrides: Any) -> SimpleNamespace:
             },
         },
         metadata_={
+            "callerAuthorities": {str(_USER_ID): grants},
             "capabilityAuthority": {
                 "fresh": True,
                 "providerProfileGeneration": 4,

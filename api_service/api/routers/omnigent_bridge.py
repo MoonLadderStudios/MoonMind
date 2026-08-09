@@ -14,6 +14,7 @@ maps bridge failure classes onto HTTP status codes.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import json
 import logging
 import os
@@ -134,8 +135,8 @@ from moonmind.omnigent.workflow_chat_facade import (
     required_capability_for_event,
 )
 from moonmind.omnigent.effective_capabilities import (
-    CAPABILITY_NAMES,
     EffectiveCapabilitySet,
+    caller_capabilities_for_bridge,
     resolve_bridge_row_capabilities,
 )
 from moonmind.utils.build_info import resolve_moonmind_build_id
@@ -1442,12 +1443,12 @@ def _projection_capabilities(row: Any) -> dict[str, bool]:
     }
 
 
-def _effective_capabilities(row: Any) -> EffectiveCapabilitySet:
-    """Return the caller-filtered canonical decision for an authorized owner."""
+def _effective_capabilities(row: Any, user: User) -> EffectiveCapabilitySet:
+    """Return the canonical decision filtered by actual caller authority."""
 
     return resolve_bridge_row_capabilities(
         row,
-        caller_capabilities={name: True for name in CAPABILITY_NAMES},
+        caller_capabilities=caller_capabilities_for_bridge(row, user),
     )
 
 
@@ -2866,6 +2867,18 @@ async def _resolve_and_authorize_chat_binding(
             reason="binding_unknown",
         )
         raise _binding_unknown_error()
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    caller_authorities = metadata.get("callerAuthorities")
+    caller_id = str(getattr(user, "id", "") or "")
+    # A durable, principal-specific sharing grant authorizes binding discovery;
+    # its capability map is still intersected independently for every request.
+    # Missing/empty grants never turn a guessed viewer into an owner.
+    if (
+        isinstance(caller_authorities, Mapping)
+        and isinstance(caller_authorities.get(caller_id), Mapping)
+        and any(value is True for value in caller_authorities[caller_id].values())
+    ):
+        return row
     workflow_id = str(getattr(row, "moonmind_workflow_id", "") or "").strip()
     agent_run_id = str(getattr(row, "moonmind_agent_run_id", "") or "").strip() or None
     principal = await resolve_execution_principal(
@@ -3124,6 +3137,7 @@ async def _revalidate_binding_before_mutation(
     chat_binding_id: str,
     expected_provider_session_id: str,
     expected_authority_digest: str,
+    user: User,
 ) -> tuple[Any, str, dict[str, bool]]:
     """Re-read and compare-and-set the binding state at the mutation handoff.
 
@@ -3155,7 +3169,7 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    fresh_capabilities = _effective_capabilities(fresh)
+    fresh_capabilities = _effective_capabilities(fresh, user)
     if fresh_capabilities.authority_digest != expected_authority_digest:
         raise WorkflowChatFacadeError(
             "The Workflow Chat authority changed before the request completed.",
@@ -3601,7 +3615,7 @@ async def _dispatch_workflow_chat_facade(
     # Capabilities are recomputed from trusted status *and* intersected with the
     # binding's stored policy so a disabled operation is never re-advertised or
     # re-authorized from status alone.
-    capability_set = _effective_capabilities(row)
+    capability_set = _effective_capabilities(row, user)
     capabilities = capability_set.capabilities
 
     # 3. Read a bounded JSON body for mutations before the substitution guard.
@@ -3804,6 +3818,7 @@ async def _dispatch_workflow_chat_facade(
                 chat_binding_id=chat_binding_id,
                 expected_provider_session_id=provider_session_id,
                 expected_authority_digest=capability_set.authority_digest,
+                user=user,
             )
         )
         if not fresh_capabilities.get(required, False):
@@ -3876,17 +3891,34 @@ async def _dispatch_workflow_chat_facade(
         )
         dispatch_time = datetime.now(tz=UTC).isoformat()
 
-        result = await _apply_owned_session_control(
-            control_facade=facade,
-            session_id=fresh_provider,
-            payload=event,
-            config=config,
-            actor=str(user.id),
-            proxy=proxy,
-            embedded_facade=embedded_facade,
-            registry=registry,
-            store=store,
-        )
+        try:
+            result = await _apply_owned_session_control(
+                control_facade=facade,
+                session_id=fresh_provider,
+                payload=event,
+                config=config,
+                actor=str(user.id),
+                proxy=proxy,
+                embedded_facade=embedded_facade,
+                registry=registry,
+                store=store,
+            )
+        except Exception:
+            # The provider may have accepted the request before the transport
+            # failed. Persist the ambiguity and leave the claim occupied so a
+            # retry reconciles instead of repeating the side effect.
+            await _record_facade_mutation_audit(
+                store=store,
+                row=fresh_row,
+                control_type=event.type,
+                outcome="delivery_unknown",
+                actor=str(user.id),
+                idempotency_key=effective_key,
+                scan_evidence=scan_evidence,
+                request_time=request_time,
+                dispatch_time=dispatch_time,
+            )
+            raise
         await _record_facade_mutation_audit(
             store=store,
             row=fresh_row,
@@ -3961,6 +3993,7 @@ async def _dispatch_workflow_chat_facade(
                 chat_binding_id=chat_binding_id,
                 expected_provider_session_id=provider_session_id,
                 expected_authority_digest=capability_set.authority_digest,
+                user=user,
             )
         )
         if not fresh_capabilities.get(CAP_RESOLVE_ELICITATION, False):
@@ -4017,12 +4050,26 @@ async def _dispatch_workflow_chat_facade(
             scan_evidence=elicitation_scan_evidence,
         )
         dispatch_time = datetime.now(tz=UTC).isoformat()
-        result = await facade.resolve_elicitation(
-            session_id=fresh_provider,
-            elicitation_id=params["elicitation_id"],
-            payload=body or {},
-            **actor_kwargs,
-        )
+        try:
+            result = await facade.resolve_elicitation(
+                session_id=fresh_provider,
+                elicitation_id=params["elicitation_id"],
+                payload=body or {},
+                **actor_kwargs,
+            )
+        except Exception:
+            await _record_facade_mutation_audit(
+                store=store,
+                row=fresh_row,
+                control_type="resolve_elicitation",
+                outcome="delivery_unknown",
+                actor=str(user.id),
+                idempotency_key=elicitation_key,
+                scan_evidence=elicitation_scan_evidence,
+                request_time=request_time,
+                dispatch_time=dispatch_time,
+            )
+            raise
         await _record_facade_mutation_audit(
             store=store,
             row=fresh_row,
