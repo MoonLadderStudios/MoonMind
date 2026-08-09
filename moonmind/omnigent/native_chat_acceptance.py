@@ -123,6 +123,34 @@ REQUIRED_SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+DENIED_SCENARIOS = frozenset({
+    "unauthorized", "unknown-binding", "expired-binding", "revoked-binding",
+    "cross-workflow-binding", "path-substitution", "query-substitution",
+    "body-substitution", "header-substitution", "sse-cursor-substitution",
+    "websocket-frame-substitution", "launch-authority-substitution",
+    "authorization-change-http", "authorization-change-sse",
+    "authorization-change-websocket", "archived-workflow", "cleaned-session",
+    "non-enumerating-response", "direct-api-denial", "stale-profile",
+    "stale-provider-generation", "stale-policy", "stale-launch-snapshot",
+    "stale-session-epoch", "stale-turn", "stale-elicitation",
+    "unsupported-control", "secret-message", "idempotency-payload-change",
+    "unknown-payload", "malformed-payload", "compressed-payload",
+    "binary-payload", "oversized-payload", "uninspectable-payload",
+    "scanner-unavailable", "scanner-error", "scanner-timeout",
+})
+UNAVAILABLE_SCENARIOS = frozenset({
+    "native-ui-unavailable", "unsupported-runtime", "failed-before-stream",
+    "retention-gap", "schema-incompatibility",
+})
+
+
+def expected_scenario_outcome(scenario_id: str) -> str:
+    if scenario_id in DENIED_SCENARIOS:
+        return "denied"
+    if scenario_id in UNAVAILABLE_SCENARIOS:
+        return "unavailable"
+    return "allowed"
+
 
 def _time(value: Any, label: str) -> datetime:
     try:
@@ -167,7 +195,7 @@ def _validate_scenario_evidence(
     *,
     lane: str,
     scenario_id: str,
-) -> None:
+) -> tuple[str, str]:
     """Validate objective observations instead of trusting result booleans.
 
     The scenario payload is emitted by a repository-owned runner after it has
@@ -199,20 +227,48 @@ def _validate_scenario_evidence(
         raise ConformanceContractError(
             f"scenario {scenario_id} lacks trusted producer provenance"
         )
-    assertions = evidence.get("observedAssertions")
+    observation = evidence.get("observation")
     requests = evidence.get("upstreamRequests")
+    moonmind_requests = evidence.get("moonmindRequests")
+    responses = evidence.get("responses")
     if (
-        not isinstance(assertions, list)
-        or not assertions
-        or any(not isinstance(item, str) or not item for item in assertions)
+        not isinstance(observation, Mapping)
+        or not isinstance(observation.get("observationId"), str)
+        or not observation["observationId"]
+        or observation.get("operation") != scenario_id
+        or observation.get("expectedOutcome") != expected_scenario_outcome(scenario_id)
+        or observation.get("actualOutcome") != expected_scenario_outcome(scenario_id)
+        or not isinstance(observation.get("stateBefore"), str)
+        or not observation["stateBefore"]
+        or not isinstance(observation.get("stateAfter"), str)
+        or not observation["stateAfter"]
         or not isinstance(requests, list)
         or any(not isinstance(item, Mapping) for item in requests)
+        or not isinstance(moonmind_requests, list)
+        or not moonmind_requests
+        or any(not isinstance(item, Mapping) for item in moonmind_requests)
+        or observation.get("requestCount") != len(moonmind_requests)
+        or not isinstance(responses, list)
+        or not responses
+        or any(not isinstance(item, Mapping) for item in responses)
+        or observation.get("responseCount") != len(responses)
         or record.get("upstreamSideEffects") != len(requests)
     ):
         raise ConformanceContractError(
-            f"scenario {scenario_id} observations do not prove their outcome"
+            f"scenario {scenario_id} lacks an objective observation of its outcome"
         )
     assert_secret_free(evidence)
+    captured = {
+        "moonmindRequests": moonmind_requests,
+        "upstreamRequests": requests,
+        "responses": responses,
+        "stateBefore": observation["stateBefore"],
+        "stateAfter": observation["stateAfter"],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(captured, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return observation["observationId"], fingerprint
 
 
 def assemble_native_chat_acceptance_input(
@@ -245,6 +301,8 @@ def assemble_native_chat_acceptance_input(
     output_root.mkdir(parents=True, exist_ok=True)
     lane_root = output_root / "lanes"
     lane_root.mkdir(parents=True, exist_ok=True)
+    observation_ids: set[str] = set()
+    capture_fingerprints: set[str] = set()
     for lane, required_scenarios in REQUIRED_SCENARIOS.items():
         scenarios: list[dict[str, Any]] = []
         for scenario_id in required_scenarios:
@@ -268,9 +326,18 @@ def assemble_native_chat_acceptance_input(
                 "evidenceRef": f"artifact://{relative.as_posix()}",
                 "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
             }
-            _validate_scenario_evidence(
+            observation_id, capture_fingerprint = _validate_scenario_evidence(
                 output_root, record, lane=lane, scenario_id=scenario_id
             )
+            if (
+                observation_id in observation_ids
+                or capture_fingerprint in capture_fingerprints
+            ):
+                raise ConformanceContractError(
+                    f"scenario {scenario_id} reused another scenario observation"
+                )
+            observation_ids.add(observation_id)
+            capture_fingerprints.add(capture_fingerprint)
             scenarios.append(record)
         lane_payload = {
             "schemaVersion": OBSERVATION_VERSION,
@@ -329,6 +396,8 @@ def build_native_chat_acceptance_report(
     if not isinstance(lanes, Mapping) or set(lanes) != set(REQUIRED_LANES):
         raise ConformanceContractError("complete native Chat lane inventory is required")
     resolved: dict[str, Any] = {}
+    observation_ids: set[str] = set()
+    capture_fingerprints: set[str] = set()
     for lane_name in REQUIRED_LANES:
         lane = lanes[lane_name]
         if not isinstance(lane, Mapping) or lane.get("status") != "passed":
@@ -353,9 +422,18 @@ def build_native_chat_acceptance_report(
                     or not isinstance(scenario.get("upstreamSideEffects"), int)
                     or scenario["upstreamSideEffects"] < 0):
                 raise ConformanceContractError(f"lane {lane_name} has an unproven scenario")
-            _validate_scenario_evidence(
+            observation_id, capture_fingerprint = _validate_scenario_evidence(
                 root, scenario, lane=lane_name, scenario_id=str(scenario["id"])
             )
+            if (
+                observation_id in observation_ids
+                or capture_fingerprint in capture_fingerprints
+            ):
+                raise ConformanceContractError(
+                    f"scenario {scenario['id']} reused another scenario observation"
+                )
+            observation_ids.add(observation_id)
+            capture_fingerprints.add(capture_fingerprint)
         digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         if lane.get("sha256") != digest:
             raise ConformanceContractError(f"lane {lane_name} evidence digest mismatch")

@@ -15,6 +15,7 @@ from moonmind.omnigent.native_chat_acceptance import (
     PRODUCER_VERSION, SCENARIO_EVIDENCE_VERSION,
     assemble_native_chat_acceptance_input,
     build_native_chat_acceptance_report,
+    expected_scenario_outcome,
 )
 
 
@@ -41,8 +42,19 @@ def _fixture(root: Path) -> dict:
                 "command": ["node", "tools/run_omnigent_native_chat_journey.mjs"],
                 "exitCode": 0,
             },
-            "observedAssertions": [f"{lane}.{scenario}.observed"],
+            "observation": {
+                "observationId": f"{lane}:{scenario}",
+                "operation": scenario,
+                "expectedOutcome": expected_scenario_outcome(scenario),
+                "actualOutcome": expected_scenario_outcome(scenario),
+                "requestCount": 1,
+                "responseCount": 1,
+                "stateBefore": "ready",
+                "stateAfter": "observed",
+            },
             "upstreamRequests": [],
+            "moonmindRequests": [{"method": "POST", "url": f"/{lane}/{scenario}"}],
+            "responses": [{"status": 200, "url": f"/{lane}/{scenario}"}],
         }
         return {
             "id": scenario,
@@ -215,7 +227,68 @@ def test_side_effect_counter_must_match_captured_requests(tmp_path: Path) -> Non
     source["lanes"]["browser-network-isolation"]["sha256"] = (
         "sha256:" + hashlib.sha256(lane_path.read_bytes()).hexdigest()
     )
-    with pytest.raises(ConformanceContractError, match="prove their outcome"):
+    with pytest.raises(ConformanceContractError, match="objective observation"):
+        _build(source, tmp_path)
+
+
+def test_generic_assertion_strings_do_not_prove_a_scenario(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    scenario_path = (
+        tmp_path / "scenarios" / "authority-isolation" / "owner.json"
+    )
+    payload = json.loads(scenario_path.read_text())
+    payload.pop("observation")
+    payload["observedAssertions"] = ["route observed", "passed"]
+    scenario_path.write_text(json.dumps(payload), encoding="utf-8")
+    lane_path = tmp_path / "lanes" / "authority-isolation.json"
+    lane = json.loads(lane_path.read_text())
+    lane["scenarios"][0]["sha256"] = "sha256:" + hashlib.sha256(
+        scenario_path.read_bytes()).hexdigest()
+    lane_path.write_text(json.dumps(lane), encoding="utf-8")
+    source["lanes"]["authority-isolation"]["sha256"] = "sha256:" + hashlib.sha256(
+        lane_path.read_bytes()).hexdigest()
+
+    with pytest.raises(ConformanceContractError, match="objective observation"):
+        _build(source, tmp_path)
+
+
+def test_one_observation_cannot_be_reused_for_unrelated_scenarios(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    lane_path = tmp_path / "lanes" / "authority-isolation.json"
+    lane = json.loads(lane_path.read_text())
+    first_path = tmp_path / lane["scenarios"][0]["evidenceRef"].removeprefix("artifact://")
+    second_path = tmp_path / lane["scenarios"][1]["evidenceRef"].removeprefix("artifact://")
+    first = json.loads(first_path.read_text())
+    second = json.loads(second_path.read_text())
+    second["observation"]["observationId"] = first["observation"]["observationId"]
+    second_path.write_text(json.dumps(second), encoding="utf-8")
+    lane["scenarios"][1]["sha256"] = "sha256:" + hashlib.sha256(
+        second_path.read_bytes()).hexdigest()
+    lane_path.write_text(json.dumps(lane), encoding="utf-8")
+    source["lanes"]["authority-isolation"]["sha256"] = "sha256:" + hashlib.sha256(
+        lane_path.read_bytes()).hexdigest()
+
+    with pytest.raises(ConformanceContractError, match="reused"):
+        _build(source, tmp_path)
+
+
+def test_denial_scenario_cannot_report_an_allowed_outcome(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    scenario_path = (
+        tmp_path / "scenarios" / "authority-isolation" / "unauthorized.json"
+    )
+    payload = json.loads(scenario_path.read_text())
+    payload["observation"]["actualOutcome"] = "allowed"
+    scenario_path.write_text(json.dumps(payload), encoding="utf-8")
+    lane_path = tmp_path / "lanes" / "authority-isolation.json"
+    lane = json.loads(lane_path.read_text())
+    scenario = next(item for item in lane["scenarios"] if item["id"] == "unauthorized")
+    scenario["sha256"] = "sha256:" + hashlib.sha256(scenario_path.read_bytes()).hexdigest()
+    lane_path.write_text(json.dumps(lane), encoding="utf-8")
+    source["lanes"]["authority-isolation"]["sha256"] = "sha256:" + hashlib.sha256(
+        lane_path.read_bytes()).hexdigest()
+
+    with pytest.raises(ConformanceContractError, match="objective observation"):
         _build(source, tmp_path)
 
 

@@ -38,6 +38,9 @@ const features = requiredScenarios["native-ui-and-transports"].slice(0, 16);
 const accessibility = requiredScenarios["native-ui-and-transports"].slice(16);
 const securityControls = ["csp", "frame", "cors", "csrf", "origin", "cookie", "cache", "service-worker", "route-version-drift"];
 const telemetryNames = ["bindingResolution", "nativeUiCompatibility", "transportOutcomes", "authorizationDenials", "capabilityDenials", "securityScanOutcomes", "nativeUiLifecycle", "mutationOutcomes", "diagnosticFallback", "terminalReplay", "continuationCreation", "upstreamHealth"];
+const deniedScenarios = new Set(["unauthorized", "unknown-binding", "expired-binding", "revoked-binding", "cross-workflow-binding", "path-substitution", "query-substitution", "body-substitution", "header-substitution", "sse-cursor-substitution", "websocket-frame-substitution", "launch-authority-substitution", "authorization-change-http", "authorization-change-sse", "authorization-change-websocket", "archived-workflow", "cleaned-session", "non-enumerating-response", "direct-api-denial", "stale-profile", "stale-provider-generation", "stale-policy", "stale-launch-snapshot", "stale-session-epoch", "stale-turn", "stale-elicitation", "unsupported-control", "secret-message", "idempotency-payload-change", "unknown-payload", "malformed-payload", "compressed-payload", "binary-payload", "oversized-payload", "uninspectable-payload", "scanner-unavailable", "scanner-error", "scanner-timeout"]);
+const unavailableScenarios = new Set(["native-ui-unavailable", "unsupported-runtime", "failed-before-stream", "retention-gap", "schema-incompatibility"]);
+const expectedOutcome = (scenarioId) => deniedScenarios.has(scenarioId) ? "denied" : unavailableScenarios.has(scenarioId) ? "unavailable" : "allowed";
 
 const baseUrl = required("MOONMIND_OMNIGENT_DASHBOARD_URL").replace(/\/$/, "");
 const workflowId = required("MOONMIND_OMNIGENT_NATIVE_CHAT_WORKFLOW_ID");
@@ -84,9 +87,19 @@ try {
       writeJson(path.join(outputRoot, "scenarios", lane, `${scenarioId}.json`), {
         schemaVersion: "moonmind.omnigent.native-chat-scenario-evidence/v1", lane, scenarioId,
         producer: { ...producer, kind },
-        observedAssertions: [`${lane}.${scenarioId}.browser-route-observed`, "workflow-scoped-route-observed", "no-direct-upstream-request-observed"],
+        observation: {
+          observationId: `${lane}:${scenarioId}:${crypto.randomUUID()}`,
+          operation: scenarioId,
+          expectedOutcome: expectedOutcome(scenarioId),
+          actualOutcome: "allowed",
+          requestCount: scopedRequests.length,
+          responseCount: responses.length,
+          stateBefore: "workflow-detail-loaded",
+          stateAfter: "native-chat-reloaded",
+        },
         upstreamRequests: directUpstream,
         moonmindRequests: scopedRequests,
+        responses,
       });
     }
   }
