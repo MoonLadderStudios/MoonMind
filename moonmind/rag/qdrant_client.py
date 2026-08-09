@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -523,6 +524,17 @@ class RagQdrantClient:
         canonical_points: Iterable[qmodels.ScoredPoint],
         trust_overrides: Optional[Mapping[str, str]] = None,
     ) -> List[ContextItem]:
+        def legacy_node(payload: MutableMapping[str, Any]) -> Mapping[str, Any]:
+            """Decode persisted LlamaIndex nodes during the legacy collection cutover."""
+            raw = payload.get("_node_content")
+            if not isinstance(raw, str) or not raw.strip():
+                return {}
+            try:
+                decoded = json.loads(raw)
+            except (TypeError, ValueError):
+                return {}
+            return decoded if isinstance(decoded, Mapping) else {}
+
         def resolve_source(payload: MutableMapping[str, Any]) -> str:
             for key in ("source", "path", "file_path", "document_path"):
                 value = payload.get(key)
@@ -534,6 +546,13 @@ class RagQdrantClient:
                     value = metadata.get(key)
                     if isinstance(value, str) and value.strip():
                         return value
+            legacy = legacy_node(payload)
+            metadata = legacy.get("metadata")
+            if isinstance(metadata, Mapping):
+                for key in ("source", "path", "file_path", "document_path"):
+                    value = metadata.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value
             return str(payload.get("id") or payload.get("point_id") or "unknown")
 
         def resolve_text(payload: MutableMapping[str, Any]) -> str:
@@ -541,6 +560,9 @@ class RagQdrantClient:
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value
+            value = legacy_node(payload).get("text")
+            if isinstance(value, str) and value.strip():
+                return value
             return ""
 
         def to_item(point: qmodels.ScoredPoint, default_trust: str) -> ContextItem:

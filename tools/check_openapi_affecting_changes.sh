@@ -12,8 +12,6 @@ matches_openapi_affecting_path() {
         moonmind/schemas/__init__.py|\
         moonmind/schemas/agent_runtime_models.py|\
         moonmind/schemas/agent_skill_models.py|\
-        moonmind/schemas/chat_models.py|\
-        moonmind/schemas/documents_models.py|\
         moonmind/schemas/managed_session_models.py|\
         moonmind/schemas/manifest_ingest_models.py|\
         moonmind/schemas/manifest_models.py|\

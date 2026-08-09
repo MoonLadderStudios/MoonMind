@@ -24,10 +24,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         await conn.run_sync(Base.metadata.create_all)
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()
@@ -926,10 +922,6 @@ async def test_startup_deactivates_legacy_speckit_orchestrate_template(
         await session.commit()
 
     with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
         patch("api_service.main._initialize_oidc_provider"),
     ):
         await startup_event()

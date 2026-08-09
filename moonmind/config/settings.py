@@ -1797,10 +1797,8 @@ class GitHubSettings(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 class GoogleDriveSettings(BaseSettings):
-    """Google Drive settings"""
+    """Google credentials available to manifest reader adapters."""
 
-    google_drive_enabled: bool = Field(False, alias="GOOGLE_DRIVE_ENABLED")
-    google_drive_folder_id: Optional[str] = Field(None, alias="GOOGLE_DRIVE_FOLDER_ID")
     google_application_credentials: Optional[str] = Field(
         None, alias="GOOGLE_APPLICATION_CREDENTIALS"
     )
@@ -1823,9 +1821,6 @@ class OpenAISettings(BaseSettings):
 class ConfluenceSettings(BaseSettings):
     """Confluence specific settings"""
 
-    confluence_space_keys: Optional[str] = Field(
-        None, alias="ATLASSIAN_CONFLUENCE_SPACE_KEYS"
-    )
     confluence_enabled: bool = Field(False, alias="ATLASSIAN_CONFLUENCE_ENABLED")
 
     model_config = SettingsConfigDict(
@@ -2108,24 +2103,6 @@ class MemorySettings(BaseSettings):
         populate_by_name=True,
         env_prefix="MEMORY_",
         env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-class LocalDataSettings(BaseSettings):
-    """Settings for local data indexing"""
-
-    local_data_path: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("LocalData", "LOCAL_DATA_PATH"),
-    )
-    # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
-    # local_data_enabled: bool = Field(False, alias="LOCAL_DATA_ENABLED")
-
-    model_config = SettingsConfigDict(
-        populate_by_name=True,
-        env_prefix="",
-        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -2843,7 +2820,6 @@ class AppSettings(BaseSettings):
     rag: RAGSettings = Field(default_factory=RAGSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
-    local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
 
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
