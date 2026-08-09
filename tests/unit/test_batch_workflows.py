@@ -124,7 +124,7 @@ def test_parse_github_issue_range_rejects_invalid_search_criteria(value):
         module["parse_github_issue_range"](value)
 
 
-def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
+def test_resolve_github_issue_range_excludes_non_open_issues_and_missing_numbers():
     module = _load_module()
     calls: list[list[str]] = []
 
@@ -155,6 +155,22 @@ def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
                             # request number and a number that does not exist.
                             "issue41": None,
                             "issue42": None,
+                            "issue43": {
+                                "number": 43,
+                                "title": "Closed issue",
+                                "body": "Already completed",
+                                "url": "https://github.com/acme/widgets/issues/43",
+                                "state": "CLOSED",
+                                "labels": {"nodes": [{"name": "done"}]},
+                            },
+                            "issue44": {
+                                "number": 44,
+                                "title": "Issue with unusable state",
+                                "body": "Provider response is incomplete",
+                                "url": "https://github.com/acme/widgets/issues/44",
+                                "state": "",
+                                "labels": {"nodes": []},
+                            },
                         }
                     },
                     "errors": [
@@ -180,7 +196,7 @@ def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
 
     targets = module["resolve_github_issue_range"](
         "acme/widgets",
-        "40-42",
+        "40-44",
         run_command=fake_run,
     )
 
@@ -199,6 +215,8 @@ def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
     assert "issue40: issue(number: 40)" in query_arg
     assert "issue41: issue(number: 41)" in query_arg
     assert "issue42: issue(number: 42)" in query_arg
+    assert "issue43: issue(number: 43)" in query_arg
+    assert "issue44: issue(number: 44)" in query_arg
     assert "-F" not in calls[0]
     assert calls[0].count("-f") == 3
     assert "owner=acme" in calls[0]

@@ -88,7 +88,7 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         '--github-repository "MoonLadderStudios/MoonMind"'
         in step["instructions"]
     )
-    assert "only for Issue objects returned by GitHub" in step["instructions"]
+    assert "only for open Issue objects returned by GitHub" in step["instructions"]
     assert (
         "--targets artifacts/batch-workflows-targets.json"
         not in step["instructions"]

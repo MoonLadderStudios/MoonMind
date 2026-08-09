@@ -182,11 +182,12 @@ def resolve_github_issue_range(
     *,
     run_command: Any = subprocess.run,
 ) -> list[dict[str, Any]]:
-    """Return only GitHub Issue objects whose numbers fall in ``issue_range``.
+    """Return only open GitHub Issues whose numbers fall in ``issue_range``.
 
     GitHub's shared issue/PR numbering means numeric members of the range may be
     pull requests or may not exist. Querying the GraphQL ``issue(number:)`` field
     makes those entries resolve to null, so neither can become a workflow target.
+    Closed issues and responses without an explicit open state are also omitted.
     """
 
     owner, name = _github_repository_parts(repository)
@@ -270,6 +271,9 @@ def resolve_github_issue_range(
             issue = repository_data.get(f"issue{number}")
             if not isinstance(issue, dict):
                 continue
+            issue_state = (_text(issue.get("state")) or "").upper()
+            if issue_state != "OPEN":
+                continue
             labels_node = (
                 issue.get("labels") if isinstance(issue.get("labels"), dict) else {}
             )
@@ -289,7 +293,7 @@ def resolve_github_issue_range(
                         "title": str(issue.get("title") or ""),
                         "body": str(issue.get("body") or ""),
                         "url": str(issue.get("url") or ""),
-                        "state": str(issue.get("state") or "").lower(),
+                        "state": issue_state.lower(),
                         "labels": labels,
                     },
                     "repository": normalized_repository,
