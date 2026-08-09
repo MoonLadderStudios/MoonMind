@@ -1,3 +1,4 @@
+import json
 import threading
 from types import SimpleNamespace
 
@@ -90,6 +91,30 @@ def test_search_caps_results_to_top_k_after_overlay_merge():
     assert len(result.items) == 2
     assert result.items[0].source == "src/overlay_a.py"
     assert result.items[1].source == "src/overlay_b.py"
+
+
+def test_merge_results_reads_persisted_llamaindex_node_payload():
+    client = _client()
+    point = qmodels.ScoredPoint(
+        id="legacy-node",
+        version=1,
+        score=0.9,
+        payload={
+            "_node_content": json.dumps(
+                {
+                    "text": "legacy indexed document",
+                    "metadata": {"file_path": "docs/legacy.md"},
+                }
+            )
+        },
+        vector=None,
+    )
+
+    items = client._merge_results([], [point])
+
+    assert len(items) == 1
+    assert items[0].text == "legacy indexed document"
+    assert items[0].source == "docs/legacy.md"
 
 def test_search_uses_query_points_when_search_api_is_unavailable():
     client = _client()
