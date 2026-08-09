@@ -606,6 +606,19 @@ The remediation runtime should not scrape dashboard pages. It should receive a M
   Live follow when supported.
 
 - `remediation.list_allowed_actions()`
+
+Action discovery is capability-truthful. Each catalog identity has an
+independently evaluated capability row containing `requestable`,
+`dryRunSupported`, `executionBackendReady`, `approvalBackendReady`,
+`verificationBackendReady`, `supportedTargetRuntimes`, `supportedHostModes`,
+`requiredEvidenceClasses`, and bounded `blockedReasons`. The executable list is
+the intersection of catalog enablement, caller/profile permission, an owning
+execution adapter, durable approval support, and an authoritative verifier.
+Actions without both an execution owner and verifier remain visible only in the
+capability matrix and are rejected before mutation. In particular, managed
+session terminate/restart, targeted janitor cleanup, cleanup verification,
+target annotation/verification, helper-container, and Omnigent host/lease
+actions are not executable until their missing owners are wired.
   Return action kinds allowed by `actionPolicyRef`.
 
 - `remediation.execute_action(actionKind, params, dryRun?)`

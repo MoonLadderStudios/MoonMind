@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.remediation_context import (
@@ -381,14 +384,92 @@ _SUPPORTED_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
 
+# Execution readiness is deliberately explicit and conservative. An action is
+# requestable only when both its owning mutation adapter and its authoritative
+# verifier are wired. Keeping unavailable identities in ``_ACTION_CATALOG``
+# lets policy and documentation expose a stable, bounded disabled reason without
+# advertising the action as executable (MoonLadderStudios/MoonMind#3624).
+_EXECUTION_BACKEND_READY = frozenset(
+    {
+        "execution.pause",
+        "execution.resume",
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "checkpoint_branch.create_from_remediation_context",
+        "execution.cancel",
+        "execution.force_terminate",
+        "session.interrupt_turn",
+        "session.clear",
+        "session.cancel",
+        "provider_profile.evict_stale_lease",
+        "workload.restart_helper_container",
+        "workload.reap_orphan_container",
+        "host.drain",
+        "host.stop",
+        "host.restart",
+        "host.remove",
+        "host_lease.reconcile_stale",
+    }
+)
+
+
+def remediation_action_capability(action_kind: str) -> Mapping[str, Any]:
+    """Return the canonical, independently evaluated readiness projection."""
+
+    normalized = str(action_kind or "").strip()
+    metadata = _ACTION_CATALOG.get(normalized)
+    contract = verification_contract_for(normalized)
+    catalog_enabled = bool(metadata and metadata.get("enabled"))
+    execution_ready = normalized in _EXECUTION_BACKEND_READY
+    verification_ready = contract.automatically_verifiable
+    approval_ready = catalog_enabled
+    blocked: list[str] = []
+    if not catalog_enabled:
+        blocked.append("action_not_in_enabled_catalog")
+    if not execution_ready:
+        blocked.append("execution_backend_unavailable")
+    if not approval_ready:
+        blocked.append("approval_backend_unavailable")
+    if not verification_ready:
+        blocked.append("authoritative_verifier_unavailable")
+    requestable = not blocked
+    return {
+        "requestable": requestable,
+        "dryRunSupported": catalog_enabled,
+        "executionBackendReady": execution_ready,
+        "approvalBackendReady": approval_ready,
+        "verificationBackendReady": verification_ready,
+        "supportedTargetRuntimes": ["temporal", "omnigent"],
+        "supportedHostModes": ["managed", "external"],
+        "requiredEvidenceClasses": list(
+            dict.fromkeys(
+                contract.before_evidence_classes + contract.after_evidence_classes
+            )
+        ),
+        "blockedReasons": blocked,
+    }
+
+
+def remediation_action_capability_matrix() -> tuple[Mapping[str, Any], ...]:
+    """Return every catalog identity, including truthfully disabled actions."""
+
+    return tuple(
+        {
+            "actionKind": action_kind,
+            **remediation_action_capability(action_kind),
+        }
+        for action_kind in _ACTION_CATALOG
+    )
+
 
 def remediation_action_kinds() -> tuple[str, ...]:
-    """Return the canonical enabled action identities for adapter construction."""
+    """Return canonical identities with ready execution and verification owners."""
 
     return tuple(
         action_kind
         for action_kind, metadata in _ACTION_CATALOG.items()
         if metadata.get("enabled") is True
+        and remediation_action_capability(action_kind)["requestable"] is True
     )
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
@@ -686,6 +767,9 @@ class RemediationActionAuthorityService:
                 continue
             if action_kind not in allowed_by_profile:
                 continue
+            capability = remediation_action_capability(action_kind)
+            if not capability["requestable"]:
+                continue
             actions.append(
                 {
                     "actionKind": action_kind,
@@ -697,6 +781,7 @@ class RemediationActionAuthorityService:
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
                     "auditPayloadShape": deepcopy(_COMMON_AUDIT_PAYLOAD_SHAPE),
+                    **capability,
                 }
             )
         return tuple(actions)
@@ -2541,5 +2626,8 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "remediation_action_capability",
+    "remediation_action_capability_matrix",
+    "remediation_action_kinds",
     "remediation_changes_require_checkpoint_branch",
 ]

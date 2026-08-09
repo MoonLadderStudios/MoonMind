@@ -247,6 +247,16 @@ CANONICAL_REMEDIATION_ACTIONS = {
     "workload.reap_orphan_container",
 }
 
+REQUESTABLE_REMEDIATION_ACTIONS = {
+    "checkpoint_branch.create_from_remediation_context",
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+}
+
 def test_remediation_action_authority_lists_canonical_mm483_action_registry():
     service = RemediationActionAuthorityService(session=object())
 
@@ -257,7 +267,7 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         ),
     )
 
-    assert {item["actionKind"] for item in allowed} == CANONICAL_REMEDIATION_ACTIONS
+    assert {item["actionKind"] for item in allowed} == REQUESTABLE_REMEDIATION_ACTIONS
     for item in allowed:
         assert item["riskTier"] in {"low", "medium", "high"}
         assert item["targetType"]
@@ -267,6 +277,11 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         assert item["verificationRequired"] is True
         assert item["verificationHint"]
         assert item["auditPayloadShape"]
+        assert item["requestable"] is True
+        assert item["executionBackendReady"] is True
+        assert item["approvalBackendReady"] is True
+        assert item["verificationBackendReady"] is True
+        assert item["blockedReasons"] == []
 
 def test_remediation_action_authority_rejects_legacy_action_aliases():
     service = RemediationActionAuthorityService(session=object())
@@ -283,10 +298,7 @@ def test_remediation_action_authority_rejects_legacy_action_aliases():
         ),
     )
 
-    assert {item["actionKind"] for item in allowed} == {
-        "workload.restart_helper_container",
-        "session.terminate",
-    }
+    assert allowed == ()
 
 def test_remediation_action_authority_lists_policy_compatible_actions():
     service = RemediationActionAuthorityService(session=object())
@@ -300,20 +312,20 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
     allowed = service.list_allowed_actions(
         permissions=_admin_permissions(),
         security_profile=_admin_profile(
-            allowed_action_kinds=("workload.restart_helper_container",)
+            allowed_action_kinds=("execution.pause",)
         ),
     )
 
-    assert [item["actionKind"] for item in allowed] == ["workload.restart_helper_container"]
+    assert [item["actionKind"] for item in allowed] == ["execution.pause"]
     assert allowed[0]["riskTier"] == "medium"
-    assert allowed[0]["targetType"] == "workload_container"
+    assert allowed[0]["targetType"] == "execution"
     assert allowed[0]["inputMetadata"]["reason"]["required"] is False
 
     allowed[0]["inputMetadata"]["reason"]["required"] = True
     listed_again = service.list_allowed_actions(
         permissions=_admin_permissions(),
         security_profile=_admin_profile(
-            allowed_action_kinds=("workload.restart_helper_container",)
+            allowed_action_kinds=("execution.pause",)
         ),
     )
     assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
@@ -338,7 +350,7 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
     )
 
     action_kinds = {item["actionKind"] for item in allowed}
-    assert action_kinds == {"workload.restart_helper_container", "session.terminate"}
+    assert action_kinds == set()
     assert not action_kinds.intersection(
         {
             "raw_host_shell",

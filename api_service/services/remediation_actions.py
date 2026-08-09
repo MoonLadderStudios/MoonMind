@@ -16,9 +16,13 @@ from moonmind.omnigent.policies import (
     validate_approval_binding,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.remediation_actions import remediation_action_kinds
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
     RemediationTargetHealthSnapshot,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -213,7 +217,7 @@ class TemporalRemediationControlPlane:
         # evidence and classifies the actual repair outcome (issue #3622); this
         # adapter no longer claims "verified" immediately after persistence.
         return {
-            "status": "applied",
+            "status": "accepted",
             "message": "Checkpoint Branch was persisted by its durable owner.",
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": [
@@ -226,6 +230,9 @@ class TemporalRemediationControlPlane:
                 "Re-verify the target objective from fresh evidence; a persisted "
                 "branch is a remediation candidate, not a confirmed repair."
             ),
+            "deliveryStage": "branch_graph_created",
+            "branchTurnLaunched": False,
+            "terminalBranchResultAvailable": False,
         }
 
     async def session_control(
@@ -349,24 +356,30 @@ class TemporalRemediationControlPlane:
             target: RemediationTargetHealthSnapshot,
         ) -> Mapping[str, Any]:
             before = [f"execution:{target.workflow_id}:run:{target.current_run_id}"]
+            action_id = str(action_request.get("actionId") or "").strip()
+            action_kind = str(action_request.get("actionKind") or "").strip()
+            target_identity = {
+                "workflowId": target.workflow_id,
+                "runId": target.current_run_id,
+            }
             try:
-                return await handler(action_request, guard_result, target)
+                result = dict(await handler(action_request, guard_result, target))
             except ValueError as exc:
-                return {
+                result = {
                     "status": "precondition_failed",
                     "reason": str(exc),
                     "beforeEvidenceRefs": before,
                     "afterEvidenceRefs": [],
                 }
             except asyncio.TimeoutError:
-                return {
+                result = {
                     "status": "timed_out",
                     "reason": "owning control plane timed out",
                     "beforeEvidenceRefs": before,
                     "afterEvidenceRefs": [],
                 }
             except Exception as exc:
-                return {
+                result = {
                     "status": "delivery_unknown",
                     "reason": (
                         "owning control plane did not return authoritative "
@@ -375,6 +388,19 @@ class TemporalRemediationControlPlane:
                     "beforeEvidenceRefs": before,
                     "afterEvidenceRefs": [],
                 }
+            result.setdefault("beforeEvidenceRefs", [])
+            result.setdefault("afterEvidenceRefs", [])
+            result["idempotencyIdentity"] = action_id
+            result["targetIdentity"] = target_identity
+            result["resultIdentity"] = {
+                "actionId": action_id,
+                "actionKind": action_kind,
+                "targetWorkflowId": target.workflow_id,
+            }
+            result["verificationContract"] = verification_contract_for(
+                action_kind
+            ).to_payload()
+            return result
 
         return execute
 
@@ -544,8 +570,13 @@ def build_remediation_action_executor(
             CheckpointBranchService(session) if session is not None else None
         ),
     )
+    ready = set(remediation_action_kinds())
     return MoonMindControlPlaneRemediationActionExecutor(
-        plane.handlers(enforce_policy=True)
+        {
+            action_kind: handler
+            for action_kind, handler in plane.handlers(enforce_policy=True).items()
+            if action_kind in ready
+        }
     )
 
 

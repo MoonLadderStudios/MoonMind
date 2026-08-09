@@ -192,13 +192,9 @@ def test_bootstrap_keeps_mutating_remediation_actions_approval_gated():
             assert decision["approvalClass"] and decision["reviewerRule"]
 
 
-def test_bootstrap_approval_rule_is_bindable():
+def test_bootstrap_does_not_authorize_unready_action():
     snapshot = _bootstrap_snapshot()
-    binding = bind_approval_request(
-        snapshot, "host.restart", target_expected_state="run-1"
-    )
-    assert binding["approvalClass"] == "remediation"
-    assert binding["reviewerRule"] == "workflow-owner"
+    assert resolve_action(snapshot, "host.restart")["decision"] == "deny"
 
 
 def test_policy_authority_evidence_rejects_unvalidated_snapshot():
