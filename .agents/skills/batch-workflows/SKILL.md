@@ -48,7 +48,7 @@ Progress" with a single batch run.
 - `additional_jql` (string, optional): advanced JQL AND-clause appended to the
   project/status query.
 - `issue_range` (string, GitHub preset only): inclusive `START-END` search
-  criteria. Numeric members are not targets unless GitHub returns an Issue.
+  criteria. Numeric members are targets only when GitHub returns an open Issue.
 - `repository` (string, optional): repository override when workflow context
   cannot infer it.
 - `publish_mode` (string, optional): advanced child publish override, `none`,
@@ -83,10 +83,11 @@ Progress" with a single batch run.
    For GitHub, the inclusive number range is search criteria, not a target list.
    GitHub issues and pull requests share numbers, and numbers may be absent. Use
    the helper's `--github-issue-range` plus `--github-repository` inputs so its
-   trusted GraphQL `issue(number:)` lookup returns only real Issue objects.
-   Pull requests and absent numbers are omitted normally and never become
-   targets. The helper rejects numeric spans wider than 1,000 numbers before
-   querying GitHub and writes the resolved target artifact before queueing.
+   trusted GraphQL `issue(number:)` lookup returns only open Issue objects.
+   Closed issues, pull requests, absent numbers, and responses without an
+   explicit open state are omitted normally and never become targets. The helper
+   rejects numeric spans wider than 1,000 numbers before querying GitHub and
+   writes the resolved target artifact before queueing.
 
 2. **Queue child workflows** by running the helper:
 
