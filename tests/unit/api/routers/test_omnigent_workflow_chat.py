@@ -35,6 +35,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
@@ -98,6 +99,7 @@ class _FakeService:
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
+    grants = {name: True for name in CAPABILITY_NAMES}
     values = dict(
         bridge_session_id=_BRIDGE_SESSION_ID,
         moonmind_workflow_id="mm:w1",
@@ -110,7 +112,29 @@ def _row(**overrides: Any) -> SimpleNamespace:
         omnigent_host_id="host-1",
         compatibility_profile="omnigent.server.v1",
         terminal_refs={},
-        metadata_={},
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "callerAuthorities": {str(_USER_ID): grants},
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            }
+        },
         diagnostics_ref=None,
         capture_manifest_ref=None,
         initial_snapshot_ref=None,
@@ -244,8 +268,7 @@ class _FakeStore:
         # can be reconciled against the digest it was first bound to.
         for entry in reversed(self.lifecycle):
             if (
-                entry["kind"] == "claim"
-                and entry["event_identity"] == event_identity
+                entry["event_identity"] == event_identity
             ):
                 return dict(entry["metadata"])
         return None
@@ -628,7 +651,7 @@ def test_message_forwarded_to_bound_provider_session() -> None:
     assert _PROVIDER_SESSION_ID not in response.text
 
 
-def test_stop_control_denied_without_distinct_authority() -> None:
+def test_stop_control_uses_distinct_authority() -> None:
     # The browser facade carries message/interrupt authority only. Destructive
     # session controls (stop/clear/cleanup/terminal_cleanup) need their own
     # authority the facade does not grant, so a caller with sendMessage cannot
@@ -641,19 +664,27 @@ def test_stop_control_denied_without_distinct_authority() -> None:
         json={"type": "stop"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
-    # The destructive control never reached the revocation/forward path.
-    registry.revoke_scope.assert_not_called()
-    assert proxy.posted == []
+    assert response.status_code == 200
+    registry.revoke_scope.assert_called_once()
+    assert proxy.posted == [
+        {"session_id": _PROVIDER_SESSION_ID, "type": "stop", "actor": None}
+    ]
 
 
 @pytest.mark.parametrize(
     "event_type",
     ["stop", "stop_session", "clear_session", "cleanup_session", "terminal_cleanup"],
 )
-def test_destructive_controls_denied(event_type: str) -> None:
-    client, proxy, _store = _build()
+def test_destructive_controls_denied_without_distinct_grant(
+    event_type: str,
+) -> None:
+    grants = {name: True for name in CAPABILITY_NAMES}
+    grants[required_capability_for_event(event_type)] = False
+    row = _row(metadata_={
+        **_row().metadata_,
+        "callerAuthorities": {str(_USER_ID): grants},
+    })
+    client, proxy, _store = _build(store=_FakeStore(row=row))
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
@@ -692,6 +723,19 @@ def test_resolve_elicitation_persists_scan_evidence_in_mutation_audit(
     assert metadata.get("scanContractVersion")
     assert metadata.get("scannerPolicyRef")
     assert metadata.get("highSecurityMode") is True
+    assert metadata["receiptSchemaVersion"] == "moonmind.omnigent.mutation-receipt.v1"
+    assert metadata["actor"] == str(_USER_ID)
+    assert metadata["workflowId"] == "mm:w1"
+    assert metadata["runId"] == "run-1"
+    assert metadata["stepExecutionId"] == "step-1"
+    assert metadata["agentRunId"] == "ar-1"
+    assert metadata["bridgeSessionId"] == _BRIDGE_SESSION_ID
+    assert metadata["providerSessionId"] == _PROVIDER_SESSION_ID
+    assert metadata["moonmindRequestId"]
+    assert metadata["requestTime"]
+    assert metadata["dispatchTime"]
+    assert metadata["completionTime"]
+    assert metadata["durableAuditRef"].startswith("omnigent-bridge-event://")
 
 
 def test_resolve_elicitation_forwarded_to_bound_session() -> None:
@@ -979,9 +1023,11 @@ def test_required_capability_for_event_allowlist() -> None:
     assert required_capability_for_event("message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("user.message") == CAP_SEND_MESSAGE
     assert required_capability_for_event("interrupt") == CAP_INTERRUPT_TURN
-    # Destructive/unknown controls map to a capability the facade never grants.
-    for control in ("stop_session", "cleanup_session", "terminal_cleanup", "weird"):
-        assert required_capability_for_event(control) == CAP_CONTROL_UNSUPPORTED
+    assert required_capability_for_event("stop_session") == "stopSession"
+    assert required_capability_for_event("clear_session") == "replaceSession"
+    assert required_capability_for_event("harvest_session") == "harvestEvidence"
+    assert required_capability_for_event("cleanup_session") == "cleanupSession"
+    assert required_capability_for_event("weird") == CAP_CONTROL_UNSUPPORTED
 
 
 def test_interrupt_is_forwarded() -> None:
@@ -1256,7 +1302,9 @@ def test_message_idempotency_key_dedupes_replay() -> None:
     assert second.status_code == 200
     # Exactly one provider turn was issued despite the retry.
     assert len(proxy.posted) == 1
-    assert second.json()["deduplicated"] is True
+    # A duplicate receives the canonical persisted prior result, not a newly
+    # synthesized acknowledgement with different semantics.
+    assert second.json() == first.json()
 
 
 def test_message_idempotency_key_reuse_with_different_payload_conflicts() -> None:
@@ -1304,6 +1352,45 @@ def test_message_records_durable_control_audit() -> None:
     )
 
 
+def test_message_receipt_retains_caller_compare_and_set_values() -> None:
+    client, _proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 2,
+            "expectedTerminalState": "active",
+            "expectedAgentProfileDigest": "sha256:agent",
+            "expectedProviderProfileGeneration": 4,
+            "expectedLaunchSnapshotRef": "artifact://launch",
+            "expectedPolicyDigest": "sha256:policy",
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    receipts = [
+        entry["metadata"]
+        for entry in store.lifecycle
+        if entry["metadata"].get("receiptSchemaVersion")
+    ]
+    assert receipts
+    assert all(item["expectedSessionEpoch"] == 2 for item in receipts)
+    assert all(item["expectedTerminalState"] == "active" for item in receipts)
+    assert all(
+        item["expectedAgentProfileDigest"] == "sha256:agent" for item in receipts
+    )
+    assert all(
+        item["expectedProviderProfileGeneration"] == 4 for item in receipts
+    )
+    assert all(
+        item["expectedLaunchSnapshotRef"] == "artifact://launch"
+        for item in receipts
+    )
+    assert all(item["expectedPolicyDigest"] == "sha256:policy" for item in receipts)
+
+
 # --- Mutation-handoff revalidation (compare-and-set) -------------------------
 
 
@@ -1322,6 +1409,62 @@ def test_message_rejected_when_session_terminalizes_midrequest() -> None:
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "omnigent_chat_session_read_only"
     assert proxy.posted == []
+
+
+def test_message_rejects_caller_supplied_stale_session_epoch() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            "expectedSessionEpoch": 1,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expectedAgentProfileDigest", "sha256:stale"),
+        ("expectedProviderProfileGeneration", 3),
+        ("expectedLaunchSnapshotRef", "artifact://stale-launch"),
+        ("expectedPolicyDigest", "sha256:stale-policy"),
+    ],
+)
+def test_message_rejects_stale_immutable_authority(field: str, value: Any) -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={
+            "type": "message",
+            field: value,
+            "data": {"content": [{"type": "text", "text": "hi"}]},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.posted == []
+
+
+def test_elicitation_rejects_caller_supplied_wrong_elicitation() -> None:
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
+        json={"decision": "approve", "expectedElicitation": "el-other"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "omnigent_chat_session_not_ready"
+    assert proxy.resolved == []
 
 
 # --- Terminal durable read after provider cleanup ----------------------------

@@ -172,6 +172,22 @@ def test_bootstrap_policy_denied_reason_when_live() -> None:
     )
 
 
+def test_bootstrap_projects_versioned_stable_capability_decisions() -> None:
+    bootstrap = build_chat_bootstrap(
+        chat_binding_id=_BINDING,
+        mode="embedded",
+        read_only=False,
+        capabilities={"sendMessage": False},
+        state="available",
+        capability_schema_version="moonmind.omnigent.effective-capabilities.v1",
+        capability_authority_digest="a" * 64,
+        disabled_reasons={"sendMessage": "provider_generation_stale"},
+    )
+    assert bootstrap["disabledReasons"]["sendMessage"] == "provider_generation_stale"
+    assert bootstrap["capabilitySchemaVersion"].endswith("v1")
+    assert bootstrap["capabilityAuthorityDigest"] == "a" * 64
+
+
 # --- security headers ---------------------------------------------------------
 
 

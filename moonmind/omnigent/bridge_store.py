@@ -1445,6 +1445,30 @@ class OmnigentBridgeSessionStore:
                         "controlOutcome",
                         "controlId",
                         "controlIdempotencyKey",
+                        "receiptSchemaVersion",
+                        "reasonCode",
+                        "moonmindRequestId",
+                        "runId",
+                        "agentRunId",
+                        "bridgeSessionId",
+                        "providerSessionId",
+                        "providerProfileGeneration",
+                        "agentProfileRef",
+                        "agentProfileDigest",
+                        "launchPolicyRef",
+                        "effectiveLaunchSnapshotRef",
+                        "policySnapshotRef",
+                        "policyDigest",
+                        "expectedSessionEpoch",
+                        "expectedActiveTurn",
+                        "expectedElicitation",
+                        "expectedTerminalState",
+                        "requestTime",
+                        "dispatchTime",
+                        "completionTime",
+                        "upstreamCorrelation",
+                        "normalizedResult",
+                        "durableAuditRef",
                         # Bounded, non-disclosing native outbound-scan evidence
                         # (MoonLadderStudios/MoonMind#3637). Persisted so a
                         # posted mutation durably proves the exact payload was
@@ -2041,6 +2065,39 @@ class OmnigentBridgeSessionStore:
                 changed = True
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
+                from moonmind.omnigent.effective_capabilities import (
+                    adapt_provider_capabilities,
+                )
+
+                canonical_upstream = adapt_provider_capabilities(capabilities)
+                launch = dict(row.effective_launch_snapshot_json or {})
+                # Each intersection layer comes from its own immutable launch
+                # evidence.  Never clone the provider-reported map into policy
+                # or profile authority merely because the names overlap.
+                profile_capabilities = dict(
+                    launch.get("agentProfileCapabilities") or {}
+                )
+                launch_capabilities = dict(launch.get("capabilities") or {})
+                metadata["capabilityAuthority"] = {
+                    "schemaVersion": "moonmind.omnigent.capability-authority.v1",
+                    "fresh": True,
+                    "providerProfileGeneration": row.credential_generation,
+                    "upstream": canonical_upstream,
+                    "agentProfile": profile_capabilities,
+                    "launchPolicy": launch_capabilities,
+                    "state": {
+                        "sessionEpoch": 1,
+                        "activeTurnId": None,
+                        "elicitationId": None,
+                        # At creation the live session is active.  This layer
+                        # expresses state availability only; upstream support
+                        # remains an independent intersection input above.
+                        "capabilities": dict(
+                            launch.get("sessionStateCapabilities")
+                            or {}
+                        ),
+                    },
+                }
                 changed = True
             if not already_recorded:
                 journal.append(
@@ -2489,6 +2546,42 @@ class OmnigentBridgeSessionStore:
                 and next_status not in _TERMINAL_STATUSES
             ):
                 row.status = next_status
+            # Keep compare-and-set authority synchronized with the normalized
+            # provider event journal.  Requests can then bind to the exact live
+            # turn/elicitation instead of comparing against creation-time nulls.
+            row_metadata = dict(row.metadata_ or {})
+            capability_authority = dict(
+                row_metadata.get("capabilityAuthority") or {}
+            )
+            authority_state = dict(capability_authority.get("state") or {})
+            for event in prepared_events:
+                event_type = str(event.get("type") or event.get("eventType") or "")
+                turn_id = _string_or_none(
+                    event.get("turnId") or event.get("responseId")
+                )
+                elicitation_id = _string_or_none(
+                    event.get("elicitationId") or event.get("requestId")
+                )
+                if event_type in {
+                    "response.created", "response.started", "turn.started"
+                } and turn_id:
+                    authority_state["activeTurnId"] = turn_id
+                elif event_type in {
+                    "response.completed", "response.failed", "turn.completed"
+                }:
+                    authority_state["activeTurnId"] = None
+                if event_type in {
+                    "response.elicitation_request", "elicitation_request"
+                } and elicitation_id:
+                    authority_state["elicitationId"] = elicitation_id
+                elif event_type in {
+                    "elicitation.resolved", "elicitation.cancelled"
+                }:
+                    authority_state["elicitationId"] = None
+            if capability_authority:
+                capability_authority["state"] = authority_state
+                row_metadata["capabilityAuthority"] = capability_authority
+                row.metadata_ = row_metadata
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)

@@ -325,35 +325,34 @@ def match_facade_operation(method: str, path: str) -> FacadeMatch | None:
     return None
 
 
-# Sentinel capability the facade never grants. Any composer/control event that
-# is not on the supported allowlist maps here and is therefore denied: the
-# browser facade only carries message and interrupt authority, never the
-# distinct stop, reset, harvest, or cleanup authority those controls require.
+# Sentinel capability the facade never grants. Any event that is not on the
+# supported allowlist maps here and is therefore denied.
 CAP_CONTROL_UNSUPPORTED = "controlUnsupported"
 
-# Composer/control events the binding-scoped facade supports, mapped to the one
-# capability each requires. ``stop_session``, ``clear_session``,
-# ``reset_session``, ``cleanup_session``, ``terminal_cleanup``,
-# ``harvest_session``, and any future control are intentionally absent: they
-# stop, reset, harvest, or destroy owned runtime resources and need their own
-# authority, which the browser facade does not carry (OB-§4.2, §16).
+# Events the binding-scoped facade supports, mapped to the distinct capability
+# each requires. The resolver, not the event name or browser visibility, is the
+# authority boundary for lifecycle controls.
 _SUPPORTED_COMPOSER_EVENTS: dict[str, str] = {
     "message": CAP_SEND_MESSAGE,
     "user.message": CAP_SEND_MESSAGE,
     "interrupt": CAP_INTERRUPT_TURN,
+    "stop": "stopSession",
+    "session.stop": "stopSession",
+    "stop_session": "stopSession",
+    "clear_session": "replaceSession",
+    "reset_session": "replaceSession",
+    "harvest_session": "harvestEvidence",
+    "cleanup_session": "cleanupSession",
+    "terminal_cleanup": "cleanupSession",
 }
 
 
 def required_capability_for_event(event_type: str | None) -> str:
     """Map a supported composer event type to the capability it requires.
 
-    Only ``message``/``user.message`` (``sendMessage``) and ``interrupt``
-    (``interruptTurn``) are supported through the browser facade. Every other
-    event type — including ``stop_session``, ``clear_session``,
-    ``cleanup_session``, and ``terminal_cleanup`` — maps to
-    :data:`CAP_CONTROL_UNSUPPORTED`, a capability the facade never grants, so a
-    caller holding only ``sendMessage`` cannot reach a destructive control by
-    naming an off-allowlist event type.
+    Every supported lifecycle event has a separate grant. Unknown controls map
+    to :data:`CAP_CONTROL_UNSUPPORTED`, so message authority can never be used
+    to reach a destructive operation.
     """
 
     raw = str(event_type or "").strip().lower()

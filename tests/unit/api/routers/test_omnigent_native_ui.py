@@ -35,6 +35,7 @@ from api_service.api.routers.omnigent_native_ui import (
 )
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.native_ui import scoped_ui_base
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 
 _USER_ID = uuid4()
 _CHAT_BINDING_ID = "chatb_opaque123"
@@ -60,6 +61,7 @@ class _FakeService:
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
+    grants = {name: True for name in CAPABILITY_NAMES}
     values = dict(
         bridge_session_id="brs-internal-1",
         moonmind_workflow_id="mm:w1",
@@ -67,7 +69,29 @@ def _row(**overrides: Any) -> SimpleNamespace:
         moonmind_agent_run_id="ar-1",
         status="active",
         omnigent_session_id=_PROVIDER_SESSION_ID,
-        metadata_={},
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "callerAuthorities": {str(_USER_ID): grants},
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            }
+        },
     )
     values.update(overrides)
     return SimpleNamespace(**values)
