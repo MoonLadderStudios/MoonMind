@@ -895,6 +895,31 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
         return str(settings.workflow.default_runtime or "codex_cli").strip().lower()
     return normalized
 
+
+def _compile_repository_operation(
+    inputs: dict[str, Any],
+    *,
+    is_agent_runtime: bool,
+) -> None:
+    """Make repository authority explicit in one durable plan node."""
+
+    repository_operation = str(
+        inputs.get("repositoryOperation") or ""
+    ).strip().lower()
+    if repository_operation == "read":
+        # A read-only repository step may still write its declared handoff
+        # artifacts, but it cannot own repository mutation or publication.
+        inputs["publishMode"] = "none"
+    elif (
+        is_agent_runtime
+        and str(inputs.get("publishMode") or "").strip().lower()
+        in {"branch", "pr"}
+    ):
+        # Managed publication is repository mutation authority. Make the
+        # default explicit so downstream steps retain the authored base.
+        inputs["repositoryOperation"] = "write"
+
+
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _STORY_OUTPUT_TASK_TOOLS = frozenset(
     {
@@ -2138,14 +2163,10 @@ def _build_runtime_planner():
                     step_node_inputs.pop("selectedSkill", None)
                 if is_story_output_tool:
                     step_node_inputs["publishMode"] = "none"
-                repository_operation = str(
-                    step_node_inputs.get("repositoryOperation") or ""
-                ).strip().lower()
-                if repository_operation == "read":
-                    # A read-only repository step may still write its declared
-                    # handoff artifacts, but it cannot own repository mutation
-                    # or publication. Compile that authority away before launch.
-                    step_node_inputs["publishMode"] = "none"
+                _compile_repository_operation(
+                    step_node_inputs,
+                    is_agent_runtime=is_agent_runtime_step,
+                )
 
                 nodes.append({
                     "id": step_id,
@@ -2191,6 +2212,10 @@ def _build_runtime_planner():
                 )
                 if _jira_agent_skill_selected(selected_skill_name):
                     expanded_inputs["publishMode"] = "none"
+                _compile_repository_operation(
+                    expanded_inputs,
+                    is_agent_runtime=True,
+                )
                 expanded_publish_mode = str(
                     expanded_inputs.get("publishMode") or ""
                 ).strip().lower()
@@ -2245,6 +2270,10 @@ def _build_runtime_planner():
             if is_story_output_tool:
                 node_inputs.pop("selectedSkill", None)
                 node_inputs["publishMode"] = "none"
+            _compile_repository_operation(
+                node_inputs,
+                is_agent_runtime=not is_story_output_tool,
+            )
             node_publish_mode = str(node_inputs.get("publishMode") or "").strip().lower()
             if node_publish_mode in {"auto", "none"} and not is_story_output_tool:
                 node_inputs["instructions"] = (

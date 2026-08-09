@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
+    RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
@@ -4143,6 +4144,56 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
         self.assertEqual(
             request.workspace_spec["targetBranch"],
             "moonmind-job-2602f4e9",
+        )
+        self.assertEqual(request.parameters["repositoryOperation"], "write")
+
+    def test_pr_publish_request_defaults_to_write_on_published_branch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._publish_context.update(
+            {
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-24a73665",
+                "headSha": "b651c9e47fe6e7696ef575b6969ed7d682c78338",
+                "baseRef": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:6103dddf-2e68-4185-9481-5668d5916642",
+            run_id="019fe3a7-4522-78a5-af30-9ea9a5a03311",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: patch_id
+                in {
+                    RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+                    RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
+                },
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "targetBranch": "generated-plan-branch",
+                    "publishMode": "pr",
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        assert request.workspace_spec is not None
+        self.assertEqual(request.workspace_spec["startingBranch"], "main")
+        self.assertEqual(
+            request.workspace_spec["targetBranch"],
+            "moonmind-job-24a73665",
         )
         self.assertEqual(request.parameters["repositoryOperation"], "write")
 
