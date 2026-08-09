@@ -3574,24 +3574,19 @@ async def _record_facade_mutation_audit(
     if scan_evidence is not None:
         metadata.update(scan_evidence.audit_metadata())
     identity_suffix = idempotency_key or actor
-    try:
-        await store.record_lifecycle_event(
-            row.idempotency_key,
-            event_type="workflow_chat_control",
-            event_identity=(
-                f"workflow-chat-control:{control_type}:{outcome}:{identity_suffix}"
-            ),
-            summary=f"workflow chat {control_type} {outcome}",
-            metadata=metadata,
-        )
-    except OmnigentIdempotencyError:
-        # The durable row lock lost a benign race with terminal processing; the
-        # authoritative terminal evidence remains, so the audit is best-effort.
-        logger.info(
-            "omnigent.workflow_chat_facade audit-skip control=%s outcome=%s",
-            control_type,
-            outcome,
-        )
+    # A mutation is not complete without its durable receipt.  Propagate a
+    # terminal-row/idempotency conflict to the caller so the durable owner can
+    # retry or reconcile it; silently dropping the audit would turn a provider
+    # side effect into success without objective MoonMind evidence.
+    await store.record_lifecycle_event(
+        row.idempotency_key,
+        event_type="workflow_chat_control",
+        event_identity=(
+            f"workflow-chat-control:{control_type}:{outcome}:{identity_suffix}"
+        ),
+        summary=f"workflow chat {control_type} {outcome}",
+        metadata=metadata,
+    )
     return request_time or now
 
 

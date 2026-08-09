@@ -2065,6 +2065,11 @@ class OmnigentBridgeSessionStore:
                 changed = True
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
+                from moonmind.omnigent.effective_capabilities import (
+                    adapt_provider_capabilities,
+                )
+
+                canonical_upstream = adapt_provider_capabilities(capabilities)
                 launch = dict(row.effective_launch_snapshot_json or {})
                 # Each intersection layer comes from its own immutable launch
                 # evidence.  Never clone the provider-reported map into policy
@@ -2077,7 +2082,7 @@ class OmnigentBridgeSessionStore:
                     "schemaVersion": "moonmind.omnigent.capability-authority.v1",
                     "fresh": True,
                     "providerProfileGeneration": row.credential_generation,
-                    "upstream": dict(capabilities),
+                    "upstream": canonical_upstream,
                     "agentProfile": profile_capabilities,
                     "launchPolicy": launch_capabilities,
                     "state": {
@@ -2089,7 +2094,7 @@ class OmnigentBridgeSessionStore:
                         # remains an independent intersection input above.
                         "capabilities": dict(
                             launch.get("sessionStateCapabilities")
-                            or dict.fromkeys(capabilities, True)
+                            or {}
                         ),
                     },
                 }

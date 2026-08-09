@@ -5,10 +5,22 @@ from types import SimpleNamespace
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     CAPABILITY_SCHEMA_VERSION,
+    adapt_provider_capabilities,
     caller_capabilities_for_bridge,
     resolve_bridge_row_capabilities,
     resolve_effective_capabilities,
 )
+
+
+def test_provider_capabilities_are_adapted_to_complete_canonical_namespace():
+    adapted = adapt_provider_capabilities(
+        {"sendFollowUp": True, "stop": True, "unknownProviderControl": True}
+    )
+    assert tuple(adapted) == CAPABILITY_NAMES
+    assert adapted["sendMessage"] is True
+    assert adapted["stopSession"] is True
+    assert adapted["queueMessage"] is False
+    assert "unknownProviderControl" not in adapted
 
 
 def _authority(**overrides):

@@ -41,6 +41,33 @@ CAPABILITY_NAMES: tuple[str, ...] = (
     "cleanupSession",
 )
 
+# Provider facades report their own operation names.  This is the sole scoped
+# translation boundary into MoonMind's canonical capability namespace; the
+# resolver itself never guesses aliases or treats an unknown provider bit as
+# authority.
+PROVIDER_CAPABILITY_ALIASES: Mapping[str, tuple[str, ...]] = {
+    "sendFollowUp": ("sendMessage",),
+    "stop": ("stopSession",),
+    "harvest": ("harvestEvidence",),
+    "clearSession": ("cleanupSession",),
+    "newSession": ("replaceSession", "reconnectSession"),
+    "interrupt": ("interruptTurn",),
+}
+
+
+def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bool]:
+    """Adapt bounded provider evidence to the complete canonical namespace."""
+
+    adapted = dict.fromkeys(CAPABILITY_NAMES, False)
+    for name in CAPABILITY_NAMES:
+        if capabilities.get(name) is True:
+            adapted[name] = True
+    for provider_name, canonical_names in PROVIDER_CAPABILITY_ALIASES.items():
+        if capabilities.get(provider_name) is True:
+            for canonical_name in canonical_names:
+                adapted[canonical_name] = True
+    return adapted
+
 MUTATION_CAPABILITIES = frozenset(CAPABILITY_NAMES) - frozenset(
     {"viewTranscript", "readResources", "viewTerminal", "viewSubagents"}
 )
