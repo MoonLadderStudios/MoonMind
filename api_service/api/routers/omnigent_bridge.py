@@ -1859,6 +1859,7 @@ async def stream_omnigent_bridge_session_events(
 async def post_omnigent_session_event(
     session_id: str,
     payload: BridgeSessionEventRequest,
+    request: Request,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
@@ -1890,10 +1891,116 @@ async def post_omnigent_session_event(
         service=service,
         proxy=control_facade,
     )
+    row = await store.get_session_by_provider_session_id(session_id)
+    chat_binding_id = str(getattr(row, "chat_binding_id", "") or "").strip()
+    if row is None or not chat_binding_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": (
+                    "This compatibility control has no canonical Workflow Chat "
+                    "binding authority."
+                ),
+            },
+        )
+
+    required = required_capability_for_event(payload.type)
+    caller_grants = caller_capabilities_for_bridge(row, user)
+    capability_set = resolve_bridge_row_capabilities(
+        row, caller_capabilities=caller_grants
+    )
+    if not capability_set.capabilities.get(required, False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": CODE_OPERATION_DENIED,
+                "message": "The requested control is not permitted for this binding.",
+            },
+        )
+
+    effective_key = _facade_idempotency_key(request) or f"mm-{uuid4().hex}"
+    body = payload.model_dump(by_alias=True, exclude_none=True)
     try:
-        return await _apply_owned_session_control(
+        scan_evidence = _enforce_native_outbound_scan(
+            surface=NativeScanSurface.MESSAGE,
+            body=body,
+            idempotency_key=effective_key,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            operation="post_event",
+        )
+    except WorkflowChatFacadeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+    preconditions = _mutation_preconditions(body)
+    allow_terminal = required in {"harvestEvidence", "cleanupSession"}
+    try:
+        fresh_row, fresh_provider, fresh_capabilities = (
+            await _revalidate_binding_before_mutation(
+                store=store,
+                chat_binding_id=chat_binding_id,
+                expected_provider_session_id=session_id,
+                expected_authority_digest=capability_set.authority_digest,
+                user=user,
+                allow_terminal_mutation=allow_terminal,
+                **preconditions,
+            )
+        )
+    except WorkflowChatFacadeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+    if not fresh_capabilities.get(required, False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": CODE_OPERATION_DENIED, "message": "Capability revoked."},
+        )
+    try:
+        claimed = await _claim_facade_message(
+            store=store,
+            row=fresh_row,
+            event_type=payload.type,
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            payload_digest=scan_evidence.payload_digest,
+        )
+    except WorkflowChatFacadeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+    if not claimed:
+        prior = await _reconcile_facade_mutation(
+            store=store,
+            row=fresh_row,
+            facade=control_facade,
+            control_type=payload.type,
+            idempotency_key=effective_key,
+            provider_session_id=fresh_provider,
+            chat_binding_id=chat_binding_id,
+            actor=str(user.id),
+            scan_evidence=scan_evidence,
+            request_preconditions=preconditions,
+        )
+        if prior is not None:
+            return prior
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": CODE_SESSION_NOT_READY,
+                "message": "Prior delivery is not yet reconcilable.",
+            },
+        )
+    request_time = await _record_facade_mutation_audit(
+        store=store,
+        row=fresh_row,
+        control_type=payload.type,
+        outcome="pending",
+        actor=str(user.id),
+        idempotency_key=effective_key,
+        scan_evidence=scan_evidence,
+        request_preconditions=preconditions,
+    )
+    dispatch_time = datetime.now(tz=UTC).isoformat()
+    try:
+        result = await _apply_owned_session_control(
             control_facade=control_facade,
-            session_id=session_id,
+            session_id=fresh_provider,
             payload=payload,
             config=config,
             actor=str(user.id),
@@ -1902,7 +2009,33 @@ async def post_omnigent_session_event(
             registry=registry,
             store=store,
         )
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=payload.type,
+            outcome="posted",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+            upstream_result=result,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
+            request_preconditions=preconditions,
+        )
+        return result
     except OmnigentBridgeError as exc:
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=payload.type,
+            outcome="delivery_unknown",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
+            request_preconditions=preconditions,
+        )
         raise _http_error_from_bridge(exc) from exc
 
 
@@ -3462,6 +3595,77 @@ async def _record_facade_mutation_audit(
     return request_time or now
 
 
+async def _reconcile_facade_mutation(
+    *,
+    store: OmnigentBridgeSessionStore,
+    row: Any,
+    facade: Any,
+    control_type: str,
+    idempotency_key: str,
+    provider_session_id: str,
+    chat_binding_id: str,
+    actor: str,
+    scan_evidence: NativeScanEvidence,
+    request_preconditions: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Reconcile an occupied mutation claim without repeating its side effect.
+
+    A completed receipt is authoritative.  For stop controls, a fresh upstream
+    terminal snapshot is also objective terminal evidence and can safely close
+    a request whose transport outcome was ambiguous.  Other controls remain
+    occupied until their provider supplies equivalent correlation evidence;
+    they are never retried speculatively.
+    """
+
+    posted_identity = (
+        f"workflow-chat-control:{control_type}:posted:{idempotency_key}"
+    )
+    prior = await store.get_lifecycle_event_metadata(
+        row.idempotency_key, event_identity=posted_identity
+    )
+    if isinstance(prior, dict) and "normalizedResult" in prior:
+        result = prior["normalizedResult"]
+        return result if isinstance(result, dict) else {"result": result}
+
+    if control_type not in {"stop", "session.stop", "stop_session"}:
+        return None
+    try:
+        snapshot = await facade.get_session(provider_session_id)
+    except OmnigentBridgeError:
+        return None
+    terminal_statuses = {
+        "completed",
+        "failed",
+        "canceled",
+        "cancelled",
+        "stopped",
+        "terminated",
+    }
+    if (
+        not isinstance(snapshot, dict)
+        or str(snapshot.get("status") or "").lower() not in terminal_statuses
+    ):
+        return None
+
+    reconciled = _virtualize_facade_payload(
+        {**snapshot, "reconciled": True},
+        provider_session_id=provider_session_id,
+        chat_binding_id=chat_binding_id,
+    )
+    await _record_facade_mutation_audit(
+        store=store,
+        row=row,
+        control_type=control_type,
+        outcome="posted",
+        actor=actor,
+        idempotency_key=idempotency_key,
+        scan_evidence=scan_evidence,
+        upstream_result=reconciled,
+        request_preconditions=request_preconditions,
+    )
+    return reconciled
+
+
 def _event_is_chat_visible(row: Any) -> bool:
     """Return whether a journal row is meant for the browser transcript.
 
@@ -3984,6 +4188,20 @@ async def _dispatch_workflow_chat_facade(
             )
             if isinstance(prior, dict) and "normalizedResult" in prior:
                 return prior["normalizedResult"]
+            reconciled = await _reconcile_facade_mutation(
+                store=store,
+                row=fresh_row,
+                facade=facade,
+                control_type=event.type,
+                idempotency_key=effective_key,
+                provider_session_id=fresh_provider,
+                chat_binding_id=chat_binding_id,
+                actor=str(user.id),
+                scan_evidence=scan_evidence,
+                request_preconditions=request_preconditions,
+            )
+            if reconciled is not None:
+                return reconciled
             raise WorkflowChatFacadeError(
                 "The prior request is still pending or its delivery is unknown.",
                 failure_class="system_error",

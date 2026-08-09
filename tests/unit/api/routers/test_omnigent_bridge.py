@@ -25,6 +25,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_execution_service,
     _get_launch_default_agent_selection,
     _require_bridge_enabled,
+    _reconcile_facade_mutation,
     embedded_host_auth_preflight,
     router,
 )
@@ -57,6 +58,58 @@ _ELICITATION_RESOLVE_PATH = (
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
 _UNSET = object()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_stop_reconciles_terminal_provider_state_without_repost(
+    monkeypatch,
+) -> None:
+    store = SimpleNamespace(get_lifecycle_event_metadata=AsyncMock(return_value=None))
+    facade = SimpleNamespace(
+        get_session=AsyncMock(return_value={"id": "sess-77", "status": "stopped"})
+    )
+    recorded = AsyncMock(return_value="2026-08-09T00:00:00+00:00")
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+    monkeypatch.setattr(module, "_record_facade_mutation_audit", recorded)
+    row = SimpleNamespace(idempotency_key="bridge-key")
+    scan = SimpleNamespace(audit_metadata=lambda: {}, payload_digest="sha256:payload")
+
+    result = await _reconcile_facade_mutation(
+        store=store,
+        row=row,
+        facade=facade,
+        control_type="stop",
+        idempotency_key="request-key",
+        provider_session_id="sess-77",
+        chat_binding_id="binding-1",
+        actor="user-1",
+        scan_evidence=scan,
+    )
+
+    assert result == {"id": "binding-1", "status": "stopped", "reconciled": True}
+    facade.get_session.assert_awaited_once_with("sess-77")
+    recorded.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_message_is_not_reposted_without_provider_evidence() -> None:
+    store = SimpleNamespace(get_lifecycle_event_metadata=AsyncMock(return_value=None))
+    facade = SimpleNamespace(get_session=AsyncMock())
+
+    result = await _reconcile_facade_mutation(
+        store=store,
+        row=SimpleNamespace(idempotency_key="bridge-key"),
+        facade=facade,
+        control_type="message",
+        idempotency_key="request-key",
+        provider_session_id="sess-77",
+        chat_binding_id="binding-1",
+        actor="user-1",
+        scan_evidence=SimpleNamespace(),
+    )
+
+    assert result is None
+    facade.get_session.assert_not_awaited()
 
 
 @pytest.fixture(autouse=True)
