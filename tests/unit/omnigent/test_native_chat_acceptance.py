@@ -9,13 +9,21 @@ import pytest
 
 from moonmind.omnigent.conformance import ConformanceContractError
 from moonmind.omnigent.native_chat_acceptance import (
-    COMPATIBILITY_VERSION, OBSERVATION_VERSION, REQUIRED_CHANNELS,
-    REQUIRED_LANES, REQUIRED_TELEMETRY, REQUIRED_TRANSPORTS,
+    COMPATIBILITY_VERSION, OBSERVATION_VERSION, REQUIRED_ACCESSIBILITY,
+    REQUIRED_CHANNELS, REQUIRED_FEATURES, REQUIRED_LANES, REQUIRED_SCENARIOS,
+    REQUIRED_SECURITY_CONTROLS, REQUIRED_TELEMETRY, REQUIRED_TRANSPORTS,
     build_native_chat_acceptance_report,
 )
 
 
 def _fixture(root: Path) -> dict:
+    def evidence_record(relative: str, content: str = "redacted observed evidence") -> dict:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return {"evidenceRef": f"artifact://{relative}",
+                "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+
     digest = "sha256:" + "a" * 64
     identity = {
         "moonmindCommit": "commit-3642", "moonmindBuild": "build-1",
@@ -29,12 +37,18 @@ def _fixture(root: Path) -> dict:
         path = root / "lanes" / f"{lane}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         observation = {"schemaVersion": OBSERVATION_VERSION, "lane": lane,
-                       "status": "passed", "identity": identity}
+                       "status": "passed", "identity": identity,
+                       "scenarios": []}
         # Written again after compatibility identity is finalised below.
         path.write_text(json.dumps(observation), encoding="utf-8")
         lanes[lane] = {"status": "passed", "evidenceRef": f"artifact://lanes/{lane}.json"}
-    compatibility = {"schemaVersion": COMPATIBILITY_VERSION,
-                     "transports": {name: "passed" for name in REQUIRED_TRANSPORTS}}
+    compatibility = {
+        "schemaVersion": COMPATIBILITY_VERSION,
+        "transports": {name: "passed" for name in REQUIRED_TRANSPORTS},
+        "features": {name: "passed" for name in REQUIRED_FEATURES},
+        "accessibility": {name: "passed" for name in REQUIRED_ACCESSIBILITY},
+        "securityControls": {name: "passed" for name in REQUIRED_SECURITY_CONTROLS},
+    }
     compatibility_path = root / "compatibility.json"
     compatibility_path.write_text(json.dumps(compatibility), encoding="utf-8")
     identity["compatibilityManifestDigest"] = "sha256:" + hashlib.sha256(
@@ -42,23 +56,29 @@ def _fixture(root: Path) -> dict:
     for lane in REQUIRED_LANES:
         path = root / "lanes" / f"{lane}.json"
         path.write_text(json.dumps({"schemaVersion": OBSERVATION_VERSION,
-            "lane": lane, "status": "passed", "identity": identity}), encoding="utf-8")
+            "lane": lane, "status": "passed", "identity": identity,
+            "scenarios": [{"id": scenario, "outcome": "passed",
+                "upstreamSideEffects": 0,
+                **evidence_record(f"scenario/{lane}/{scenario}")
+                } for scenario in REQUIRED_SCENARIOS[lane]]
+            }), encoding="utf-8")
         lanes[lane]["sha256"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     retained = {}
     for channel in REQUIRED_CHANNELS:
-        path = root / "retained" / channel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("redacted evidence", encoding="utf-8")
-        retained[channel] = f"artifact://retained/{channel}"
+        retained[channel] = {"kind": channel,
+            **evidence_record(f"retained/{channel}")}
     return {
         "producer": "protected-provider-workflow", "identity": identity,
         "generatedAt": "2026-08-09T00:00:00Z", "expiresAt": "2026-08-16T00:00:00Z",
         "supersededBy": None, "lanes": lanes,
         "compatibilityManifestRef": "artifact://compatibility.json",
-        "retainedEvidence": retained, "retainedEvidenceSecretScan": "passed",
-        "telemetry": {name: {"passed": 1} for name in REQUIRED_TELEMETRY},
-        "rollout": {key: True for key in ("canaryPolicy", "disableInteractiveChat",
-            "historicalReads", "noRuntimeFallback", "temporaryFlagRetirement")},
+        "retainedEvidence": retained,
+        "telemetry": {name: {"sampleCount": 1, "identityLabels": [],
+            **evidence_record(f"telemetry/{name}")} for name in REQUIRED_TELEMETRY},
+        "rollout": {key: {"outcome": "passed",
+            **evidence_record(f"rollout/{key}")} for key in
+            ("canaryPolicy", "disableInteractiveChat", "historicalReads",
+             "noRuntimeFallback", "temporaryFlagRetirement")},
     }
 
 
@@ -90,6 +110,39 @@ def test_tampered_observation_or_mutable_identity_closes_gate(tmp_path: Path) ->
     source = _fixture(tmp_path)
     source["identity"]["hostImageDigest"] = "host:latest"
     with pytest.raises(ConformanceContractError, match="immutable SHA-256"):
+        _build(source, tmp_path)
+
+
+def test_status_only_observation_cannot_claim_a_lane(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    path = tmp_path / "lanes" / "authority-isolation.json"
+    observation = json.loads(path.read_text())
+    observation.pop("scenarios")
+    path.write_text(json.dumps(observation), encoding="utf-8")
+    source["lanes"]["authority-isolation"]["sha256"] = "sha256:" + hashlib.sha256(
+        path.read_bytes()).hexdigest()
+    with pytest.raises(ConformanceContractError, match="scenario inventory"):
+        _build(source, tmp_path)
+
+
+def test_retained_evidence_is_digest_bound_and_scanned_from_bytes(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    path = tmp_path / "retained" / "artifacts"
+    path.write_text("token=exposed-value", encoding="utf-8")
+    source["retainedEvidence"]["artifacts"]["sha256"] = "sha256:" + hashlib.sha256(
+        path.read_bytes()).hexdigest()
+    with pytest.raises(ConformanceContractError):
+        _build(source, tmp_path)
+
+
+def test_boolean_rollout_and_arbitrary_telemetry_are_not_evidence(tmp_path: Path) -> None:
+    source = _fixture(tmp_path)
+    source["rollout"]["canaryPolicy"] = True
+    with pytest.raises(ConformanceContractError, match="rollout"):
+        _build(source, tmp_path)
+    source = _fixture(tmp_path)
+    source["telemetry"]["bindingResolution"] = {"passed": 1}
+    with pytest.raises(ConformanceContractError, match="observed"):
         _build(source, tmp_path)
 
 

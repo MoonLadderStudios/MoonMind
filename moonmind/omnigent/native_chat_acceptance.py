@@ -35,6 +35,20 @@ REQUIRED_LANES = (
     "readiness-telemetry-rollout",
 )
 REQUIRED_TRANSPORTS = ("http", "sse", "websocket", "terminal", "resource")
+REQUIRED_FEATURES = (
+    "spa-assets", "deep-link-refresh", "embedded-mode", "full-page-mode",
+    "transcript", "composer", "queue-steer", "tools-reasoning", "approvals",
+    "files-diffs", "uploads-downloads", "terminals", "agents-tasks",
+    "browser-pane", "multipart-binary", "reconnect-liveness",
+)
+REQUIRED_ACCESSIBILITY = (
+    "mobile-responsive", "keyboard-shortcuts", "focus-transitions",
+    "screen-reader", "reduced-motion", "large-session",
+)
+REQUIRED_SECURITY_CONTROLS = (
+    "csp", "frame", "cors", "csrf", "origin", "cookie", "cache",
+    "service-worker", "route-version-drift",
+)
 REQUIRED_CHANNELS = (
     "artifacts", "events", "diagnostics", "mutationAudit", "screenshots"
 )
@@ -45,6 +59,62 @@ REQUIRED_TELEMETRY = (
     "terminalReplay", "continuationCreation", "upstreamHealth",
 )
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# These are observable cases, not prose assertions.  Producers must emit every
+# case with a terminal outcome and objective counters captured at the decisive
+# browser/proxy/provider boundary.
+REQUIRED_SCENARIOS: dict[str, tuple[str, ...]] = {
+    "browser-product-journey": (
+        "workflow-detail-chat", "binding-resolution", "embedded-native-ui",
+        "normal-message", "queue-steer", "approval", "resources", "terminal",
+        "agents-tasks", "reconnect", "terminal-cleanup-replay", "diagnostics",
+        "linked-continuation",
+    ),
+    "authority-isolation": (
+        "owner", "shared-viewer", "read-only-viewer", "approver-only",
+        "unauthorized", "unknown-binding", "expired-binding", "revoked-binding",
+        "cross-workflow-binding", "path-substitution", "query-substitution",
+        "body-substitution", "header-substitution", "sse-cursor-substitution",
+        "websocket-frame-substitution", "launch-authority-substitution",
+        "authorization-change-http", "authorization-change-sse",
+        "authorization-change-websocket", "archived-workflow", "cleaned-session",
+        "non-enumerating-response",
+    ),
+    "browser-network-isolation": (
+        "no-direct-upstream", "no-upstream-secret-in-browser",
+        "no-moonmind-secret-upstream", "allowlisted-headers-only", "redirect",
+        "error-body", "download", "websocket", "service-worker", "full-page-sso",
+    ),
+    "immutable-capability-policy": (
+        "pinned-model-effort", "approval-authority-state", "read-only-controls",
+        "active-terminal-controls", "direct-api-denial", "stale-profile",
+        "stale-provider-generation", "stale-policy", "stale-launch-snapshot",
+        "stale-session-epoch", "stale-turn", "stale-elicitation",
+        "duplicate-mutation", "delivery-unknown-reconciliation",
+        "unsupported-control",
+    ),
+    "high-security-outbound-scan": (
+        "clean-message", "secret-message", "queued-steered", "slash-command",
+        "approval-text", "reply-quote", "text-attachment", "upload-metadata",
+        "idempotency-payload-change", "unknown-payload", "malformed-payload",
+        "compressed-payload", "binary-payload", "oversized-payload",
+        "uninspectable-payload", "scanner-unavailable", "scanner-error",
+        "scanner-timeout",
+    ),
+    "native-ui-and-transports": REQUIRED_FEATURES + REQUIRED_ACCESSIBILITY,
+    "terminal-fallback-continuation": (
+        "native-ui-unavailable", "unsupported-runtime", "failed-before-stream",
+        "retention-gap", "schema-incompatibility", "direct-runtime-history",
+    ),
+    "protected-stock-image-journey": ("stock-codex-product-path",),
+    "retained-evidence-and-cleanup": (
+        "refs-after-cleanup", "secret-scan-retained-bytes", "mutation-audit",
+    ),
+    "readiness-telemetry-rollout": (
+        "bounded-metrics", "readiness-consumption", "canary", "rollback",
+        "temporary-flag-retirement",
+    ),
+}
 
 
 def _time(value: Any, label: str) -> datetime:
@@ -67,6 +137,21 @@ def _resolve_ref(root: Path, ref: str) -> Path:
     if not candidate.is_file():
         raise ConformanceContractError(f"evidence ref is unresolved: {ref}")
     return candidate
+
+
+def _validate_evidence_record(root: Path, record: Mapping[str, Any], label: str) -> None:
+    """Require a resolvable, digest-bound, secret-scanned evidence record."""
+
+    ref = record.get("evidenceRef")
+    path = _resolve_ref(root, ref)
+    digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    if record.get("sha256") != digest:
+        raise ConformanceContractError(f"{label} evidence digest mismatch")
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConformanceContractError(f"{label} evidence is not secret-scannable text") from exc
+    assert_secret_free(content)
 
 
 def build_native_chat_acceptance_report(
@@ -115,6 +200,19 @@ def build_native_chat_acceptance_report(
                 or observation.get("status") != "passed"
                 or observation.get("identity") != identity):
             raise ConformanceContractError(f"lane {lane_name} evidence is not bound to this release")
+        scenarios = observation.get("scenarios")
+        required = REQUIRED_SCENARIOS[lane_name]
+        if not isinstance(scenarios, list) or {
+            item.get("id") for item in scenarios if isinstance(item, Mapping)
+        } != set(required) or len(scenarios) != len(required):
+            raise ConformanceContractError(f"lane {lane_name} scenario inventory is incomplete")
+        for scenario in scenarios:
+            if (not isinstance(scenario, Mapping)
+                    or scenario.get("outcome") != "passed"
+                    or not isinstance(scenario.get("upstreamSideEffects"), int)
+                    or scenario["upstreamSideEffects"] < 0):
+                raise ConformanceContractError(f"lane {lane_name} has an unproven scenario")
+            _validate_evidence_record(root, scenario, f"scenario {scenario['id']}")
         digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         if lane.get("sha256") != digest:
             raise ConformanceContractError(f"lane {lane_name} evidence digest mismatch")
@@ -133,24 +231,48 @@ def build_native_chat_acceptance_report(
         value != "passed" for value in compatibility["transports"].values()
     ):
         raise ConformanceContractError("all claimed native transports must pass")
+    for key, required in (("features", REQUIRED_FEATURES),
+                          ("accessibility", REQUIRED_ACCESSIBILITY),
+                          ("securityControls", REQUIRED_SECURITY_CONTROLS)):
+        values = compatibility.get(key)
+        if not isinstance(values, Mapping) or set(values) != set(required) or any(
+            value != "passed" for value in values.values()
+        ):
+            raise ConformanceContractError(f"complete native {key} compatibility is required")
 
     refs = source.get("retainedEvidence")
     if not isinstance(refs, Mapping) or set(refs) != set(REQUIRED_CHANNELS):
         raise ConformanceContractError("complete retained evidence channels are required")
-    for ref in refs.values():
-        _resolve_ref(root, ref)
-    if source.get("retainedEvidenceSecretScan") != "passed":
-        raise ConformanceContractError("all retained evidence must pass secret scanning")
+    retained: dict[str, Any] = {}
+    for channel, entry in refs.items():
+        if not isinstance(entry, Mapping) or entry.get("kind") != channel:
+            raise ConformanceContractError(f"retained evidence {channel} has the wrong kind")
+        _validate_evidence_record(root, entry, f"retained evidence {channel}")
+        digest = entry["sha256"]
+        retained[channel] = {"evidenceRef": entry["evidenceRef"], "kind": channel,
+                             "sha256": digest}
     telemetry = source.get("telemetry")
     if not isinstance(telemetry, Mapping) or set(telemetry) != set(REQUIRED_TELEMETRY):
         raise ConformanceContractError("complete bounded native Chat telemetry is required")
-    if any(not isinstance(value, Mapping) or not value for value in telemetry.values()):
-        raise ConformanceContractError("native Chat telemetry groups must be populated")
+    if any(not isinstance(value, Mapping)
+           or not isinstance(value.get("sampleCount"), int)
+           or value["sampleCount"] <= 0
+           or value.get("identityLabels") != []
+           for value in telemetry.values()):
+        raise ConformanceContractError("native Chat telemetry must be observed and identity-safe")
+    for name, value in telemetry.items():
+        _validate_evidence_record(root, value, f"telemetry {name}")
     rollout = source.get("rollout")
     required_rollout = ("canaryPolicy", "disableInteractiveChat", "historicalReads",
                         "noRuntimeFallback", "temporaryFlagRetirement")
-    if not isinstance(rollout, Mapping) or any(rollout.get(key) is not True for key in required_rollout):
+    if not isinstance(rollout, Mapping) or any(
+        not isinstance(rollout.get(key), Mapping)
+        or rollout[key].get("outcome") != "passed"
+        for key in required_rollout
+    ):
         raise ConformanceContractError("rollout and rollback evidence is incomplete")
+    for name, value in rollout.items():
+        _validate_evidence_record(root, value, f"rollout {name}")
 
     report = {
         "schemaVersion": SCHEMA_VERSION, "issue": ISSUE, "status": "passed",
@@ -158,7 +280,7 @@ def build_native_chat_acceptance_report(
         "supersedes": source.get("supersedes"), "producer": source.get("producer"),
         "identity": dict(identity), "lanes": resolved,
         "compatibilityManifestRef": compatibility_ref,
-        "retainedEvidence": dict(refs), "retainedEvidenceSecretScan": "passed",
+        "retainedEvidence": retained,
         "telemetry": dict(telemetry), "rollout": dict(rollout),
     }
     if not isinstance(report["producer"], str) or not report["producer"]:
