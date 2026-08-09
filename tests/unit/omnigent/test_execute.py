@@ -27,6 +27,7 @@ from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _agent_items,
     _await_marked_turn_terminal,
+    _build_omnigent_first_message,
     _first_message_text,
     _enqueue_stream_events,
     _resolve_agent_id,
@@ -49,6 +50,54 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "inline_instruction", "artifact_text", "expected_base"),
+    [
+        ({"text": "Explicit prompt"}, "Inline prompt", None, "Explicit prompt"),
+        (
+            {"instructionRef": "artifact://prompt"},
+            "Inline prompt",
+            "Artifact prompt",
+            "Artifact prompt",
+        ),
+        ({}, "Inline prompt", None, "Inline prompt"),
+    ],
+)
+async def test_first_message_includes_terminal_continuation_authority(
+    prompt: dict[str, Any],
+    inline_instruction: str,
+    artifact_text: str | None,
+    expected_base: str,
+) -> None:
+    authority_instruction = "Execution continuation authority: none."
+    request = _request()
+    request.instruction_ref = inline_instruction
+    request.parameters = {
+        "metadata": {
+            "moonmind": {
+                "terminalContinuationAuthorityInstruction": authority_instruction
+            }
+        }
+    }
+
+    class Gateway:
+        async def read_text(self, ref: str) -> str:
+            assert ref == "artifact://prompt"
+            assert artifact_text is not None
+            return artifact_text
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt=prompt,
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+
+    assert expected_base in text
+    assert text.count(authority_instruction) == 1
 
 
 def test_current_turn_progress_ignores_prior_terminal_work() -> None:

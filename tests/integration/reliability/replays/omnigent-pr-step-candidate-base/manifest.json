@@ -1,0 +1,36 @@
+{
+  "failureShapeId": "omnigent-pr-step-candidate-base",
+  "incidentWorkflowId": "mm:6103dddf-2e68-4185-9481-5668d5916642",
+  "incidentRunId": "019fe3a7-4522-78a5-af30-9ea9a5a03311",
+  "runtime": "omnigent",
+  "boundary": "published branch handoff to downstream PR-publishing AgentExecutionRequest",
+  "logicalStepId": "tpl:github-issue-implement:05:a328c02c",
+  "workflowInfo": {
+    "namespace": "default",
+    "workflow_id": "mm:6103dddf-2e68-4185-9481-5668d5916642",
+    "run_id": "019fe3a7-4522-78a5-af30-9ea9a5a03311",
+    "parent": null
+  },
+  "publishContext": {
+    "pushStatus": "pushed",
+    "branch": "moonmind-job-24a73665",
+    "headSha": "b651c9e47fe6e7696ef575b6969ed7d682c78338",
+    "baseRef": "main"
+  },
+  "nodeInputs": {
+    "targetRuntime": "omnigent",
+    "repository": "MoonLadderStudios/MoonMind",
+    "startingBranch": "main",
+    "targetBranch": "fetch-github-issue-moonladderstudios-moo-7af037d8",
+    "publishMode": "pr"
+  },
+  "observedFailure": {
+    "providerErrorCode": "OMNIGENT_REPOSITORY_OUTPUT_MISSING",
+    "pushStatus": "no_commits",
+    "pushBranch": "moonmind-job-24a73665",
+    "pushBaseBranch": "moonmind-job-24a73665",
+    "repositoryContinuationCount": 8,
+    "genericExecutionAttempts": 4
+  },
+  "invariant": "A PR-publishing downstream step continues from the verified candidate head while comparing repository output to the original PR base, even when repositoryOperation was omitted by an older plan."
+}
