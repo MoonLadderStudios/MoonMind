@@ -1078,3 +1078,11 @@ Its contract is:
 - grounded in `workflowId` as the durable handle,
 - explicit about update/signal/cancel semantics,
 - usable alongside the workflow console product surfaces; it is not inherently a replacement for every `/workflows/*` flow.
+# Remediation relationship projection
+
+`GET /api/executions/{workflowId}/remediations` is the authoritative bounded
+relationship projection for Workflow Detail. `deliveryStatus` describes whether
+the requested action was delivered/applied; `verificationOutcome` independently
+describes trusted post-action repair verification. Clients must not infer either
+field from logs or model prose. Approval decisions use the owned remediation
+approval endpoint and may include a bounded operator `comment` rationale.

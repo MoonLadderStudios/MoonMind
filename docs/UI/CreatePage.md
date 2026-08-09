@@ -431,6 +431,15 @@ The schema renderer should operate on this normalized shape regardless of whethe
 
 The Create page should preserve draft state across navigation and validation failures.
 
+Remediation authoring uses this same Create page. A `Remediate` action supplies a
+tab-scoped, short-lived draft whose target Workflow and pinned run are visibly
+read-only. Import failures distinguish missing/cross-tab, malformed, expired, and
+stale-target cases with a safe recovery message. The draft remains in session
+storage until ordinary submission succeeds or the operator explicitly discards
+it; merely opening or validating the draft does not consume it. Repair
+instructions, runtime/profile and policy selections, retrieval controls, branch,
+and publication choices remain editable.
+
 Draft state should include:
 
 - workflow overview fields

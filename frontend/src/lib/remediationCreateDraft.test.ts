@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildRemediationCreateDraft,
   clearRemediationCreateDraft,
+  inspectRemediationCreateDraft,
+  REMEDIATION_CREATE_DRAFT_TTL_MS,
   remediationCreateDraftHref,
   readRemediationCreateDraft,
   storeRemediationCreateDraft,
@@ -82,10 +84,29 @@ describe('remediationCreateDraft', () => {
     const href = remediationCreateDraftHref(draftId);
 
     expect(href).toBe(`/workflows/new?intent=remediate&draftId=${encodeURIComponent(draftId)}`);
-    expect(readRemediationCreateDraft(draftId)).toEqual(draft);
+    expect(readRemediationCreateDraft(draftId)).toMatchObject(draft);
 
     clearRemediationCreateDraft(draftId);
     expect(readRemediationCreateDraft(draftId)).toBeNull();
+  });
+
+  it('distinguishes missing, malformed, and expired drafts without clearing evidence', () => {
+    expect(inspectRemediationCreateDraft('other-tab')).toEqual({ status: 'missing', draft: null });
+
+    window.sessionStorage.setItem('moonmind.remediation-create-draft.bad', '{not-json');
+    expect(inspectRemediationCreateDraft('bad')).toEqual({ status: 'malformed', draft: null });
+    expect(window.sessionStorage.getItem('moonmind.remediation-create-draft.bad')).toBe('{not-json');
+
+    const expired = buildRemediationCreateDraft({ workflowId: 'mm:target', runId: 'run-target' });
+    window.sessionStorage.setItem('moonmind.remediation-create-draft.old', JSON.stringify({
+      ...expired,
+      createdAt: '2026-07-07T00:00:00.000Z',
+    }));
+    expect(inspectRemediationCreateDraft(
+      'old',
+      Date.parse('2026-07-07T00:00:00.000Z') + REMEDIATION_CREATE_DRAFT_TTL_MS + 1,
+    )).toEqual({ status: 'expired', draft: null });
+    expect(window.sessionStorage.getItem('moonmind.remediation-create-draft.old')).not.toBeNull();
   });
 
   it('preserves the immutable agent and Provider Profile selection', () => {

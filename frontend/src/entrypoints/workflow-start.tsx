@@ -31,7 +31,7 @@ import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowW
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
   clearRemediationCreateDraft,
-  readRemediationCreateDraft,
+  inspectRemediationCreateDraft,
   type RemediationCreateDraft,
 } from "../lib/remediationCreateDraft";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
@@ -6830,14 +6830,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!draftId || remediationDraftAppliedRef.current === draftId) {
       return;
     }
-    const draft = readRemediationCreateDraft(draftId);
-    if (!draft) {
+    const draftResult = inspectRemediationCreateDraft(draftId);
+    if (draftResult.status !== "valid") {
       setRemediationDraft(null);
       remediationDraftAppliedRef.current = null;
       remediationDraftIdRef.current = null;
-      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
+      const messages = {
+        missing: "This remediation draft is unavailable in this tab. Return to the target workflow and choose Remediate here; drafts are tab-scoped and are not transferred across tabs.",
+        malformed: "This remediation draft is malformed and was not imported. Discard it or return to the target workflow and choose Remediate again.",
+        expired: "This remediation draft expired before import. Return to the target workflow and choose Remediate again to pin current evidence.",
+      } as const;
+      setSubmitMessage(messages[draftResult.status]);
       return;
     }
+    const draft = draftResult.draft;
 
     remediationDraftAppliedRef.current = draftId;
     remediationDraftIdRef.current = draftId;
@@ -12005,6 +12011,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             className="card queue-remediation-draft-summary stack"
             aria-label="Remediation draft"
             data-jira-issue="MM-1119"
+            data-github-issue="MoonLadderStudios/MoonMind#3623"
           >
             <div className="queue-section-heading">
               <div>
@@ -12013,7 +12020,28 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftIdRef.current);
+                  remediationDraftIdRef.current = null;
+                  remediationDraftAppliedRef.current = null;
+                  setRemediationDraft(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+                  setSubmitMessage("Remediation draft discarded. Create remains open as an ordinary workflow.");
+                }}
+                aria-label="Discard remediation draft"
+              >
+                Discard draft
+              </button>
             </div>
+            <p className="notice subtle">
+              Pinned target identity is immutable. Repair instructions, runtime, profiles, policies, branches, retrieval, and publication choices below remain editable until submission.
+            </p>
             <div className="grid-2">
               <label>
                 Target workflow

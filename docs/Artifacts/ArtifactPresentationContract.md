@@ -1309,3 +1309,9 @@ The artifact system is still execution-linked and Temporal-compatible, but the p
 - future UI convenience surfaces
 
 This document should therefore move to `docs/Artifacts/ArtifactPresentationContract.md` and remain the generic presentation layer that more specific documents, especially `docs/Artifacts/ReportArtifacts.md`, build on.
+# Remediation evidence
+
+Remediation context, action request/result, approval, verification, decision-log,
+and summary artifacts retain durable download links. Presentation may use bounded
+metadata for status summaries, but action delivery and repair verification remain
+distinct and artifact content is never reconstructed from rendered logs or chat.

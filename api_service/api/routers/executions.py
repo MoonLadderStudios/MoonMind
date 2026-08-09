@@ -674,6 +674,7 @@ class RemediationLinkSummaryModel(BaseModel):
     # ``resolution`` is the terminal remediation lifecycle resolution. They are
     # distinct projections (issue #3622) and must never share a column.
     deliveryStatus: str | None = None
+    verificationOutcome: str | None = None
     resolution: str | None = None
     contextArtifactRef: str | None = None
     selectedSteps: list[str] | None = None
@@ -11797,6 +11798,7 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         activeLockHolder=getattr(link, "active_lock_holder", None),
         latestActionSummary=getattr(link, "latest_action_summary", None),
         deliveryStatus=getattr(link, "outcome", None),
+        verificationOutcome=getattr(link, "verification_outcome", None),
         resolution=getattr(link, "resolution", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),

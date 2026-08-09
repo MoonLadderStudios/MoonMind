@@ -100,6 +100,13 @@ Creating, continuing, or publishing a branch does not automatically make it the 
 
 Promotion is a workflow-owned decision. It must be gated by structured evidence, side-effect classification, workspace validation, and approval policy where applicable.
 
+For remediation, branch creation, branch execution, action delivery, and repair
+verification are separate lifecycle states. Creating a branch is not evidence
+that its turn ran, that an action reached the target, or that verification passed.
+Workflow Detail preserves the source checkpoint, isolated work branch, head and
+verification refs, remaining work, publication/promotion, and archive state from
+canonical branch records.
+
 ### 2.5 Provider sessions are runtime bindings, not branch authority
 
 External provider sessions, including Omnigent sessions, may be associated with a branch or branch turn. They do not become the branch source of truth.

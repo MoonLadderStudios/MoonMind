@@ -1078,6 +1078,7 @@ const RemediationLinkSchema = z
     activeLockHolder: z.string().nullable().optional(),
     latestActionSummary: z.string().nullable().optional(),
     deliveryStatus: z.string().nullable().optional(),
+    verificationOutcome: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
     selectedSteps: z.array(z.string()).nullable().optional(),
@@ -7633,6 +7634,9 @@ function RemediationApprovalSummary({
   );
 
   if (!hasDetails) return null;
+  const expired = approval.expiresAt
+    ? Date.parse(approval.expiresAt) <= Date.now()
+    : false;
 
   return (
     <div className="td-remediation-approval">
@@ -7656,6 +7660,16 @@ function RemediationApprovalSummary({
       {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}
+      {expired && approval.decision === 'pending' ? (
+        <p className="notice warning" role="status">
+          This approval request expired. Refresh the target state and create a new request before acting.
+        </p>
+      ) : null}
+      {approval.decision === 'stale' ? (
+        <p className="notice warning" role="status">
+          This decision is stale because its pinned target evidence changed. A new approval request is required.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -7673,10 +7687,11 @@ function RemediationRelationshipsPanel({
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected', comment?: string) => void;
   approvalBusy: boolean;
   showEmpty: boolean;
 }) {
+  const [approvalComments, setApprovalComments] = useState<Record<string, string>>({});
   const inboundItems = inbound?.items ?? [];
   const outboundItems = outbound?.items ?? [];
   const hasData = inboundItems.length > 0 || outboundItems.length > 0;
@@ -7708,6 +7723,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (
@@ -7718,12 +7734,24 @@ function RemediationRelationshipsPanel({
                 <RemediationCheckpointBranches branches={item.checkpointBranches} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
+                  <div className="stack">
+                    <label>
+                      Decision rationale
+                      <textarea
+                        value={approvalComments[item.approvalState.requestId] || ''}
+                        onChange={(event) => setApprovalComments((current) => ({
+                          ...current,
+                          [item.approvalState!.requestId!]: event.target.value,
+                        }))}
+                        placeholder="Explain the bounded operator decision"
+                      />
+                    </label>
+                    <div className="actions">
                     <button
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved', approvalComments[item.approvalState!.requestId!] || undefined)}
                     >
                       Approve remediation action
                     </button>
@@ -7731,10 +7759,11 @@ function RemediationRelationshipsPanel({
                       type="button"
                       className="secondary"
                       disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected', approvalComments[item.approvalState!.requestId!] || undefined)}
                     >
                       Reject remediation action
                     </button>
+                    </div>
                   </div>
                 ) : null}
               </li>
@@ -7758,6 +7787,8 @@ function RemediationRelationshipsPanel({
                   <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
+                  <Card label="Action delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
                   <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
@@ -9082,17 +9113,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      comment,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      comment?: string;
     }) => {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify({ decision, ...(comment?.trim() ? { comment: comment.trim() } : {}) }),
         },
       );
       if (!response.ok) {
@@ -10453,9 +10486,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, comment) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision, comment });
               }}
             />
           ) : null}

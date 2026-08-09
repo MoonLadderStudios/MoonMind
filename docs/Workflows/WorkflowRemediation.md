@@ -371,6 +371,11 @@ The important rule is that **automatic remediation is policy-driven and bounded*
 
 ### 7.7 Create-page first remediation flow
 
+The stored authoring draft is tab-scoped and expires after two hours. Missing or
+cross-tab, malformed, expired, and stale-target drafts fail safely with actionable
+recovery. Reading and validation never clear the draft; only successful ordinary
+Workflow creation or explicit operator discard clears it.
+
 The dashboard `Remediate` action should open `/workflows/new` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
 
 - target `workflowId` and pinned `runId`;

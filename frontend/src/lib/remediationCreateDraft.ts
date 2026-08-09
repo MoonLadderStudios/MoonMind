@@ -7,9 +7,11 @@ import {
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
+export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 
 export type RemediationCreateDraft = {
   source: 'remediation';
+  createdAt?: string;
   target: {
     workflowId: string;
     runId: string;
@@ -53,6 +55,10 @@ export type RemediationCreateDraft = {
     trigger: { type: 'manual' };
   };
 };
+
+export type RemediationCreateDraftReadResult =
+  | { status: 'valid'; draft: RemediationCreateDraft }
+  | { status: 'missing' | 'malformed' | 'expired'; draft: null };
 
 type RemediationDraftExecution = {
   workflowId?: string | null | undefined;
@@ -290,21 +296,52 @@ export function buildRemediationCreateDraft(
 
 export function storeRemediationCreateDraft(draft: RemediationCreateDraft): string {
   const draftId = randomDraftId();
-  window.sessionStorage.setItem(storageKey(draftId), JSON.stringify(draft));
+  window.sessionStorage.setItem(storageKey(draftId), JSON.stringify({
+    ...draft,
+    createdAt: draft.createdAt || new Date().toISOString(),
+  }));
   return draftId;
 }
 
-export function readRemediationCreateDraft(draftId: string | null | undefined): RemediationCreateDraft | null {
+function isNonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function inspectRemediationCreateDraft(
+  draftId: string | null | undefined,
+  now = Date.now(),
+): RemediationCreateDraftReadResult {
   const normalized = cleanText(draftId);
-  if (!normalized) return null;
+  if (!normalized) return { status: 'missing', draft: null };
   const raw = window.sessionStorage.getItem(storageKey(normalized));
-  if (!raw) return null;
+  if (!raw) return { status: 'missing', draft: null };
   try {
     const parsed = JSON.parse(raw) as RemediationCreateDraft;
-    return parsed?.source === 'remediation' ? parsed : null;
+    if (
+      parsed?.source !== 'remediation' ||
+      !isNonEmptyText(parsed.target?.workflowId) ||
+      !isNonEmptyText(parsed.target?.runId) ||
+      parsed.remediation?.target?.workflowId !== parsed.target.workflowId ||
+      parsed.remediation?.target?.runId !== parsed.target.runId
+    ) {
+      return { status: 'malformed', draft: null };
+    }
+    if (parsed.createdAt) {
+      const createdAt = Date.parse(parsed.createdAt);
+      if (!Number.isFinite(createdAt)) return { status: 'malformed', draft: null };
+      if (now - createdAt > REMEDIATION_CREATE_DRAFT_TTL_MS) {
+        return { status: 'expired', draft: null };
+      }
+    }
+    return { status: 'valid', draft: parsed };
   } catch {
-    return null;
+    return { status: 'malformed', draft: null };
   }
+}
+
+export function readRemediationCreateDraft(draftId: string | null | undefined): RemediationCreateDraft | null {
+  const result = inspectRemediationCreateDraft(draftId);
+  return result.status === 'valid' ? result.draft : null;
 }
 
 export function clearRemediationCreateDraft(draftId: string | null | undefined): void {

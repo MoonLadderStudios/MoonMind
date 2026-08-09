@@ -19160,7 +19160,7 @@ describe("Task Create runtime command previews", () => {
   it("warns when a remediation draft target run changed before submit", async () => {
     const draft = {
       source: "remediation",
-      createdAt: "2026-07-07T00:00:00.000Z",
+      createdAt: new Date().toISOString(),
       target: {
         workflowId: "mm:remediation-target",
         runId: "run-original",

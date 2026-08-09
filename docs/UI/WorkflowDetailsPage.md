@@ -561,6 +561,15 @@ Suggested actions
 
 ## Remediation panel
 
+The panel reads canonical remediation-link and artifact projections. Target and
+remediator identities, action delivery, and post-action repair verification are
+separate labeled facts; the original target outcome is never rewritten. Pending
+approval shows its action, risk, expected state, policy, expiration, blast radius,
+and a rationale field for authorized approve/deny decisions. Expired and stale
+requests are read-only and direct the operator to refresh evidence and request a
+new decision. Unsupported controls must remain absent or disabled with the
+bounded capability reason supplied by the owning backend.
+
 The remediation panel is present when remediation data exists or remediation is available.
 
 It contains:
