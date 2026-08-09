@@ -3103,6 +3103,55 @@ class TemporalArtifactActivities:
                     "reasonCode": "temporal_projection_pending",
                 }
 
+            branch_terminal = (
+                (model.finish_summary or {}).get("checkpointBranchTurn")
+                if isinstance(model.finish_summary, Mapping)
+                else None
+            )
+            if isinstance(branch_terminal, Mapping):
+                from api_service.services.checkpoint_branch_service import (
+                    CheckpointBranchService,
+                )
+
+                branch_id = str(branch_terminal.get("branchId") or "").strip()
+                turn_id = str(branch_terminal.get("branchTurnId") or "").strip()
+                if branch_id and turn_id:
+                    outcome_code = str(model.finish_outcome_code or "").lower()
+                    if model.state == "completed":
+                        turn_status = "verification_required"
+                    elif model.state == "canceled":
+                        turn_status = "canceled"
+                    elif "delivery_unknown" in outcome_code:
+                        turn_status = "delivery_unknown"
+                    elif "resume_unavailable" in outcome_code:
+                        turn_status = "resume_unavailable"
+                    else:
+                        turn_status = "failed"
+                    refs = {
+                        key: value
+                        for key, value in {
+                            "artifact_manifest": branch_terminal.get(
+                                "artifactManifestRef"
+                            ),
+                            "run_summary": getattr(record, "summary_ref", None),
+                        }.items()
+                        if isinstance(value, str) and value.strip()
+                    }
+                    await CheckpointBranchService(session).reconcile_turn_terminal(
+                        branch_id=branch_id,
+                        branch_turn_id=turn_id,
+                        runtime_agent_run_id=model.workflow_id,
+                        status=turn_status,
+                        evidence_refs=refs,
+                        terminal_summary={
+                            "state": model.state,
+                            "closeStatus": model.close_status,
+                            "finishOutcomeCode": model.finish_outcome_code,
+                            "errorCategory": model.error_category,
+                        },
+                    )
+                    await session.commit()
+
         await self._write_run_digest_best_effort(record)
 
         return {

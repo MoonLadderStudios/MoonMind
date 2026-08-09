@@ -1258,6 +1258,64 @@ async def test_checkpoint_branch_service_launches_turn_with_context_manifest_and
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_terminal_reconciliation_is_idempotent_and_requires_verification(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-terminal"),
+            "instructionRef": "artifact://instructions/terminal",
+            "instructionDigest": "sha256:terminal",
+            "idempotencyKey": "terminal:create",
+        }
+    )
+    turn_id = graph.turns[0].branch_turn_id
+    launch_key = build_branch_turn_launch_idempotency_key(
+        workflow_id="wf-1", branch_id="cbr-terminal", branch_turn_id=turn_id
+    )
+    await service.launch_turn(
+        workflow_id="wf-1",
+        branch_id="cbr-terminal",
+        branch_turn_id=turn_id,
+        context_bundle_ref="artifact://context/terminal",
+        step_execution_manifest_ref="artifact://manifest/terminal",
+        checkpoint_ref=None,
+        diagnostics_ref="artifact://diagnostics/terminal",
+        created_step_execution_id="runtime-wf:runtime-run:step:execution:1",
+        runtime_agent_run_id="runtime-wf",
+        idempotency_key=launch_key,
+    )
+    kwargs = {
+        "branch_id": "cbr-terminal",
+        "branch_turn_id": turn_id,
+        "runtime_agent_run_id": "runtime-wf",
+        "status": "verification_required",
+        "evidence_refs": {
+            "artifact_manifest": "artifact://manifest/terminal-evidence"
+        },
+        "terminal_summary": {"state": "completed", "closeStatus": "completed"},
+    }
+    first = await service.reconcile_turn_terminal(**kwargs)
+    replay = await service.reconcile_turn_terminal(**kwargs)
+    await checkpoint_branch_session.commit()
+
+    assert first.status == "verification_required"
+    assert replay.diagnostics["terminalReconciliation"]["status"] == (
+        "verification_required"
+    )
+    stored = await service.read_branch_graph(
+        workflow_id="wf-1", branch_id="cbr-terminal"
+    )
+    assert stored.branch.state == "active"
+    assert sum(
+        item.artifact_kind
+        == "runtime.branch_turn.terminal.artifact_manifest"
+        for item in stored.artifacts
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_service_rejects_launch_mutation_and_bad_key(
     checkpoint_branch_session: AsyncSession,
 ) -> None:

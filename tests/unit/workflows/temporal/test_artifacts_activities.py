@@ -189,6 +189,89 @@ async def test_execution_record_terminal_state_indexes_run_digest_best_effort(
 
 
 @pytest.mark.asyncio
+async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
+    activities,
+    monkeypatch,
+):
+    import api_service.db.base as db_base
+    import api_service.services.checkpoint_branch_service as branch_service
+    import moonmind.workflows.temporal.service as temporal_service
+
+    reconciliations: list[dict[str, object]] = []
+
+    class _Session:
+        async def commit(self):
+            return None
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return _Session()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _TemporalExecutionService:
+        def __init__(self, session):
+            pass
+
+        async def record_terminal_state(self, **kwargs):
+            return SimpleNamespace(
+                workflow_id="runtime-wf",
+                run_id="runtime-run",
+                state="completed",
+                close_status="completed",
+            )
+
+    class _CheckpointBranchService:
+        def __init__(self, session):
+            pass
+
+        async def reconcile_turn_terminal(self, **kwargs):
+            reconciliations.append(dict(kwargs))
+
+    monkeypatch.setattr(db_base, "get_async_session_context", lambda: _SessionContext())
+    monkeypatch.setattr(
+        temporal_service, "TemporalExecutionService", _TemporalExecutionService
+    )
+    monkeypatch.setattr(
+        branch_service, "CheckpointBranchService", _CheckpointBranchService
+    )
+    monkeypatch.setattr(activities, "_write_run_digest_best_effort", AsyncMock())
+
+    await activities.execution_record_terminal_state(
+        {
+            "workflowId": "runtime-wf",
+            "state": "completed",
+            "closeStatus": "completed",
+            "finishOutcomeCode": "PUBLISHED_PR",
+            "finishSummary": {
+                "checkpointBranchTurn": {
+                    "branchId": "branch-1",
+                    "branchTurnId": "turn-1",
+                    "artifactManifestRef": "artifact://branch/terminal-manifest",
+                }
+            },
+        }
+    )
+
+    assert reconciliations == [
+        {
+            "branch_id": "branch-1",
+            "branch_turn_id": "turn-1",
+            "runtime_agent_run_id": "runtime-wf",
+            "status": "verification_required",
+            "evidence_refs": {
+                "artifact_manifest": "artifact://branch/terminal-manifest"
+            },
+            "terminal_summary": {
+                "state": "completed",
+                "closeStatus": "completed",
+                "finishOutcomeCode": "PUBLISHED_PR",
+                "errorCategory": None,
+            },
+        }
+    ]
+@pytest.mark.asyncio
 async def test_execution_terminal_projection_lag_does_not_overwrite_success(
     activities,
     monkeypatch,

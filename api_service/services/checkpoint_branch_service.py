@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -1177,6 +1178,74 @@ class CheckpointBranchService:
         await self._session.flush()
         await self._session.refresh(turn)
         return turn
+
+    async def reconcile_turn_terminal(
+        self,
+        *,
+        branch_id: str,
+        branch_turn_id: str,
+        runtime_agent_run_id: str,
+        status: str,
+        evidence_refs: Mapping[str, str],
+        terminal_summary: Mapping[str, Any],
+    ) -> WorkflowCheckpointBranchTurn:
+        """Idempotently project the runtime's authoritative terminal envelope."""
+
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            relation="branchTurnId",
+        )
+        if turn.runtime_agent_run_id != runtime_agent_run_id:
+            raise ValueError("branch turn runtime authority mismatch")
+        allowed = {
+            CheckpointBranchTurnState.FAILED.value,
+            CheckpointBranchTurnState.CANCELED.value,
+            CheckpointBranchTurnState.DELIVERY_UNKNOWN.value,
+            CheckpointBranchTurnState.RESUME_UNAVAILABLE.value,
+            CheckpointBranchTurnState.VERIFICATION_REQUIRED.value,
+        }
+        if status not in allowed:
+            raise ValueError(f"unsupported branch terminal status '{status}'")
+
+        previous = (turn.diagnostics or {}).get("terminalReconciliation")
+        reconciliation = {
+            "runtimeAgentRunId": runtime_agent_run_id,
+            "status": status,
+            "evidenceRefs": dict(sorted(evidence_refs.items())),
+            "terminalSummary": dict(terminal_summary),
+        }
+        if previous is not None and previous != reconciliation:
+            raise ValueError("immutable branch terminal reconciliation cannot be changed")
+
+        turn.status = status
+        turn.completed_at = turn.completed_at or datetime.now(UTC)
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "terminalReconciliation": reconciliation,
+        }
+        branch = await self._get_branch_by_id(branch_id)
+        branch.state = (
+            CheckpointBranchState.ACTIVE.value
+            if status == CheckpointBranchTurnState.VERIFICATION_REQUIRED.value
+            else CheckpointBranchState.FAILED.value
+        )
+        for kind, ref in sorted(evidence_refs.items()):
+            await self._upsert_turn_artifact(
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                artifact_kind=f"runtime.branch_turn.terminal.{kind}",
+                artifact_ref=ref,
+            )
+        await self._session.flush()
+        await self._session.refresh(turn)
+        return turn
+
+    async def _get_branch_by_id(self, branch_id: str) -> WorkflowCheckpointBranch:
+        branch = await self._session.get(WorkflowCheckpointBranch, branch_id)
+        if branch is None:
+            raise ValueError("checkpoint branch not found")
+        return branch
 
     @staticmethod
     def _require_launch_replay_matches(

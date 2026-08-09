@@ -22043,6 +22043,22 @@ class MoonMindRunWorkflow:
                     "outcomes": self._dependency_outcomes(),
                 },
             }
+            if self._step_execution_branch_projections:
+                latest_key = next(reversed(self._step_execution_branch_projections))
+                branch_projection = dict(
+                    self._step_execution_branch_projections[latest_key]
+                )
+                branch_manifest = dict(
+                    self._step_execution_branch_artifact_manifests.get(latest_key)
+                    or {}
+                )
+                finish_summary["checkpointBranchTurn"] = {
+                    "branchId": branch_projection.get("branchId"),
+                    "branchTurnId": branch_projection.get("branchTurnId"),
+                    "artifactManifestRef": branch_manifest.get(
+                        "persistedArtifactRef"
+                    ),
+                }
             if self._workflow_control_stop:
                 auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
                 if isinstance(auxiliary, dict):

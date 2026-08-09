@@ -32,6 +32,9 @@ class CheckpointBranchTurnState(str, enum.Enum):
     FAILED = "failed"
     BLOCKED = "blocked"
     CANCELED = "canceled"
+    DELIVERY_UNKNOWN = "delivery_unknown"
+    RESUME_UNAVAILABLE = "resume_unavailable"
+    VERIFICATION_REQUIRED = "verification_required"
     SUPERSEDED = "superseded"
 
 
@@ -56,6 +59,9 @@ CheckpointBranchTurnStateValue = Literal[
     "failed",
     "blocked",
     "canceled",
+    "delivery_unknown",
+    "resume_unavailable",
+    "verification_required",
     "superseded",
 ]
 
