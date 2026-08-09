@@ -22052,6 +22052,101 @@ class MoonMindRunWorkflow:
                     self._step_execution_branch_artifact_manifests.get(latest_key)
                     or {}
                 )
+                if workflow.patched("checkpoint-branch-terminal-manifest-v1"):
+                    step_refs = (
+                        self._proposal_step_output_refs(self._last_step_id)
+                        if self._last_step_id
+                        else {}
+                    )
+                    external_state_ref = self._coerce_text(
+                        step_refs.get("externalStateRef"), max_chars=500
+                    )
+                    output_ref = self._coerce_text(
+                        step_refs.get("primaryRef") or step_refs.get("summaryRef"),
+                        max_chars=500,
+                    )
+                    checkpoint_ref = next(
+                        (
+                            self._coerce_text(value, max_chars=500)
+                            for value in reversed(
+                                list(self._step_checkpoint_refs_by_boundary.values())
+                            )
+                            if self._coerce_text(value, max_chars=500)
+                        ),
+                        None,
+                    )
+                    terminal_refs = {
+                        "runtime.branch_turn.context_bundle.json": self._coerce_text(
+                            branch_manifest.get("contextBundleRef"), max_chars=500
+                        ),
+                        **{
+                            str(entry.get("name")): str(entry.get("artifactRef"))
+                            for entry in branch_manifest.get("artifacts", ())
+                            if isinstance(entry, Mapping)
+                            and str(entry.get("name") or "").strip()
+                            and str(entry.get("artifactRef") or "").strip()
+                        },
+                    }
+                    for evidence_name, evidence_ref in {
+                        "terminal": external_state_ref,
+                        "workspace": checkpoint_ref,
+                        "output": output_ref,
+                        "checkpoint": checkpoint_ref,
+                        # The external-state artifact is the normal-path Omnigent
+                        # authority chain: it records lease/session/message,
+                        # terminal harvest, cleanup, and release-last evidence.
+                        "cleanup": external_state_ref,
+                        "host_lease": external_state_ref,
+                        "provider_lease": external_state_ref,
+                        "first_message": external_state_ref,
+                        "diagnostics": self._coerce_text(
+                            step_refs.get("diagnosticsRef")
+                            or self._last_diagnostics_ref,
+                            max_chars=500,
+                        ),
+                        "publication": self._coerce_text(
+                            self._publish_context.get("evidenceRef")
+                            or (
+                                self._publish_context.get("terminalPublication")
+                                or {}
+                            ).get("evidenceRef"),
+                            max_chars=500,
+                        ),
+                    }.items():
+                        if evidence_ref:
+                            terminal_refs[evidence_name] = evidence_ref
+                    terminal_manifest = {
+                        key: value
+                        for key, value in branch_manifest.items()
+                        if key not in {"artifactManifestDigest", "persistedArtifactRef"}
+                    }
+                    terminal_manifest["evidenceRefs"] = terminal_refs
+                    terminal_digest = "sha256:" + hashlib.sha256(
+                        json.dumps(
+                            terminal_manifest, sort_keys=True, separators=(",", ":")
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    terminal_manifest["artifactManifestDigest"] = terminal_digest
+                    terminal_manifest_ref = await self._write_json_artifact(
+                        name=(
+                            "reports/checkpoint_branches/"
+                            f"{self._artifact_slug(str(branch_projection.get('branchId') or 'branch'))}/turns/"
+                            f"{self._artifact_slug(str(branch_projection.get('branchTurnId') or 'turn'))}/terminal_manifest.json"
+                        ),
+                        payload=terminal_manifest,
+                        content_type="application/json",
+                        metadata_json={
+                            "artifact_kind": "checkpoint_branch_terminal_manifest",
+                            "branchId": str(branch_projection.get("branchId") or ""),
+                            "branchTurnId": str(
+                                branch_projection.get("branchTurnId") or ""
+                            ),
+                        },
+                    )
+                    branch_manifest = {
+                        **terminal_manifest,
+                        "persistedArtifactRef": terminal_manifest_ref,
+                    }
                 terminal_branch_turn = {
                     "branchId": branch_projection.get("branchId"),
                     "branchTurnId": branch_projection.get("branchTurnId"),
@@ -22077,10 +22172,15 @@ class MoonMindRunWorkflow:
                     terminal_branch_turn.update(
                         {
                             "artifactPrincipal": self._principal(),
+                            "evidenceSchemaVersion": (
+                                "v2"
+                                if workflow.patched(
+                                    "checkpoint-branch-terminal-manifest-v1"
+                                )
+                                else "v1"
+                            ),
                             "evidenceRefs": {
-                                "runtime.branch_turn.context_bundle.json": str(
-                                    branch_manifest.get("contextBundleRef") or ""
-                                ),
+                                **dict(branch_manifest.get("evidenceRefs") or {}),
                                 **{
                                     str(entry.get("name")): str(
                                         entry.get("artifactRef")

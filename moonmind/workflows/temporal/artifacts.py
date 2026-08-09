@@ -3176,6 +3176,25 @@ class TemporalArtifactActivities:
                         "checkpoint branch terminal artifact manifest lineage mismatch"
                     )
 
+                authoritative_refs = {
+                    str(entry.get("name") or "").strip(): str(
+                        entry.get("artifactRef") or ""
+                    ).strip()
+                    for entry in authoritative_manifest.get("artifacts", ())
+                    if isinstance(entry, Mapping)
+                    and str(entry.get("name") or "").strip()
+                    and str(entry.get("artifactRef") or "").strip()
+                }
+                declared_manifest_refs = authoritative_manifest.get("evidenceRefs")
+                if isinstance(declared_manifest_refs, Mapping):
+                    authoritative_refs.update(
+                        {
+                            str(key).strip(): str(value).strip()
+                            for key, value in declared_manifest_refs.items()
+                            if str(key).strip() and str(value).strip()
+                        }
+                    )
+
                 branch_id = terminal_contract.branch_id
                 turn_id = terminal_contract.branch_turn_id
                 if branch_id and turn_id:
@@ -3210,17 +3229,54 @@ class TemporalArtifactActivities:
                         if isinstance(value, str) and value.strip()
                     }
                     refs.update(terminal_contract.evidence_refs)
-                    if model.state == "completed":
-                        required = {
-                            "input.branch_turn.instructions.md",
-                            "runtime.branch_turn.context_bundle.json",
-                        }
-                        missing = sorted(required.difference(refs))
-                        if missing:
-                            raise TemporalArtifactValidationError(
-                                "completed checkpoint branch lacks authoritative evidence: "
-                                + ", ".join(missing)
+                    required = {
+                        "input.branch_turn.instructions.md",
+                        "runtime.branch_turn.context_bundle.json",
+                    }
+                    if terminal_contract.evidence_schema_version == "v2":
+                        required.update(
+                            terminal_contract.required_evidence(
+                                runtime_state=model.state,
+                                finish_outcome_code=str(
+                                    model.finish_outcome_code or ""
+                                ),
                             )
+                        )
+                    missing = sorted(required.difference(refs))
+                    if missing:
+                        raise TemporalArtifactValidationError(
+                            "checkpoint branch lacks authoritative lifecycle evidence: "
+                            + ", ".join(missing)
+                        )
+                    inconsistent = sorted(
+                        key
+                        for key, value in refs.items()
+                        if key not in {"artifact_manifest", "run_summary"}
+                        and authoritative_refs.get(key) != value
+                    )
+                    if terminal_contract.evidence_schema_version == "v2" and inconsistent:
+                        raise TemporalArtifactValidationError(
+                            "checkpoint branch lifecycle evidence is not present in the "
+                            "authoritative manifest: " + ", ".join(inconsistent)
+                        )
+                    release_states = {
+                        "cleanup": terminal_contract.cleanup_state,
+                        "host": terminal_contract.host_release_state,
+                        "profile": terminal_contract.profile_release_state,
+                    }
+                    incomplete_release = sorted(
+                        key
+                        for key, value in release_states.items()
+                        if str(value or "").lower() not in {"completed", "released"}
+                    )
+                    if (
+                        terminal_contract.evidence_schema_version == "v2"
+                        and incomplete_release
+                    ):
+                        raise TemporalArtifactValidationError(
+                            "checkpoint branch terminal projection precedes release-last "
+                            "authority: " + ", ".join(incomplete_release)
+                        )
                     await CheckpointBranchService(session).reconcile_turn_terminal(
                         branch_id=branch_id,
                         branch_turn_id=turn_id,

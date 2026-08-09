@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     AliasChoices,
@@ -207,10 +207,41 @@ class CheckpointBranchTerminalEvidence(BaseModel):
         ..., alias="contextBundleDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
     evidence_refs: dict[str, str] = Field(default_factory=dict, alias="evidenceRefs")
+    evidence_schema_version: Literal["v1", "v2"] = Field(
+        "v1", alias="evidenceSchemaVersion"
+    )
     terminal_state: str | None = Field(None, alias="terminalState")
     cleanup_state: str | None = Field(None, alias="cleanupState")
     host_release_state: str | None = Field(None, alias="hostReleaseState")
     profile_release_state: str | None = Field(None, alias="profileReleaseState")
+
+    _BASE_LIFECYCLE_EVIDENCE: ClassVar[frozenset[str]] = frozenset(
+        {
+            "terminal",
+            "cleanup",
+            "host_lease",
+            "provider_lease",
+            "first_message",
+        }
+    )
+
+    def required_evidence(self, *, runtime_state: str, finish_outcome_code: str) -> set[str]:
+        """Return the evidence that must exist before this turn can be projected.
+
+        Terminal failures still need proof that runtime authority was harvested and
+        released.  Successful turns additionally need the cumulative workspace and
+        produced output/checkpoint; publication and diagnostics are conditional on
+        the outcome that claims those side effects occurred.
+        """
+
+        required = set(self._BASE_LIFECYCLE_EVIDENCE)
+        if runtime_state == "completed":
+            required.update({"workspace", "output", "checkpoint"})
+        if finish_outcome_code.upper() in {"PUBLISHED_PR", "PUBLISHED_BRANCH"}:
+            required.add("publication")
+        if runtime_state != "completed" or "DELIVERY_UNKNOWN" in finish_outcome_code.upper():
+            required.add("diagnostics")
+        return required
 
     @model_validator(mode="after")
     def _normalize_refs(self) -> "CheckpointBranchTerminalEvidence":

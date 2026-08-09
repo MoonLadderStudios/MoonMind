@@ -242,11 +242,25 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
     )
     monkeypatch.setattr(activities, "_write_run_digest_best_effort", AsyncMock())
 
+    evidence_refs = {
+        "input.branch_turn.instructions.md": "artifact://branch/instructions",
+        "runtime.branch_turn.context_bundle.json": "artifact://branch/context",
+        "terminal": "artifact://branch/terminal",
+        "workspace": "artifact://branch/workspace",
+        "output": "artifact://branch/output",
+        "publication": "artifact://branch/publication",
+        "checkpoint": "artifact://branch/checkpoint",
+        "cleanup": "artifact://branch/cleanup",
+        "host_lease": "artifact://branch/host-lease",
+        "provider_lease": "artifact://branch/provider-lease",
+        "first_message": "artifact://branch/first-message",
+    }
     manifest = {
         "branchId": "branch-1",
         "branchTurnId": "turn-1",
         "contextBundleRef": "artifact://branch/context",
         "contextBundleDigest": "sha256:" + "c" * 64,
+        "evidenceRefs": evidence_refs,
     }
     manifest_digest = "sha256:" + hashlib.sha256(
         json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
@@ -276,17 +290,10 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
                     "artifactManifestRef": "artifact://branch/terminal-manifest",
                     "artifactManifestDigest": manifest_digest,
                     "artifactPrincipal": "owner-1",
+                    "evidenceSchemaVersion": "v2",
                     "contextBundleRef": "artifact://branch/context",
                     "contextBundleDigest": "sha256:" + "c" * 64,
-                    "evidenceRefs": {
-                        "input.branch_turn.instructions.md": "artifact://branch/instructions",
-                        "runtime.branch_turn.context_bundle.json": "artifact://branch/context",
-                        "checkpoint": "artifact://branch/checkpoint",
-                        "cleanup": "artifact://branch/cleanup",
-                        "host_lease": "artifact://branch/host-lease",
-                        "provider_lease": "artifact://branch/provider-lease",
-                        "first_message": "artifact://branch/first-message",
-                    },
+                    "evidenceRefs": evidence_refs,
                     "terminalState": "harvested",
                     "cleanupState": "completed",
                     "hostReleaseState": "released",
@@ -304,6 +311,10 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
             "status": "verification_required",
             "evidence_refs": {
                 "artifact_manifest": "artifact://branch/terminal-manifest",
+                "terminal": "artifact://branch/terminal",
+                "workspace": "artifact://branch/workspace",
+                "output": "artifact://branch/output",
+                "publication": "artifact://branch/publication",
                 "checkpoint": "artifact://branch/checkpoint",
                 "cleanup": "artifact://branch/cleanup",
                 "host_lease": "artifact://branch/host-lease",
