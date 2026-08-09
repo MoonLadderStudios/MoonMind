@@ -89,6 +89,11 @@ from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
     synthesize_workflow_title,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    RemediationCapabilityContext,
+    remediation_action_capability_matrix,
+)
+from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -659,6 +664,19 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
             raise ValueError("next action baseline must match the persisted head")
         return self
 
+class RemediationActionCapabilityModel(BaseModel):
+    actionKind: str
+    requestable: bool
+    dryRunSupported: bool
+    executionBackendReady: bool
+    approvalBackendReady: bool
+    verificationBackendReady: bool
+    supportedTargetRuntimes: list[str]
+    supportedHostModes: list[str]
+    requiredEvidenceClasses: list[str]
+    blockedReasons: list[str]
+
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -679,6 +697,9 @@ class RemediationLinkSummaryModel(BaseModel):
     selectedSteps: list[str] | None = None
     currentTargetState: str | None = None
     allowedActions: list[str] | None = None
+    actionCapabilities: list[RemediationActionCapabilityModel] = Field(
+        default_factory=list
+    )
     evidenceDegraded: bool | None = None
     unavailableEvidenceClasses: list[str] | None = None
     liveObservation: RemediationLiveObservationModel | None = None
@@ -11784,6 +11805,44 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         authority_mode=authority_mode,
         status_value=status_value,
     )
+    policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
+    target_state = str(getattr(link, "current_target_state", "") or "").strip()
+    unavailable_evidence = set(
+        _bounded_string_list(getattr(link, "unavailable_evidence_classes", None)) or []
+    )
+    known_evidence = {
+        "execution_state",
+        "workflow_history",
+        "target_identity",
+        "action_result",
+        "continuity_boundary",
+    } - unavailable_evidence
+    approval_backend_ready = authority_mode == "admin_auto" or (
+        authority_mode == "approval_gated"
+        and isinstance(getattr(link, "approval_state", None), dict)
+    )
+    executor = build_remediation_action_executor()
+    backend_readiness = {
+        action_kind: action_kind in executor._adapters
+        for action_kind in (row["actionKind"] for row in remediation_action_capability_matrix())
+    }
+    capability_context = RemediationCapabilityContext(
+        target_runtime=(str(getattr(link, "target_runtime", "") or "").strip() or None),
+        host_mode=(str(getattr(link, "host_mode", "") or "").strip() or None),
+        target_state_eligible=target_state.lower() not in {"unknown", "missing"},
+        current_evidence_classes=tuple(sorted(known_evidence)),
+        require_current_evidence=bool(getattr(link, "evidence_degraded", False)),
+        # Missing persisted policy projection is not permission to advertise
+        # every catalog action. Fail closed until the owning projection supplies
+        # the immutable target-policy intersection.
+        policy_allowed_action_kinds=tuple(policy_actions or ()),
+        caller_allowed_action_kinds=tuple(policy_actions or ()),
+        execution_backend_readiness=backend_readiness,
+        approval_backend_ready=approval_backend_ready,
+    )
+    capability_matrix = [
+        dict(row) for row in remediation_action_capability_matrix(context=capability_context)
+    ]
 
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
@@ -11801,7 +11860,12 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
         currentTargetState=getattr(link, "current_target_state", None),
-        allowedActions=_bounded_string_list(getattr(link, "allowed_actions", None)),
+        allowedActions=[
+            str(row["actionKind"])
+            for row in capability_matrix
+            if row["requestable"] is True
+        ],
+        actionCapabilities=capability_matrix,
         evidenceDegraded=getattr(link, "evidence_degraded", None),
         unavailableEvidenceClasses=_bounded_string_list(
             getattr(link, "unavailable_evidence_classes", None)

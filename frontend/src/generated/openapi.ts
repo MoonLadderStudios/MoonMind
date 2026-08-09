@@ -11573,6 +11573,29 @@ export interface components {
             /** Message */
             message?: string | null;
         };
+        /** RemediationActionCapabilityModel */
+        RemediationActionCapabilityModel: {
+            /** Actionkind */
+            actionKind: string;
+            /** Requestable */
+            requestable: boolean;
+            /** Dryrunsupported */
+            dryRunSupported: boolean;
+            /** Executionbackendready */
+            executionBackendReady: boolean;
+            /** Approvalbackendready */
+            approvalBackendReady: boolean;
+            /** Verificationbackendready */
+            verificationBackendReady: boolean;
+            /** Supportedtargetruntimes */
+            supportedTargetRuntimes: string[];
+            /** Supportedhostmodes */
+            supportedHostModes: string[];
+            /** Requiredevidenceclasses */
+            requiredEvidenceClasses: string[];
+            /** Blockedreasons */
+            blockedReasons: string[];
+        };
         /** RemediationApprovalDecisionRequest */
         RemediationApprovalDecisionRequest: {
             /** Decision */
@@ -11824,6 +11847,8 @@ export interface components {
             currentTargetState?: string | null;
             /** Allowedactions */
             allowedActions?: string[] | null;
+            /** Actioncapabilities */
+            actionCapabilities?: components["schemas"]["RemediationActionCapabilityModel"][];
             /** Evidencedegraded */
             evidenceDegraded?: boolean | null;
             /** Unavailableevidenceclasses */

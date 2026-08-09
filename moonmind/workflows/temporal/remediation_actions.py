@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -412,17 +412,62 @@ _EXECUTION_BACKEND_READY = frozenset(
     }
 )
 
+_OMNIGENT_ONLY_TARGETS = frozenset(
+    {"session", "provider_profile", "workload", "host", "host_lease"}
+)
 
-def remediation_action_capability(action_kind: str) -> Mapping[str, Any]:
-    """Return the canonical, independently evaluated readiness projection."""
+
+@dataclass(frozen=True, slots=True)
+class RemediationCapabilityContext:
+    """Live, exact-target inputs resolved by the owning service boundary."""
+
+    target_runtime: str | None = None
+    host_mode: str | None = None
+    target_state_eligible: bool = True
+    current_evidence_classes: Sequence[str] = field(default_factory=tuple)
+    require_current_evidence: bool = False
+    policy_allowed_action_kinds: Sequence[str] | None = None
+    caller_allowed_action_kinds: Sequence[str] | None = None
+    execution_backend_readiness: Mapping[str, bool] | None = None
+    approval_backend_ready: bool = True
+    verification_backend_readiness: Mapping[str, bool] | None = None
+
+
+def _action_support(action_kind: str) -> tuple[list[str], list[str]]:
+    target_type = str((_ACTION_CATALOG.get(action_kind) or {}).get("target_type") or "")
+    if target_type in _OMNIGENT_ONLY_TARGETS:
+        return ["omnigent"], ["managed"]
+    return ["temporal", "codex_cli", "claude_code", "gemini_cli", "omnigent"], [
+        "managed",
+        "external",
+    ]
+
+
+def remediation_action_capability(
+    action_kind: str,
+    *,
+    context: RemediationCapabilityContext | None = None,
+) -> Mapping[str, Any]:
+    """Evaluate one action against catalog and live exact-target readiness."""
 
     normalized = str(action_kind or "").strip()
     metadata = _ACTION_CATALOG.get(normalized)
     contract = verification_contract_for(normalized)
     catalog_enabled = bool(metadata and metadata.get("enabled"))
+    supported_runtimes, supported_host_modes = _action_support(normalized)
     execution_ready = normalized in _EXECUTION_BACKEND_READY
     verification_ready = contract.automatically_verifiable
     approval_ready = catalog_enabled
+    if context is not None:
+        if context.execution_backend_readiness is not None:
+            execution_ready = execution_ready and bool(
+                context.execution_backend_readiness.get(normalized, False)
+            )
+        if context.verification_backend_readiness is not None:
+            verification_ready = verification_ready and bool(
+                context.verification_backend_readiness.get(normalized, False)
+            )
+        approval_ready = catalog_enabled and context.approval_backend_ready
     blocked: list[str] = []
     if not catalog_enabled:
         blocked.append("action_not_in_enabled_catalog")
@@ -432,6 +477,23 @@ def remediation_action_capability(action_kind: str) -> Mapping[str, Any]:
         blocked.append("approval_backend_unavailable")
     if not verification_ready:
         blocked.append("authoritative_verifier_unavailable")
+    if context is not None:
+        policy = context.policy_allowed_action_kinds
+        if policy is not None and normalized not in set(policy):
+            blocked.append("target_policy_denied")
+        caller = context.caller_allowed_action_kinds
+        if caller is not None and normalized not in set(caller):
+            blocked.append("caller_permission_denied")
+        if not context.target_state_eligible:
+            blocked.append("target_state_ineligible")
+        if context.target_runtime and context.target_runtime not in supported_runtimes:
+            blocked.append("target_runtime_unsupported")
+        if context.host_mode and context.host_mode not in supported_host_modes:
+            blocked.append("host_mode_unsupported")
+        required = set(contract.before_evidence_classes)
+        available = set(context.current_evidence_classes)
+        if context.require_current_evidence and not required.issubset(available):
+            blocked.append("required_evidence_unavailable")
     requestable = not blocked
     return {
         "requestable": requestable,
@@ -439,8 +501,8 @@ def remediation_action_capability(action_kind: str) -> Mapping[str, Any]:
         "executionBackendReady": execution_ready,
         "approvalBackendReady": approval_ready,
         "verificationBackendReady": verification_ready,
-        "supportedTargetRuntimes": ["temporal", "omnigent"],
-        "supportedHostModes": ["managed", "external"],
+        "supportedTargetRuntimes": supported_runtimes,
+        "supportedHostModes": supported_host_modes,
         "requiredEvidenceClasses": list(
             dict.fromkeys(
                 contract.before_evidence_classes + contract.after_evidence_classes
@@ -450,13 +512,15 @@ def remediation_action_capability(action_kind: str) -> Mapping[str, Any]:
     }
 
 
-def remediation_action_capability_matrix() -> tuple[Mapping[str, Any], ...]:
+def remediation_action_capability_matrix(
+    *, context: RemediationCapabilityContext | None = None
+) -> tuple[Mapping[str, Any], ...]:
     """Return every catalog identity, including truthfully disabled actions."""
 
     return tuple(
         {
             "actionKind": action_kind,
-            **remediation_action_capability(action_kind),
+            **remediation_action_capability(action_kind, context=context),
         }
         for action_kind in _ACTION_CATALOG
     )
@@ -749,6 +813,7 @@ class RemediationActionAuthorityService:
         *,
         permissions: RemediationPermissionSet,
         security_profile: RemediationSecurityProfile | None,
+        capability_context: RemediationCapabilityContext | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
         """Return enabled action metadata allowed by caller permissions and profile."""
 
@@ -767,7 +832,14 @@ class RemediationActionAuthorityService:
                 continue
             if action_kind not in allowed_by_profile:
                 continue
-            capability = remediation_action_capability(action_kind)
+            live_context = capability_context or RemediationCapabilityContext()
+            live_context = replace(
+                live_context,
+                caller_allowed_action_kinds=tuple(allowed_by_profile),
+            )
+            capability = remediation_action_capability(
+                action_kind, context=live_context
+            )
             if not capability["requestable"]:
                 continue
             actions.append(
@@ -2610,6 +2682,7 @@ def remediation_changes_require_checkpoint_branch(
 
 
 __all__ = [
+    "RemediationCapabilityContext",
     "REMEDIATION_BRANCH_SENSITIVE_FIELDS",
     "RemediationActionAuthorityResult",
     "RemediationActionAuthorityService",
