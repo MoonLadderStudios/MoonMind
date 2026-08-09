@@ -9623,6 +9623,57 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     return ref.strip() or None
 
 
+async def _validate_checkpoint_artifact_digest(
+    *,
+    session: AsyncSession,
+    checkpoint_ref: str,
+    checkpoint_digest: str,
+    principal: str,
+) -> None:
+    """Resolve checkpoint authority and verify its immutable bytes before launch."""
+
+    artifact_id = _artifact_id_from_ref(checkpoint_ref)
+    expected = str(checkpoint_digest or "").removeprefix("sha256:").lower()
+    if artifact_id is None or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "invalid_checkpoint_authority",
+            },
+        )
+    try:
+        _artifact, payload = await get_temporal_artifact_service(session).read(
+            artifact_id=artifact_id, principal=principal
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "checkpoint_unresolvable",
+            },
+        ) from exc
+    payload_digest = hashlib.sha256(payload).hexdigest()
+    embedded_digest: str | None = None
+    try:
+        decoded = json.loads(payload)
+        if isinstance(decoded, Mapping):
+            workspace = decoded.get("workspace")
+            if isinstance(workspace, Mapping):
+                embedded_digest = str(workspace.get("workspaceDigest") or "")
+    except (TypeError, ValueError, UnicodeDecodeError):
+        decoded = None
+    if payload_digest != expected and embedded_digest != f"sha256:{expected}":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "checkpoint_invalidity",
+                "reason": "checkpoint_digest_mismatch",
+            },
+        )
+
+
 async def _hydrate_recovery_checkpoint_payload(
     *,
     session: AsyncSession,
@@ -13867,6 +13918,15 @@ async def launch_checkpoint_branch_turn(
                 checkpointRef=turn.source_checkpoint_ref,
                 checkpointDigest=turn.source_checkpoint_digest,
             ),
+        )
+    if (branch.diagnostics or {}).get("repairActionKind") == (
+        "checkpoint_branch.create_from_remediation_context"
+    ):
+        await _validate_checkpoint_artifact_digest(
+            session=session,
+            checkpoint_ref=turn.source_checkpoint_ref,
+            checkpoint_digest=turn.source_checkpoint_digest,
+            principal=_owner_id(user),
         )
 
     # Allocate semantic identities before compiling any launch artifacts.

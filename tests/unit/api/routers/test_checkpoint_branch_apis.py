@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -20,6 +21,7 @@ from api_service.api.routers.executions import (
     _checkpoint_branch_git_context,
     _get_service,
     _scoped_operation_digest,
+    _validate_checkpoint_artifact_digest,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -40,6 +42,88 @@ from api_service.services.checkpoint_branch_service import (
     build_branch_turn_launch_idempotency_key,
 )
 from moonmind.schemas.checkpoint_branch_models import CheckpointBranchTurnLaunchRequest
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_artifact_digest_is_resolved_and_verified_before_launch(
+    monkeypatch,
+) -> None:
+    payload = b"authoritative checkpoint bytes"
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(return_value=(SimpleNamespace(), payload))
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    await _validate_checkpoint_artifact_digest(
+        session=SimpleNamespace(),
+        checkpoint_ref="artifact://checkpoint-authority",
+        checkpoint_digest=f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        principal="owner-1",
+    )
+
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="checkpoint-authority", principal="owner-1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_artifact_digest_mismatch_fails_closed(monkeypatch) -> None:
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(return_value=(SimpleNamespace(), b"stale bytes"))
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await _validate_checkpoint_artifact_digest(
+            session=SimpleNamespace(),
+            checkpoint_ref="artifact://checkpoint-authority",
+            checkpoint_digest=f"sha256:{'a' * 64}",
+            principal="owner-1",
+        )
+
+    assert exc_info.value.detail == {
+        "code": "checkpoint_invalidity",
+        "reason": "checkpoint_digest_mismatch",
+    }
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_artifact_resolution_can_retry_without_changing_authority(
+    monkeypatch,
+) -> None:
+    payload = b"checkpoint restored after restart"
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            side_effect=[RuntimeError("projection lag"), (SimpleNamespace(), payload)]
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    kwargs = {
+        "session": SimpleNamespace(),
+        "checkpoint_ref": "artifact://checkpoint-authority",
+        "checkpoint_digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        "principal": "owner-1",
+    }
+
+    with pytest.raises(Exception) as first:
+        await _validate_checkpoint_artifact_digest(**kwargs)
+    await _validate_checkpoint_artifact_digest(**kwargs)
+
+    assert first.value.detail["reason"] == "checkpoint_unresolvable"
+    assert artifact_service.read.await_count == 2
+    assert (
+        artifact_service.read.await_args_list[0]
+        == artifact_service.read.await_args_list[1]
+    )
 
 
 def _record_like(user: SimpleNamespace) -> SimpleNamespace:

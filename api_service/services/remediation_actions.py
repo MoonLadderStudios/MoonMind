@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 from copy import deepcopy
 from collections.abc import Awaitable, Callable, Mapping
@@ -105,10 +107,12 @@ class TemporalRemediationControlPlane:
         client: TemporalClientAdapter | None = None,
         execution_service: TemporalExecutionService | None = None,
         checkpoint_branch_service: CheckpointBranchService | None = None,
+        artifact_service: Any | None = None,
     ) -> None:
         self._client = client or TemporalClientAdapter()
         self._execution_service = execution_service
         self._checkpoint_branch_service = checkpoint_branch_service
+        self._artifact_service = artifact_service
 
     @staticmethod
     def _parts(
@@ -250,6 +254,27 @@ class TemporalRemediationControlPlane:
             target=target,
             params=params,
         )
+        if self._artifact_service is not None:
+            try:
+                _artifact, checkpoint_payload = await self._artifact_service.read(
+                    artifact_id=checkpoint_ref.removeprefix("artifact://"),
+                    principal=str(source.owner_id),
+                )
+            except Exception as exc:
+                raise ValueError("checkpoint_unresolvable") from exc
+            expected_digest = str(params["checkpointDigest"])
+            actual_digest = f"sha256:{hashlib.sha256(checkpoint_payload).hexdigest()}"
+            embedded_digest = None
+            try:
+                decoded_checkpoint = json.loads(checkpoint_payload)
+                if isinstance(decoded_checkpoint, Mapping):
+                    workspace = decoded_checkpoint.get("workspace")
+                    if isinstance(workspace, Mapping):
+                        embedded_digest = workspace.get("workspaceDigest")
+            except (TypeError, ValueError, UnicodeDecodeError):
+                pass
+            if expected_digest not in {actual_digest, embedded_digest}:
+                raise ValueError("checkpoint_digest_mismatch")
         branch_id = f"remediation-{action_id}"
         turn_id = f"{branch_id}-turn-1"
         graph = await self._checkpoint_branch_service.create_branch_graph(
@@ -693,12 +718,22 @@ def build_remediation_action_executor(
         if session is not None
         else None
     )
+    if session is not None:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        artifact_service = TemporalArtifactService(TemporalArtifactRepository(session))
+    else:
+        artifact_service = None
     plane = TemporalRemediationControlPlane(
         client=client,
         execution_service=execution_service,
         checkpoint_branch_service=(
             CheckpointBranchService(session) if session is not None else None
         ),
+        artifact_service=artifact_service,
     )
     return MoonMindControlPlaneRemediationActionExecutor(
         plane.handlers(enforce_policy=True)

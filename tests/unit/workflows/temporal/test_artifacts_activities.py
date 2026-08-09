@@ -249,6 +249,15 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
                     "branchId": "branch-1",
                     "branchTurnId": "turn-1",
                     "artifactManifestRef": "artifact://branch/terminal-manifest",
+                    "checkpointRef": "artifact://branch/checkpoint",
+                    "cleanupRef": "artifact://branch/cleanup",
+                    "hostLeaseRef": "artifact://branch/host-lease",
+                    "providerLeaseRef": "artifact://branch/provider-lease",
+                    "firstMessageRef": "artifact://branch/first-message",
+                    "terminalState": "harvested",
+                    "cleanupState": "completed",
+                    "hostReleaseState": "released",
+                    "profileReleaseState": "released",
                 }
             },
         }
@@ -261,13 +270,22 @@ async def test_execution_terminal_state_reconciles_checkpoint_branch_turn(
             "runtime_agent_run_id": "runtime-wf",
             "status": "verification_required",
             "evidence_refs": {
-                "artifact_manifest": "artifact://branch/terminal-manifest"
+                "artifact_manifest": "artifact://branch/terminal-manifest",
+                "checkpoint": "artifact://branch/checkpoint",
+                "cleanup": "artifact://branch/cleanup",
+                "host_lease": "artifact://branch/host-lease",
+                "provider_lease": "artifact://branch/provider-lease",
+                "first_message": "artifact://branch/first-message",
             },
             "terminal_summary": {
                 "state": "completed",
                 "closeStatus": "completed",
                 "finishOutcomeCode": "PUBLISHED_PR",
                 "errorCategory": None,
+                "terminalState": "harvested",
+                "cleanupState": "completed",
+                "hostReleaseState": "released",
+                "profileReleaseState": "released",
             },
         }
     ]

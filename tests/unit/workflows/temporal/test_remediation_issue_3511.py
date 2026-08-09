@@ -823,12 +823,13 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     checkpoint_service.launch_turn.assert_awaited_once()
 
 
-async def test_checkpoint_branch_adapter_rejects_stale_checkpoint_before_mutation() -> None:
+async def test_checkpoint_branch_adapter_digest_checks_artifact_before_mutation() -> None:
     checkpoint_service = AsyncMock()
     execution_service = AsyncMock()
     execution_service.describe_execution.return_value = SimpleNamespace(
         workflow_id="target",
         run_id="target-run",
+        owner_id="owner-1",
         memo={
             "checkpoint": {
                 "logicalStepId": "implement",
@@ -841,6 +842,9 @@ async def test_checkpoint_branch_adapter_rejects_stale_checkpoint_before_mutatio
     plane = TemporalRemediationControlPlane(
         execution_service=execution_service,
         checkpoint_branch_service=checkpoint_service,
+        artifact_service=SimpleNamespace(
+            read=AsyncMock(return_value=(SimpleNamespace(), b"stale checkpoint bytes"))
+        ),
     )
     result = await plane.handlers()[
         "checkpoint_branch.create_from_remediation_context"
@@ -853,7 +857,7 @@ async def test_checkpoint_branch_adapter_rejects_stale_checkpoint_before_mutatio
                 "remediationWorkflowId": "remediation",
                 "remediationContextRef": "artifact://context",
                 "checkpointRef": "artifact://checkpoint",
-                "checkpointDigest": "sha256:" + ("c" * 64),
+                "checkpointDigest": "sha256:" + ("b" * 64),
                 "logicalStepId": "implement",
                 "executionOrdinal": 2,
                 "instructionRef": "artifact://instructions",
@@ -865,7 +869,7 @@ async def test_checkpoint_branch_adapter_rejects_stale_checkpoint_before_mutatio
     )
 
     assert result["status"] == "precondition_failed"
-    assert result["reason"] == "checkpoint_authority_mismatch"
+    assert result["reason"] == "checkpoint_digest_mismatch"
     checkpoint_service.create_branch_graph.assert_not_awaited()
     execution_service.create_execution.assert_not_awaited()
 

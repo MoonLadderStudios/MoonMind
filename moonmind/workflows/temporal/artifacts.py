@@ -3134,6 +3134,17 @@ class TemporalArtifactActivities:
                                 "artifactManifestRef"
                             ),
                             "run_summary": getattr(record, "summary_ref", None),
+                            "terminal": branch_terminal.get("terminalRef"),
+                            "workspace": branch_terminal.get("workspaceRef"),
+                            "output": branch_terminal.get("outputRef"),
+                            "publication": branch_terminal.get("publicationRef"),
+                            "capture": branch_terminal.get("captureRef"),
+                            "checkpoint": branch_terminal.get("checkpointRef"),
+                            "diagnostics": branch_terminal.get("diagnosticsRef"),
+                            "cleanup": branch_terminal.get("cleanupRef"),
+                            "host_lease": branch_terminal.get("hostLeaseRef"),
+                            "provider_lease": branch_terminal.get("providerLeaseRef"),
+                            "first_message": branch_terminal.get("firstMessageRef"),
                         }.items()
                         if isinstance(value, str) and value.strip()
                     }
@@ -3148,6 +3159,12 @@ class TemporalArtifactActivities:
                             "closeStatus": model.close_status,
                             "finishOutcomeCode": model.finish_outcome_code,
                             "errorCategory": model.error_category,
+                            "terminalState": branch_terminal.get("terminalState"),
+                            "cleanupState": branch_terminal.get("cleanupState"),
+                            "hostReleaseState": branch_terminal.get("hostReleaseState"),
+                            "profileReleaseState": branch_terminal.get(
+                                "profileReleaseState"
+                            ),
                         },
                     )
                     await session.commit()
