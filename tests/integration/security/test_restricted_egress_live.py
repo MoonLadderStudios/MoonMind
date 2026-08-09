@@ -32,10 +32,12 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobWorkflowInput,
 )
+from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
 )
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
+from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.integration]
 
@@ -161,6 +163,80 @@ def _live_backend_request(workspace: Path, *, command: list[str]):
             "resolvedImageRef": "alpine:3.21",
         }
     )
+
+
+def _live_helper_request(tmp_path: Path):
+    workspace = tmp_path / "helper-workspace"
+    repo = workspace / "helper-run" / "repo"
+    artifacts = workspace / "helper-run" / "artifacts" / "egress-live"
+    repo.mkdir(parents=True)
+    artifacts.mkdir(parents=True)
+    registry_path = tmp_path / "helper-profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "egress-live-helper",
+                        "kind": "bounded_service",
+                        "image": "redis:7.2-alpine",
+                        "entrypoint": ["redis-server"],
+                        "command_wrapper": [],
+                        "workdir_template": f"{workspace}/${{agent_run_id}}/repo",
+                        "required_mounts": [],
+                        "optional_mounts": [],
+                        "env_allowlist": [],
+                        "network_policy": "restricted_egress",
+                        "resources": {
+                            "cpu": "1",
+                            "memory": "256m",
+                            "shm_size": "64m",
+                            "max_cpu": "1",
+                            "max_memory": "256m",
+                            "max_shm_size": "64m",
+                        },
+                        "timeout_seconds": 60,
+                        "max_timeout_seconds": 60,
+                        "helper_ttl_seconds": 120,
+                        "max_helper_ttl_seconds": 120,
+                        "readiness_probe": {
+                            "type": "exec",
+                            "command": ["redis-cli", "ping"],
+                            "interval_seconds": 1,
+                            "timeout_seconds": 2,
+                            "retries": 10,
+                        },
+                        "cleanup": {
+                            "remove_container_on_exit": True,
+                            "kill_grace_seconds": 1,
+                        },
+                        "device_policy": {"mode": "none"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(
+        registry_path, workspace_root=workspace
+    )
+    request = WorkloadRequest.model_validate(
+        {
+            "profileId": "egress-live-helper",
+            "agentRunId": "helper-run",
+            "stepId": "egress-live",
+            "attempt": 1,
+            "toolName": "container.run_workload",
+            "repoDir": str(repo),
+            "artifactsDir": str(artifacts),
+            "command": ["--appendonly", "no"],
+            "envOverrides": {},
+            "timeoutSeconds": 60,
+            "resources": {"cpu": "1", "memory": "256m"},
+            "ttlSeconds": 120,
+        }
+    )
+    return registry.validate_request(request)
 
 
 @pytest.mark.parametrize(
@@ -464,18 +540,31 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
 
 
 @pytest.mark.asyncio
-async def test_managed_helper_crosses_its_live_trusted_attestation_boundary() -> None:
-    """Exercise the real managed-helper adapter instead of relabelling raw Docker."""
+async def test_managed_helper_crosses_its_live_trusted_launch_boundary(
+    tmp_path: Path,
+) -> None:
+    """Launch through ``start_helper`` and inspect the owned live attachment."""
 
     launcher = DockerWorkloadLauncher()
-    request = SimpleNamespace(
-        profile=SimpleNamespace(network_policy="restricted_egress")
-    )
-    attestation = await launcher._attest_egress_before_launch(request)
-    assert attestation is not None
-    assert attestation.validation_state == "attested"
-    assert attestation.network_ref == EGRESS_NETWORK_REF
-    assert attestation.backend_ref == "docker-workload-launcher"
+    request = _live_helper_request(tmp_path)
+    result = await launcher.start_helper(request)
+    try:
+        assert result.status == "ready"
+        attestation = result.metadata["helper"]["egressAttestation"]
+        assert attestation["validationResult"] == "passed"
+        assert attestation["networkRef"] == EGRESS_NETWORK_REF
+        assert attestation["backendRef"] == "docker-workload-launcher"
+        inspected = _docker(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            request.container_name,
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
+    finally:
+        await launcher.stop_helper(request, reason="conformance_complete")
+    assert _docker("inspect", request.container_name).returncode != 0
 
 
 @pytest.mark.asyncio
