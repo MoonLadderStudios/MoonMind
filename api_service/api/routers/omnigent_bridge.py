@@ -17,10 +17,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
+import aiohttp
 from fastapi import (
     APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
     WebSocketDisconnect, status,
@@ -101,8 +103,10 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_TRANSPORT_UNSUPPORTED,
     CODE_WS_SUBPROTOCOL_REJECTED,
     NativeUiCompatibilityError,
+    DISPOSITION_SERVED,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
+    upstream_websocket_path,
 )
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -3974,12 +3978,10 @@ def _strict_query_cursor(value: Any, field: str) -> int | None:
 # *before* the socket is accepted. A successful earlier HTTP bootstrap never
 # authorizes a later WebSocket (this handler reauthorizes from scratch).
 #
-# Upstream WebSocket route rewriting per compatibility profile is an open design
-# question (OB §21 Q1): the pinned ``omnigent.server.v1`` profile therefore marks
-# every recognized native-UI WebSocket class as ``compatibility_review_required``
-# and this handler fails closed with an explicit compatibility diagnostic rather
-# than generically proxying the browser to the upstream server. Unknown/changed
-# transports fail closed the same way (issue §1, acceptance criteria 2-8, 10).
+# The pinned compatibility profile supplies the exact reviewed upstream paths.
+# Unknown or changed transports remain absent from that map and fail closed;
+# reviewed transports are identity-virtualized and relayed with bounded,
+# renewable authority.
 # ---------------------------------------------------------------------------
 
 # Application-defined WebSocket close codes (4000-4999 private range), mirroring
@@ -3993,6 +3995,159 @@ WS_CLOSE_SESSION_NOT_READY = 4409
 WS_CLOSE_SUBPROTOCOL_REJECTED = 4406
 WS_CLOSE_TRANSPORT_UNSUPPORTED = 4400
 WS_CLOSE_COMPAT_REVIEW = 4451
+WS_CLOSE_UPSTREAM_UNAVAILABLE = 1013
+WS_CLOSE_LIMIT_EXCEEDED = 1009
+
+_NATIVE_WS_MAX_MESSAGE_BYTES = 1 * 1024 * 1024
+_NATIVE_WS_IDLE_SECONDS = 60.0
+_NATIVE_WS_LIFETIME_SECONDS = 60.0 * 60.0
+_NATIVE_WS_REAUTH_SECONDS = 2.0
+_NATIVE_WS_MESSAGES_PER_MINUTE = 240
+
+
+def _websocket_origin_allowed(websocket: WebSocket) -> bool:
+    """Apply a same-origin check without trusting forwarded topology headers."""
+
+    origin = str(websocket.headers.get("origin") or "").strip()
+    if not origin:  # non-browser clients authenticate through the normal dependency
+        return True
+    try:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    host = str(websocket.headers.get("host") or "").strip().lower()
+    return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host
+
+
+def _upstream_ws_url(path: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+
+    configured = urlsplit(resolved_server_url())
+    scheme = "wss" if configured.scheme == "https" else "ws"
+    return urlunsplit((scheme, configured.netloc, path, "", ""))
+
+
+async def _relay_native_websocket(
+    *,
+    browser: WebSocket,
+    upstream_url: str,
+    subprotocol: str | None,
+    still_authorized: Any,
+) -> None:
+    """Relay one reviewed native transport with bounded, renewable authority."""
+
+    headers: dict[str, str] = {}
+    token = resolved_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    started = time.monotonic()
+    recent_messages: list[float] = []
+    try:
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.ws_connect(
+                upstream_url,
+                protocols=([subprotocol] if subprotocol else ()),
+                max_msg_size=_NATIVE_WS_MAX_MESSAGE_BYTES,
+                heartbeat=_NATIVE_WS_IDLE_SECONDS / 2,
+                receive_timeout=_NATIVE_WS_IDLE_SECONDS,
+            ) as upstream:
+                await browser.accept(subprotocol=subprotocol)
+
+                async def browser_to_upstream() -> None:
+                    while True:
+                        message = await asyncio.wait_for(
+                            browser.receive(), timeout=_NATIVE_WS_IDLE_SECONDS
+                        )
+                        kind = message.get("type")
+                        if kind == "websocket.disconnect":
+                            await upstream.close()
+                            return
+                        now = time.monotonic()
+                        recent_messages[:] = [
+                            t for t in recent_messages if now - t < 60
+                        ]
+                        if len(recent_messages) >= _NATIVE_WS_MESSAGES_PER_MINUTE:
+                            await browser.close(
+                                code=WS_CLOSE_LIMIT_EXCEEDED,
+                                reason="omnigent_chat_ws_rate_limited",
+                            )
+                            return
+                        recent_messages.append(now)
+                        if message.get("text") is not None:
+                            payload = str(message["text"])
+                            if len(payload.encode("utf-8")) > _NATIVE_WS_MAX_MESSAGE_BYTES:
+                                raise ValueError("message too large")
+                            await upstream.send_str(payload)
+                        elif message.get("bytes") is not None:
+                            payload = bytes(message["bytes"])
+                            if len(payload) > _NATIVE_WS_MAX_MESSAGE_BYTES:
+                                raise ValueError("message too large")
+                            await upstream.send_bytes(payload)
+
+                async def upstream_to_browser() -> None:
+                    async for message in upstream:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            await browser.send_text(message.data)
+                        elif message.type == aiohttp.WSMsgType.BINARY:
+                            await browser.send_bytes(message.data)
+                        elif message.type in {
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        }:
+                            return
+
+                async def authority_monitor() -> None:
+                    while True:
+                        await asyncio.sleep(_NATIVE_WS_REAUTH_SECONDS)
+                        if time.monotonic() - started >= _NATIVE_WS_LIFETIME_SECONDS:
+                            await browser.close(
+                                code=1000, reason="omnigent_chat_ws_lifetime"
+                            )
+                            return
+                        if not await still_authorized():
+                            await browser.close(
+                                code=WS_CLOSE_CAPABILITY_DENIED,
+                                reason=CODE_OPERATION_DENIED,
+                            )
+                            await upstream.close()
+                            return
+
+                tasks = [
+                    asyncio.create_task(browser_to_upstream()),
+                    asyncio.create_task(upstream_to_browser()),
+                    asyncio.create_task(authority_monitor()),
+                ]
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    task.result()
+                if not upstream.closed:
+                    await upstream.close()
+                try:
+                    await browser.close(code=1000)
+                except RuntimeError:
+                    pass
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        await browser.close(
+            code=WS_CLOSE_UPSTREAM_UNAVAILABLE,
+            reason="omnigent_chat_upstream_unavailable",
+        )
+    except ValueError:
+        await browser.close(
+            code=WS_CLOSE_LIMIT_EXCEEDED,
+            reason="omnigent_chat_ws_message_too_large",
+        )
+    except WebSocketDisconnect:
+        # A browser disconnect is normal terminal evidence for this bounded
+        # relay; no payload or terminal input is logged.
+        return
 
 
 def _facade_reconnect_state(row: Any) -> str:
@@ -4087,6 +4242,26 @@ async def workflow_chat_binding_facade_ws(
         return
     route = match.route
 
+    if route.disposition != DISPOSITION_SERVED:
+        await websocket.close(
+            code=WS_CLOSE_COMPAT_REVIEW, reason=CODE_COMPAT_REVIEW_REQUIRED
+        )
+        return
+
+    if not _websocket_origin_allowed(websocket):
+        _audit_facade(
+            outcome="denied",
+            operation=operation,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="origin_rejected",
+        )
+        await websocket.close(
+            code=WS_CLOSE_CAPABILITY_DENIED,
+            reason="omnigent_chat_ws_origin_rejected",
+        )
+        return
+
     # 4. A terminal/revoked binding cannot open a new live transport; close it
     #    rather than letting a WebSocket outlive terminal authority (criterion 10).
     session_status = str(getattr(row, "status", "") or "")
@@ -4101,7 +4276,14 @@ async def workflow_chat_binding_facade_ws(
     capabilities = recompute_capabilities(
         session_status, policy_capabilities=_projection_capabilities(row)
     )
-    if route.capability and not capabilities.get(route.capability, False):
+    required_capability = route.capability
+    terminal_read_only = (
+        operation == "terminal_attach"
+        and str(websocket.query_params.get("read_only") or "").lower() == "true"
+    )
+    if terminal_read_only:
+        required_capability = "readResources"
+    if required_capability and not capabilities.get(required_capability, False):
         _audit_facade(
             outcome="denied",
             operation=operation,
@@ -4121,7 +4303,7 @@ async def workflow_chat_binding_facade_ws(
         if part.strip()
     ]
     try:
-        negotiate_ws_subprotocol(offered, route=route)
+        selected_subprotocol = negotiate_ws_subprotocol(offered, route=route)
     except NativeUiCompatibilityError:
         _audit_facade(
             outcome="denied",
@@ -4144,19 +4326,69 @@ async def workflow_chat_binding_facade_ws(
         )
         return
 
-    # 8. Recognized transport, fully authorized — but upstream WebSocket rewrite
-    #    for this compatibility profile is unreviewed (OB §21 Q1). Fail closed
-    #    with the explicit compatibility diagnostic instead of blindly bridging
-    #    the browser to the upstream server.
+    if not provider_session_id:
+        await websocket.accept(subprotocol=selected_subprotocol)
+        await websocket.send_json({"state": _facade_reconnect_state(row)})
+        await websocket.close(code=1000)
+        return
+
+    # 8. Replace the browser-visible binding alias with the server-owned provider
+    #    identity and relay through MoonMind. Browser headers, credentials, and
+    #    query parameters are never forwarded upstream.
+    upstream_path = upstream_websocket_path(match, provider_session_id)
+    if operation == "terminal_attach":
+        from urllib.parse import urlencode
+
+        query = {"read_only": "true" if terminal_read_only else "false"}
+        transport = str(websocket.query_params.get("transport") or "").strip()
+        if transport:
+            if transport not in {"control", "pty"}:
+                await websocket.close(
+                    code=WS_CLOSE_CAPABILITY_DENIED,
+                    reason=CODE_OPERATION_DENIED,
+                )
+                return
+            query["transport"] = transport
+        upstream_path += "?" + urlencode(query)
+
+    async def still_authorized() -> bool:
+        try:
+            refreshed = await _resolve_and_authorize_chat_binding(
+                chat_binding_id=chat_binding_id,
+                operation=operation,
+                user=user,
+                service=service,
+                store=store,
+            )
+        except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+            return False
+        if is_read_only(str(getattr(refreshed, "status", "") or "")):
+            return False
+        if (
+            str(getattr(refreshed, "omnigent_session_id", "") or "").strip()
+            != provider_session_id
+        ):
+            return False
+        refreshed_capabilities = recompute_capabilities(
+            str(getattr(refreshed, "status", "") or ""),
+            policy_capabilities=_projection_capabilities(refreshed),
+        )
+        return not required_capability or refreshed_capabilities.get(
+            required_capability, False
+        )
+
     _audit_facade(
-        outcome="compat_review",
+        outcome="connected",
         operation=f"{operation}:{_facade_reconnect_state(row)}",
         chat_binding_id=chat_binding_id,
         user=user,
-        reason="compatibility_review_required",
+        reason="binding_scoped_websocket",
     )
-    await websocket.close(
-        code=WS_CLOSE_COMPAT_REVIEW, reason=CODE_COMPAT_REVIEW_REQUIRED
+    await _relay_native_websocket(
+        browser=websocket,
+        upstream_url=_upstream_ws_url(upstream_path),
+        subprotocol=selected_subprotocol,
+        still_authorized=still_authorized,
     )
 
 

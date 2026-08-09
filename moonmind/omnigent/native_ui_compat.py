@@ -22,12 +22,10 @@ Two dispositions are expressed per route:
   :data:`moonmind.omnigent.workflow_chat_facade.FACADE_OPERATIONS` so there is a
   single source of truth for the served HTTP allowlist; this module never
   re-declares them.
-* ``compatibility_review_required`` — a native-UI transport class that is
-  *recognized* (so it fails closed with a specific, non-generic diagnostic) but
-  whose upstream rewrite is an open compatibility question (OB §21 Q1). The
-  facade authenticates, authorizes, capability-checks, and validates the durable
-  binding for these, then closes/rejects with the review diagnostic instead of
-  blindly bridging the browser to the upstream server.
+* ``compatibility_review_required`` — a reserved disposition for a recognized
+  route whose upstream contract has not been reviewed. The pinned WebSocket
+  routes below are reviewed and served through the binding-scoped relay; future
+  or changed routes remain absent and therefore fail closed.
 
 The classifier is pure and side-effect-free so it can be unit-tested in
 isolation and reused by the FastAPI router (both the HTTP dispatcher and the
@@ -191,106 +189,46 @@ _SERVED_ROUTES: tuple[NativeUiRoute, ...] = tuple(
 
 
 def _ws(path: str, **kwargs: Any) -> NativeUiRoute:
+    disposition = str(kwargs.pop("disposition", DISPOSITION_SERVED))
     return NativeUiRoute(
         transport=TRANSPORT_WEBSOCKET,
         methods=("GET",),
-        disposition=DISPOSITION_COMPAT_REVIEW,
+        disposition=disposition,
         subprotocols=NATIVE_UI_WS_SUBPROTOCOLS,
         pattern=re.compile("^" + path + "$"),
         **kwargs,
     )
 
 
-# Recognized native-UI WebSocket transport classes. Each is authenticated,
-# authorized, capability-checked, and binding-validated before upgrade, then
-# fails closed with a compatibility diagnostic (upstream WS rewrite is OB §21
-# Q1). Terminal input/create/attach/resize/close require capabilities the facade
-# never grants, so a read-only viewer or nonowner is denied on capability before
-# the review disposition is even reached (issue acceptance criteria 4-5, 7).
+# Reviewed native-UI WebSocket transport classes. Each is authenticated,
+# authorized, capability-checked, binding-validated, and identity-virtualized
+# before the server-owned upstream relay is opened.
 _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
-    # Live session control/event channel.
+    # The stock UI's global list/update channel carries caller-authored watch
+    # sets and therefore remains closed until per-frame alias filtering lands.
     _ws(
-        rf"(v1/sessions/{_SESSION}/)?ws",
-        name="ws_session_channel",
+        r"v1/sessions/updates",
+        name="ws_session_updates",
         operation_class=CLASS_STREAM,
         capability=CAP_VIEW_TRANSCRIPT,
+        disposition=DISPOSITION_COMPAT_REVIEW,
     ),
-    # Runner/host liveness + reconnect/wake channel.
+    # The only session-scoped WebSocket in the pinned server contract.
     _ws(
-        rf"(v1/sessions/{_SESSION}/)?(reconnect|wake|liveness)",
-        name="ws_reconnect",
-        operation_class=CLASS_RECONNECT,
-        capability=None,
-    ),
-    # Terminal / PTY lifecycle, each separately classed and gated.
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/(stream|output)",
-        name="terminal_view",
-        operation_class=CLASS_TERMINAL_VIEW,
-        capability=CAP_READ_RESOURCES,
-    ),
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/exec-log",
-        name="terminal_exec_log",
-        operation_class=CLASS_EXEC_LOG,
-        capability=CAP_READ_RESOURCES,
-    ),
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals",
-        name="terminal_create",
-        operation_class=CLASS_TERMINAL_CREATE,
-        capability=CAP_CREATE_TERMINAL,
-        mutation=True,
-    ),
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/attach",
+        rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/attach",
         name="terminal_attach",
         operation_class=CLASS_TERMINAL_ATTACH,
         capability=CAP_WRITE_TERMINAL,
         mutation=True,
     ),
+    # Dictation is binary input and needs a separately reviewed audio policy.
     _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/input",
-        name="terminal_input",
-        operation_class=CLASS_TERMINAL_INPUT,
-        capability=CAP_WRITE_TERMINAL,
-        mutation=True,
-    ),
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/resize",
-        name="terminal_resize",
-        operation_class=CLASS_TERMINAL_RESIZE,
-        capability=CAP_WRITE_TERMINAL,
-        mutation=True,
-    ),
-    _ws(
-        rf"v1/sessions/{_SESSION}/terminals/{_TERMINAL}/close",
-        name="terminal_close",
-        operation_class=CLASS_TERMINAL_CLOSE,
-        capability=CAP_WRITE_TERMINAL,
-        mutation=True,
-    ),
-    # Browser pane session/control channel — mutating; always fails closed.
-    _ws(
-        rf"v1/sessions/{_SESSION}/browser(/.*)?",
-        name="browser_pane",
-        operation_class=CLASS_BROWSER_PANE,
+        r"v1/dictation/stream",
+        name="dictation_stream",
+        operation_class=CLASS_CONTROL,
         capability=CAP_MUTATE_WORKSPACE,
         mutation=True,
-    ),
-    # Sub-agent / session-tree read channel.
-    _ws(
-        rf"v1/sessions/{_SESSION}/(subagents|session-tree)(/.*)?",
-        name="subagent_tree",
-        operation_class=CLASS_SUBAGENT,
-        capability=CAP_VIEW_TRANSCRIPT,
-    ),
-    # Task / todo read channel.
-    _ws(
-        rf"v1/sessions/{_SESSION}/(tasks|todos)(/.*)?",
-        name="task_todo",
-        operation_class=CLASS_TASK,
-        capability=CAP_VIEW_TRANSCRIPT,
+        disposition=DISPOSITION_COMPAT_REVIEW,
     ),
 )
 
@@ -313,8 +251,35 @@ def classify_native_ui_websocket(path: str) -> NativeUiRouteMatch | None:
         assert route.pattern is not None  # WebSocket routes always compile a pattern
         matched = route.pattern.match(candidate)
         if matched is not None:
-            return NativeUiRouteMatch(route=route, params=dict(matched.groupdict()))
+            params = dict(matched.groupdict())
+            params["_browser_path"] = candidate
+            return NativeUiRouteMatch(route=route, params=params)
     return None
+
+
+def upstream_websocket_path(match: NativeUiRouteMatch, provider_session_id: str) -> str:
+    """Return the reviewed upstream path with the opaque browser id virtualized.
+
+    The compatibility map is the only route allowlist.  Replacing the captured
+    session segment here (rather than forwarding the browser path) prevents a
+    path alias from becoming provider authority.
+    """
+
+    candidate = match.route.pattern.pattern if match.route.pattern else ""
+    del candidate  # make it explicit that regex source is never used as a URL
+    browser_path = str(match.params.get("_browser_path", ""))
+    if not browser_path:
+        raise ValueError("classified websocket path is missing its source path")
+    browser_session = str(match.params.get("session_id") or "")
+    if browser_session:
+        parts = browser_path.split("/")
+        try:
+            index = parts.index(browser_session)
+        except ValueError as exc:
+            raise ValueError("classified websocket session is not in path") from exc
+        parts[index] = provider_session_id
+        browser_path = "/".join(parts)
+    return "/" + browser_path.lstrip("/")
 
 
 def negotiate_ws_subprotocol(
@@ -411,4 +376,5 @@ __all__ = [
     "classify_native_ui_websocket",
     "compatibility_map",
     "negotiate_ws_subprotocol",
+    "upstream_websocket_path",
 ]

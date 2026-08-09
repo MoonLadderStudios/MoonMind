@@ -5,8 +5,8 @@ channel, terminal/PTY, browser pane, sub-agent/task, reconnect) must
 independently authenticate, resolve the durable binding, authorize the caller,
 reject caller-supplied identity, capability-check from recomputed state, and
 validate the transport against the versioned compatibility map *before* upgrade.
-Recognized-but-unreviewed transports fail closed with a compatibility
-diagnostic; unknown transports fail closed non-enumeratingly; terminal/revoked
+Reviewed transports are relayed through a bounded server-owned bridge; unknown
+transports fail closed non-enumeratingly; terminal/revoked
 bindings and read-only viewers cannot open a live/mutating transport.
 """
 
@@ -45,6 +45,17 @@ _UNSET = object()
 _PROVIDER_SESSION_ID = "prov-sess-1"
 _CHAT_BINDING_ID = "chatb-1"
 _BRIDGE_SESSION_ID = "brs-internal-1"
+
+
+@pytest.fixture(autouse=True)
+def _stub_upstream_relay(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def relay(*, browser: Any, **_: Any) -> None:
+        await browser.accept()
+        await browser.close(code=1000, reason="relayed")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
 
 
 def _mock_user():
@@ -122,28 +133,24 @@ def _connect_expect_close(client: TestClient, path: str, **kwargs: Any) -> WebSo
 # --- Authorization before upgrade --------------------------------------------
 
 
-def test_recognized_ws_is_reauthorized_then_fails_closed_for_review() -> None:
-    # A fully-authorized owner opening a recognized session WebSocket is closed
-    # with the compatibility-review diagnostic rather than proxied upstream
-    # (acceptance criteria 2, 8: no direct browser<->upstream WS).
+def test_global_updates_ws_fails_closed_pending_frame_alias_filtering() -> None:
     client = _build()
-    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/chatb-1/ws"))
+    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
     assert disconnect.code == WS_CLOSE_COMPAT_REVIEW
-    assert disconnect.reason == "omnigent_chat_compat_review_required"
 
 
 def test_non_owner_ws_is_non_enumerating() -> None:
     # A caller who does not own the workflow gets the same close as an unknown
     # binding, so bindings cannot be enumerated over WebSocket.
     client = _build(owner_id=uuid4())
-    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/chatb-1/ws"))
+    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
     assert disconnect.code == WS_CLOSE_BINDING_UNKNOWN
     assert disconnect.reason == "omnigent_chat_binding_unknown"
 
 
 def test_unknown_binding_ws_is_non_enumerating() -> None:
     client = _build(store=_FakeStore(row=None))
-    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/chatb-1/ws"))
+    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
     assert disconnect.code == WS_CLOSE_BINDING_UNKNOWN
 
 
@@ -158,42 +165,54 @@ def test_unknown_ws_transport_fails_closed_with_diagnostic() -> None:
 # --- Terminal / PTY gating ----------------------------------------------------
 
 
-def test_terminal_input_is_denied_by_capability() -> None:
+def test_terminal_attach_is_denied_by_capability() -> None:
     # Terminal input requires writeTerminal, which the facade never grants, so
     # even the workflow owner cannot write to a PTY (acceptance criteria 4-5).
     client = _build()
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/terminals/t1/input")
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
     )
     assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
     assert disconnect.reason == "omnigent_chat_operation_denied"
 
 
-def test_terminal_create_is_denied_by_capability() -> None:
+def test_terminal_attach_relays_when_durable_policy_explicitly_grants_it() -> None:
+    store = _FakeStore(
+        row=_row(metadata_={"interventionCapabilities": {"writeTerminal": True}})
+    )
+    client = _build(store=store)
+    disconnect = _connect_expect_close(
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+    )
+    assert disconnect.code == 1000
+
+
+def test_unknown_terminal_create_websocket_is_not_proxied() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client, _ws_path("v1/sessions/chatb-1/terminals")
     )
-    assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
+    assert disconnect.code == WS_CLOSE_TRANSPORT_UNSUPPORTED
 
 
-def test_terminal_view_passes_capability_then_review() -> None:
+def test_terminal_view_passes_capability_then_relays() -> None:
     # Terminal viewing is a read capability the owner holds, so it clears the
     # capability gate and reaches the compatibility-review disposition (proving
     # view is gated separately from input).
     client = _build()
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/terminals/t1/stream")
+        client,
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"),
     )
-    assert disconnect.code == WS_CLOSE_COMPAT_REVIEW
+    assert disconnect.code == 1000
 
 
-def test_browser_pane_control_is_denied_by_capability() -> None:
+def test_unknown_browser_websocket_is_not_proxied() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client, _ws_path("v1/sessions/chatb-1/browser")
     )
-    assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
+    assert disconnect.code == WS_CLOSE_TRANSPORT_UNSUPPORTED
 
 
 # --- Read-only viewer / terminal binding --------------------------------------
@@ -207,7 +226,8 @@ def test_read_only_binding_from_policy_denies_terminal_view() -> None:
     )
     client = _build(store=store)
     disconnect = _connect_expect_close(
-        client, _ws_path("v1/sessions/chatb-1/terminals/t1/stream")
+        client,
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach?read_only=true"),
     )
     assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
 
@@ -216,7 +236,9 @@ def test_terminal_binding_closes_live_transport() -> None:
     # A terminal/revoked binding cannot open a new live transport (criterion 10).
     store = _FakeStore(row=_row(status="completed"))
     client = _build(store=store)
-    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/chatb-1/ws"))
+    disconnect = _connect_expect_close(
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+    )
     assert disconnect.code == WS_CLOSE_READ_ONLY
     assert disconnect.reason == "omnigent_chat_session_read_only"
 
@@ -224,7 +246,9 @@ def test_terminal_binding_closes_live_transport() -> None:
 def test_starting_binding_without_provider_session_is_not_ready() -> None:
     store = _FakeStore(row=_row(omnigent_session_id=None))
     client = _build(store=store)
-    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/chatb-1/ws"))
+    disconnect = _connect_expect_close(
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+    )
     assert disconnect.code == WS_CLOSE_SESSION_NOT_READY
 
 
@@ -236,7 +260,10 @@ def test_ws_rejects_session_identity_substitution() -> None:
     # chatBindingId -> substitution rejected before upgrade.
     client = _build()
     disconnect = _connect_expect_close(
-        client, _ws_path(f"v1/sessions/{_PROVIDER_SESSION_ID}/ws")
+        client,
+        _ws_path(
+            f"v1/sessions/{_PROVIDER_SESSION_ID}/resources/terminals/t1/attach"
+        ),
     )
     assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
     assert disconnect.reason == "omnigent_chat_session_substitution"
@@ -246,17 +273,28 @@ def test_ws_rejects_unlisted_subprotocol() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client,
-        _ws_path("v1/sessions/chatb-1/ws"),
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
         subprotocols=["evil.raw.protocol"],
     )
     assert disconnect.code == WS_CLOSE_SUBPROTOCOL_REJECTED
 
 
-def test_ws_accepts_allowlisted_subprotocol_then_review() -> None:
+def test_ws_rejects_cross_origin_browser_connect() -> None:
     client = _build()
     disconnect = _connect_expect_close(
         client,
-        _ws_path("v1/sessions/chatb-1/ws"),
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
+        headers={"origin": "https://attacker.example"},
+    )
+    assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
+    assert disconnect.reason == "omnigent_chat_ws_origin_rejected"
+
+
+def test_ws_accepts_allowlisted_subprotocol_then_relays() -> None:
+    client = _build()
+    disconnect = _connect_expect_close(
+        client,
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
         subprotocols=["omnigent.workflow-chat.v1"],
     )
-    assert disconnect.code == WS_CLOSE_COMPAT_REVIEW
+    assert disconnect.code == 1000

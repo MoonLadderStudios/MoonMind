@@ -39,7 +39,10 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
     }
     # The served native-UI surface is derived from — and matches — the #3634
     # HTTP/SSE allowlist, so there is one source of truth for served routes.
-    assert served == {operation.name for operation in FACADE_OPERATIONS}
+    assert served == {
+        *(operation.name for operation in FACADE_OPERATIONS),
+        "terminal_attach",
+    }
 
 
 def test_every_native_ui_transport_class_is_represented() -> None:
@@ -49,55 +52,20 @@ def test_every_native_ui_transport_class_is_represented() -> None:
         compat.CLASS_STREAM,
         compat.CLASS_CONTROL,
         compat.CLASS_RESOURCE_READ,
-        compat.CLASS_TERMINAL_VIEW,
-        compat.CLASS_TERMINAL_CREATE,
         compat.CLASS_TERMINAL_ATTACH,
-        compat.CLASS_TERMINAL_INPUT,
-        compat.CLASS_TERMINAL_RESIZE,
-        compat.CLASS_TERMINAL_CLOSE,
-        compat.CLASS_EXEC_LOG,
-        compat.CLASS_BROWSER_PANE,
-        compat.CLASS_SUBAGENT,
-        compat.CLASS_TASK,
-        compat.CLASS_RECONNECT,
     } <= classes
 
 
 @pytest.mark.parametrize(
     ("path", "expected_name", "expected_class"),
     [
-        ("v1/sessions/s1/ws", "ws_session_channel", compat.CLASS_STREAM),
-        ("ws", "ws_session_channel", compat.CLASS_STREAM),
-        ("v1/sessions/s1/reconnect", "ws_reconnect", compat.CLASS_RECONNECT),
+        ("v1/sessions/updates", "ws_session_updates", compat.CLASS_STREAM),
         (
-            "v1/sessions/s1/terminals/t1/stream",
-            "terminal_view",
-            compat.CLASS_TERMINAL_VIEW,
+            "v1/sessions/s1/resources/terminals/t1/attach",
+            "terminal_attach",
+            compat.CLASS_TERMINAL_ATTACH,
         ),
-        (
-            "v1/sessions/s1/terminals/t1/exec-log",
-            "terminal_exec_log",
-            compat.CLASS_EXEC_LOG,
-        ),
-        ("v1/sessions/s1/terminals", "terminal_create", compat.CLASS_TERMINAL_CREATE),
-        (
-            "v1/sessions/s1/terminals/t1/input",
-            "terminal_input",
-            compat.CLASS_TERMINAL_INPUT,
-        ),
-        (
-            "v1/sessions/s1/terminals/t1/resize",
-            "terminal_resize",
-            compat.CLASS_TERMINAL_RESIZE,
-        ),
-        (
-            "v1/sessions/s1/terminals/t1/close",
-            "terminal_close",
-            compat.CLASS_TERMINAL_CLOSE,
-        ),
-        ("v1/sessions/s1/browser", "browser_pane", compat.CLASS_BROWSER_PANE),
-        ("v1/sessions/s1/subagents", "subagent_tree", compat.CLASS_SUBAGENT),
-        ("v1/sessions/s1/tasks", "task_todo", compat.CLASS_TASK),
+        ("v1/dictation/stream", "dictation_stream", compat.CLASS_CONTROL),
     ],
 )
 def test_classify_websocket_matches_known_transports(
@@ -107,15 +75,22 @@ def test_classify_websocket_matches_known_transports(
     assert match is not None
     assert match.route.name == expected_name
     assert match.route.operation_class == expected_class
-    # A recognized native-UI WebSocket is never auto-served: its upstream rewrite
-    # is an open compatibility question, so it fails closed until reviewed.
-    assert match.route.disposition == compat.DISPOSITION_COMPAT_REVIEW
+    assert match.route.disposition in {
+        compat.DISPOSITION_SERVED,
+        compat.DISPOSITION_COMPAT_REVIEW,
+    }
 
 
 def test_classify_websocket_captures_session_id() -> None:
-    match = compat.classify_native_ui_websocket("v1/sessions/prov-123/terminals/t9/input")
+    match = compat.classify_native_ui_websocket(
+        "v1/sessions/prov-123/resources/terminals/t9/attach"
+    )
     assert match is not None
     assert match.params.get("session_id") == "prov-123"
+    assert (
+        compat.upstream_websocket_path(match, "provider-session")
+        == "/v1/sessions/provider-session/resources/terminals/t9/attach"
+    )
 
 
 def test_unknown_websocket_route_fails_closed() -> None:
