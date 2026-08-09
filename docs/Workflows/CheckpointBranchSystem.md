@@ -146,11 +146,24 @@ diagnostics identities. MoonMind revalidates the exact source workflow, run,
 step, execution ordinal, checkpoint ref, checkpoint digest, and immutable
 instruction identity before dispatch. It then allocates stable execution
 identities and starts a dedicated normal-path `external/omnigent` execution.
+Validation resolves the checkpoint and instruction artifact bytes, verifies
+both recorded digests, and requires the checkpoint manifest itself to match the
+exact source workflow, run, logical step, execution ordinal, and checkpoint
+reference. Metadata projections and embedded workspace digest claims do not
+substitute for that manifest lineage.
 The Omnigent coordinator remains the sole owner of profile capacity, workspace
 restore, host/session creation, first-message delivery, terminal harvesting,
 publication evidence, cleanup, and release-last lease handling. Replaying the
 launch idempotency key resolves the same execution and cannot post a second
 first message.
+
+Terminal branch reconciliation accepts only the workflow-built lifecycle
+envelope and its resolvable manifest. That envelope preserves selected
+profile/policy authority, host/session and first-message identity, workspace
+restore and isolated git binding, result, publication, comparison/promotion,
+cleanup, and release-last evidence. Missing or inconsistent required evidence
+leaves the turn non-verified; state strings supplied without their evidence do
+not advance branch truth.
 
 ```text
 Checkpoint C1

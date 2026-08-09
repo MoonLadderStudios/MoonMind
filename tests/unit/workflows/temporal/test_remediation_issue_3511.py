@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -12,7 +14,10 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
-from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from api_service.services.remediation_actions import (
+    TemporalRemediationControlPlane,
+    _validate_checkpoint_payload_lineage,
+)
 from moonmind.omnigent.policies import bind_approval_request
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
@@ -722,6 +727,39 @@ def _production_target_health() -> RemediationTargetHealthSnapshot:
     )
 
 
+def test_checkpoint_payload_lineage_requires_exact_source_authority() -> None:
+    payload = json.dumps({
+        "checkpoint": {
+            "workflowId": "source-workflow",
+            "runId": "source-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 3,
+            "stepExecutionId": (
+                "source-workflow:source-run:implement:execution:3"
+            ),
+            "checkpointRef": "artifact://checkpoint",
+        }
+    }).encode()
+
+    _validate_checkpoint_payload_lineage(
+        payload,
+        workflow_id="source-workflow",
+        run_id="source-run",
+        logical_step_id="implement",
+        execution_ordinal=3,
+        checkpoint_ref="artifact://checkpoint",
+    )
+    with pytest.raises(ValueError, match="checkpoint_lineage_mismatch"):
+        _validate_checkpoint_payload_lineage(
+            payload,
+            workflow_id="source-workflow",
+            run_id="replayed-stale-run",
+            logical_step_id="implement",
+            execution_ordinal=3,
+            checkpoint_ref="artifact://checkpoint",
+        )
+
+
 async def test_production_rerun_adapter_uses_execution_service_idempotently() -> None:
     client = AsyncMock()
     execution_service = AsyncMock()
@@ -755,6 +793,19 @@ async def test_production_rerun_adapter_uses_execution_service_idempotently() ->
 
 
 async def test_checkpoint_branch_adapter_persists_graph_through_service() -> None:
+    instruction_payload = b"authoritative corrected instructions"
+    checkpoint_payload = json.dumps({
+        "identity": {
+            "workflowId": "target",
+            "runId": "target-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 2,
+            "stepExecutionId": "target:target-run:implement:execution:2",
+            "checkpointRef": "artifact://checkpoint",
+        }
+    }).encode()
+    checkpoint_digest = f"sha256:{hashlib.sha256(checkpoint_payload).hexdigest()}"
+    instruction_digest = f"sha256:{hashlib.sha256(instruction_payload).hexdigest()}"
     checkpoint_service = AsyncMock()
     checkpoint_service.create_branch_graph.return_value = SimpleNamespace(
         branch=SimpleNamespace(branch_id="remediation-action-branch")
@@ -769,7 +820,7 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
                 "logicalStepId": "implement",
                 "executionOrdinal": 2,
                 "checkpointRef": "artifact://checkpoint",
-                "checkpointDigest": "sha256:" + ("b" * 64),
+                "checkpointDigest": checkpoint_digest,
             }]
         },
         owner_id="owner-1",
@@ -779,6 +830,14 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         client=AsyncMock(),
         execution_service=execution_service,
         checkpoint_branch_service=checkpoint_service,
+        artifact_service=SimpleNamespace(
+            read=AsyncMock(
+                side_effect=[
+                    (SimpleNamespace(), checkpoint_payload),
+                    (SimpleNamespace(), instruction_payload),
+                ]
+            )
+        ),
     )
 
     result = await plane.handlers()[
@@ -792,11 +851,11 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
                 "remediationWorkflowId": "remediation",
                 "remediationContextRef": "artifact://context",
                 "checkpointRef": "artifact://checkpoint",
-                "checkpointDigest": "sha256:" + ("b" * 64),
+                "checkpointDigest": checkpoint_digest,
                 "logicalStepId": "implement",
                 "executionOrdinal": 2,
                 "instructionRef": "artifact://instructions",
-                "instructionDigest": "sha256:" + ("a" * 64),
+                "instructionDigest": instruction_digest,
             },
         },
         {},
@@ -810,7 +869,7 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     assert payload["source"]["checkpointRef"] == "artifact://checkpoint"
     assert payload["runtimeContextPolicy"] == "fresh_agent_run"
     assert payload["instructionRef"] == "artifact://instructions"
-    assert payload["instructionDigest"] == "sha256:" + ("a" * 64)
+    assert payload["instructionDigest"] == instruction_digest
     assert payload["idempotencyKey"] == "action-branch"
     execution_service.create_execution.assert_awaited_once()
     runtime_parameters = execution_service.create_execution.await_args.kwargs[
@@ -843,7 +902,12 @@ async def test_checkpoint_branch_adapter_digest_checks_artifact_before_mutation(
         execution_service=execution_service,
         checkpoint_branch_service=checkpoint_service,
         artifact_service=SimpleNamespace(
-            read=AsyncMock(return_value=(SimpleNamespace(), b"stale checkpoint bytes"))
+            read=AsyncMock(
+                side_effect=[
+                    (SimpleNamespace(), b"stale checkpoint bytes"),
+                    (SimpleNamespace(), b"instructions"),
+                ]
+            )
         ),
     )
     result = await plane.handlers()[

@@ -676,6 +676,13 @@ A remediation-created branch should record:
 - remediation workflow/run provenance;
 - idempotency key.
 
+Before creating that record, the server resolves the checkpoint and instruction
+artifacts, verifies their byte digests, and verifies exact source lineage from
+the checkpoint manifest. This validation precedes graph creation, profile or
+host selection, lease acquisition, and runtime dispatch. Terminal
+reconciliation uses the normal execution's manifest-bound lifecycle evidence;
+remediation cannot declare repair from unverified refs or copied state labels.
+
 Failed-step recovery remains the path that preserves original inputs and resumes from validated checkpoint evidence. It must not accept edited instructions, alternate branch settings, or publish-mode changes. Those belong to a Checkpoint Branch or a fresh workflow created through Create.
 
 ### 9.10 Omnigent-backed remediation

@@ -98,6 +98,67 @@ def _validate_remediation_branch_authority(
     return logical_step_id, execution_ordinal
 
 
+def _validate_checkpoint_payload_lineage(
+    payload: bytes,
+    *,
+    workflow_id: str,
+    run_id: str,
+    logical_step_id: str,
+    execution_ordinal: int,
+    checkpoint_ref: str,
+) -> Mapping[str, Any]:
+    """Require the resolved checkpoint itself to attest the exact source turn."""
+
+    try:
+        decoded = json.loads(payload)
+    except (TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("checkpoint_manifest_invalid") from exc
+    if not isinstance(decoded, Mapping):
+        raise ValueError("checkpoint_manifest_invalid")
+
+    def candidates(value: object):
+        if isinstance(value, Mapping):
+            yield value
+            for child in value.values():
+                yield from candidates(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from candidates(child)
+
+    for candidate in candidates(decoded):
+        candidate_ref = candidate.get("checkpointRef") or candidate.get(
+            "stepCheckpointRef"
+        )
+        if candidate_ref != checkpoint_ref:
+            continue
+        candidate_workflow = candidate.get("workflowId") or candidate.get(
+            "sourceWorkflowId"
+        )
+        candidate_run = candidate.get("runId") or candidate.get("sourceRunId")
+        candidate_step = candidate.get("logicalStepId") or candidate.get("stepId")
+        candidate_step_execution = candidate.get("stepExecutionId")
+        candidate_ordinal = (
+            candidate.get("executionOrdinal")
+            or candidate.get("sourceExecutionOrdinal")
+            or candidate.get("attemptOrdinal")
+            or candidate.get("attempt")
+        )
+        try:
+            ordinal_matches = int(candidate_ordinal) == execution_ordinal
+        except (TypeError, ValueError):
+            ordinal_matches = False
+        if (
+            candidate_workflow == workflow_id
+            and candidate_run == run_id
+            and str(candidate_step or "") == logical_step_id
+            and ordinal_matches
+            and candidate_step_execution
+            == f"{workflow_id}:{run_id}:{logical_step_id}:execution:{execution_ordinal}"
+        ):
+            return decoded
+    raise ValueError("checkpoint_lineage_mismatch")
+
+
 class TemporalRemediationControlPlane:
     """Route each action to the durable service that owns the mutated state."""
 
@@ -254,27 +315,41 @@ class TemporalRemediationControlPlane:
             target=target,
             params=params,
         )
-        if self._artifact_service is not None:
-            try:
-                _artifact, checkpoint_payload = await self._artifact_service.read(
-                    artifact_id=checkpoint_ref.removeprefix("artifact://"),
-                    principal=str(source.owner_id),
-                )
-            except Exception as exc:
-                raise ValueError("checkpoint_unresolvable") from exc
-            expected_digest = str(params["checkpointDigest"])
-            actual_digest = f"sha256:{hashlib.sha256(checkpoint_payload).hexdigest()}"
-            embedded_digest = None
-            try:
-                decoded_checkpoint = json.loads(checkpoint_payload)
-                if isinstance(decoded_checkpoint, Mapping):
-                    workspace = decoded_checkpoint.get("workspace")
-                    if isinstance(workspace, Mapping):
-                        embedded_digest = workspace.get("workspaceDigest")
-            except (TypeError, ValueError, UnicodeDecodeError):
-                pass
-            if expected_digest not in {actual_digest, embedded_digest}:
-                raise ValueError("checkpoint_digest_mismatch")
+        if self._artifact_service is None:
+            raise RuntimeError("artifact service is unavailable")
+        try:
+            _artifact, checkpoint_payload = await self._artifact_service.read(
+                artifact_id=checkpoint_ref.removeprefix("artifact://"),
+                principal=str(source.owner_id),
+            )
+            (
+                _instruction_artifact,
+                instruction_payload,
+            ) = await self._artifact_service.read(
+                artifact_id=instruction_ref.removeprefix("artifact://"),
+                principal=str(source.owner_id),
+            )
+        except Exception as exc:
+            raise ValueError("branch_source_artifact_unresolvable") from exc
+        expected_checkpoint_digest = str(params["checkpointDigest"])
+        actual_checkpoint_digest = (
+            f"sha256:{hashlib.sha256(checkpoint_payload).hexdigest()}"
+        )
+        if expected_checkpoint_digest != actual_checkpoint_digest:
+            raise ValueError("checkpoint_digest_mismatch")
+        actual_instruction_digest = (
+            f"sha256:{hashlib.sha256(instruction_payload).hexdigest()}"
+        )
+        if instruction_digest != actual_instruction_digest:
+            raise ValueError("instruction_digest_mismatch")
+        _validate_checkpoint_payload_lineage(
+            checkpoint_payload,
+            workflow_id=target.workflow_id,
+            run_id=target.current_run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=execution_ordinal,
+            checkpoint_ref=checkpoint_ref,
+        )
         branch_id = f"remediation-{action_id}"
         turn_id = f"{branch_id}-turn-1"
         graph = await self._checkpoint_branch_service.create_branch_graph(

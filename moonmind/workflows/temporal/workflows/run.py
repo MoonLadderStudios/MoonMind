@@ -22055,9 +22055,24 @@ class MoonMindRunWorkflow:
                 finish_summary["checkpointBranchTurn"] = {
                     "branchId": branch_projection.get("branchId"),
                     "branchTurnId": branch_projection.get("branchTurnId"),
+                    "sourceCheckpoint": branch_projection.get("sourceCheckpoint"),
+                    "instructionRef": branch_projection.get("instructionRef"),
+                    "instructionDigest": branch_projection.get("instructionDigest"),
+                    "runtimeContextPolicy": branch_projection.get(
+                        "runtimeContextPolicy"
+                    ),
+                    "workspacePolicy": branch_projection.get("workspacePolicy"),
+                    "contextBundleRef": branch_manifest.get("contextBundleRef"),
+                    "contextBundleDigest": branch_manifest.get(
+                        "contextBundleDigest"
+                    ),
                     "artifactManifestRef": branch_manifest.get(
                         "persistedArtifactRef"
                     ),
+                    "artifactManifestDigest": branch_manifest.get(
+                        "artifactManifestDigest"
+                    ),
+                    "artifacts": list(branch_manifest.get("artifacts") or ()),
                 }
             if self._workflow_control_stop:
                 auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")

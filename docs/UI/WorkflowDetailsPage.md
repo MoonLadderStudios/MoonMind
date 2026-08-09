@@ -37,6 +37,16 @@ The page is rendered from a Workflow Execution detail model that includes the Wo
 
 The UI does not infer unavailable actions from status alone. The UI displays actions from explicit capability fields.
 
+For a Checkpoint Branch turn, detail data distinguishes accepted launch,
+runtime terminal state, and verified repair. The backend projection includes
+the server-owned workflow/run, Step Execution and Agent Run identities; exact
+source lineage; instruction and context refs/digests; selected profile/policy,
+host/session and first-message authority; workspace restore and isolated branch
+evidence; terminal result and publication/comparison/promotion refs; and cleanup
+plus release-last outcomes. The page links these durable refs and reports
+missing or invalid evidence explicitly. It never derives verified repair from a
+branch record, provider session id, copied lifecycle label, or process exit.
+
 Required page data:
 
 ```ts

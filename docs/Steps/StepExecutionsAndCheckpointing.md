@@ -646,6 +646,21 @@ version, and its validation projection. A capability is `true` only when every
 evidence class it requires is independently resolvable. Partial capture records
 bounded reason codes and leaves the affected capability false.
 
+Before recovery or Checkpoint Branch work may mutate graph or runtime state,
+the server resolves both the checkpoint and immutable instruction artifacts.
+Their bytes must match the recorded SHA-256 digests, and the checkpoint manifest
+must attest the exact source workflow id, run id, logical step id, execution
+ordinal, and checkpoint ref. A caller-provided ref, embedded workspace digest,
+or matching execution projection alone is not source authority.
+
+Terminal reconciliation consumes a workflow-built evidence envelope, not
+caller-authored lifecycle labels. The envelope binds branch/turn, context-bundle
+and artifact-manifest refs and digests to selected profile and policy authority,
+host/session and first-message identity, restored workspace and isolated git
+binding, terminal result, publication/comparison/promotion, cleanup, and lease
+release. Cleanup is auxiliary to the primary outcome, but release remains last
+and must be durably evidenced.
+
 ### 9.2 Workspace checkpoint kinds
 
 Supported checkpoint kinds should be explicit.
