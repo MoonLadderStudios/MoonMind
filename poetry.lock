@@ -2976,14 +2976,14 @@ files = [
 
 [[package]]
 name = "mem0ai"
-version = "2.0.14"
+version = "2.0.17"
 description = "Long-term memory for AI Agents"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "mem0ai-2.0.14-py3-none-any.whl", hash = "sha256:9c567df69af794278bc051400829d1a2d4f8aa659cae6cd019d88ec66dbf4f3f"},
-    {file = "mem0ai-2.0.14.tar.gz", hash = "sha256:e999f23503cc2514fec2439017d9b539edc3f67fbce79d84781e6a93d0352ddb"},
+    {file = "mem0ai-2.0.17-py3-none-any.whl", hash = "sha256:1521209f0ab4c77b7e5777aa1b0b5f0104efa06ca5b9eddb804cdd091c17726a"},
+    {file = "mem0ai-2.0.17.tar.gz", hash = "sha256:fc84dcf12b656d63d662d57353d137ddccfcf67665cbe2476793a8115930c262"},
 ]
 
 [package.dependencies]
