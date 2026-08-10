@@ -19,6 +19,57 @@ from tests.helpers.codex_session_runtime import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+
+def test_runtime_send_turn_accepts_terminal_notification_when_thread_read_lags(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    final_text = "Completed while thread/read still reported inProgress"
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_assistant_text=final_text,
+        completion_visible_on_thread_read=False,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == final_text
+    assert response.session_state.active_turn_id is None
+
+
 def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcript(
     tmp_path: Path,
 ) -> None:

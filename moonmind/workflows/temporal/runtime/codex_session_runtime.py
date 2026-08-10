@@ -144,6 +144,7 @@ def _redact_text(value: Any, *, max_chars: int) -> str:
 class _RolloutTurnScan:
     references_turn: bool = False
     assistant_text: str = ""
+    terminal_assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
     provider_failure_reason: str | None = None
@@ -192,6 +193,9 @@ class _RolloutLiveMirror:
     turn_started_at: float | None = None
     last_assistant_text: str = ""
     last_assistant_text_matches_active_turn: bool = False
+    terminal_assistant_text: str = ""
+    saw_task_complete: bool = False
+    terminal_error_text: str | None = None
     inside_active_turn: bool = False
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
@@ -1245,6 +1249,7 @@ class CodexManagedSessionRuntime:
         return _RolloutTurnScan(
             references_turn=references_active_turn,
             assistant_text=last_text or terminal_text,
+            terminal_assistant_text=terminal_text,
             saw_task_complete=saw_task_complete,
             error_text=error_text,
             provider_failure_reason=provider_failure_reason,
@@ -1511,6 +1516,22 @@ class CodexManagedSessionRuntime:
                         mirror.offset = handle.tell()
                         continue
                     live_output = self._rollout_entry_live_output(payload)
+                    terminal_text = self._terminal_assistant_text_from_rollout_entry(
+                        payload
+                    )
+                    if terminal_text and (
+                        belongs_to_active_turn or entry_timestamp is not None
+                    ):
+                        mirror.terminal_assistant_text = terminal_text
+                    if event_type == "task_complete" and belongs_to_active_turn:
+                        mirror.saw_task_complete = True
+                        for field_name in ("error", "reason", "message"):
+                            extracted_error = self._error_text_from_value(
+                                event_payload.get(field_name)
+                            )
+                            if extracted_error:
+                                mirror.terminal_error_text = extracted_error
+                                break
                     if live_output is None:
                         mirror.offset = handle.tell()
                         continue
@@ -1965,6 +1986,7 @@ class CodexManagedSessionRuntime:
             "entriesScanned": scan.entries_scanned,
             "entriesReferencingTurn": scan.entries_referencing_turn,
             "referencesTurn": scan.references_turn,
+            "hasTerminalAssistantText": bool(scan.terminal_assistant_text),
             "sawTaskComplete": scan.saw_task_complete,
             "eventTypes": list(scan.event_types),
             "errorText": cls._diagnostic_value(scan.error_text),
@@ -2211,6 +2233,99 @@ class CodexManagedSessionRuntime:
                     disposition="no_op",
                 )
         return None
+
+    def _stale_turn_rollout_terminal_outcome(
+        self,
+        scan: _RolloutTurnScan,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None,
+    ) -> _TurnTerminalOutcome | None:
+        """Accept only provider-owned terminal transcript evidence.
+
+        A normal assistant message may be commentary emitted while tools are
+        still running, so it cannot override an app-server ``inProgress``
+        projection. A fresh final-phase assistant message or task-complete event
+        is terminal evidence and may reconcile that stale projection.
+        """
+
+        if not (
+            scan.terminal_assistant_text
+            or scan.saw_task_complete
+            or scan.error_text
+        ):
+            return None
+        outcome = self._rollout_terminal_outcome_from_scan(
+            scan,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=turn_started_at,
+        )
+        if outcome is not None:
+            return outcome
+        if scan.saw_task_complete:
+            return _TurnTerminalOutcome(status="completed")
+        return None
+
+    @staticmethod
+    def _live_rollout_terminal_outcome(
+        mirror: _RolloutLiveMirror,
+    ) -> _TurnTerminalOutcome | None:
+        if mirror.terminal_error_text:
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=mirror.terminal_error_text,
+                failure_class="permanent",
+            )
+        if mirror.terminal_assistant_text or mirror.saw_task_complete:
+            return _TurnTerminalOutcome(status="completed")
+        return None
+
+    @classmethod
+    def _terminal_notification_turn(
+        cls,
+        notification: Mapping[str, Any],
+        *,
+        vendor_turn_id: str,
+    ) -> tuple[Mapping[str, Any], _TurnTerminalOutcome] | None:
+        params = notification.get("params")
+        if not isinstance(params, Mapping):
+            return None
+        turn_payload = params.get("turn")
+        if not isinstance(turn_payload, Mapping):
+            return None
+        if str(turn_payload.get("id") or "").strip() != vendor_turn_id:
+            return None
+        outcome = cls._terminal_turn_outcome(turn_payload)
+        if outcome is None:
+            return None
+        return turn_payload, outcome
+
+    @staticmethod
+    def _thread_payload_with_terminal_turn(
+        thread_payload: Mapping[str, Any],
+        *,
+        turn_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> Mapping[str, Any]:
+        merged_payload = dict(thread_payload)
+        raw_thread = thread_payload.get("thread")
+        merged_thread = dict(raw_thread) if isinstance(raw_thread, Mapping) else {}
+        raw_turns = merged_thread.get("turns")
+        turns = list(raw_turns) if isinstance(raw_turns, list) else []
+        replaced = False
+        for index, existing_turn in enumerate(turns):
+            if not isinstance(existing_turn, Mapping):
+                continue
+            if str(existing_turn.get("id") or "").strip() != vendor_turn_id:
+                continue
+            turns[index] = dict(turn_payload)
+            replaced = True
+            break
+        if not replaced:
+            turns.append(dict(turn_payload))
+        merged_thread["turns"] = turns
+        merged_payload["thread"] = merged_thread
+        return merged_payload
 
     def _completed_turn_without_assistant_outcome(
         self,
@@ -2532,6 +2647,9 @@ class CodexManagedSessionRuntime:
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
+                outcome = self._live_rollout_terminal_outcome(rollout_mirror)
+                if outcome is not None:
+                    return thread_payload, outcome
                 outcome = self._failed_thread_terminal_outcome(
                     state=state,
                     thread_payload=thread_payload,
@@ -2599,12 +2717,26 @@ class CodexManagedSessionRuntime:
                 )
 
             try:
-                client.wait_for_notification(
+                notification = client.wait_for_notification(
                     None,
                     timeout_seconds=min(1.0, remaining),
                 )
             except TimeoutError:
                 continue
+            terminal_notification = self._terminal_notification_turn(
+                notification,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if terminal_notification is not None:
+                terminal_turn, outcome = terminal_notification
+                return (
+                    self._thread_payload_with_terminal_turn(
+                        thread_payload,
+                        turn_payload=terminal_turn,
+                        vendor_turn_id=vendor_turn_id,
+                    ),
+                    outcome,
+                )
 
     def _find_vendor_thread_path(self, vendor_thread_id: str) -> str | None:
         sessions_root = self._codex_home_path / "sessions"
@@ -2857,7 +2989,21 @@ class CodexManagedSessionRuntime:
         if isinstance(turn_payload, Mapping):
             outcome = self._terminal_turn_outcome(turn_payload)
             if outcome is None:
-                return state
+                rollout_scan = self._scan_rollout_for_turn(
+                    self._resolved_rollout_path(
+                        state=state,
+                        thread_payload=thread_payload,
+                    ),
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                outcome = self._stale_turn_rollout_terminal_outcome(
+                    rollout_scan,
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                if outcome is None:
+                    return state
         else:
             outcome = self._missing_turn_terminal_outcome(
                 state=state,

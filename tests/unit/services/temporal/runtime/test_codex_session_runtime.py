@@ -2440,6 +2440,7 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -2481,6 +2482,151 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     assert handle.status == "busy"
     assert handle.metadata["lastTurnStatus"] == "running"
 
+
+def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+    assert response.status == "running"
+
+    final_text = "Recovered from durable final rollout evidence"
+    timestamp = _iso_timestamp(minutes_offset=5)
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": final_text,
+                        "phase": "final",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    status = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert status.status == "ready"
+    assert status.session_state.active_turn_id is None
+    assert status.metadata["lastTurnStatus"] == "completed"
+    assert status.metadata["lastAssistantText"] == final_text
+
+
+def test_runtime_send_turn_ignores_nonterminal_rollout_assistant_for_stale_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    timestamp = _iso_timestamp(minutes_offset=5)
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "Still working",
+                    "phase": "commentary",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "running"
+    assert response.session_state.active_turn_id == "vendor-turn-1"
+
+
 def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     tmp_path: Path,
 ) -> None:
@@ -2510,6 +2656,7 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
