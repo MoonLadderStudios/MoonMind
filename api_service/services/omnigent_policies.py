@@ -686,11 +686,7 @@ async def resolve_bootstrap_image_refs(
 # listed explicitly (not imported) to keep the seed reviewable and to avoid a
 # circular import with the temporal remediation package; a unit test guards
 # against catalog drift.
-_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = (
-    "cleanup.verify",
-    "target.annotate",
-    "target.verify",
-)
+_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = ()
 _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
     "execution.pause",
     "execution.resume",
@@ -699,20 +695,6 @@ _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
     "execution.cancel",
     "execution.force_terminate",
     "checkpoint_branch.create_from_remediation_context",
-    "session.interrupt_turn",
-    "session.clear",
-    "session.cancel",
-    "session.terminate",
-    "session.restart_container",
-    "provider_profile.evict_stale_lease",
-    "workload.restart_helper_container",
-    "workload.reap_orphan_container",
-    "host.drain",
-    "host.stop",
-    "host.restart",
-    "host.remove",
-    "host_lease.reconcile_stale",
-    "cleanup.request_janitor",
 )
 
 
