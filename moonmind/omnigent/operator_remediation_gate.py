@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Protocol
 from urllib.parse import unquote, urlparse
 
 MATRIX_VERSION = "moonmind.operator-remediation-matrix/v1"
@@ -22,6 +22,14 @@ MAX_EVIDENCE_AGE_SECONDS = 7 * 24 * 60 * 60
 MAX_REFERENCED_EVIDENCE_BYTES = 10 * 1024 * 1024
 OBSERVATION_SCHEMA_VERSION = "moonmind.operator-remediation-observation/v1"
 EvidenceResolver = Callable[[str], bytes]
+
+
+class ArtifactWriter(Protocol):
+    """Narrow artifact boundary used by production scenario activities."""
+
+    async def create(self, **kwargs: Any) -> tuple[Any, Any]: ...
+    async def write_complete(self, **kwargs: Any) -> Any: ...
+    async def read(self, **kwargs: Any) -> tuple[Any, bytes]: ...
 
 REQUIRED_EVIDENCE_FIELDS = (
     "authoredRequest", "immutableInput", "identities", "contextEvidence",
@@ -288,3 +296,140 @@ def allows_autonomous_mutation(status: Any) -> bool:
             for observation in rows.values()
         )
     )
+
+
+def _artifact_uri(artifact_id: str) -> str:
+    return f"artifact://temporal/{artifact_id}"
+
+
+def artifact_id_from_uri(ref: str) -> str:
+    parsed = urlparse(ref)
+    if parsed.scheme != "artifact" or parsed.netloc != "temporal":
+        raise RemediationGateError("unsupported remediation artifact ref")
+    artifact_id = parsed.path.lstrip("/")
+    if not artifact_id:
+        raise RemediationGateError("remediation artifact ref has no artifact id")
+    return artifact_id
+
+
+async def _persist_json(
+    service: ArtifactWriter,
+    *,
+    principal: str,
+    payload: Mapping[str, Any],
+    kind: str,
+    row_id: str | None = None,
+) -> dict[str, str]:
+    """Persist immutable typed evidence through the canonical artifact service."""
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    metadata = {"producer": "operator_remediation_gate", "kind": kind}
+    if row_id:
+        metadata["rowId"] = row_id
+    artifact, _ = await service.create(
+        principal=principal,
+        content_type="application/json",
+        size_bytes=len(body),
+        sha256=hashlib.sha256(body).hexdigest(),
+        metadata_json=metadata,
+    )
+    await service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=body,
+        content_type="application/json",
+    )
+    return {"ref": _artifact_uri(artifact.artifact_id), "sha256": hashlib.sha256(body).hexdigest(),
+            "contentType": "application/json"}
+
+
+async def persist_observed_row(
+    service: ArtifactWriter,
+    *,
+    principal: str,
+    row_id: str,
+    observations: Mapping[str, Mapping[str, Any]],
+    result: Mapping[str, Any],
+) -> dict[str, str]:
+    """Production row producer: persist observations first, then the typed row.
+
+    Scenario activities supply observed values, never ownership or pass authority.
+    Catalog-owned identity and capability fields are injected here.
+    """
+    row = ROW_CATALOG.get(row_id)
+    if row is None:
+        raise RemediationGateError("unknown remediation row")
+    required_refs = [field for field in REQUIRED_EVIDENCE_FIELDS
+                     if field not in {"timings", "thresholds", "secretScan", "architecture"}]
+    if set(observations) != set(required_refs):
+        raise RemediationGateError("scenario producer must supply every evidence class")
+    refs: dict[str, Any] = {}
+    for evidence_class in required_refs:
+        observation = {"schemaVersion": OBSERVATION_SCHEMA_VERSION, "rowId": row_id,
+                       "evidenceClass": evidence_class, "observed": True,
+                       "value": dict(observations[evidence_class])}
+        refs[evidence_class] = await _persist_json(
+            service, principal=principal, payload=observation,
+            kind="operator-remediation-observation", row_id=row_id,
+        )
+    generated_at = result.get("generatedAt") or datetime.now(timezone.utc).isoformat()
+    payload: dict[str, Any] = {
+        "schemaVersion": EVIDENCE_SCHEMA_VERSION, "rowId": row_id, "owner": row.owner,
+        "observedResult": result.get("observedResult"), "generatedAt": generated_at,
+        "evidenceKind": row.evidence_kind, "targetRuntimeProvenance": row.target_provenance,
+        "remediationRuntimeProvenance": row.remediation_provenance,
+        "hostMode": result.get("hostMode"), "architecture": result.get("architecture"),
+        "actionCapability": row.action_capability,
+        "verificationCapability": row.verification_capability, "authority": row.authority,
+        "uiJourney": row.ui_journey, "liveResourcesGone": result.get("liveResourcesGone"),
+        "timings": result.get("timings"), "thresholds": result.get("thresholds"),
+        "secretScan": result.get("secretScan"), **refs,
+    }
+    # Validate the complete in-memory shape before publishing the authoritative row.
+    bodies: dict[str, bytes] = {}
+    for evidence_class, ref in refs.items():
+        bodies[ref["ref"]] = json.dumps(
+            {"schemaVersion": OBSERVATION_SCHEMA_VERSION, "rowId": row_id,
+             "evidenceClass": evidence_class, "observed": True,
+             "value": dict(observations[evidence_class])},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+    validate_row_artifact(payload, resolve_ref=bodies.__getitem__)
+    return await _persist_json(service, principal=principal, payload=payload,
+                               kind="operator-remediation-row", row_id=row_id)
+
+
+async def publish_release_projection(
+    service: ArtifactWriter,
+    *,
+    principal: str,
+    row_refs: Iterable[Mapping[str, Any]],
+    release_inputs: Mapping[str, Any],
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Resolve durable rows after cleanup and publish the combined projection."""
+    cache: dict[str, bytes] = {}
+
+    async def load(ref: str) -> bytes:
+        if ref not in cache:
+            _, cache[ref] = await service.read(
+                artifact_id=artifact_id_from_uri(ref), principal=principal,
+                allow_restricted_raw=True,
+            )
+        return cache[ref]
+
+    supplied = [dict(ref) for ref in row_refs]
+    for ref in supplied:
+        await load(str(ref["ref"]))
+    # Row validation resolves nested refs synchronously, so preload those refs.
+    for ref in supplied:
+        row_payload = json.loads(cache[str(ref["ref"])])
+        for field in REQUIRED_EVIDENCE_FIELDS:
+            value = row_payload.get(field)
+            if isinstance(value, Mapping) and "ref" in value:
+                await load(str(value["ref"]))
+    projection = build_combined_matrix(
+        artifact_paths=supplied, release_inputs=release_inputs, now=now,
+        resolve_ref=cache.__getitem__,
+    )
+    return await _persist_json(service, principal=principal, payload=projection,
+                               kind="operator-remediation-release")

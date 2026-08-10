@@ -7,7 +7,7 @@ import pytest
 from moonmind.omnigent.operator_remediation_gate import (
     EVIDENCE_SCHEMA_VERSION, REQUIRED_EVIDENCE_FIELDS, REQUIRED_ROW_CATALOG,
     RemediationGateError, allows_autonomous_mutation, build_combined_matrix, catalog_document, release_status,
-    validate_row_artifact,
+    persist_observed_row, publish_release_projection, validate_row_artifact,
 )
 
 NOW = datetime(2026, 8, 10, tzinfo=timezone.utc)
@@ -112,3 +112,72 @@ def test_semantically_unbound_evidence_is_rejected(tmp_path):
         tmp_path, "wrong.json", row_id="another-row", evidence_class="verificationEvidence")
     with pytest.raises(RemediationGateError, match="lineage"):
         validate_row_artifact(payload, now=NOW)
+
+
+class _Artifact:
+    def __init__(self, artifact_id):
+        self.artifact_id = artifact_id
+
+
+class _ArtifactService:
+    def __init__(self):
+        self.payloads = {}
+        self.created = []
+
+    async def create(self, **kwargs):
+        artifact = _Artifact(f"art_{len(self.created)}")
+        self.created.append((artifact, kwargs))
+        return artifact, object()
+
+    async def write_complete(self, *, artifact_id, payload, **kwargs):
+        self.payloads[artifact_id] = payload
+
+    async def read(self, *, artifact_id, **kwargs):
+        return _Artifact(artifact_id), self.payloads[artifact_id]
+
+
+def _observations():
+    return {field: {"artifact": field} for field in REQUIRED_EVIDENCE_FIELDS
+            if field not in {"timings", "thresholds", "secretScan", "architecture"}}
+
+
+@pytest.mark.asyncio
+async def test_production_row_producer_persists_catalog_owned_typed_artifacts():
+    service = _ArtifactService()
+    row = REQUIRED_ROW_CATALOG[0]
+    ref = await persist_observed_row(
+        service, principal="service:release-gate", row_id=row.row_id,
+        observations=_observations(),
+        result={"observedResult": "passed", "generatedAt": NOW.isoformat(),
+                "hostMode": row.host_modes[0], "architecture": row.architectures[0],
+                "liveResourcesGone": True, "timings": {"durationSeconds": 1},
+                "thresholds": {"withinLimits": True},
+                "secretScan": {"status": "passed", "prohibitedAuthorityFound": False}},
+    )
+    payload = json.loads(service.payloads[ref["ref"].rsplit("/", 1)[-1]])
+    assert payload["owner"] == row.owner
+    assert payload["uiJourney"] == "workflow-detail.remediate.normal-create"
+    assert len(service.created) == len(_observations()) + 1
+
+
+@pytest.mark.asyncio
+async def test_release_projection_rereads_rows_and_nested_evidence_after_cleanup():
+    service = _ArtifactService()
+    refs = []
+    for row in REQUIRED_ROW_CATALOG:
+        refs.append(await persist_observed_row(
+            service, principal="service:release-gate", row_id=row.row_id,
+            observations=_observations(),
+            result={"observedResult": "passed", "generatedAt": NOW.isoformat(),
+                    "hostMode": row.host_modes[0], "architecture": row.architectures[0],
+                    "liveResourcesGone": True, "timings": {"durationSeconds": 1},
+                    "thresholds": {"withinLimits": True},
+                    "secretScan": {"status": "passed", "prohibitedAuthorityFound": False}},
+        ))
+    projection_ref = await publish_release_projection(
+        service, principal="service:release-gate", row_refs=refs,
+        release_inputs={"immutable": True, "version": "release-1"}, now=NOW,
+    )
+    projection = json.loads(service.payloads[projection_ref["ref"].rsplit("/", 1)[-1]])
+    assert allows_autonomous_mutation(projection)
+    assert set(projection["rows"]) == {row.row_id for row in REQUIRED_ROW_CATALOG}
