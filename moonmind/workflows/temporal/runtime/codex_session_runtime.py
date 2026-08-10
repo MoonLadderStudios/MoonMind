@@ -2673,14 +2673,14 @@ class CodexManagedSessionRuntime:
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
-                outcome = self._live_rollout_terminal_outcome(rollout_mirror)
-                if outcome is not None:
-                    return thread_payload, outcome
                 outcome = self._failed_thread_terminal_outcome(
                     state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
                 )
+                if outcome is not None:
+                    return thread_payload, outcome
+                outcome = self._live_rollout_terminal_outcome(rollout_mirror)
                 if outcome is not None:
                     return thread_payload, outcome
             else:
@@ -2990,6 +2990,26 @@ class CodexManagedSessionRuntime:
         if status in {"failed", "interrupted"} and error_text and previous_status != status:
             self._append_spool("stderr", f"turn {status}: {error_text}\n")
 
+    @staticmethod
+    def _assistant_text_was_published(
+        state: CodexSessionRuntimeState,
+        *,
+        turn_id: str,
+        assistant_text: str,
+    ) -> bool:
+        expected = assistant_text.strip()
+        if not expected:
+            return False
+        for event in state.observability_events:
+            if event.get("kind") != "assistant_message_completed":
+                continue
+            if str(event.get("turnId") or "").strip() != turn_id:
+                continue
+            observed = str(event.get("text") or "").strip()
+            if observed.removeprefix("assistant: ").strip() == expected:
+                return True
+        return False
+
     def _refresh_turn_state(
         self,
         state: CodexSessionRuntimeState,
@@ -3028,6 +3048,12 @@ class CodexManagedSessionRuntime:
         outcome = None
         if isinstance(turn_payload, Mapping):
             outcome = self._terminal_turn_outcome(turn_payload)
+            if outcome is None:
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=active_turn_id,
+                )
             if outcome is None:
                 rollout_scan = self._scan_rollout_for_turn(
                     self._resolved_rollout_path(
@@ -3090,6 +3116,11 @@ class CodexManagedSessionRuntime:
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
+            append_assistant_to_spool=not self._assistant_text_was_published(
+                state,
+                turn_id=active_turn_id,
+                assistant_text=assistant_text,
+            ),
             failure_class=failure_class,
             disposition=disposition,
         )

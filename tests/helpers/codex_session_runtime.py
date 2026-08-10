@@ -16,7 +16,7 @@ def write_fake_app_server(
     omit_turns_on_initial_reads: int = 0,
     omit_turns_when_incomplete: bool = False,
     assistant_text: str = "OK",
-    in_progress_assistant_text: str | None = None,
+    incomplete_assistant_text: str | None = None,
     thread_status_type: str = "idle",
     thread_status_reason: str | None = None,
     fail_thread_resume: bool = False,
@@ -83,7 +83,7 @@ OMIT_TURNS_ON_READ = __OMIT_TURNS_ON_READ__
 OMIT_TURNS_ON_INITIAL_READS = __OMIT_TURNS_ON_INITIAL_READS__
 OMIT_TURNS_WHEN_INCOMPLETE = __OMIT_TURNS_WHEN_INCOMPLETE__
 ASSISTANT_TEXT = __ASSISTANT_TEXT__
-IN_PROGRESS_ASSISTANT_TEXT = __IN_PROGRESS_ASSISTANT_TEXT__
+INCOMPLETE_ASSISTANT_TEXT = __INCOMPLETE_ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
 THREAD_STATUS_REASON = __THREAD_STATUS_REASON__
 ROLLOUT_ENTRIES_ON_READ = __ROLLOUT_ENTRIES_ON_READ__
@@ -313,9 +313,9 @@ __COMPLETION_BLOCK__
             turn_items = [
                 {"type": "agentMessage", "id": "msg-1", "text": ASSISTANT_TEXT, "phase": "final_answer", "memoryCitation": None}
             ]
-        elif IN_PROGRESS_ASSISTANT_TEXT is not None:
+        elif INCOMPLETE_ASSISTANT_TEXT is not None:
             turn_items = [
-                {"type": "agentMessage", "id": "msg-progress-1", "text": IN_PROGRESS_ASSISTANT_TEXT, "phase": "commentary", "memoryCitation": None}
+                {"type": "agentMessage", "id": "msg-1", "text": INCOMPLETE_ASSISTANT_TEXT, "phase": "commentary", "memoryCitation": None}
             ]
         should_omit_turns = (
             (OMIT_TURNS_ON_READ or thread_read_attempts <= OMIT_TURNS_ON_INITIAL_READS)
@@ -415,7 +415,7 @@ __COMPLETION_BLOCK__
         .replace("__START_THREAD_ID__", repr(start_thread_id))
         .replace("__START_THREAD_PATH__", repr(start_thread_path))
         .replace("__ASSISTANT_TEXT__", repr(assistant_text))
-        .replace("__IN_PROGRESS_ASSISTANT_TEXT__", repr(in_progress_assistant_text))
+        .replace("__INCOMPLETE_ASSISTANT_TEXT__", repr(incomplete_assistant_text))
         .replace("__THREAD_STATUS_TYPE__", repr(thread_status_type))
         .replace("__THREAD_STATUS_REASON__", repr(thread_status_reason))
         .replace("__ROLLOUT_ENTRIES_ON_READ__", repr(rollout_entries_on_read or []))

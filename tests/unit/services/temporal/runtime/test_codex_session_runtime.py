@@ -2483,7 +2483,7 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     assert handle.metadata["lastTurnStatus"] == "running"
 
 
-def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
+def test_runtime_send_turn_completes_from_final_answer_when_turn_status_is_stale(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -2493,7 +2493,7 @@ def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
         / "2026"
         / "08"
         / "10"
-        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
     )
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     transcript_path.write_text("", encoding="utf-8")
@@ -2501,7 +2501,43 @@ def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
         tmp_path,
         completion_notification_method=None,
         complete_turn_on_read=False,
+        incomplete_assistant_text="Stale thread commentary",
         start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Still working"}
+                    ],
+                    "phase": "commentary",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Authoritative result"}
+                    ],
+                    "phase": "final_answer",
+                },
+            },
+        ],
     )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
@@ -2512,7 +2548,7 @@ def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
         control_url="docker-exec://mm-codex-session-sess-1",
         container_id="ctr-1",
         app_server_command=("python3", str(script)),
-        turn_completion_timeout_seconds=0.01,
+        turn_completion_timeout_seconds=0.1,
     )
     runtime.launch_session(request)
 
@@ -2525,43 +2561,13 @@ def test_runtime_session_status_recovers_fresh_final_rollout_for_stale_turn(
             instructions="Reply with exactly the word OK",
         )
     )
-    assert response.status == "running"
 
-    final_text = "Recovered from durable final rollout evidence"
-    timestamp = _iso_timestamp(minutes_offset=5)
-    with transcript_path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "timestamp": timestamp,
-                    "type": "event_msg",
-                    "payload": {
-                        "type": "agent_message",
-                        "turn_id": "vendor-turn-1",
-                        "message": final_text,
-                        "phase": "final",
-                    },
-                }
-            )
-            + "\n"
-        )
-
-    status = runtime.session_status(
-        CodexManagedSessionLocator(
-            sessionId="sess-1",
-            sessionEpoch=1,
-            containerId="ctr-1",
-            threadId="logical-thread-1",
-        )
-    )
-
-    assert status.status == "ready"
-    assert status.session_state.active_turn_id is None
-    assert status.metadata["lastTurnStatus"] == "completed"
-    assert status.metadata["lastAssistantText"] == final_text
+    assert response.status == "completed"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "Authoritative result"
 
 
-def test_runtime_session_status_prefers_terminal_rollout_over_interim_thread_item(
+def test_runtime_session_status_rejects_prior_turn_final_before_active_boundary(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -2571,148 +2577,23 @@ def test_runtime_session_status_prefers_terminal_rollout_over_interim_thread_ite
         / "2026"
         / "08"
         / "10"
-        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
-    )
-    transcript_path.parent.mkdir(parents=True, exist_ok=True)
-    transcript_path.write_text("", encoding="utf-8")
-    script = write_fake_app_server(
-        tmp_path,
-        completion_notification_method=None,
-        complete_turn_on_read=False,
-        in_progress_assistant_text="Interim commentary from thread/read",
-        start_thread_path=str(transcript_path),
-    )
-    runtime = CodexManagedSessionRuntime(
-        workspace_path=request.workspace_path,
-        session_workspace_path=request.session_workspace_path,
-        artifact_spool_path=request.artifact_spool_path,
-        codex_home_path=request.codex_home_path,
-        image_ref=request.image_ref,
-        control_url="docker-exec://mm-codex-session-sess-1",
-        container_id="ctr-1",
-        app_server_command=("python3", str(script)),
-        turn_completion_timeout_seconds=0.01,
-    )
-    runtime.launch_session(request)
-
-    response = runtime.send_turn(
-        SendCodexManagedSessionTurnRequest(
-            sessionId="sess-1",
-            sessionEpoch=1,
-            containerId="ctr-1",
-            threadId="logical-thread-1",
-            instructions="Reply with exactly the word OK",
-        )
-    )
-    assert response.status == "running"
-
-    final_text = "Authoritative final answer from rollout"
-    timestamp = _iso_timestamp(minutes_offset=0)
-    with transcript_path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            "\n".join(
-                (
-                    json.dumps(
-                        {
-                            "timestamp": timestamp,
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "task_started",
-                                "turn_id": "vendor-turn-1",
-                            },
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "timestamp": timestamp,
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "agent_message",
-                                "message": final_text,
-                                "phase": "final",
-                            },
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "timestamp": timestamp,
-                            "type": "event_msg",
-                            "payload": {
-                                "type": "task_complete",
-                                "turn_id": "vendor-turn-1",
-                                "last_agent_message": final_text,
-                            },
-                        }
-                    ),
-                )
-            )
-            + "\n"
-        )
-
-    status = runtime.session_status(
-        CodexManagedSessionLocator(
-            sessionId="sess-1",
-            sessionEpoch=1,
-            containerId="ctr-1",
-            threadId="logical-thread-1",
-        )
-    )
-
-    assert status.status == "ready"
-    assert status.metadata["lastTurnStatus"] == "completed"
-    assert status.metadata["lastAssistantText"] == final_text
-
-
-def test_runtime_session_status_ignores_recent_final_from_previous_turn(
-    tmp_path: Path,
-) -> None:
-    request = launch_request(tmp_path)
-    timestamp = _iso_timestamp(minutes_offset=0)
-    transcript_path = (
-        Path(request.codex_home_path)
-        / "sessions"
-        / "2026"
-        / "08"
-        / "10"
-        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
     )
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     transcript_path.write_text(
-        "\n".join(
-            (
-                json.dumps(
-                    {
-                        "timestamp": timestamp,
-                        "type": "event_msg",
-                        "payload": {
-                            "type": "task_started",
-                            "turn_id": "vendor-turn-0",
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "timestamp": timestamp,
-                        "type": "event_msg",
-                        "payload": {
-                            "type": "agent_message",
-                            "message": "Final answer from the previous turn",
-                            "phase": "final",
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "timestamp": timestamp,
-                        "type": "event_msg",
-                        "payload": {
-                            "type": "task_complete",
-                            "turn_id": "vendor-turn-0",
-                            "last_agent_message": "Final answer from the previous turn",
-                        },
-                    }
-                ),
-            )
+        json.dumps(
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Previous turn result"}
+                    ],
+                    "phase": "final_answer",
+                },
+            }
         )
         + "\n",
         encoding="utf-8",
@@ -2722,6 +2603,17 @@ def test_runtime_session_status_ignores_recent_final_from_previous_turn(
         completion_notification_method=None,
         complete_turn_on_read=False,
         start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            }
+        ],
     )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
@@ -2745,9 +2637,7 @@ def test_runtime_session_status_ignores_recent_final_from_previous_turn(
             instructions="Reply with exactly the word OK",
         )
     )
-    assert response.status == "running"
-
-    status = runtime.session_status(
+    handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
             sessionEpoch=1,
@@ -2756,12 +2646,12 @@ def test_runtime_session_status_ignores_recent_final_from_previous_turn(
         )
     )
 
-    assert status.status == "busy"
-    assert status.session_state.active_turn_id == "vendor-turn-1"
-    assert status.metadata["lastTurnStatus"] == "running"
+    assert response.status == "running"
+    assert handle.status == "busy"
+    assert handle.session_state.active_turn_id == "vendor-turn-1"
 
 
-def test_runtime_send_turn_ignores_nonterminal_rollout_assistant_for_stale_turn(
+def test_runtime_send_turn_prefers_failed_thread_over_rollout_final_answer(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -2771,19 +2661,20 @@ def test_runtime_send_turn_ignores_nonterminal_rollout_assistant_for_stale_turn(
         / "2026"
         / "08"
         / "10"
-        / "rollout-2026-08-10T15-09-23-vendor-thread-1.jsonl"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
     )
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     transcript_path.write_text("", encoding="utf-8")
-    timestamp = _iso_timestamp(minutes_offset=5)
     script = write_fake_app_server(
         tmp_path,
         completion_notification_method=None,
         complete_turn_on_read=False,
         start_thread_path=str(transcript_path),
+        thread_status_type="failed",
+        thread_status_reason="provider failed the thread",
         rollout_entries_on_read=[
             {
-                "timestamp": timestamp,
+                "timestamp": _iso_timestamp(minutes_offset=0),
                 "type": "event_msg",
                 "payload": {
                     "type": "task_started",
@@ -2791,11 +2682,84 @@ def test_runtime_send_turn_ignores_nonterminal_rollout_assistant_for_stale_turn(
                 },
             },
             {
-                "timestamp": timestamp,
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Do not hide failure"}
+                    ],
+                    "phase": "final_answer",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.1,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["reason"] == "provider failed the thread"
+
+
+def test_runtime_send_turn_does_not_complete_from_commentary_when_status_is_stale(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
                 "type": "event_msg",
                 "payload": {
-                    "type": "agent_message",
-                    "message": "Still working",
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Still working"}
+                    ],
                     "phase": "commentary",
                 },
             },
@@ -2826,6 +2790,134 @@ def test_runtime_send_turn_ignores_nonterminal_rollout_assistant_for_stale_turn(
 
     assert response.status == "running"
     assert response.session_state.active_turn_id == "vendor-turn-1"
+
+    with transcript_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Recovered final result",
+                            }
+                        ],
+                        "phase": "final_answer",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "ready"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastAssistantText"] == "Recovered final result"
+
+
+def test_runtime_session_status_does_not_duplicate_published_rollout_final_answer(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "08"
+        / "10"
+        / "rollout-2026-08-10T15-09-29-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        start_thread_path=str(transcript_path),
+        thread_status_type="active",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state = runtime._load_state()
+    state.active_turn_id = "vendor-turn-1"
+    state.last_turn_id = "vendor-turn-1"
+    state.last_turn_status = "running"
+    state.last_control_at = time.time()
+    state.observability_events = [
+        {
+            "kind": "assistant_message_completed",
+            "turnId": "vendor-turn-1",
+            "text": "assistant: Authoritative result",
+        }
+    ]
+    runtime._save_state(state)
+    transcript_path.write_text(
+        "\n".join(
+            json.dumps(entry)
+            for entry in (
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                        "turn_id": "vendor-turn-1",
+                    },
+                },
+                {
+                    "timestamp": _iso_timestamp(minutes_offset=0),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Authoritative result"}
+                        ],
+                        "phase": "final_answer",
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime._append_spool("stdout", "assistant: Authoritative result\n")
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    stdout_text = (Path(request.artifact_spool_path) / "stdout.log").read_text(
+        encoding="utf-8"
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastAssistantText"] == "Authoritative result"
+    assert stdout_text.count("assistant: Authoritative result\n") == 1
 
 
 def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
@@ -3125,7 +3217,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                         "type": "event_msg",
                         "payload": {
                             "type": "task_complete",
-                            "turn_id": "codex-turn-1",
+                            "turn_id": "vendor-turn-1",
                             "last_agent_message": (
                                 "Recovered final answer without vendor turn id"
                             ),
