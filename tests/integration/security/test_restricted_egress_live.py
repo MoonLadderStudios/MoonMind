@@ -577,6 +577,97 @@ async def test_managed_helper_crosses_its_live_trusted_launch_boundary(
 
 
 @pytest.mark.asyncio
+async def test_managed_helper_restart_reuses_only_attested_policy_and_cleans_each_attachment(
+    tmp_path: Path,
+) -> None:
+    """Exercise restart/reuse through the production helper lifecycle owner.
+
+    A helper restart must perform a fresh attestation rather than inheriting a
+    declaration from the removed container.  Both generations must be attached
+    only to the reviewed restricted-egress network, and ``stop_helper`` must
+    release the owned container before the next generation can reuse its
+    deterministic name.
+    """
+
+    launcher = DockerWorkloadLauncher()
+    request = _live_helper_request(tmp_path)
+    attachment_ids: list[str] = []
+    attestation_times: list[str] = []
+
+    for generation in range(2):
+        result = await launcher.start_helper(request)
+        try:
+            assert result.status == "ready"
+            attestation = result.metadata["helper"]["egressAttestation"]
+            assert attestation["validationResult"] == "passed"
+            assert attestation["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+            assert attestation["profileDigest"] == DEFAULT_EGRESS_PROFILE.digest
+            assert attestation["networkRef"] == EGRESS_NETWORK_REF
+            assert attestation["backendRef"] == "docker-workload-launcher"
+            attestation_times.append(attestation["validatedAt"])
+
+            inspected = _docker("inspect", request.container_name)
+            assert inspected.returncode == 0, inspected.stderr[-1000:]
+            container = json.loads(inspected.stdout)[0]
+            attachment_ids.append(container["Id"])
+            assert set(container["NetworkSettings"]["Networks"]) == {
+                EGRESS_NETWORK_REF
+            }
+        finally:
+            stopped = await launcher.stop_helper(
+                request, reason=f"egress_conformance_generation_{generation}"
+            )
+            assert stopped.status == "stopped"
+
+        assert _docker("inspect", request.container_name).returncode != 0
+
+    assert attachment_ids[0] != attachment_ids[1]
+    assert len(attestation_times) == 2
+
+
+@pytest.mark.asyncio
+async def test_managed_helper_failed_readiness_releases_lease_and_owned_container(
+    tmp_path: Path,
+) -> None:
+    """Prove partial helper startup is recoverable through its real owner."""
+
+    launcher = DockerWorkloadLauncher()
+    request = _live_helper_request(tmp_path)
+    assert request.profile is not None
+    broken_probe = request.profile.readiness_probe.model_copy(
+        update={"command": ["/bin/false"], "retries": 1}
+    )
+    request = request.model_copy(
+        update={
+            "profile": request.profile.model_copy(
+                update={"readiness_probe": broken_probe}
+            )
+        }
+    )
+
+    result = await launcher.start_helper(request)
+    try:
+        assert result.status == "unhealthy"
+        attestation = result.metadata["helper"]["egressAttestation"]
+        assert attestation["validationResult"] == "passed"
+        inspected = _docker(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            request.container_name,
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
+    finally:
+        stopped = await launcher.stop_helper(
+            request, reason="failed_readiness_reconciliation"
+        )
+        assert stopped.status == "stopped"
+
+    assert _docker("inspect", request.container_name).returncode != 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("host_mode", ["static_compose", "on_demand_docker"])
 async def test_omnigent_modes_cross_the_real_prepare_host_launch_boundary(
     host_mode: str, tmp_path: Path
