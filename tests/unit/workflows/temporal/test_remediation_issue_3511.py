@@ -106,12 +106,8 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     )
     kwargs = dict(
         remediation_workflow_id="remediation-1",
-        action_kind="host.restart",
-        parameters={
-            "providerProfileId": "profile-1",
-            "hostLeaseRef": "lease-1",
-            "expectedHostState": "running",
-        },
+        action_kind="execution.force_terminate",
+        parameters={"reason": "terminal recovery"},
         dry_run=False,
         idempotency_key="action-1",
         requesting_principal="operator:requester",
@@ -121,7 +117,7 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
         security_profile=RemediationSecurityProfile(
             profile_ref="admin",
             execution_principal="operator:requester",
-            allowed_action_kinds=("host.restart",),
+            allowed_action_kinds=("execution.force_terminate",),
         ),
     )
 

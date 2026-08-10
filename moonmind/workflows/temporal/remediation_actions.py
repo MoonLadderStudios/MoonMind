@@ -399,7 +399,6 @@ _EXECUTION_BACKEND_READY = frozenset(
         "execution.cancel",
         "execution.force_terminate",
         "session.interrupt_turn",
-        "session.clear",
         "session.cancel",
         "provider_profile.evict_stale_lease",
         "workload.restart_helper_container",
@@ -440,13 +439,12 @@ class RemediationCapabilityContext:
 
 
 def _action_support(action_kind: str) -> tuple[list[str], list[str]]:
+    from moonmind.workflows.executions.execution_contract import SUPPORTED_RUNTIME_MODES
+
     target_type = str((_ACTION_CATALOG.get(action_kind) or {}).get("target_type") or "")
     if target_type in _OMNIGENT_ONLY_TARGETS:
-        return ["omnigent"], ["managed"]
-    return ["temporal", "codex_cli", "claude_code", "gemini_cli", "omnigent"], [
-        "managed",
-        "external",
-    ]
+        return ["omnigent"], ["static_compose", "on_demand_docker"]
+    return sorted(SUPPORTED_RUNTIME_MODES | {"temporal"}), []
 
 
 def remediation_action_capability(
@@ -494,7 +492,11 @@ def remediation_action_capability(
             blocked.append("target_state_ineligible")
         if context.target_runtime and context.target_runtime not in supported_runtimes:
             blocked.append("target_runtime_unsupported")
-        if context.host_mode and context.host_mode not in supported_host_modes:
+        if (
+            context.host_mode
+            and supported_host_modes
+            and context.host_mode not in supported_host_modes
+        ):
             blocked.append("host_mode_unsupported")
         required = set(contract.before_evidence_classes)
         available = set(context.current_evidence_classes)
@@ -503,7 +505,7 @@ def remediation_action_capability(
     requestable = not blocked
     return {
         "requestable": requestable,
-        "dryRunSupported": catalog_enabled,
+        "dryRunSupported": False,
         "executionBackendReady": execution_ready,
         "approvalBackendReady": approval_ready,
         "verificationBackendReady": verification_ready,
@@ -614,7 +616,7 @@ class RemediationActionAuthorityResult:
                     "resourceKind": _target_type(self.action_kind),
                 },
                 "riskTier": self.risk,
-                "dryRun": self.reason == "dry_run",
+                "dryRun": self.reason.startswith("dry_run"),
                 "idempotencyKey": self.idempotency_key,
                 "params": dict(self.redacted_parameters),
             },
@@ -1231,6 +1233,33 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
+        if dry_run:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason="dry_run_unsupported",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+        capability = remediation_action_capability(action_kind)
+        if not capability["requestable"]:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=str(capability["blockedReasons"][0]),
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
         if not permissions.can_view_target:
             return self._linked_result(
                 link=link,
@@ -1251,22 +1280,6 @@ class RemediationActionAuthorityService:
                 risk=risk,
                 decision="denied",
                 reason="unsupported_authority_mode",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
-        if dry_run:
-            decision: RemediationActionDecision = (
-                "dry_run_only" if authority_mode == "observe_only" else "allowed"
-            )
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision=decision,
-                reason="dry_run",
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,

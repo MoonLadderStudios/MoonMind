@@ -2950,11 +2950,12 @@ async def test_remediation_action_authority_enforces_authority_modes(
             permissions=_admin_permissions(),
             security_profile=_admin_profile(),
         )
-        assert dry_run.decision == "dry_run_only"
+        assert dry_run.decision == "denied"
+        assert dry_run.reason == "dry_run_unsupported"
         assert dry_run.executable is False
         dry_run_payload = dry_run.to_dict()
         assert dry_run_payload["request"]["dryRun"] is True
-        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["status"] == "rejected"
         assert dry_run_payload["result"]["verificationRequired"] is False
         assert dry_run_payload["result"]["verificationHint"] is None
 

@@ -38,7 +38,7 @@ def test_remediation_link_publishes_complete_evaluated_capability_matrix() -> No
     assert "execution_backend_unavailable" in rows["session.terminate"].blockedReasons
 
 
-def test_remediation_link_reports_approval_backend_unavailable_before_request() -> None:
+def test_remediation_link_reports_approval_backend_ready_before_request() -> None:
     now = datetime(2026, 8, 9, tzinfo=UTC)
     link = SimpleNamespace(
         remediation_workflow_id="remediation-1",
@@ -61,5 +61,6 @@ def test_remediation_link_reports_approval_backend_unavailable_before_request() 
     pause = next(
         row for row in result.actionCapabilities if row.actionKind == "execution.pause"
     )
-    assert pause.requestable is False
-    assert "approval_backend_unavailable" in pause.blockedReasons
+    assert pause.requestable is True
+    assert pause.approvalBackendReady is True
+    assert "approval_backend_unavailable" not in pause.blockedReasons

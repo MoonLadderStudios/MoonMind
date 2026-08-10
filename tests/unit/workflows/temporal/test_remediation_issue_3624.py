@@ -42,6 +42,7 @@ def test_every_requestable_action_has_execution_and_verification_owners() -> Non
         assert capability["executionBackendReady"] is True
         assert capability["approvalBackendReady"] is True
         assert capability["verificationBackendReady"] is True
+        assert capability["dryRunSupported"] is False
 
 
 def test_incomplete_owners_are_disabled_with_bounded_reasons() -> None:
@@ -54,6 +55,7 @@ def test_incomplete_owners_are_disabled_with_bounded_reasons() -> None:
             "execution_backend_unavailable",
             "authoritative_verifier_unavailable",
         },
+        "session.clear": {"execution_backend_unavailable"},
         "cleanup.request_janitor": {
             "execution_backend_unavailable",
             "authoritative_verifier_unavailable",
@@ -117,10 +119,6 @@ def test_production_executor_registers_only_requestable_actions() -> None:
             "target_runtime_unsupported",
         ),
         (
-            RemediationCapabilityContext(host_mode="unknown-host-mode"),
-            "host_mode_unsupported",
-        ),
-        (
             RemediationCapabilityContext(policy_allowed_action_kinds=()),
             "target_policy_denied",
         ),
@@ -154,7 +152,10 @@ def test_action_specific_runtime_and_host_filtering(action_kind: str) -> None:
         ),
     )
     assert capability["supportedTargetRuntimes"] == ["omnigent"]
-    assert capability["supportedHostModes"] == ["managed"]
+    assert capability["supportedHostModes"] == [
+        "static_compose",
+        "on_demand_docker",
+    ]
     assert set(capability["blockedReasons"]) >= {
         "target_runtime_unsupported",
         "host_mode_unsupported",
