@@ -59,6 +59,10 @@ class _HermeticSystemDaemon:
     async def run(self, raw: Any) -> tuple[int, bytes, bytes]:
         command = tuple(str(item) for item in raw)
         self.commands.append(command)
+        if command[:2] == ("info", "--format"):
+            return 0, str(10 * 1024**3).encode(), b""
+        if command[0] == "ps":
+            return 0, b"", b""
         if command[:2] == ("image", "inspect"):
             image = command[-1]
             if image not in self.images:
@@ -226,6 +230,8 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
     assert all("/var/run/docker.sock" not in " ".join(command) for command in creates)
     assert all("DOCKER_HOST" not in " ".join(command) for command in daemon.commands)
     assert not any(command[0] == "rmi" for command in daemon.commands)
+    assert sum(command[0] == "info" for command in daemon.commands) == 3
+    assert sum(command[0] == "ps" for command in daemon.commands) == 3
     assert {job_id for job_id, state in projected if state == "succeeded"} == {
         "container-job:" + "1" * 32,
         "container-job:" + "2" * 32,
