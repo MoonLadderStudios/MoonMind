@@ -5367,6 +5367,61 @@ def test_parse_docker_timestamp_handles_nano_zulu_and_zero_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cleanup_docker_references_include_precise_container_correlation(
+    tmp_path: Path,
+) -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "ps", "-q"):
+            return 0, "container-1\n", ""
+        if command == ("docker", "inspect", "container-1"):
+            return (
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": "container-1",
+                            "Name": "/mm-workload-run-1",
+                            "Config": {
+                                "Labels": {
+                                    "moonmind.correlation": "mm:workflow-1",
+                                }
+                            },
+                            "Mounts": [
+                                {
+                                    "Type": "volume",
+                                    "Name": "agent_workspaces",
+                                    "Source": "/var/lib/docker/volumes/agent_workspaces/_data",
+                                    "Destination": "/work/agent_jobs",
+                                }
+                            ],
+                        }
+                    ]
+                ),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        command_runner=_fake_runner,
+    )
+
+    state = await controller.collect_managed_runtime_cleanup_docker_references()
+
+    assert "mm:workflow-1" in state.active_container_refs
+    assert "/work/agent_jobs" in state.active_mount_paths
+
+
+@pytest.mark.asyncio
 async def test_controller_reaps_orphan_session_containers_and_skips_active(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

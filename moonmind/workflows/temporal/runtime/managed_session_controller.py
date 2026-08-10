@@ -3923,6 +3923,7 @@ class DockerCodexManagedSessionController:
                     "moonmind.session_id",
                     "moonmind.agent_run_id",
                     "moonmind.run_id",
+                    "moonmind.correlation",
                 ):
                     value = labels.get(key)
                     if value:
@@ -3939,6 +3940,27 @@ class DockerCodexManagedSessionController:
         return DockerReferenceState(
             active_container_refs=frozenset(active_container_refs),
             active_mount_paths=frozenset(active_mount_paths),
+        )
+
+    async def reclaim_docker_storage_pressure(self, *, config: Any = None) -> Any:
+        """Reclaim only unused image/cache data through the selected daemon."""
+        from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+            DockerStorageMaintenanceConfig,
+            reclaim_docker_storage_under_pressure,
+        )
+
+        resolved_config = config or DockerStorageMaintenanceConfig.from_env()
+
+        async def _run(command: Sequence[str]) -> tuple[int, str, str]:
+            return await self._command_runner(
+                tuple(command),
+                env=self._docker_env(),
+            )
+
+        return await reclaim_docker_storage_under_pressure(
+            config=resolved_config,
+            command_runner=_run,
+            docker_binary=self._docker_binary,
         )
 
     def _active_sidecar_volume_names(self, active_session_ids: set[str]) -> set[str]:
