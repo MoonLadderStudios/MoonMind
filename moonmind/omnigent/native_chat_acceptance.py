@@ -256,7 +256,10 @@ def _passed_evidence(
 
 
 def _validate_identities(
-    source: Mapping[str, Any], *, expected_commit: str | None
+    source: Mapping[str, Any],
+    *,
+    expected_commit: str | None,
+    expected_build: str | None = None,
 ) -> dict[str, Any]:
     identities = source.get("identities")
     if not isinstance(identities, Mapping):
@@ -270,6 +273,8 @@ def _validate_identities(
         )
     if expected_commit is not None and identities["moonmindCommit"] != expected_commit:
         raise ConformanceContractError("acceptance evidence is for a different commit")
+    if expected_build is not None and identities["moonmindBuild"] != expected_build:
+        raise ConformanceContractError("acceptance evidence is for a different build")
     contract_versions = identities.get("contractVersions")
     if not isinstance(contract_versions, Mapping) or any(
         not isinstance(contract_versions.get(key), str)
@@ -450,6 +455,96 @@ def build_native_chat_acceptance_report(
     return report
 
 
+def validate_native_chat_acceptance_report(
+    report: Mapping[str, Any],
+    *,
+    evidence_resolver: Callable[[str], Mapping[str, Any]],
+    now: datetime | None = None,
+    expected_commit: str | None = None,
+    expected_build: str | None = None,
+) -> dict[str, Any]:
+    """Validate a published report and all durable evidence it references.
+
+    Runtime rollout admission uses this path.  Merely configuring an artifact
+    reference is never proof: the report must still be current, unsuperseded,
+    bound to pinned candidate/image/contract identities, and every nested case
+    reference must resolve and retain passing cleanup and secret-scan evidence.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ConformanceContractError("acceptance validation time must include a timezone")
+    if report.get("schemaVersion") != SCHEMA_VERSION or report.get("status") != "passed":
+        raise ConformanceContractError("acceptance report is not a passing supported report")
+    _active_evidence(report, label="acceptance report", now=now)
+    identities = _validate_identities(
+        report,
+        expected_commit=expected_commit,
+        expected_build=expected_build,
+    )
+    _validate_safe_refs(report)
+    scenarios = report.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        raise ConformanceContractError("native-chat acceptance scenarios are required")
+    evidence_objects: dict[str, Mapping[str, Any]] = {}
+
+    def resolve(ref: str) -> Mapping[str, Any]:
+        if ref not in evidence_objects:
+            evidence_objects[ref] = evidence_resolver(ref)
+        return evidence_objects[ref]
+
+    for scenario in REQUIRED_SCENARIOS:
+        item = scenarios.get(scenario)
+        if isinstance(item, Mapping):
+            for ref in item.get("evidenceRefs") or []:
+                evidence = resolve(ref)
+                cases = evidence.get("cases") if isinstance(evidence, Mapping) else None
+                if isinstance(cases, Mapping):
+                    for case in cases.values():
+                        if isinstance(case, Mapping):
+                            for case_ref in case.get("evidenceRefs") or []:
+                                resolve(case_ref)
+        _passed_evidence(
+            item,
+            label=f"scenario {scenario}",
+            claim=f"scenario:{scenario}",
+            evidence_objects=evidence_objects,
+            identities=identities,
+            now=now,
+            expected_lane=SCENARIO_LANES[scenario],
+        )
+    cleanup = report.get("cleanup")
+    if isinstance(cleanup, Mapping):
+        for ref in cleanup.get("evidenceRefs") or []:
+            evidence = resolve(ref)
+            cases = evidence.get("cases") if isinstance(evidence, Mapping) else None
+            if isinstance(cases, Mapping):
+                for case in cases.values():
+                    if isinstance(case, Mapping):
+                        for case_ref in case.get("evidenceRefs") or []:
+                            resolve(case_ref)
+    accepted_cleanup = _passed_evidence(
+        cleanup,
+        label="cleanup",
+        claim="cleanup",
+        evidence_objects=evidence_objects,
+        identities=identities,
+        now=now,
+    )
+    if (
+        accepted_cleanup.get("historicalEvidencePreserved") is not True
+        or accepted_cleanup.get("leasesReleased") is not True
+    ):
+        raise ConformanceContractError("cleanup must preserve history and release leases")
+    secret_scan = report.get("secretScan")
+    if not isinstance(secret_scan, Mapping) or secret_scan.get("status") != "passed":
+        raise ConformanceContractError("the retained-evidence secret scan must pass")
+    if not isinstance(report.get("producer"), str) or not report["producer"].strip():
+        raise ConformanceContractError("trusted workflow producer identity is required")
+    assert_secret_free(report)
+    return dict(report)
+
+
 __all__ = [
     "CASE_EVIDENCE_SCHEMA_VERSION",
     "EVIDENCE_SCHEMA_VERSION",
@@ -474,4 +569,5 @@ __all__ = [
     "SCENARIO_TERMINAL_CONTINUATION",
     "SCHEMA_VERSION",
     "build_native_chat_acceptance_report",
+    "validate_native_chat_acceptance_report",
 ]

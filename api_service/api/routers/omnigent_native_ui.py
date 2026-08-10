@@ -29,6 +29,7 @@ mechanics live in :mod:`moonmind.omnigent.native_ui`.
 
 from __future__ import annotations
 
+import json
 import logging
 import posixpath
 from typing import Any
@@ -47,10 +48,15 @@ from api_service.api.routers.omnigent_bridge import (
     _resolve_and_authorize_chat_binding,
 )
 from api_service.auth_providers import get_current_user
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.db.models import User
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
+from moonmind.omnigent.native_chat_acceptance import (
+    validate_native_chat_acceptance_report,
+)
+from moonmind.omnigent.conformance import ConformanceContractError
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
@@ -72,6 +78,8 @@ from moonmind.omnigent.settings import (
     resolved_server_url,
 )
 from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError, is_read_only
+from moonmind.utils.build_info import resolve_moonmind_build_id
+from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +101,62 @@ _NATIVE_UI_UPSTREAM_TIMEOUT = httpx.Timeout(30.0)
 
 class NativeUiUpstreamError(RuntimeError):
     """The upstream native UI/server could not be reached or served."""
+
+
+async def _acceptance_report_is_current(
+    ref: str,
+    *,
+    artifact_service: TemporalArtifactService,
+) -> bool:
+    """Resolve and fully validate the configured canary proof, fail closed."""
+
+    normalized = str(ref or "").strip()
+    if not normalized.startswith("artifact://"):
+        return False
+    build_identity = resolve_moonmind_build_id()
+    if not build_identity:
+        return False
+    pending = [normalized]
+    objects: dict[str, dict[str, Any]] = {}
+    try:
+        while pending:
+            current = pending.pop()
+            if current in objects:
+                continue
+            artifact_id = current.removeprefix("artifact://").strip()
+            if not artifact_id:
+                return False
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_id,
+                principal="service:omnigent-native-chat-acceptance-gate",
+            )
+            value = json.loads(payload)
+            if not isinstance(value, dict):
+                return False
+            objects[current] = value
+            refs = value.get("evidenceRefs")
+            if isinstance(refs, list):
+                pending.extend(item for item in refs if isinstance(item, str))
+            cases = value.get("cases")
+            if isinstance(cases, dict):
+                for case in cases.values():
+                    if isinstance(case, dict) and isinstance(case.get("evidenceRefs"), list):
+                        pending.extend(
+                            item for item in case["evidenceRefs"] if isinstance(item, str)
+                        )
+        report = objects.pop(normalized)
+        validate_native_chat_acceptance_report(
+            report,
+            evidence_resolver=objects.__getitem__,
+            expected_build=build_identity,
+        )
+    except (KeyError, TypeError, ValueError, ConformanceContractError, UnicodeDecodeError):
+        logger.warning("omnigent.native_chat acceptance evidence rejected")
+        return False
+    except Exception:
+        logger.exception("omnigent.native_chat acceptance evidence unavailable")
+        return False
+    return True
 
 
 class NativeUiUpstreamResponse:
@@ -289,6 +353,7 @@ async def _serve_native_ui(
     service: Any,
     store: OmnigentBridgeSessionStore,
     upstream: NativeUiUpstream,
+    artifact_service: TemporalArtifactService,
 ) -> Response:
     mode = presentation_mode_from_query(embedded)
     document = is_document_request(ui_path)
@@ -319,9 +384,17 @@ async def _serve_native_ui(
     #     non-topology-revealing unavailable state the read-only diagnostics
     #     fallback presents, rather than silently routing through a different
     #     runtime or the legacy chat path.
+    rollout_mode = resolved_native_chat_rollout_mode()
+    acceptance_ref = resolved_native_chat_acceptance_ref()
+    acceptance_recorded = False
+    raw_rollout_mode = str(rollout_mode or "").strip().lower()
+    if raw_rollout_mode in {"", "canary"}:
+        acceptance_recorded = await _acceptance_report_is_current(
+            acceptance_ref, artifact_service=artifact_service
+        )
     rollout = resolve_native_chat_rollout(
-        mode=resolved_native_chat_rollout_mode(),
-        acceptance_recorded=bool(resolved_native_chat_acceptance_ref()),
+        mode=rollout_mode,
+        acceptance_recorded=acceptance_recorded,
     )
     if not rollout.serve_native_ui:
         return _native_chat_unavailable(
@@ -418,6 +491,7 @@ async def serve_native_workflow_chat_ui_root(
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> Response:
     """Serve the native Omnigent SPA document for a binding (root route)."""
 
@@ -430,6 +504,7 @@ async def serve_native_workflow_chat_ui_root(
         service=service,
         store=store,
         upstream=upstream,
+        artifact_service=artifact_service,
     )
 
 
@@ -447,6 +522,7 @@ async def serve_native_workflow_chat_ui_asset(
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> Response:
     """Serve a scoped native UI asset or an SPA deep-link/refresh document."""
 
@@ -459,6 +535,7 @@ async def serve_native_workflow_chat_ui_asset(
         service=service,
         store=store,
         upstream=upstream,
+        artifact_service=artifact_service,
     )
 
 

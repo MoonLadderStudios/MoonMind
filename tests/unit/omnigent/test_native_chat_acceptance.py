@@ -17,6 +17,7 @@ from moonmind.omnigent.native_chat_acceptance import (
     REQUIRED_SCENARIOS,
     SCENARIO_LANES,
     build_native_chat_acceptance_report,
+    validate_native_chat_acceptance_report,
 )
 
 _NOW = datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
@@ -136,6 +137,19 @@ def test_complete_matrix_builds_publishable_issue_3642_report() -> None:
 def test_expected_commit_must_match_evidence_identity() -> None:
     with pytest.raises(ConformanceContractError, match="different commit"):
         _build(_source(), expected_commit="def456")
+
+
+def test_runtime_validation_must_match_deployed_build_identity() -> None:
+    source = _source()
+    objects = source["evidenceObjects"]
+    report = _build(source)
+    with pytest.raises(ConformanceContractError, match="different build"):
+        validate_native_chat_acceptance_report(
+            report,
+            evidence_resolver=objects.__getitem__,
+            now=_NOW,
+            expected_build="other-build",
+        )
 
 
 @pytest.mark.parametrize("scenario", ["binding-authorization-isolation", "protected-stock-image-journey"])
@@ -263,3 +277,36 @@ def test_lazy_resolver_resolves_every_ref() -> None:
     assert report["status"] == "passed"
     # Every scenario, cleanup, and nested case ref was independently resolved.
     assert any(ref.startswith("artifact://case/") for ref in resolved)
+
+
+def test_published_report_is_revalidated_with_all_durable_evidence() -> None:
+    source = _source()
+    objects = source["evidenceObjects"]
+    report = _build(source)
+
+    validated = validate_native_chat_acceptance_report(
+        report,
+        evidence_resolver=objects.__getitem__,
+        now=_NOW,
+        expected_commit="abc123",
+    )
+
+    assert validated["status"] == "passed"
+
+
+def test_published_report_expiry_revocation_and_missing_evidence_fail_closed() -> None:
+    source = _source()
+    objects = source["evidenceObjects"]
+    report = _build(source)
+    report["revokedAt"] = "2026-07-21T11:00:00Z"
+    with pytest.raises(ConformanceContractError, match="revoked"):
+        validate_native_chat_acceptance_report(
+            report, evidence_resolver=objects.__getitem__, now=_NOW
+        )
+
+    report.pop("revokedAt")
+    del objects["artifact://case/cleanup"]
+    with pytest.raises(KeyError):
+        validate_native_chat_acceptance_report(
+            report, evidence_resolver=objects.__getitem__, now=_NOW
+        )

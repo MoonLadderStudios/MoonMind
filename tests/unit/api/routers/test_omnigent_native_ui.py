@@ -33,6 +33,7 @@ from api_service.api.routers.omnigent_native_ui import (
     get_native_ui_upstream,
     native_ui_router,
 )
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.native_ui import scoped_ui_base
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
@@ -58,6 +59,11 @@ class _FakeService:
 
     async def describe_execution(self, workflow_id: str):
         return SimpleNamespace(owner_id=self._owner_id)
+
+
+class _FakeArtifactService:
+    async def read(self, *, artifact_id: str, principal: str):
+        raise AssertionError(f"unexpected artifact read: {artifact_id} for {principal}")
 
 
 def _row(**overrides: Any) -> SimpleNamespace:
@@ -154,6 +160,7 @@ def _build(
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     app.dependency_overrides[get_native_ui_upstream] = lambda: upstream
+    app.dependency_overrides[_get_temporal_artifact_service] = _FakeArtifactService
     return TestClient(app), upstream
 
 
@@ -450,6 +457,14 @@ def test_canary_with_recorded_evidence_serves_native_ui(
     monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "canary")
     monkeypatch.setenv(
         "OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", "artifact://native-chat-report"
+    )
+
+    async def _accepted(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_native_ui._acceptance_report_is_current",
+        _accepted,
     )
     client, _upstream = _build()
 
