@@ -1676,6 +1676,73 @@ async def test_create_execution_accepts_autonomous_remediation_only_from_server_
         assert link is not None
         assert link.authority_mode == "admin_auto"
 
+
+@pytest.mark.asyncio
+async def test_create_execution_awaits_durable_autonomous_remediation_authority(
+    tmp_path, mock_client_adapter
+):
+    from moonmind.omnigent.operator_remediation_gate import (
+        COMBINED_SCHEMA_VERSION, MATRIX_VERSION, REQUIRED_ROW_CATALOG,
+    )
+
+    projection = {
+        "schemaVersion": COMBINED_SCHEMA_VERSION,
+        "matrixVersion": MATRIX_VERSION,
+        "issue": "MoonLadderStudios/MoonMind#3626",
+        "status": "supported",
+        "autonomousMutationAllowed": True,
+        "releaseInputs": {"immutable": True, "version": "release-1"},
+        "rows": {
+            row.row_id: {"ref": f"artifact://{row.row_id}", "sha256": "a" * 64}
+            for row in REQUIRED_ROW_CATALOG
+        },
+    }
+
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        authority = AsyncMock(return_value=projection)
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+            autonomous_remediation_authority=authority,
+        )
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow", owner_id=owner_id,
+            title="Target", input_artifact_ref=None, plan_artifact_ref=None,
+            manifest_artifact_ref=None, failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(), idempotency_key=None,
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow", owner_id=owner_id,
+            title="Automatic remediation", input_artifact_ref=None,
+            plan_artifact_ref=None, manifest_artifact_ref=None,
+            failure_policy=None, idempotency_key=None,
+            initial_parameters={"workflow": {
+                "instructions": "Repair target",
+                "remediation": {
+                    "target": {"workflowId": target.workflow_id},
+                    "authorityMode": "admin_auto",
+                },
+            }},
+        )
+
+        authority.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_configured_release_projection_resolution_fails_closed(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        monkeypatch.setattr(
+            settings.workflow,
+            "operator_remediation_release_artifact_id",
+            "art_missing",
+        )
+
+        assert await service._operator_remediation_release_status() is None
+
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target_workflow_id(
     tmp_path, mock_client_adapter

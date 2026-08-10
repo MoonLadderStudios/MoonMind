@@ -501,6 +501,16 @@ class WorkflowSettings(BaseSettings):
         ),
         ge=0,
     )
+    operator_remediation_release_artifact_id: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "MOONMIND_OPERATOR_REMEDIATION_RELEASE_ARTIFACT_ID"
+        ),
+        description=(
+            "Server-owned combined operator-remediation release projection. "
+            "An empty value keeps autonomous remediation disabled."
+        ),
+    )
     agent_job_artifact_max_bytes: int = Field(
         50 * 1024 * 1024,
         alias="AGENT_JOB_ARTIFACT_MAX_BYTES",

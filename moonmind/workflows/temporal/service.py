@@ -10,8 +10,9 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import inspect
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -412,7 +413,9 @@ class TemporalExecutionService:
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
         manifest_continue_as_new_phase_threshold: int = 5,
-        autonomous_remediation_authority: Callable[[], Mapping[str, Any]] | None = None,
+        autonomous_remediation_authority: Callable[
+            [], Mapping[str, Any] | Awaitable[Mapping[str, Any] | None] | None
+        ] | None = None,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -442,6 +445,29 @@ class TemporalExecutionService:
         # must supply a server-owned projection derived from the observed
         # remediation matrix rather than trusting workflow input.
         self._autonomous_remediation_authority = autonomous_remediation_authority
+
+    async def _operator_remediation_release_status(self) -> Mapping[str, Any] | None:
+        """Resolve the configured durable release projection, failing closed."""
+        artifact_id = str(
+            settings.workflow.operator_remediation_release_artifact_id or ""
+        ).strip()
+        if not artifact_id:
+            return None
+        try:
+            repository = TemporalArtifactRepository(self._session)
+            artifact = await repository.get_artifact(artifact_id)
+            service = TemporalArtifactService(repository)
+            _, content = await service.read(
+                artifact_id=artifact_id,
+                principal=artifact.created_by_principal,
+                allow_restricted_raw=True,
+            )
+            payload = json.loads(content)
+        except Exception:
+            # Admission must not become unavailable merely because release
+            # evidence is missing or malformed. The capability stays closed.
+            return None
+        return payload if isinstance(payload, Mapping) else None
 
     def _remediation_context_builder(self) -> RemediationContextBuilder:
         return RemediationContextBuilder(
@@ -713,11 +739,13 @@ class TemporalExecutionService:
                 f"Remediation target unauthorized: {target_workflow_id}"
             )
         if authority_mode == "admin_auto":
-            release_status = (
-                self._autonomous_remediation_authority()
-                if self._autonomous_remediation_authority is not None
-                else None
+            authority = (
+                self._autonomous_remediation_authority
+                or self._operator_remediation_release_status
             )
+            release_status = authority()
+            if inspect.isawaitable(release_status):
+                release_status = await release_status
             if not allows_autonomous_mutation(release_status):
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.authorityMode 'admin_auto' is disabled "
