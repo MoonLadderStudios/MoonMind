@@ -75,6 +75,14 @@ from api_service.services.checkpoint_branch_service import (
     build_branch_turn_launch_idempotency_key,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.native_chat_telemetry import (
+    OUTCOME_DENIED,
+    OUTCOME_FAILURE,
+    OUTCOME_STALE_REJECTED,
+    OUTCOME_SUCCESS,
+    STAGE_CONTINUATION,
+    record_request as record_native_chat_request,
+)
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
@@ -15663,6 +15671,7 @@ async def continue_in_new_workflow(
         service=service, workflow_id=workflow_id, user=user
     )
     if str(getattr(source, "status", "") or "") not in _TERMINAL_EXECUTION_STATUSES:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_STALE_REJECTED)
         # Never infer writeability from an idle status or a still-reachable
         # upstream session after the MoonMind Workflow is terminal (§1, §7).
         raise HTTPException(
@@ -15677,6 +15686,7 @@ async def continue_in_new_workflow(
         )
     source_run_id = str(getattr(source, "run_id", "") or "").strip()
     if not source_run_id:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_FAILURE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -15687,6 +15697,7 @@ async def continue_in_new_workflow(
 
     canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
     if canonical is None:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_FAILURE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -15706,6 +15717,7 @@ async def continue_in_new_workflow(
         if ref not in evidence.authorized_refs
     ]
     if unauthorized:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_DENIED)
         # Non-enumerating: report the count, never which refs, so a caller cannot
         # probe for the existence of hidden source artifacts (§7).
         raise HTTPException(
@@ -15759,6 +15771,7 @@ async def continue_in_new_workflow(
             bounded_purpose=payload.bounded_purpose,
         )
     except LinkedContinuationConflict as exc:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_STALE_REJECTED)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -15770,7 +15783,7 @@ async def continue_in_new_workflow(
     if reservation.already_finalized:
         # Duplicate request after a successful create: return the same linked
         # Workflow rather than creating a second one (§5).
-        return ContinueInNewWorkflowResponse(
+        response = ContinueInNewWorkflowResponse(
             sourceWorkflowId=source.workflow_id,
             sourceRunId=source_run_id,
             destinationWorkflowId=reservation.destination_workflow_id,
@@ -15778,6 +15791,8 @@ async def continue_in_new_workflow(
             created=False,
             pinnedSourceRefs=dict(reservation.record.pinned_source_refs or {}),
         )
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_SUCCESS)
+        return response
 
     # Persist the reservation (and its pinned destination id) before the external
     # create side effect. If the create then fails or is interrupted, a retry with
@@ -15868,6 +15883,7 @@ async def continue_in_new_workflow(
             _workflow_id=reserved_workflow_id,
         )
     except TemporalExecutionValidationError as exc:
+        record_native_chat_request(STAGE_CONTINUATION, OUTCOME_FAILURE)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -15902,7 +15918,7 @@ async def continue_in_new_workflow(
     )
     await session.commit()
 
-    return ContinueInNewWorkflowResponse(
+    response = ContinueInNewWorkflowResponse(
         sourceWorkflowId=source.workflow_id,
         sourceRunId=source_run_id,
         destinationWorkflowId=record.workflow_id,
@@ -15910,6 +15926,8 @@ async def continue_in_new_workflow(
         created=True,
         pinnedSourceRefs=pinned,
     )
+    record_native_chat_request(STAGE_CONTINUATION, OUTCOME_SUCCESS)
+    return response
 
 
 class LinkedContinuationSummaryModel(BaseModel):

@@ -157,6 +157,12 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
     user = SimpleNamespace(id=uuid4())
     await _seed_canonical(sessions, owner_id=str(user.id))
     _patch_collaborators(monkeypatch)
+    telemetry: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ex,
+        "record_native_chat_request",
+        lambda stage, outcome: telemetry.append((stage, outcome)),
+    )
     service = _FakeService()
 
     async with sessions() as session:
@@ -185,6 +191,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
         "art_final",
         "art_output",
     ]
+    assert telemetry == [("continuation", "success")]
 
     # Ordinary create path was reused with the reserved destination id, the pinned
     # source lineage, and the authored new intent.
@@ -308,6 +315,12 @@ async def test_continue_rejects_non_terminal_source(monkeypatch) -> None:
     user = SimpleNamespace(id=uuid4())
     await _seed_canonical(sessions, owner_id=str(user.id))
     _patch_collaborators(monkeypatch, source_status="executing")
+    telemetry: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ex,
+        "record_native_chat_request",
+        lambda stage, outcome: telemetry.append((stage, outcome)),
+    )
     service = _FakeService()
 
     with pytest.raises(HTTPException) as excinfo:
@@ -323,6 +336,7 @@ async def test_continue_rejects_non_terminal_source(monkeypatch) -> None:
     assert excinfo.value.status_code == 409
     assert excinfo.value.detail["code"] == "continuation_source_not_terminal"
     assert service.create_calls == []
+    assert telemetry == [("continuation", "stale_rejected")]
     await engine.dispose()
 
 
@@ -332,6 +346,12 @@ async def test_continue_rejects_unauthorized_evidence(monkeypatch) -> None:
     user = SimpleNamespace(id=uuid4())
     await _seed_canonical(sessions, owner_id=str(user.id))
     _patch_collaborators(monkeypatch)
+    telemetry: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ex,
+        "record_native_chat_request",
+        lambda stage, outcome: telemetry.append((stage, outcome)),
+    )
     service = _FakeService()
 
     with pytest.raises(HTTPException) as excinfo:
@@ -351,6 +371,7 @@ async def test_continue_rejects_unauthorized_evidence(monkeypatch) -> None:
     # Non-enumerating: the count is reported, never which refs.
     assert excinfo.value.detail["unauthorizedCount"] == 1
     assert service.create_calls == []
+    assert telemetry == [("continuation", "denied")]
     await engine.dispose()
 
 
