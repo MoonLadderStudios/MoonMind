@@ -29,6 +29,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
+from moonmind.security.egress import DEFAULT_EGRESS_PROFILE
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
     ManagedSessionReapResult,
@@ -68,6 +69,103 @@ class _LocalArtifactStorage:
 
     def resolve_storage_path(self, ref: str) -> Path:
         return self._root / ref
+
+
+def _remediation_controller(tmp_path: Path, runner):
+    return DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        command_runner=runner,
+    )
+
+
+@pytest.mark.asyncio
+async def test_remediation_restart_revalidates_restricted_egress_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def runner(command, *, input_text=None, env=None):
+        del input_text, env
+        calls.append(command)
+        assert command[:4] == ("docker", "inspect", "--format", "{{json .}}")
+        return 0, json.dumps(
+            {
+                "Config": {
+                    "Labels": {
+                        "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                        "moonmind.egress.profile_digest": DEFAULT_EGRESS_PROFILE.digest,
+                    }
+                },
+                "NetworkSettings": {
+                    "Networks": {DEFAULT_EGRESS_PROFILE.network_ref: {}}
+                },
+            }
+        ), ""
+
+    attestor = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.attest_docker_egress",
+        attestor,
+    )
+    controller = _remediation_controller(tmp_path, runner)
+
+    await controller._attest_restricted_egress_remediation_restart("helper-1")
+
+    assert calls == [
+        ("docker", "inspect", "--format", "{{json .}}", "helper-1")
+    ]
+    assert attestor.await_args.kwargs["profile"] == DEFAULT_EGRESS_PROFILE
+    assert (
+        attestor.await_args.kwargs["backend_ref"]
+        == "managed-session-remediation"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_ref", "profile_digest", "networks", "message"),
+    [
+        (
+            "restricted-default@999",
+            DEFAULT_EGRESS_PROFILE.digest,
+            {DEFAULT_EGRESS_PROFILE.network_ref: {}},
+            "stale or unsupported",
+        ),
+        (
+            DEFAULT_EGRESS_PROFILE.ref,
+            DEFAULT_EGRESS_PROFILE.digest,
+            {DEFAULT_EGRESS_PROFILE.network_ref: {}, "bridge": {}},
+            "unapproved network attachment",
+        ),
+    ],
+)
+async def test_remediation_restart_fails_before_mutation_for_untrusted_egress(
+    tmp_path: Path,
+    profile_ref: str,
+    profile_digest: str,
+    networks: dict[str, object],
+    message: str,
+) -> None:
+    async def runner(command, *, input_text=None, env=None):
+        del command, input_text, env
+        return 0, json.dumps(
+            {
+                "Config": {
+                    "Labels": {
+                        "moonmind.egress.profile": profile_ref,
+                        "moonmind.egress.profile_digest": profile_digest,
+                    }
+                },
+                "NetworkSettings": {"Networks": networks},
+            }
+        ), ""
+
+    controller = _remediation_controller(tmp_path, runner)
+
+    with pytest.raises(RuntimeError, match=message):
+        await controller._attest_restricted_egress_remediation_restart("helper-1")
 
 def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str, ...]:
     resolved_workspace = str(Path(workspace_path).resolve())

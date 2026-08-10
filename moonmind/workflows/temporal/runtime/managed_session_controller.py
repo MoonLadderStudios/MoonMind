@@ -50,6 +50,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from moonmind.security.egress import DEFAULT_EGRESS_PROFILE, attest_docker_egress
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
@@ -3651,6 +3652,9 @@ class DockerCodexManagedSessionController:
                 raise ValueError("containerRef is not a managed helper container")
             if before_state != "running":
                 raise ValueError("only an owned running helper container can restart")
+            await self._attest_restricted_egress_remediation_restart(
+                container.container_id
+            )
             await self._run((self._docker_binary, "restart", container.container_id))
             after_state = "running"
         elif action_kind == "workload.reap_orphan_container":
@@ -3676,6 +3680,63 @@ class DockerCodexManagedSessionController:
             "beforeEvidenceRefs": [before_ref],
             "afterEvidenceRefs": [after_ref],
         }
+
+    async def _attest_restricted_egress_remediation_restart(
+        self, container_ref: str
+    ) -> None:
+        """Revalidate immutable egress authority before restarting a helper."""
+
+        returncode, stdout, stderr = await self._command_runner(
+            (
+                self._docker_binary,
+                "inspect",
+                "--format",
+                "{{json .}}",
+                container_ref,
+            ),
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            detail = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+            raise RuntimeError(f"failed to inspect remediation helper: {detail}")
+        try:
+            inspected = json.loads(stdout)
+            labels = inspected["Config"]["Labels"] or {}
+            networks = inspected["NetworkSettings"]["Networks"] or {}
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "remediation helper inspection did not return trusted launch state"
+            ) from exc
+
+        profile_ref = str(labels.get("moonmind.egress.profile") or "").strip()
+        profile_digest = str(
+            labels.get("moonmind.egress.profile_digest") or ""
+        ).strip()
+        if not profile_ref and not profile_digest:
+            return
+        if (
+            profile_ref != DEFAULT_EGRESS_PROFILE.ref
+            or profile_digest != DEFAULT_EGRESS_PROFILE.digest
+        ):
+            raise RuntimeError(
+                "remediation helper restricted-egress profile is stale or unsupported"
+            )
+        if set(networks) != {DEFAULT_EGRESS_PROFILE.network_ref}:
+            raise RuntimeError(
+                "remediation helper has an unapproved network attachment"
+            )
+
+        async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:
+            code, out, err = await self._command_runner(
+                (self._docker_binary, *args), env=self._docker_env()
+            )
+            return code, out.encode(), err.encode()
+
+        await attest_docker_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            backend_ref="managed-session-remediation",
+        )
 
     @staticmethod
     def _is_managed_session_sidecar_volume_name(volume_name: str) -> bool:
