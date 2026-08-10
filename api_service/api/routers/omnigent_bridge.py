@@ -4079,20 +4079,38 @@ def _terminal_frame_operation(payload: str | bytes, is_binary: bool) -> str:
 
 
 def _trusted_native_workspace_root(row: Any) -> Path | None:
-    """Read an optional server-owned materialized workspace path from the binding."""
+    """Read a usable server-owned materialized workspace path from the binding."""
 
     metadata = dict(getattr(row, "metadata_", None) or {})
     value = metadata.get("workspacePath")
     if not isinstance(value, str) or not value.strip():
         return None
     path = Path(value)
-    return path if path.is_absolute() else None
+    if not path.is_absolute():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_dir() else None
+
+
+_NATIVE_WORKSPACE_PATH_OPERATIONS = frozenset(
+    {"workspace_file", "workspace_diff", "workspace_edit", "workspace_delete"}
+)
 
 
 def _validate_native_match_paths(match: Any, *, row: Any | None = None) -> None:
     """Validate every caller-controlled captured or wildcard path segment."""
 
     workspace_root = _trusted_native_workspace_root(row) if row is not None else None
+    if match.route.name in _NATIVE_WORKSPACE_PATH_OPERATIONS and workspace_root is None:
+        raise WorkflowChatFacadeError(
+            "The bound workspace path is unavailable for this resource operation.",
+            failure_class="system_error",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code=CODE_ENFORCEMENT_UNAVAILABLE,
+        )
     for name, value in match.params.items():
         if name in {"session_id", "runner_id"}:
             continue

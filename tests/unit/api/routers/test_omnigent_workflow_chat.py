@@ -993,8 +993,12 @@ def test_resource_index_delegated_to_bound_session() -> None:
     assert proxy.resources == [("changed_files", _PROVIDER_SESSION_ID, None)]
 
 
-def test_resource_file_returns_bytes() -> None:
-    client, proxy, _store = _build()
+def test_resource_file_returns_bytes(tmp_path: Path) -> None:
+    client, proxy, _store = _build(
+        store=_FakeStore(
+            row=_row(metadata_={**_row().metadata_, "workspacePath": str(tmp_path)})
+        )
+    )
 
     response = client.get(
         _path(
@@ -1009,8 +1013,12 @@ def test_resource_file_returns_bytes() -> None:
     assert proxy.resources == [("workspace_file", _PROVIDER_SESSION_ID, "src/main.py")]
 
 
-def test_workspace_diff_media_type() -> None:
-    client, proxy, _store = _build()
+def test_workspace_diff_media_type(tmp_path: Path) -> None:
+    client, proxy, _store = _build(
+        store=_FakeStore(
+            row=_row(metadata_={**_row().metadata_, "workspacePath": str(tmp_path)})
+        )
+    )
 
     response = client.get(
         _path(
@@ -1021,6 +1029,52 @@ def test_workspace_diff_media_type() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/x-diff")
+
+
+def test_resource_route_rejects_symlink_escape_before_upstream(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "outside").symlink_to(tmp_path)
+    metadata = {**_row().metadata_, "workspacePath": str(workspace)}
+    client, proxy, _store = _build(
+        store=_FakeStore(row=_row(metadata_=metadata))
+    )
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/outside/secret.txt"
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+    assert proxy.resources == []
+
+
+@pytest.mark.parametrize("workspace_path", [None, "relative/workspace"])
+def test_resource_route_fails_closed_without_absolute_workspace_root(
+    workspace_path: str | None,
+) -> None:
+    metadata = dict(_row().metadata_)
+    if workspace_path is not None:
+        metadata["workspacePath"] = workspace_path
+    client, proxy, _store = _build(
+        store=_FakeStore(row=_row(metadata_=metadata))
+    )
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/src/main.py"
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "omnigent_chat_enforcement_unavailable"
+    assert proxy.resources == []
 
 
 def test_list_agents_metadata() -> None:
