@@ -952,7 +952,13 @@ class ManagedRuntimeWorkspaceJanitor:
         for record in candidate.run_records:
             ids.update(
                 value
-                for value in (record.run_id, record.session_id, record.container_id)
+                for value in (
+                    record.run_id,
+                    record.workflow_id,
+                    record.owner_run_id,
+                    record.session_id,
+                    record.container_id,
+                )
                 if value
             )
             if record.workspace_path:
@@ -975,7 +981,6 @@ class ManagedRuntimeWorkspaceJanitor:
         return any(
             mount == path
             or mount.startswith(f"{path.rstrip('/')}/")
-            or path.startswith(f"{mount.rstrip('/')}/")
             for mount in docker_state.active_mount_paths
             for path in paths
         )

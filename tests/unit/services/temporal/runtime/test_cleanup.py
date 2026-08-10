@@ -480,7 +480,7 @@ def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
     assert workspace_decision.reason == "live Docker reference"
 
 
-def test_mm_949_parent_docker_mount_prevents_child_deletion(tmp_path: Path) -> None:
+def test_shared_runtime_root_mount_does_not_protect_every_child(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
     _touch_old(run_root)
@@ -492,6 +492,30 @@ def test_mm_949_parent_docker_mount_prevents_child_deletion(tmp_path: Path) -> N
         run_store,
         session_store,
         docker_state=DockerReferenceState(active_mount_paths=frozenset({str(root)})),
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "eligible"
+    assert workspace_decision.reason == "dry-run would delete"
+
+
+def test_matching_docker_owner_reference_protects_child_of_shared_mount(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    result = _janitor(
+        root,
+        run_store,
+        session_store,
+        docker_state=DockerReferenceState(
+            active_container_refs=frozenset({"mm:run-1"}),
+            active_mount_paths=frozenset({str(root)}),
+        ),
     ).run()
 
     workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
