@@ -26,6 +26,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
@@ -922,6 +923,9 @@ class CodexManagedSessionRuntime:
             "vendorThreadId": state.vendor_thread_id,
             **dict(metadata or {}),
         }
+        merged["turnRuntimeSelectionContract"] = (
+            CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+        )
         if state.last_assistant_text:
             merged.setdefault("lastAssistantText", state.last_assistant_text)
         if state.last_turn_id:

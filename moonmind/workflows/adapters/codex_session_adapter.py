@@ -33,6 +33,7 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionClearRequest,
@@ -1841,23 +1842,36 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         snapshot = refreshed_snapshot
                         replace_existing = self._replace_existing_on_resume_mismatch
                     else:
-                        await self._signal_control_action(
-                            action="resume_session",
-                            reason=None,
-                            container_id=handle.session_state.container_id,
-                            thread_id=handle.session_state.thread_id,
-                            active_turn_id=handle.session_state.active_turn_id,
-                        )
-                        return handle
+                        if self._requires_runtime_selection_cutover(
+                            request=request,
+                            handle=handle,
+                        ):
+                            snapshot = refreshed_snapshot
+                            replace_existing = True
+                        else:
+                            await self._signal_control_action(
+                                action="resume_session",
+                                reason=None,
+                                container_id=handle.session_state.container_id,
+                                thread_id=handle.session_state.thread_id,
+                                active_turn_id=handle.session_state.active_turn_id,
+                            )
+                            return handle
             else:
-                await self._signal_control_action(
-                    action="resume_session",
-                    reason=None,
-                    container_id=handle.session_state.container_id,
-                    thread_id=handle.session_state.thread_id,
-                    active_turn_id=handle.session_state.active_turn_id,
-                )
-                return handle
+                if self._requires_runtime_selection_cutover(
+                    request=request,
+                    handle=handle,
+                ):
+                    replace_existing = True
+                else:
+                    await self._signal_control_action(
+                        action="resume_session",
+                        reason=None,
+                        container_id=handle.session_state.container_id,
+                        thread_id=handle.session_state.thread_id,
+                        active_turn_id=handle.session_state.active_turn_id,
+                    )
+                    return handle
 
         active_binding = snapshot.binding
         if active_binding.session_epoch < binding.session_epoch:
@@ -1927,6 +1941,35 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    @staticmethod
+    def _requires_runtime_selection_cutover(
+        *,
+        request: AgentExecutionRequest,
+        handle: CodexManagedSessionHandle,
+    ) -> bool:
+        has_explicit_selection = any(
+            request.parameters.get(key) is not None for key in ("model", "effort")
+        )
+        if not has_explicit_selection:
+            return False
+        if (
+            handle.metadata.get("turnRuntimeSelectionContract")
+            == CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+        ):
+            return False
+        if handle.session_state.active_turn_id is not None:
+            raise RuntimeError(
+                "cannot replace an active managed Codex session that predates "
+                "the turn runtime-selection contract"
+            )
+        logger.warning(
+            "Replacing managed Codex session %s before applying explicit model or "
+            "effort because its runtime predates %s.",
+            handle.session_state.session_id,
+            CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
+        )
+        return True
 
     async def _prepare_launch_metadata_for_request(
         self,

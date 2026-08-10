@@ -2,7 +2,7 @@
 
 Status: Desired state  
 Owners: MoonMind Platform  
-Last updated: 2026-07-13
+Last updated: 2026-08-10
 Related:
 
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
@@ -151,6 +151,21 @@ sticky thread setting applies.
 The override is applied to the first turn even when MoonMind reuses an existing
 workflow-scoped session, and terminal-contract continuation turns retain the
 same resolved selection.
+
+A reusable session advertises the exact turn runtime-selection contract in its
+status metadata. When an explicit selection targets an idle session that does
+not advertise that contract, MoonMind replaces the pre-contract container
+before sending the turn. An active pre-contract session is rejected instead of
+being replaced while it owns an in-flight turn. Requests without an explicit
+selection omit the new fields and remain valid for already-running containers.
+Temporal continuation histories preserve their recorded payload shape through
+a workflow patch marker; new histories carry the exact selected strings on
+every continuation, including a continuation after a clear/reset boundary.
+
+The controller records the accepted model and effort and emits model-status
+evidence as soon as the runtime accepts the turn. Terminal polling may enrich
+that evidence, but it is not the authority boundary for whether the requested
+selection launched.
 
 ---
 

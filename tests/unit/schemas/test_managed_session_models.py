@@ -487,8 +487,18 @@ def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() 
 
     assert request.instructions == "Investigate the failing test"
     assert request.reason == "Operator follow-up"
-    assert request.model == "gpt-5.3-codex-spark"
-    assert request.effort == "xhigh"
+    assert request.model == "  gpt-5.3-codex-spark  "
+    assert request.effort == "  xhigh  "
+
+    with pytest.raises(ValidationError, match="must not be blank"):
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-123",
+            sessionEpoch=1,
+            containerId="ctr-123",
+            threadId="thread-1",
+            instructions="Continue",
+            model="   ",
+        )
 
 def test_send_codex_managed_session_turn_request_defaults_environment_for_old_payloads() -> None:
     request = SendCodexManagedSessionTurnRequest.model_validate(
