@@ -2,7 +2,7 @@
 
 - **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-04
+- **Last updated:** 2026-08-10
 - **Document class:** Canonical declarative design
 
 **Related:**
@@ -603,9 +603,23 @@ orphan reconciliation.
 ### 11.7 Image lifetime
 
 Images survive job, session, and workflow completion. Deployment-level retention
-may evict unused images under disk pressure while protecting images used by
-active containers and operator-pinned digests. Job cleanup never performs global
-image pruning.
+evicts unused images and build cache under disk pressure while protecting images
+used by containers. Job cleanup never performs global image pruning.
+
+The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow asks
+the trusted agent-runtime worker to inspect the filesystem that contains
+`/work/agent_jobs`. Below the default 80% high watermark it performs no Docker
+mutation. At or above that watermark it removes unused images older than seven
+days and build cache older than one day. If the filesystem remains at or above
+the default 90% critical watermark, it removes all remaining unused images and
+build cache. Docker volumes and containers are never targets of this automatic
+pressure pass, and failures are surfaced as degraded maintenance for retry on
+the next hourly run.
+
+Operators can disable the pressure pass or tune its two watermarks and minimum
+ages with the documented `MOONMIND_DOCKER_STORAGE_*` settings. The high
+watermark must be lower than the critical watermark; invalid values fail before
+any prune command runs.
 
 The operator recovery path is `tools/cleanup-docker-space.sh`. It must remain
 usable when the Docker data root has no free space: inspection must not launch a
@@ -634,6 +648,19 @@ Structured jobs apply:
 
 Callers may request resources only within deployment ceilings. They may not
 weaken security defaults.
+
+The trusted Docker launch boundary also enforces an aggregate active-memory
+budget across running MoonMind container jobs. Starts are serialized under a
+backend-scoped OS advisory lock so concurrent workflows cannot both admit
+against the same capacity snapshot. The operating system releases the lock if a
+worker exits, so admission never depends on stale-lease reclamation. By default,
+jobs may consume at most 70 percent of the Docker daemon's reported memory; the
+remaining capacity is reserved for the MoonMind control plane and Docker itself.
+Operators may set
+`MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` to a lower explicit ceiling.
+When admitting a job would exceed the budget, the job fails before start with
+`resource_limit_exceeded` and actionable retry guidance; an unbounded or
+unobservable active workload fails closed.
 
 Local image builds use separate deployment policy. Their Dockerfile, context,
 target, arguments, network access, timeout, output limit, and validation command

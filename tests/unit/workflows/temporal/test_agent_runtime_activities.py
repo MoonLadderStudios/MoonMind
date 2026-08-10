@@ -6081,6 +6081,63 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
     assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"
     assert result["metrics"] == {"resource.workspace_root.eligible": 1}
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_reclaims_docker_storage_through_controller_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_configs: list[Any] = []
+
+    class _Result:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "enabled": True,
+                "pressureDetected": True,
+                "reclaimedBytes": 42,
+                "errors": [],
+            }
+
+    class _Controller:
+        async def reclaim_docker_storage_pressure(self, *, config: Any) -> _Result:
+            observed_configs.append(config)
+            return _Result()
+
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reclaim_docker_storage({})
+
+    assert len(observed_configs) == 1
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.reclaim_docker_storage"}
+    ]
+    assert result["reclaimedBytes"] == 42
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="does not accept overrides",
+    ):
+        await activities.agent_runtime_reclaim_docker_storage(
+            {"criticalWatermarkPercent": 1}
+        )
+
+
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

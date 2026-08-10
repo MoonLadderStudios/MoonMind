@@ -1,8 +1,9 @@
 # Workflow Artifact System Design
 
+**Document Class:** Canonical declarative
 Status: Draft 
 Owners: MoonMind Platform 
-Last updated: 2026-04-04
+Last updated: 2026-08-10
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
@@ -655,7 +656,12 @@ A lifecycle manager periodically:
 3. updates metadata state
 4. preserves tombstones where audit/history policy requires them
 
-This periodic work may be triggered by a Temporal Schedule that starts a cleanup workflow.
+The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow invokes
+`artifact.lifecycle_sweep` after its workspace pass. The artifact Activity remains
+the authority for expiry, pin protection, soft deletion, hard deletion, storage
+mutation, and durable metadata. A lifecycle failure marks that maintenance run
+degraded and is retried by the next schedule rather than overwriting successful
+workspace cleanup evidence.
 
 Deletion must be idempotent.
 

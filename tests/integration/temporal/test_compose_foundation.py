@@ -237,9 +237,18 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
 
     api_service = services["api"]
     assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+    assert api_service["restart"] == "unless-stopped"
 
     healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])
     assert "http://localhost:8000/healthz" in healthcheck
+
+    agent_runtime_environment = services["temporal-worker-agent-runtime"][
+        "environment"
+    ]
+    assert any(
+        item.startswith("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=")
+        for item in agent_runtime_environment
+    )
 
     api_env = _env_map(api_service["environment"])
     assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
@@ -312,6 +321,18 @@ def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
 
     assert {key: api_env[key] for key in expected} == expected
     assert {key: worker_env[key] for key in expected} == expected
+
+    docker_storage_expected = {
+        "MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED": "${MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED:-true}",
+        "MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT:-80}",
+        "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}",
+        "MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}",
+        "MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}",
+    }
+    assert {
+        key: worker_env[key] for key in docker_storage_expected
+    } == docker_storage_expected
+
 
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()

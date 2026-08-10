@@ -1,8 +1,9 @@
 # Managed Runtime Cleanup Model
 
+- **Document Class:** Canonical declarative
 - **Status:** Canonical desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-04
+- **Last updated:** 2026-08-10
 - **Audience:** Contributors, operators, runtime authors, and infrastructure maintainers
 - **Purpose:** Declarative cleanup design for managed-runtime resources, including managed-session orphan reaping and automatic retained workspace/artifact cleanup.
 
@@ -416,6 +417,15 @@ Default schedule:
 - enabled whenever `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED` is true;
 - destructive after retention unless dry-run is explicitly enabled.
 
+The same operational workflow coordinates adjacent storage owners after the
+workspace pass: pressure-triggered Docker image/build-cache maintenance runs at
+the trusted agent-runtime boundary, and the artifact service's lifecycle
+Activity expires and hard-deletes blobs under its own
+retention policy. These operations do not move their classification or deletion
+semantics into the workspace janitor. Failure in either adjacent owner is
+reported as degraded maintenance and retried by the next hourly run; it does not
+erase a successful workspace result.
+
 This should be separate from `MoonMind.ManagedSessionReconcile` so broad filesystem deletion cannot slow or destabilize live session leak cleanup.
 
 ### 8.2 Required store APIs
@@ -531,7 +541,11 @@ Before deleting a workspace or artifact root, the janitor must verify all of the
 5. All referencing run records are terminal.
 6. All referencing session records are terminal.
 7. No referencing record has `activeTurnId`.
-8. No live Docker container or active volume mount references the session/workspace.
+8. No live Docker container identity or candidate-scoped active mount references
+   the session/workspace. A shared infrastructure mount of the ancestor runtime
+   root (for example `agent_workspaces:/work/agent_jobs`) is not per-candidate
+   liveness evidence; active MoonMind owner/correlation labels provide that
+   evidence.
 9. The newest relevant timestamp is older than both retention and grace windows.
 10. The candidate is still eligible after a second just-before-delete scan.
 11. The per-pass path and byte budgets allow deletion.
@@ -658,7 +672,9 @@ The implementation should include tests for:
 8c. filesystem progress reporting cannot exhaust the activity heartbeat queue;
 9. paths outside `/work/agent_jobs` are skipped;
 10. symlink candidates are skipped;
-11. live Docker references protect otherwise eligible roots;
+11. precise live Docker owner references and candidate-scoped mounts protect
+    otherwise eligible roots, while a shared ancestor mount does not protect
+    every retained child;
 12. second scan prevents deletion if a new active owner appears;
 13. delete path and byte budgets stop a pass cleanly;
 14. artifact directories are retained longer than workspace roots;

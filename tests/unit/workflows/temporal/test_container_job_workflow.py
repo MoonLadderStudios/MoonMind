@@ -13,9 +13,12 @@ from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
+    ContainerJobBackendError,
+    ContainerJobFailureClass,
     ContainerJobWorkflowInput,
     ImageObservation,
     container_job_workflow_id,
+    failure_class_from_exception,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
@@ -158,14 +161,6 @@ async def test_typed_activity_boundary_delegates_to_backend() -> None:
 
 @pytest.mark.asyncio
 async def test_backend_denial_becomes_nonretryable_application_error() -> None:
-    from temporalio.exceptions import ApplicationError
-
-    from moonmind.schemas.container_job_models import (
-        ContainerJobBackendError,
-        ContainerJobFailureClass,
-        failure_class_from_exception,
-    )
-
     async def deny(request):
         raise ContainerJobBackendError(
             ContainerJobFailureClass.IMAGE_USE_DENIED, "not authorized"
@@ -190,6 +185,34 @@ async def test_backend_denial_becomes_nonretryable_application_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resource_capacity_failure_crosses_activity_boundary() -> None:
+    async def deny(request):
+        raise ContainerJobBackendError(
+            ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+            "retry after another container job finishes",
+        )
+
+    backend = type("Backend", (), {"start_container": staticmethod(deny)})()
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    inp = _input()
+    payload = {
+        "jobId": JOB_ID,
+        "ownershipToken": inp.ownership_token,
+        "request": inp.request.model_dump(mode="json", by_alias=True),
+    }
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities.container_job_start_container(payload)
+
+    assert not excinfo.value.non_retryable
+    assert excinfo.value.type == "resource_limit_exceeded"
+    assert (
+        failure_class_from_exception(excinfo.value)
+        == ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+
+
+@pytest.mark.asyncio
 async def test_production_backend_makes_every_registered_activity_callable(
     tmp_path,
 ) -> None:
@@ -202,6 +225,10 @@ async def test_production_backend_makes_every_registered_activity_callable(
         commands.append(args)
         if args[:2] == ("image", "inspect"):
             return 0, b"sha256:" + b"a" * 64, b""
+        if args[0] == "info":
+            return 0, str(10 * 1024**3).encode(), b""
+        if args[0] == "ps":
+            return 0, b"", b""
         if args[:2] == ("inspect", "--format"):
             if args[2] == "{{json .Config.Labels}}":
                 return 1, b"", b"missing"
@@ -542,6 +569,27 @@ async def test_image_acquisition_failure_maps_to_granular_failure_class(
     result = await job.run(_input().model_dump(mode="json", by_alias=True))
     assert result["state"] == "failed"
     assert result["terminal"]["failureClass"] == "image_not_found"
+
+
+@pytest.mark.asyncio
+async def test_start_capacity_failure_maps_to_granular_failure_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+
+    async def activity(name, request):
+        if name == "container_job.start_container":
+            raise ApplicationError(
+                "active memory budget exhausted",
+                type="resource_limit_exceeded",
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == "resource_limit_exceeded"
 
 
 @pytest.mark.asyncio

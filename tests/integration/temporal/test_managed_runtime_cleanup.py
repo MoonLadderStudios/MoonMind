@@ -45,7 +45,12 @@ async def test_default_cleanup_deletes_terminal_workspace_and_preserves_active(
 
     class _Controller:
         async def collect_managed_runtime_cleanup_docker_references(self):
-            return {"activeContainerRefs": [], "activeMountPaths": []}
+            # Every Compose runtime container mounts the shared volume root. That
+            # infrastructure mount is not evidence that each retained child is live.
+            return {
+                "activeContainerRefs": [],
+                "activeMountPaths": [str(runtime_root)],
+            }
 
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
     monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", raising=False)

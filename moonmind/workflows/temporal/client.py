@@ -699,7 +699,7 @@ class TemporalClientAdapter:
         timezone: str = "UTC",
         enabled: bool = True,
     ) -> str:
-        """Create or replace the retained managed-runtime cleanup Schedule."""
+        """Create or replace the recurring deployment-storage Schedule."""
 
         from temporalio.client import (
             Schedule,
@@ -728,9 +728,9 @@ class TemporalClientAdapter:
                             "mm_state": ["scheduled"],
                         }
                     ),
-                    static_summary="Managed runtime workspace cleanup",
+                    static_summary="Deployment storage maintenance",
                     static_details=(
-                        "Recurring bounded retained-state cleanup for managed runtime files"
+                        "Recurring bounded workspace, artifact, and Docker storage maintenance"
                     ),
                 ),
                 spec=build_schedule_spec(
@@ -744,7 +744,7 @@ class TemporalClientAdapter:
                 ),
                 state=build_schedule_state(
                     enabled=schedule_enabled,
-                    note="Managed runtime retained-state workspace cleanup",
+                    note="Deployment storage maintenance",
                 ),
             )
 
