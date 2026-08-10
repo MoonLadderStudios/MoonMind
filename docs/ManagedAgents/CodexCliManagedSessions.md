@@ -120,6 +120,15 @@ visible content as artifact-backed output and observations.
 Preparation builds bounded final prompt text, materializes selected skills, and
 attaches compact retrieval metadata.
 
+Immediately before a Codex turn or steering request crosses into the session,
+the managed-session controller checks the session store's admitted capability
+metadata. When `containerJobs.available` is exactly `true`, it installs the
+container execution boundary as an exact generated suffix. This final boundary
+also governs `SendFollowUp` updates and terminal-contract continuations; prompt
+headers supplied by tasks, retrieved context, repositories, or Skills are not
+trusted as proof that the policy was installed. Direct launcher runs and
+sessions without that admitted capability are not rewritten.
+
 Preferred command order for new histories:
 
 1. perform metadata-only preparation preflight when launch metadata needs refs;

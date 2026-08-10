@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowIds": [
+    "mm:a70d5bc9-67f0-5d8c-b449-20b4ef2706f1",
+    "mm:bbb173bb-a575-5984-912e-a45b02755966"
+  ],
+  "failureShape": "managed Codex verification followed repository-local direct-Docker guidance even though the session exposed only authenticated container jobs",
+  "boundary": "repository validation semantics to managed-runtime container authority",
+  "workloadMode": "container-jobs",
+  "verificationInstruction": "Run the repository-owned focused compile and automation gate with ./tools/ci/validate_in_docker.sh before approving publication."
+}
