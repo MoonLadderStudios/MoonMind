@@ -167,6 +167,61 @@ async def test_remediation_restart_fails_before_mutation_for_untrusted_egress(
     with pytest.raises(RuntimeError, match=message):
         await controller._attest_restricted_egress_remediation_restart("helper-1")
 
+
+@pytest.mark.asyncio
+async def test_remediation_restart_owner_fails_closed_before_mutation_without_egress_authority(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def runner(command, *, input_text=None, env=None):
+        del input_text, env
+        calls.append(command)
+        if command[1] == "ps":
+            return 0, "helper-1\n", ""
+        if command[1] == "inspect" and "{{printf" in command[3]:
+            return (
+                0,
+                "helper-1|session-1|session-docker-sidecar|"
+                "2026-04-23 00:00:00 +0000 UTC\n",
+                "",
+            )
+        if command[1] == "inspect" and command[3] == "{{json .}}":
+            return (
+                0,
+                json.dumps(
+                    {
+                        "Config": {"Labels": {}},
+                        "NetworkSettings": {"Networks": {"bridge": {}}},
+                    }
+                ),
+                "",
+            )
+        raise AssertionError(f"mutation reached before accepted attestation: {command}")
+
+    store = Mock()
+    store.load.return_value = Mock(
+        workflow_id="target-workflow", agent_run_id=None, status="ready"
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        command_runner=runner,
+        session_store=store,
+    )
+
+    with pytest.raises(RuntimeError, match="missing restricted-egress authority"):
+        await controller.run_container_remediation_action(
+            action_kind="workload.restart_helper_container",
+            container_ref="helper-1",
+            expected_state="running",
+            request_id="request-1",
+            target_workflow_id="target-workflow",
+        )
+
+    assert all(command[1] != "restart" for command in calls)
+
 def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str, ...]:
     resolved_workspace = str(Path(workspace_path).resolve())
     return (

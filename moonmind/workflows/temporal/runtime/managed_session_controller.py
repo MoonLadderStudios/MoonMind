@@ -3713,7 +3713,9 @@ class DockerCodexManagedSessionController:
             labels.get("moonmind.egress.profile_digest") or ""
         ).strip()
         if not profile_ref and not profile_digest:
-            return
+            raise RuntimeError(
+                "remediation helper is missing restricted-egress authority"
+            )
         if (
             profile_ref != DEFAULT_EGRESS_PROFILE.ref
             or profile_digest != DEFAULT_EGRESS_PROFILE.digest
