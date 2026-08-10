@@ -32,6 +32,7 @@ def write_fake_app_server(
     skill_outcome_payload: dict | str | None = None,
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
+    turn_start_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
     thread_recovery_error_message: str | None = None,
     thread_read_error_message: str | None = None,
@@ -64,6 +65,7 @@ import os
 import sys
 
 INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
+TURN_START_RECORD_PATH = __TURN_START_RECORD_PATH__
 STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
@@ -223,6 +225,9 @@ for line in sys.stdin:
         assert isinstance(input_items, list)
         assert input_items[0]["type"] == "text"
         assert input_items[0]["text"] == "Reply with exactly the word OK"
+        if TURN_START_RECORD_PATH:
+            with open(TURN_START_RECORD_PATH, "w", encoding="utf-8") as handle:
+                json.dump(message["params"], handle)
         turn_completed = COMPLETE_TURN_ON_READ and not COMPLETION_NOTIFICATION_METHOD
         sys.stdout.write(json.dumps({
             "id": msg_id,
@@ -368,6 +373,10 @@ __COMPLETION_BLOCK__
         script_template.replace(
             "__INTERRUPT_RECORD_PATH__",
             repr(str(interrupt_record_path) if interrupt_record_path is not None else ""),
+        )
+        .replace(
+            "__TURN_START_RECORD_PATH__",
+            repr(str(turn_start_record_path) if turn_start_record_path is not None else ""),
         )
         .replace(
             "__STEER_RECORD_PATH__",

@@ -21,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
+    CODEX_TURN_RUNTIME_SELECTION_CONTRACT,
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
@@ -298,6 +299,8 @@ def _session_handle(
     container_id: str,
     thread_id: str,
     status: str = "ready",
+    supports_turn_runtime_selection: bool = True,
+    active_turn_id: str | None = None,
 ) -> CodexManagedSessionHandle:
     return CodexManagedSessionHandle(
         sessionState={
@@ -305,11 +308,20 @@ def _session_handle(
             "sessionEpoch": session_epoch,
             "containerId": container_id,
             "threadId": thread_id,
-            "activeTurnId": None,
+            "activeTurnId": active_turn_id,
         },
         status=status,
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         controlUrl=f"docker-exec://{container_id}",
+        metadata=(
+            {
+                "turnRuntimeSelectionContract": (
+                    CODEX_TURN_RUNTIME_SELECTION_CONTRACT
+                )
+            }
+            if supports_turn_runtime_selection
+            else {}
+        ),
     )
 
 def _turn_response(
@@ -3898,6 +3910,8 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
     request.parameters["_moonmindActiveSkillsDir"] = (
         "/work/runtime/skills_active/snapshot-retry"
     )
+    request.parameters["model"] = "gpt-5.3-codex-spark"
+    request.parameters["effort"] = "xhigh"
 
     handle = await adapter.start(request)
 
@@ -3911,6 +3925,8 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             "wf-user-1:run-user-1:queue-github-issues:execution:2"
         ),
     }
+    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].effort == "xhigh"
     assert request.parameters["_moonmindActiveSkillsDir"] == (
         "/work/runtime/skills_active/snapshot-retry"
     )
@@ -3919,6 +3935,136 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
         "containerId": "container-existing",
         "threadId": "thread-existing",
     }
+
+
+async def test_start_replaces_reused_session_without_runtime_selection_contract(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    launch_calls: list[dict[str, Any]] = []
+    send_turn_calls: list[SendCodexManagedSessionTurnRequest] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(
+            binding=binding,
+            container_id="container-pre-contract",
+            thread_id="thread-pre-contract",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-pre-contract",
+            thread_id="thread-pre-contract",
+            supports_turn_runtime_selection=False,
+        )
+
+    async def _launch_session(request: dict[str, Any]) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-current",
+            thread_id=f"thread:{binding.session_id}:1",
+        )
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _fetch_summary(
+        request: FetchCodexManagedSessionSummaryRequest,
+    ) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _publish_artifacts(
+        request: PublishCodexManagedSessionArtifactsRequest,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    request = _request(binding)
+    request.parameters.update(
+        {"model": "gpt-5.3-codex-spark", "effort": "xhigh"}
+    )
+
+    handle = await adapter.start(request)
+
+    assert handle.status == "completed"
+    assert len(launch_calls) == 1
+    assert launch_calls[0]["request"]["replaceExisting"] is True
+    assert send_turn_calls[0].container_id == "container-current"
+    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].effort == "xhigh"
+
+
+async def test_start_rejects_active_session_without_runtime_selection_contract(
+) -> None:
+    binding = _binding()
+    request = _request(binding)
+    request.parameters.update(
+        {"model": "gpt-5.3-codex-spark", "effort": "xhigh"}
+    )
+    handle = _session_handle(
+        session_id=binding.session_id,
+        session_epoch=binding.session_epoch,
+        container_id="container-pre-contract",
+        thread_id="thread-pre-contract",
+        status="busy",
+        supports_turn_runtime_selection=False,
+        active_turn_id="turn-active",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cannot replace an active managed Codex session",
+    ):
+        CodexSessionAdapter._requires_runtime_selection_cutover(
+            request=request,
+            handle=handle,
+        )
 
 
 async def test_start_retries_existing_session_status_after_locator_mismatch(

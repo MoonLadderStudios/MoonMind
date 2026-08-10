@@ -89,6 +89,9 @@ TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID = (
 TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
     "agent-run-terminal-contract-runtime-failure-authority-v1"
 )
+CODEX_TURN_RUNTIME_SELECTION_PATCH_ID = (
+    "agent-run-codex-turn-runtime-selection-v1"
+)
 PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuation-v1"
 PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
     "agent-run-pr-resolver-continuation-observability-v1"
@@ -2320,6 +2323,15 @@ class MoonMindAgentRun:
                 )
                 container_id = snapshot.get("containerId")
                 thread_id = snapshot.get("threadId")
+            runtime_selection_patch_enabled = workflow.patched(
+                CODEX_TURN_RUNTIME_SELECTION_PATCH_ID
+            )
+            runtime_selection: dict[str, Any] = {}
+            if runtime_selection_patch_enabled:
+                runtime_selection = {
+                    "model": request.parameters.get("model"),
+                    "effort": request.parameters.get("effort"),
+                }
             turn_request = SendCodexManagedSessionTurnRequest(
                 sessionId=session_id,
                 sessionEpoch=session_epoch,
@@ -2340,14 +2352,25 @@ class MoonMindAgentRun:
                         else None
                     ),
                 ),
+                **runtime_selection,
             )
+            turn_activity_payload: object = turn_request
+            if not runtime_selection_patch_enabled:
+                # Preserve the byte-level payload shape already recorded by
+                # pre-selection histories. The Pydantic converter includes
+                # optional defaults unless they are explicitly excluded.
+                turn_activity_payload = turn_request.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude={"model", "effort"},
+                )
             history.append(
                 {"continuation": continuation, "reason": "missing_terminal_evidence", "outcome": "requested"}
             )
             try:
                 await self._execute_routed_activity(
                     "agent_runtime.send_turn",
-                    turn_request,
+                    turn_activity_payload,
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
             except Exception:
