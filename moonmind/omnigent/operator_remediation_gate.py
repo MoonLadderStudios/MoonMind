@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import unquote, urlparse
 
 MATRIX_VERSION = "moonmind.operator-remediation-matrix/v1"
@@ -20,6 +20,8 @@ EVIDENCE_SCHEMA_VERSION = "moonmind.operator-remediation-evidence/v1"
 COMBINED_SCHEMA_VERSION = "moonmind.operator-remediation-release/v1"
 MAX_EVIDENCE_AGE_SECONDS = 7 * 24 * 60 * 60
 MAX_REFERENCED_EVIDENCE_BYTES = 10 * 1024 * 1024
+OBSERVATION_SCHEMA_VERSION = "moonmind.operator-remediation-observation/v1"
+EvidenceResolver = Callable[[str], bytes]
 
 REQUIRED_EVIDENCE_FIELDS = (
     "authoredRequest", "immutableInput", "identities", "contextEvidence",
@@ -109,18 +111,26 @@ def catalog_document() -> dict[str, Any]:
          "gates": r.gate} for r in REQUIRED_ROW_CATALOG]}
 
 
-def _resolve_file_ref(ref: Any) -> bytes:
+def _resolve_evidence_ref(ref: Any, *, resolve_ref: EvidenceResolver | None = None) -> bytes:
     if not isinstance(ref, Mapping) or set(ref) < {"ref", "sha256", "contentType"}:
         raise RemediationGateError("evidence refs require ref, sha256, and contentType")
-    if ref["contentType"] not in {"application/json", "text/plain", "image/png"}:
-        raise RemediationGateError("unsupported evidence content type")
-    parsed = urlparse(str(ref["ref"]))
-    if parsed.scheme != "file":
-        raise RemediationGateError("only independently resolvable file evidence is supported")
+    if ref["contentType"] != "application/json":
+        raise RemediationGateError("typed remediation evidence must be application/json")
+    ref_value = str(ref["ref"])
+    parsed = urlparse(ref_value)
     try:
-        content = Path(unquote(parsed.path)).read_bytes()
-    except OSError as exc:
+        if resolve_ref is not None:
+            content = resolve_ref(ref_value)
+        elif parsed.scheme == "file":
+            content = Path(unquote(parsed.path)).read_bytes()
+        else:
+            raise RemediationGateError(
+                "durable evidence requires a server-owned artifact resolver"
+            )
+    except (OSError, KeyError) as exc:
         raise RemediationGateError("evidence ref did not resolve") from exc
+    if not isinstance(content, bytes):
+        raise RemediationGateError("evidence resolver must return bytes")
     if not content or len(content) > MAX_REFERENCED_EVIDENCE_BYTES:
         raise RemediationGateError("evidence ref is empty or unbounded")
     if hashlib.sha256(content).hexdigest() != ref["sha256"]:
@@ -128,7 +138,29 @@ def _resolve_file_ref(ref: Any) -> bytes:
     return content
 
 
-def validate_row_artifact(payload: Any, *, now: datetime | None = None) -> str:
+def _validate_observation_content(content: bytes, *, row_id: str, evidence_class: str) -> None:
+    try:
+        observation = json.loads(content)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RemediationGateError("evidence content is not valid JSON") from exc
+    if not isinstance(observation, Mapping):
+        raise RemediationGateError("evidence content must be an object")
+    if (
+        observation.get("schemaVersion") != OBSERVATION_SCHEMA_VERSION
+        or observation.get("rowId") != row_id
+        or observation.get("evidenceClass") != evidence_class
+    ):
+        raise RemediationGateError("evidence schema or lineage mismatch")
+    if observation.get("observed") is not True:
+        raise RemediationGateError("evidence does not contain an authoritative observation")
+
+
+def validate_row_artifact(
+    payload: Any,
+    *,
+    now: datetime | None = None,
+    resolve_ref: EvidenceResolver | None = None,
+) -> str:
     if not isinstance(payload, Mapping) or payload.get("schemaVersion") != EVIDENCE_SCHEMA_VERSION:
         raise RemediationGateError("unsupported remediation evidence schema")
     row_id = payload.get("rowId")
@@ -174,21 +206,33 @@ def validate_row_artifact(payload: Any, *, now: datetime | None = None) -> str:
     for field in REQUIRED_EVIDENCE_FIELDS:
         if field in {"timings", "thresholds", "secretScan", "architecture"}:
             continue
-        _resolve_file_ref(payload[field])
+        content = _resolve_evidence_ref(payload[field], resolve_ref=resolve_ref)
+        _validate_observation_content(content, row_id=row_id, evidence_class=field)
     return row_id
 
 
-def build_combined_matrix(*, artifact_paths: Iterable[Path], release_inputs: Mapping[str, Any], now: datetime | None = None) -> dict[str, Any]:
+def build_combined_matrix(
+    *,
+    artifact_paths: Iterable[Path | Mapping[str, Any]],
+    release_inputs: Mapping[str, Any],
+    now: datetime | None = None,
+    resolve_ref: EvidenceResolver | None = None,
+) -> dict[str, Any]:
     """Generate release status solely from complete, validated observed rows."""
     rows: dict[str, dict[str, str]] = {}
     for supplied in artifact_paths:
-        path = supplied.resolve()
-        content = path.read_bytes()
+        if isinstance(supplied, Mapping):
+            content = _resolve_evidence_ref(supplied, resolve_ref=resolve_ref)
+            source_ref = str(supplied["ref"])
+        else:
+            path = supplied.resolve()
+            content = path.read_bytes()
+            source_ref = path.as_uri()
         payload = json.loads(content)
-        row_id = validate_row_artifact(payload, now=now)
+        row_id = validate_row_artifact(payload, now=now, resolve_ref=resolve_ref)
         if row_id in rows:
             raise RemediationGateError(f"duplicate observed row: {row_id}")
-        rows[row_id] = {"ref": path.as_uri(), "sha256": hashlib.sha256(content).hexdigest()}
+        rows[row_id] = {"ref": source_ref, "sha256": hashlib.sha256(content).hexdigest()}
     missing = sorted(set(ROW_CATALOG) - set(rows))
     if missing:
         raise RemediationGateError(f"incomplete remediation matrix; missingRows={missing}")
@@ -200,10 +244,21 @@ def build_combined_matrix(*, artifact_paths: Iterable[Path], release_inputs: Map
             "rows": rows, "generatedAt": (now or datetime.now(timezone.utc)).isoformat()}
 
 
-def release_status(*, artifact_paths: Iterable[Path], release_inputs: Mapping[str, Any], now: datetime | None = None) -> dict[str, Any]:
+def release_status(
+    *,
+    artifact_paths: Iterable[Path | Mapping[str, Any]],
+    release_inputs: Mapping[str, Any],
+    now: datetime | None = None,
+    resolve_ref: EvidenceResolver | None = None,
+) -> dict[str, Any]:
     """Return an operator projection; malformed/incomplete evidence fails closed."""
     try:
-        return build_combined_matrix(artifact_paths=artifact_paths, release_inputs=release_inputs, now=now)
+        return build_combined_matrix(
+            artifact_paths=artifact_paths,
+            release_inputs=release_inputs,
+            now=now,
+            resolve_ref=resolve_ref,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError, RemediationGateError) as exc:
         return {"schemaVersion": COMBINED_SCHEMA_VERSION, "matrixVersion": MATRIX_VERSION,
                 "issue": "MoonLadderStudios/MoonMind#3626", "status": "blocked",

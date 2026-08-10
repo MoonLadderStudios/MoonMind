@@ -13,9 +13,10 @@ from moonmind.omnigent.operator_remediation_gate import (
 NOW = datetime(2026, 8, 10, tzinfo=timezone.utc)
 
 
-def _ref(tmp_path, name):
+def _ref(tmp_path, name, *, row_id, evidence_class):
     path = tmp_path / name
-    path.write_text("observed evidence")
+    path.write_text(json.dumps({"schemaVersion": "moonmind.operator-remediation-observation/v1",
+        "rowId": row_id, "evidenceClass": evidence_class, "observed": True}))
     return {"ref": path.resolve().as_uri(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "contentType": "application/json"}
 
@@ -33,7 +34,8 @@ def _artifact(tmp_path, row):
         "secretScan": {"status": "passed", "prohibitedAuthorityFound": False}}
     for field in REQUIRED_EVIDENCE_FIELDS:
         if field not in payload:
-            payload[field] = _ref(tmp_path, f"{row.row_id}-{field}.json")
+            payload[field] = _ref(tmp_path, f"{row.row_id}-{field}.json",
+                                  row_id=row.row_id, evidence_class=field)
     return payload
 
 
@@ -84,4 +86,29 @@ def test_stale_or_over_threshold_artifact_fails_closed(tmp_path):
     payload = _artifact(tmp_path, row)
     payload["timings"]["durationSeconds"] = row.max_duration_seconds + 1
     with pytest.raises(RemediationGateError, match="duration"):
+        validate_row_artifact(payload, now=NOW)
+
+
+def test_artifact_refs_are_resolved_by_server_owned_resolver(tmp_path):
+    row = REQUIRED_ROW_CATALOG[0]
+    payload = _artifact(tmp_path, row)
+    bodies = {}
+    for field in REQUIRED_EVIDENCE_FIELDS:
+        if field in {"timings", "thresholds", "secretScan", "architecture"}:
+            continue
+        body = json.dumps({"schemaVersion": "moonmind.operator-remediation-observation/v1",
+            "rowId": row.row_id, "evidenceClass": field, "observed": True}).encode()
+        ref = f"artifact://release/{row.row_id}/{field}"
+        bodies[ref] = body
+        payload[field] = {"ref": ref, "sha256": hashlib.sha256(body).hexdigest(),
+                          "contentType": "application/json"}
+    assert validate_row_artifact(payload, now=NOW, resolve_ref=bodies.__getitem__) == row.row_id
+
+
+def test_semantically_unbound_evidence_is_rejected(tmp_path):
+    row = REQUIRED_ROW_CATALOG[0]
+    payload = _artifact(tmp_path, row)
+    payload["verificationEvidence"] = _ref(
+        tmp_path, "wrong.json", row_id="another-row", evidence_class="verificationEvidence")
+    with pytest.raises(RemediationGateError, match="lineage"):
         validate_row_artifact(payload, now=NOW)
