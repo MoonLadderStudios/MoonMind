@@ -34,6 +34,7 @@ Design decisions:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum
 
 # The temporary environment flag that selects the rollout posture. Documented as
@@ -65,6 +66,7 @@ REASON_CANARY_AWAITING_EVIDENCE = "canary_awaiting_acceptance_evidence"
 REASON_ROLLED_BACK_READ_ONLY = "rolled_back_read_only"
 REASON_DISABLED = "native_chat_disabled"
 REASON_UNKNOWN_MODE_FAILED_CLOSED = "unknown_rollout_mode_failed_closed"
+REASON_FLAG_RETIRED = "temporary_rollout_flag_retired"
 
 
 def parse_rollout_mode(value: str | None) -> NativeChatRolloutMode:
@@ -172,6 +174,68 @@ def resolve_native_chat_rollout(
     )
 
 
+def rollout_flag_is_retired(
+    *,
+    acceptance_recorded: bool,
+    retire_after: datetime | str | None,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether the temporary rollout control has completed its lifetime.
+
+    ``retire_after`` is the end of the operator-approved fallback window.  The
+    transition is deliberately fail closed: an absent/invalid/naive timestamp,
+    missing current acceptance evidence, or a future deadline keeps the canary
+    control active.  Once both gates pass the configured rollout flag no longer
+    influences serving, which makes retirement executable instead of metadata.
+    """
+
+    if not acceptance_recorded or retire_after is None:
+        return False
+    if isinstance(retire_after, datetime):
+        deadline = retire_after
+    else:
+        raw = str(retire_after).strip()
+        if not raw:
+            return False
+        try:
+            deadline = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if deadline.tzinfo is None:
+        return False
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("now must include a timezone")
+    return current >= deadline
+
+
+def resolve_native_chat_rollout_with_retirement(
+    *,
+    mode: NativeChatRolloutMode | str,
+    acceptance_recorded: bool,
+    retire_after: datetime | str | None,
+    now: datetime | None = None,
+) -> NativeChatRolloutDecision:
+    """Resolve rollout and permanently ignore the temporary flag after cutover."""
+
+    if rollout_flag_is_retired(
+        acceptance_recorded=acceptance_recorded,
+        retire_after=retire_after,
+        now=now,
+    ):
+        return NativeChatRolloutDecision(
+            mode=NativeChatRolloutMode.ENABLED,
+            interactive=True,
+            serve_native_ui=True,
+            read_only_fallback=False,
+            reason=REASON_FLAG_RETIRED,
+        )
+    return resolve_native_chat_rollout(
+        mode=mode,
+        acceptance_recorded=acceptance_recorded,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RolloutFlagRetirement:
     """The retirement contract for the temporary rollout flag."""
@@ -212,10 +276,13 @@ __all__ = [
     "REASON_CANARY_AWAITING_EVIDENCE",
     "REASON_DISABLED",
     "REASON_ENABLED",
+    "REASON_FLAG_RETIRED",
     "REASON_ROLLED_BACK_READ_ONLY",
     "REASON_UNKNOWN_MODE_FAILED_CLOSED",
     "RolloutFlagRetirement",
     "parse_rollout_mode",
     "resolve_native_chat_rollout",
+    "resolve_native_chat_rollout_with_retirement",
+    "rollout_flag_is_retired",
     "rollout_flag_retirement",
 ]

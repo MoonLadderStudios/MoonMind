@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from moonmind.omnigent.native_chat_rollout import (
@@ -9,11 +11,14 @@ from moonmind.omnigent.native_chat_rollout import (
     NativeChatRolloutMode,
     parse_rollout_mode,
     resolve_native_chat_rollout,
+    resolve_native_chat_rollout_with_retirement,
+    rollout_flag_is_retired,
     rollout_flag_retirement,
 )
 from moonmind.omnigent.settings import (
     resolved_native_chat_acceptance_ref,
     resolved_native_chat_rollout_mode,
+    resolved_native_chat_rollout_retire_after,
 )
 
 
@@ -107,3 +112,41 @@ def test_rollout_flag_is_documented_as_temporary() -> None:
     assert retirement.temporary is True
     assert retirement.steady_state_mode is NativeChatRolloutMode.ENABLED
     assert "acceptance evidence" in retirement.retire_when
+
+
+def test_rollout_flag_retires_only_after_evidence_and_fallback_window() -> None:
+    now = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
+    deadline = "2026-08-10T11:00:00Z"
+    assert rollout_flag_is_retired(
+        acceptance_recorded=True, retire_after=deadline, now=now
+    )
+    assert not rollout_flag_is_retired(
+        acceptance_recorded=False, retire_after=deadline, now=now
+    )
+    assert not rollout_flag_is_retired(
+        acceptance_recorded=True,
+        retire_after="2026-08-10T13:00:00Z",
+        now=now,
+    )
+    assert not rollout_flag_is_retired(
+        acceptance_recorded=True, retire_after="not-a-date", now=now
+    )
+
+
+def test_retired_flag_cannot_roll_canonical_path_back() -> None:
+    decision = resolve_native_chat_rollout_with_retirement(
+        mode="disabled",
+        acceptance_recorded=True,
+        retire_after="2026-08-10T11:00:00Z",
+        now=datetime(2026, 8, 10, 12, tzinfo=timezone.utc),
+    )
+    assert decision.mode is NativeChatRolloutMode.ENABLED
+    assert decision.interactive is True
+    assert decision.reason == "temporary_rollout_flag_retired"
+
+
+def test_retirement_deadline_setting_is_explicit_and_blank_by_default() -> None:
+    assert resolved_native_chat_rollout_retire_after(env={}) == ""
+    assert resolved_native_chat_rollout_retire_after(
+        env={"OMNIGENT_NATIVE_CHAT_ROLLOUT_RETIRE_AFTER": "2026-08-10T11:00:00Z"}
+    ) == "2026-08-10T11:00:00Z"

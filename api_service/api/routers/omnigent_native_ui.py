@@ -55,7 +55,9 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.native_chat_acceptance import (
     validate_native_chat_acceptance_report,
 )
-from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
+from moonmind.omnigent.native_chat_rollout import (
+    resolve_native_chat_rollout_with_retirement,
+)
 from moonmind.omnigent.native_chat_telemetry import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
@@ -82,6 +84,7 @@ from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_native_chat_acceptance_ref,
     resolved_native_chat_rollout_mode,
+    resolved_native_chat_rollout_retire_after,
     resolved_native_ui_serving_enabled,
     resolved_native_ui_version,
     resolved_server_url,
@@ -397,13 +400,15 @@ async def _serve_native_ui(
     acceptance_ref = resolved_native_chat_acceptance_ref()
     acceptance_recorded = False
     raw_rollout_mode = str(rollout_mode or "").strip().lower()
-    if raw_rollout_mode in {"", "canary"}:
+    retire_after = resolved_native_chat_rollout_retire_after()
+    if raw_rollout_mode in {"", "canary"} or retire_after:
         acceptance_recorded = await _acceptance_report_is_current(
             acceptance_ref, artifact_service=artifact_service
         )
-    rollout = resolve_native_chat_rollout(
+    rollout = resolve_native_chat_rollout_with_retirement(
         mode=rollout_mode,
         acceptance_recorded=acceptance_recorded,
+        retire_after=retire_after,
     )
     record_native_chat_rollout(
         rollout_mode=rollout.mode.value,

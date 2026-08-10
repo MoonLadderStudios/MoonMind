@@ -27,7 +27,7 @@ The journey is proven across two lanes and the gate requires both:
 | Lane | What it proves | Where it runs |
 | --- | --- | --- |
 | `deterministic` | The MoonMind binding, native-UI serving, facade authorization/allowlist, immutable capability policy, high-security outbound scan, diagnostic fallback, and rollout gating — driven against a controllable fake Omnigent upstream. | Hermetic, required-CI-safe. `tests/integration/reliability_journey/test_native_chat_acceptance_journey.py` and `frontend/src/browser/workflowNativeChat.browser.test.tsx`. |
-| `protected_live` | The stock-image Codex journey (§8): interactive Chat against immutable stock Omnigent server/host image digests with a real enrolled Provider Profile, harvested terminal/mutation evidence, and every evidence ref resolving after live resources are removed. | Credentialed job against immutable stock images; no custom host build, no manual provider session id, no direct upstream browser login, no silent direct-Codex/profile/mode/policy fallback. |
+| `protected_live` | The stock-image Codex journey (§8): interactive Chat against immutable stock Omnigent server/UI/host image digests with a real enrolled Provider Profile, harvested terminal/mutation evidence, and every evidence ref resolving after live resources are removed. | The protected `omnigent-native-chat-acceptance` job runs `tools/run_native_chat_acceptance_journey.py`. The repository-owned runner orders each product action and builds the matrix; the deployment adapter can execute an action but cannot supply a prebuilt passing report. |
 
 ## The machine-readable gate report
 
@@ -80,10 +80,15 @@ rollback never silently routes messages through a different runtime or the
 deferred `SubmitChatInstruction` / `/chat-instructions` path — it presents
 read-only diagnostics or disables interactive Chat.
 
-The rollout flag is **temporary**. `rollout_flag_retirement()` records the
-retirement contract: once the deterministic and protected-live acceptance
-evidence passes and the read-only fallback window completes, the flag is removed
-and native Chat serves unconditionally (`enabled`).
+The rollout flag is **temporary**. The deployment records the end of its
+operator-approved fallback window in
+`OMNIGENT_NATIVE_CHAT_ROLLOUT_RETIRE_AFTER` (RFC3339). On every serving request,
+the production boundary validates the configured acceptance report. Once that
+report is current and the deadline has passed, the temporary rollout flag
+ceases to affect serving and the canonical `enabled` posture is selected. A
+missing/invalid deadline, stale evidence, or future deadline leaves the canary
+control in force. This is the executable retirement transition described by
+`rollout_flag_retirement()`, rather than a documentation-only promise.
 
 ## Readiness / operational telemetry
 

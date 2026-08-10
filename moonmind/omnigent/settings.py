@@ -170,6 +170,20 @@ def resolved_native_chat_acceptance_ref(
     return _clean(source.get("OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF"))
 
 
+def resolved_native_chat_rollout_retire_after(
+    *, env: Mapping[str, Any] | None = None
+) -> str:
+    """Return the end of the temporary native-chat fallback window.
+
+    This RFC3339 timestamp is meaningful only with a current passing acceptance
+    report.  At or after it the serving boundary ignores the temporary rollout
+    flag and enters the canonical enabled posture.
+    """
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_NATIVE_CHAT_ROLLOUT_RETIRE_AFTER"))
+
+
 def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
     """Return the embedded host/runner auth token configured service-side."""
 
@@ -206,6 +220,7 @@ __all__ = [
     "resolved_host_runner_token",
     "resolved_native_chat_acceptance_ref",
     "resolved_native_chat_rollout_mode",
+    "resolved_native_chat_rollout_retire_after",
     "resolved_native_ui_serving_enabled",
     "resolved_native_ui_version",
     "resolved_proxy_forward_headers",

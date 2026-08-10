@@ -474,6 +474,34 @@ def test_canary_with_recorded_evidence_serves_native_ui(
     assert "window.__MOONMIND_OMNIGENT_CHAT__=" in response.text
 
 
+def test_completed_fallback_window_retires_flag_at_serving_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Even a stale deployment-level rollback value ceases to affect the
+    # canonical path after current evidence and the fallback deadline agree.
+    monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "disabled")
+    monkeypatch.setenv(
+        "OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", "artifact://native-chat-report"
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_NATIVE_CHAT_ROLLOUT_RETIRE_AFTER", "2020-01-01T00:00:00Z"
+    )
+
+    async def _accepted(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_native_ui._acceptance_report_is_current",
+        _accepted,
+    )
+    client, upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 200
+    assert upstream.paths == ["/"]
+
+
 @pytest.mark.asyncio
 async def test_fetch_aborts_when_asset_exceeds_limit(monkeypatch) -> None:
     # The limit is enforced while streaming, so a large/compressed upstream

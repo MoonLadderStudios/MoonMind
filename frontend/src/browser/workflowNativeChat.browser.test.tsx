@@ -62,6 +62,33 @@ function sameOriginReadyDoc(): string {
   return URL.createObjectURL(new Blob([html], { type: 'text/html' }));
 }
 
+function completeNativeJourneyDoc(): string {
+  const html = `<!doctype html><meta charset="utf-8">
+    <main aria-label="Native workflow chat">
+      <ol id="transcript" aria-live="polite"></ol>
+      <form id="composer"><label>Message<input id="message" /></label><button>Send</button></form>
+      <button data-surface="queue">Queue</button><button data-surface="tools">Tools</button>
+      <button data-surface="approval">Approve</button><button data-surface="resources">Resources</button>
+      <button data-surface="terminal">Terminal snapshot</button><button data-surface="agents">Agents and tasks</button>
+      <button id="disconnect">Simulate disconnect</button>
+      <output id="observed"></output>
+    </main>
+    <script>
+      const seen = [];
+      document.querySelectorAll('[data-surface]').forEach((button) => button.addEventListener('click', () => {
+        seen.push(button.dataset.surface); document.querySelector('#observed').value = seen.join(',');
+      }));
+      document.querySelector('#composer').addEventListener('submit', (event) => {
+        event.preventDefault(); const value = document.querySelector('#message').value;
+        document.querySelector('#transcript').insertAdjacentHTML('beforeend', '<li>' + value.replace(/[<>]/g, '') + '</li>');
+      });
+      document.querySelector('#disconnect').addEventListener('click', () =>
+        parent.postMessage({ type: 'moonmind:workflow-chat', status: 'disconnected' }, '*'));
+      parent.postMessage({ type: 'moonmind:workflow-chat', status: 'ready' }, '*');
+    </script>`;
+  return URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+}
+
 afterEach(() => {
   root?.unmount();
   root = null;
@@ -112,5 +139,32 @@ describe('native workflow chat frame (real browser)', () => {
           .querySelector('.wf-native-chat__frame')
           ?.getAttribute('data-loaded') === 'true',
     );
+  });
+
+  it('carries the complete native composer and capability journey in the scoped frame', async () => {
+    const signals: NativeChatFrameSignal[] = [];
+    const iframe = render(completeNativeJourneyDoc(), (signal) => signals.push(signal));
+    await waitFor(() => signals.includes('ready'));
+    const native = iframe.contentDocument;
+    expect(native?.querySelector('main')?.getAttribute('aria-label')).toBe(
+      'Native workflow chat',
+    );
+
+    const input = native!.querySelector<HTMLInputElement>('#message')!;
+    input.value = 'bounded follow-up';
+    native!.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+    expect(native!.querySelector('#transcript')?.textContent).toContain('bounded follow-up');
+
+    for (const surface of ['queue', 'tools', 'approval', 'resources', 'terminal', 'agents']) {
+      native!.querySelector<HTMLButtonElement>(`[data-surface="${surface}"]`)!.click();
+    }
+    expect(native!.querySelector<HTMLOutputElement>('#observed')!.value).toBe(
+      'queue,tools,approval,resources,terminal,agents',
+    );
+
+    // Reconnect is a native liveness transition, not a custom MoonMind composer.
+    native!.querySelector<HTMLButtonElement>('#disconnect')!.click();
+    await waitFor(() => signals.includes('disconnected'));
+    expect(host!.querySelectorAll('textarea')).toHaveLength(0);
   });
 });
