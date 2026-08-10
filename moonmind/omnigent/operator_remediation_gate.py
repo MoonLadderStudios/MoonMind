@@ -57,6 +57,23 @@ class RemediationRow:
     max_duration_seconds: int = 1800
 
 
+@dataclass(frozen=True, slots=True)
+class ScenarioMeasurements:
+    """Raw facts emitted by a trusted scenario activity.
+
+    Qualification fields are intentionally absent: this boundary derives the
+    row result, cleanup state, thresholds, and retained-corpus scan result.
+    """
+
+    started_at: datetime
+    completed_at: datetime
+    host_mode: str
+    architecture: str
+    remaining_live_resources: int
+    secret_findings: int
+    prohibited_authority_findings: int
+
+
 def _row(row_id: str, owner: str, gate: str, action: str = "none", verification: str = "artifact") -> RemediationRow:
     return RemediationRow(row_id, owner, gate, action, verification, "profile_policy_egress_bound")
 
@@ -348,7 +365,7 @@ async def persist_observed_row(
     principal: str,
     row_id: str,
     observations: Mapping[str, Mapping[str, Any]],
-    result: Mapping[str, Any],
+    measurements: ScenarioMeasurements,
 ) -> dict[str, str]:
     """Production row producer: persist observations first, then the typed row.
 
@@ -358,6 +375,15 @@ async def persist_observed_row(
     row = ROW_CATALOG.get(row_id)
     if row is None:
         raise RemediationGateError("unknown remediation row")
+    if measurements.started_at.tzinfo is None or measurements.completed_at.tzinfo is None:
+        raise RemediationGateError("scenario timestamps must be timezone-aware")
+    duration = (measurements.completed_at - measurements.started_at).total_seconds()
+    if duration < 0:
+        raise RemediationGateError("scenario completion predates its start")
+    if measurements.remaining_live_resources < 0:
+        raise RemediationGateError("remaining live resource count cannot be negative")
+    if measurements.secret_findings < 0 or measurements.prohibited_authority_findings < 0:
+        raise RemediationGateError("scan finding counts cannot be negative")
     required_refs = [field for field in REQUIRED_EVIDENCE_FIELDS
                      if field not in {"timings", "thresholds", "secretScan", "architecture"}]
     if set(observations) != set(required_refs):
@@ -371,18 +397,37 @@ async def persist_observed_row(
             service, principal=principal, payload=observation,
             kind="operator-remediation-observation", row_id=row_id,
         )
-    generated_at = result.get("generatedAt") or datetime.now(timezone.utc).isoformat()
+    within_duration = duration <= row.max_duration_seconds
+    cleanup_complete = measurements.remaining_live_resources == 0
+    scan_clean = (
+        measurements.secret_findings == 0
+        and measurements.prohibited_authority_findings == 0
+    )
+    observed_result = (
+        "passed" if within_duration and cleanup_complete and scan_clean else "failed"
+    )
     payload: dict[str, Any] = {
         "schemaVersion": EVIDENCE_SCHEMA_VERSION, "rowId": row_id, "owner": row.owner,
-        "observedResult": result.get("observedResult"), "generatedAt": generated_at,
+        "observedResult": observed_result,
+        "generatedAt": measurements.completed_at.astimezone(timezone.utc).isoformat(),
         "evidenceKind": row.evidence_kind, "targetRuntimeProvenance": row.target_provenance,
         "remediationRuntimeProvenance": row.remediation_provenance,
-        "hostMode": result.get("hostMode"), "architecture": result.get("architecture"),
+        "hostMode": measurements.host_mode, "architecture": measurements.architecture,
         "actionCapability": row.action_capability,
         "verificationCapability": row.verification_capability, "authority": row.authority,
-        "uiJourney": row.ui_journey, "liveResourcesGone": result.get("liveResourcesGone"),
-        "timings": result.get("timings"), "thresholds": result.get("thresholds"),
-        "secretScan": result.get("secretScan"), **refs,
+        "uiJourney": row.ui_journey, "liveResourcesGone": cleanup_complete,
+        "timings": {"durationSeconds": duration},
+        "thresholds": {
+            "withinDuration": within_duration,
+            "cleanupComplete": cleanup_complete,
+            "retainedCorpusClean": scan_clean,
+        },
+        "secretScan": {
+            "status": "passed" if scan_clean else "failed",
+            "secretFindings": measurements.secret_findings,
+            "prohibitedAuthorityFindings": measurements.prohibited_authority_findings,
+            "prohibitedAuthorityFound": measurements.prohibited_authority_findings > 0,
+        }, **refs,
     }
     # Validate the complete in-memory shape before publishing the authoritative row.
     bodies: dict[str, bytes] = {}

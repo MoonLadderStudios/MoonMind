@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 
@@ -6,7 +6,7 @@ import pytest
 
 from moonmind.omnigent.operator_remediation_gate import (
     EVIDENCE_SCHEMA_VERSION, REQUIRED_EVIDENCE_FIELDS, REQUIRED_ROW_CATALOG,
-    RemediationGateError, allows_autonomous_mutation, build_combined_matrix, catalog_document, release_status,
+    RemediationGateError, ScenarioMeasurements, allows_autonomous_mutation, build_combined_matrix, catalog_document, release_status,
     persist_observed_row, publish_release_projection, validate_row_artifact,
 )
 
@@ -141,6 +141,20 @@ def _observations():
             if field not in {"timings", "thresholds", "secretScan", "architecture"}}
 
 
+def _measurements(row, **overrides):
+    values = {
+        "started_at": NOW - timedelta(seconds=1),
+        "completed_at": NOW,
+        "host_mode": row.host_modes[0],
+        "architecture": row.architectures[0],
+        "remaining_live_resources": 0,
+        "secret_findings": 0,
+        "prohibited_authority_findings": 0,
+    }
+    values.update(overrides)
+    return ScenarioMeasurements(**values)
+
+
 @pytest.mark.asyncio
 async def test_production_row_producer_persists_catalog_owned_typed_artifacts():
     service = _ArtifactService()
@@ -148,16 +162,30 @@ async def test_production_row_producer_persists_catalog_owned_typed_artifacts():
     ref = await persist_observed_row(
         service, principal="service:release-gate", row_id=row.row_id,
         observations=_observations(),
-        result={"observedResult": "passed", "generatedAt": NOW.isoformat(),
-                "hostMode": row.host_modes[0], "architecture": row.architectures[0],
-                "liveResourcesGone": True, "timings": {"durationSeconds": 1},
-                "thresholds": {"withinLimits": True},
-                "secretScan": {"status": "passed", "prohibitedAuthorityFound": False}},
+        measurements=_measurements(row),
     )
     payload = json.loads(service.payloads[ref["ref"].rsplit("/", 1)[-1]])
     assert payload["owner"] == row.owner
     assert payload["uiJourney"] == "workflow-detail.remediate.normal-create"
+    assert payload["observedResult"] == "passed"
+    assert payload["thresholds"]["cleanupComplete"] is True
     assert len(service.created) == len(_observations()) + 1
+
+
+@pytest.mark.asyncio
+async def test_production_row_producer_derives_failure_from_raw_findings():
+    service = _ArtifactService()
+    row = REQUIRED_ROW_CATALOG[0]
+    with pytest.raises(RemediationGateError, match="row did not observe a passing result"):
+        await persist_observed_row(
+            service, principal="service:release-gate", row_id=row.row_id,
+            observations=_observations(),
+            measurements=_measurements(row, secret_findings=1),
+        )
+    assert not any(
+        created[1]["metadata_json"]["kind"] == "operator-remediation-row"
+        for created in service.created
+    )
 
 
 @pytest.mark.asyncio
@@ -168,11 +196,7 @@ async def test_release_projection_rereads_rows_and_nested_evidence_after_cleanup
         refs.append(await persist_observed_row(
             service, principal="service:release-gate", row_id=row.row_id,
             observations=_observations(),
-            result={"observedResult": "passed", "generatedAt": NOW.isoformat(),
-                    "hostMode": row.host_modes[0], "architecture": row.architectures[0],
-                    "liveResourcesGone": True, "timings": {"durationSeconds": 1},
-                    "thresholds": {"withinLimits": True},
-                    "secretScan": {"status": "passed", "prohibitedAuthorityFound": False}},
+            measurements=_measurements(row),
         ))
     projection_ref = await publish_release_projection(
         service, principal="service:release-gate", row_refs=refs,
