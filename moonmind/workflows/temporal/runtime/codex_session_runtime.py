@@ -144,6 +144,7 @@ def _redact_text(value: Any, *, max_chars: int) -> str:
 class _RolloutTurnScan:
     references_turn: bool = False
     assistant_text: str = ""
+    terminal_assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
     provider_failure_reason: str | None = None
@@ -191,6 +192,7 @@ class _RolloutLiveMirror:
     offset: int = 0
     turn_started_at: float | None = None
     last_assistant_text: str = ""
+    last_terminal_assistant_text: str = ""
     last_assistant_text_matches_active_turn: bool = False
     inside_active_turn: bool = False
     emitted_assistant_texts: set[str] = field(default_factory=set)
@@ -1170,6 +1172,7 @@ class CodexManagedSessionRuntime:
             return _RolloutTurnScan()
         last_text = ""
         terminal_text = ""
+        terminal_text_bound_to_active_turn = False
         terminal_cutoff = None
         references_active_turn = False
         entries_scanned = 0
@@ -1197,6 +1200,12 @@ class CodexManagedSessionRuntime:
                 entries_scanned += 1
                 references_turn = self._payload_references_turn(payload, vendor_turn_id)
                 if references_turn:
+                    if (
+                        not references_active_turn
+                        and terminal_text
+                        and not terminal_text_bound_to_active_turn
+                    ):
+                        terminal_text = ""
                     references_active_turn = True
                     entries_referencing_turn += 1
                     text = self._assistant_text_from_rollout_entry(payload)
@@ -1204,12 +1213,14 @@ class CodexManagedSessionRuntime:
                         last_text = text
                 text = self._terminal_assistant_text_from_rollout_entry(payload)
                 if text:
-                    if references_turn:
+                    if references_turn or inside_active_turn or references_active_turn:
                         terminal_text = text
+                        terminal_text_bound_to_active_turn = True
                     elif terminal_cutoff is not None:
                         entry_timestamp = self._rollout_entry_timestamp(payload)
                         if entry_timestamp is not None and entry_timestamp >= terminal_cutoff:
                             terminal_text = text
+                            terminal_text_bound_to_active_turn = False
                 entry_type = str(payload.get("type") or "").strip().lower()
                 if entry_type != "event_msg":
                     continue
@@ -1244,7 +1255,8 @@ class CodexManagedSessionRuntime:
             return _RolloutTurnScan()
         return _RolloutTurnScan(
             references_turn=references_active_turn,
-            assistant_text=last_text or terminal_text,
+            assistant_text=terminal_text or last_text,
+            terminal_assistant_text=terminal_text,
             saw_task_complete=saw_task_complete,
             error_text=error_text,
             provider_failure_reason=provider_failure_reason,
@@ -1531,6 +1543,10 @@ class CodexManagedSessionRuntime:
                         if normalized_text and belongs_to_active_turn:
                             mirror.last_assistant_text = normalized_text
                             mirror.last_assistant_text_matches_active_turn = True
+                            if self._terminal_assistant_text_from_rollout_entry(
+                                payload
+                            ):
+                                mirror.last_terminal_assistant_text = normalized_text
                         if normalized_text in mirror.emitted_assistant_texts:
                             mirror.offset = handle.tell()
                             continue
@@ -1965,6 +1981,7 @@ class CodexManagedSessionRuntime:
             "entriesScanned": scan.entries_scanned,
             "entriesReferencingTurn": scan.entries_referencing_turn,
             "referencesTurn": scan.references_turn,
+            "sawTerminalAssistant": bool(scan.terminal_assistant_text),
             "sawTaskComplete": scan.saw_task_complete,
             "eventTypes": list(scan.event_types),
             "errorText": cls._diagnostic_value(scan.error_text),
@@ -2288,6 +2305,20 @@ class CodexManagedSessionRuntime:
         client: CodexAppServerRpcClient | None = None,
         vendor_thread_id: str | None = None,
     ) -> _CompletedTurnInspection:
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_scan = self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
+        if rollout_scan.terminal_assistant_text:
+            return _CompletedTurnInspection(
+                assistant_text=rollout_scan.terminal_assistant_text,
+                rollout_scan=rollout_scan,
+            )
         assistant_text = self._extract_assistant_text(
             thread_payload,
             vendor_turn_id=vendor_turn_id,
@@ -2302,15 +2333,6 @@ class CodexManagedSessionRuntime:
             )
             if assistant_text:
                 return _CompletedTurnInspection(assistant_text=assistant_text)
-        vendor_thread_path = self._resolved_rollout_path(
-            state=state,
-            thread_payload=thread_payload,
-        )
-        rollout_scan = self._scan_rollout_for_turn(
-            vendor_thread_path,
-            vendor_turn_id=vendor_turn_id,
-            turn_started_at=state.last_control_at,
-        )
         return _CompletedTurnInspection(
             assistant_text=rollout_scan.assistant_text,
             rollout_scan=rollout_scan,
@@ -2539,6 +2561,24 @@ class CodexManagedSessionRuntime:
                 )
                 if outcome is not None:
                     return thread_payload, outcome
+                if rollout_mirror.last_terminal_assistant_text:
+                    state = self._load_state()
+                    rollout_scan = self._scan_rollout_for_turn(
+                        self._resolved_rollout_path(
+                            state=state,
+                            thread_payload=thread_payload,
+                        ),
+                        vendor_turn_id=vendor_turn_id,
+                        turn_started_at=state.last_control_at,
+                    )
+                    if rollout_scan.terminal_assistant_text:
+                        outcome = self._rollout_terminal_outcome_from_scan(
+                            rollout_scan,
+                            vendor_turn_id=vendor_turn_id,
+                            turn_started_at=state.last_control_at,
+                        )
+                        if outcome is not None:
+                            return thread_payload, outcome
             else:
                 state = self._load_state()
                 vendor_thread_path = self._resolved_rollout_path(
@@ -2818,6 +2858,26 @@ class CodexManagedSessionRuntime:
         if status in {"failed", "interrupted"} and error_text and previous_status != status:
             self._append_spool("stderr", f"turn {status}: {error_text}\n")
 
+    @staticmethod
+    def _assistant_text_was_published(
+        state: CodexSessionRuntimeState,
+        *,
+        turn_id: str,
+        assistant_text: str,
+    ) -> bool:
+        expected = assistant_text.strip()
+        if not expected:
+            return False
+        for event in state.observability_events:
+            if event.get("kind") != "assistant_message_completed":
+                continue
+            if str(event.get("turnId") or "").strip() != turn_id:
+                continue
+            observed = str(event.get("text") or "").strip()
+            if observed.removeprefix("assistant: ").strip() == expected:
+                return True
+        return False
+
     def _refresh_turn_state(
         self,
         state: CodexSessionRuntimeState,
@@ -2857,7 +2917,30 @@ class CodexManagedSessionRuntime:
         if isinstance(turn_payload, Mapping):
             outcome = self._terminal_turn_outcome(turn_payload)
             if outcome is None:
-                return state
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=active_turn_id,
+                )
+            if outcome is None:
+                vendor_thread_path = self._resolved_rollout_path(
+                    state=state,
+                    thread_payload=thread_payload,
+                )
+                rollout_scan = self._scan_rollout_for_turn(
+                    vendor_thread_path,
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                if not rollout_scan.terminal_assistant_text:
+                    return state
+                outcome = self._rollout_terminal_outcome_from_scan(
+                    rollout_scan,
+                    vendor_turn_id=active_turn_id,
+                    turn_started_at=state.last_control_at,
+                )
+                if outcome is None:
+                    return state
         else:
             outcome = self._missing_turn_terminal_outcome(
                 state=state,
@@ -2904,6 +2987,11 @@ class CodexManagedSessionRuntime:
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
+            append_assistant_to_spool=not self._assistant_text_was_published(
+                state,
+                turn_id=active_turn_id,
+                assistant_text=assistant_text,
+            ),
             failure_class=failure_class,
             disposition=disposition,
         )
