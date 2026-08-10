@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
-    append_managed_codex_runtime_note,
+    append_managed_container_execution_note,
 )
 from tests.integration.reliability.helpers import load_replay
 
@@ -21,9 +21,8 @@ def test_managed_container_instruction_overrides_direct_docker_replay() -> None:
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
 
-    rendered = append_managed_codex_runtime_note(
-        manifest["verificationInstruction"],
-        env_source={},
+    rendered = append_managed_container_execution_note(
+        manifest["verificationInstruction"]
     )
 
     assert len(manifest["incidentWorkflowIds"]) == 2

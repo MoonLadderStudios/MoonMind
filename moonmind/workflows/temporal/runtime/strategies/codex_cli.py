@@ -30,7 +30,6 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
 _CODEX_PROGRESS_TIMEOUT_SECONDS = 300
 _CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
 _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER = "MoonMind retrieval capability:\n"
-_CODEX_MANAGED_CONTAINER_NOTE_HEADER = "Managed container execution boundary:\n"
 
 _CODEX_MANAGED_CONTAINER_NOTE = (
     "\n\nManaged container execution boundary:\n"
@@ -117,11 +116,24 @@ def append_managed_codex_runtime_note(
         return normalized
     if _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER not in normalized:
         normalized += build_managed_retrieval_capability_note(env_source)
-    if _CODEX_MANAGED_CONTAINER_NOTE_HEADER not in normalized:
-        normalized += _CODEX_MANAGED_CONTAINER_NOTE
     if _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in normalized:
         normalized += _CODEX_MANAGED_RUNTIME_NOTE
     return normalized
+
+
+def append_managed_container_execution_note(instruction: str | None) -> str:
+    """Install the authoritative container-job policy as an exact turn suffix.
+
+    Callers must first prove that the managed session owns an admitted
+    container-job capability. Checking the complete generated suffix keeps
+    user-controlled prompt text from spoofing policy installation with only the
+    policy header.
+    """
+
+    normalized = instruction or ""
+    if not normalized or normalized.endswith(_CODEX_MANAGED_CONTAINER_NOTE):
+        return normalized
+    return normalized + _CODEX_MANAGED_CONTAINER_NOTE
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``codex`` CLI runs."""
