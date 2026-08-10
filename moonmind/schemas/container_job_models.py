@@ -122,6 +122,7 @@ class ContainerJobFailureClass(StrEnum):
     REPOSITORY_SCOPE_MISMATCH = "repository_scope_mismatch"
     REGISTRY_AUTH_FAILED = "registry_auth_failed"
     CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
+    RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
 
 
 class AuxiliaryOutcomeState(StrEnum):
@@ -399,10 +400,10 @@ def failure_class_from_exception(
 ) -> ContainerJobFailureClass | None:
     """Recover a container-job failure class from an exception, if present.
 
-    Prefers a direct ``failure_class`` attribute (in-process activity calls) and
-    falls back to parsing the stable marker embedded in the message. Temporal
-    wraps an activity failure and re-raises it with the original as ``__cause__``
-    (or ``__context__``), so the whole chain is walked to find either signal.
+    Prefers a direct ``failure_class`` attribute (in-process activity calls),
+    then a Temporal ``ApplicationError.type``, and finally the stable marker
+    embedded in the message. The whole exception chain is walked because
+    Temporal wraps activity failures before returning them to workflows.
     """
 
     seen: set[int] = set()
@@ -412,6 +413,12 @@ def failure_class_from_exception(
         direct = getattr(current, "failure_class", None)
         if isinstance(direct, ContainerJobFailureClass):
             return direct
+        typed = getattr(current, "type", None)
+        if isinstance(typed, str):
+            try:
+                return ContainerJobFailureClass(typed)
+            except ValueError:
+                pass
         text = str(current)
         marker_index = text.find(CONTAINER_JOB_FAILURE_MARKER)
         if marker_index != -1:
@@ -421,7 +428,11 @@ def failure_class_from_exception(
                 return ContainerJobFailureClass(token)
             except ValueError:
                 pass
-        current = current.__cause__ or current.__context__
+        current = (
+            current.__cause__
+            or current.__context__
+            or getattr(current, "cause", None)
+        )
     return None
 
 

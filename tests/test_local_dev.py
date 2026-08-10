@@ -319,6 +319,9 @@ def test_api_service_runs_with_container_init():
         "api service must run with an init process so child subprocesses "
         "are reaped and shutdown signals are forwarded"
     )
+    assert api_service.get("restart") == "unless-stopped", (
+        "api service must recover after an external OOM or daemon restart"
+    )
 
 
 def test_api_service_enables_omnigent_with_stock_images_by_default():

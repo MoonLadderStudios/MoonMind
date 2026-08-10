@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -23,6 +24,8 @@ from moonmind.config.container_backend_settings import (
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
+    ContainerJobBackendError,
+    ContainerJobFailureClass,
 )
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
@@ -34,6 +37,7 @@ from moonmind.workflows.temporal.container_job_backend import (
     OWNERSHIP_SCHEMA_VERSION,
     ContainerJobBackend,
     DockerContainerJobBackend,
+    FilesystemCapacityAdmissionLock,
 )
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
@@ -584,6 +588,114 @@ async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> No
     )
     with pytest.raises(RuntimeError, match="ceiling"):
         await backend.create_container(_request(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_capacity_lock_is_mutually_exclusive_across_workers(
+    tmp_path,
+) -> None:
+    first = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
+    second = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
+    first_lease = await first.acquire(
+        "system", wait_seconds=0.5, poll_seconds=0.01
+    )
+
+    second_acquire = asyncio.create_task(
+        second.acquire("system", wait_seconds=0.5, poll_seconds=0.01)
+    )
+    await asyncio.sleep(0.05)
+    assert not second_acquire.done()
+
+    await first.release(first_lease)
+    second_lease = await asyncio.wait_for(second_acquire, timeout=0.5)
+    await second.release(second_lease)
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_aggregate_memory_overcommit_before_launch(
+    tmp_path,
+) -> None:
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, str(10 * 1024**3).encode(), b""
+        if args[0] == "ps":
+            return 0, b"existing-container\n", b""
+        if args[0] == "inspect":
+            return 0, str(4 * 1024**3).encode(), b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 1000,
+            "memoryMiB": 4096,
+            "pids": 512,
+        },
+    )
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(request)
+
+    assert (
+        raised.value.failure_class
+        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+    assert "retry after" in str(raised.value)
+    assert not any(command[0] == "start" for command in commands)
+    lock.acquire.assert_awaited_once()
+    lock.release.assert_awaited_once_with(lock.acquire.return_value)
+
+
+@pytest.mark.asyncio
+async def test_start_serializes_and_admits_within_active_memory_budget(
+    tmp_path,
+) -> None:
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, str(10 * 1024**3).encode(), b""
+        if args[0] == "ps":
+            return 0, b"existing-container\n", b""
+        if args[0] == "inspect":
+            return 0, str(2 * 1024**3).encode(), b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 1000,
+            "memoryMiB": 4096,
+            "pids": 512,
+        },
+    )
+
+    result = await backend.start_container(request)
+
+    assert result.running is True
+    assert any(command[0] == "start" for command in commands)
+    lock.acquire.assert_awaited_once()
+    lock.release.assert_awaited_once_with(lock.acquire.return_value)
 
 
 @pytest.mark.asyncio

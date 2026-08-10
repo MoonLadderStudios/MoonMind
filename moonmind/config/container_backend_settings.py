@@ -151,6 +151,7 @@ class ContainerBackendSettings:
     raw_cli_enabled: bool
     max_cpu_millis: int
     max_memory_mib: int
+    max_active_memory_mib: int | None
     max_pids: int
     shm_size_mib: int
     max_timeout_seconds: int
@@ -338,6 +339,10 @@ def resolve_container_backend_settings(
         max_memory_mib=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB"),
             default=16384,
+            minimum=16,
+        ),
+        max_active_memory_mib=_coerce_optional_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB"),
             minimum=16,
         ),
         max_pids=_coerce_int(

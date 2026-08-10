@@ -22,6 +22,7 @@ services:
   api:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
+    restart: unless-stopped
     ports:
       - "${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
@@ -615,6 +616,7 @@ services:
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
+      - MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=${MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB:-}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
       - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
