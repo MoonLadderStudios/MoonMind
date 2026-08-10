@@ -27,6 +27,24 @@ submits typed jobs through MoonMind and receives neither a Docker endpoint nor
 daemon credentials. The deployment-selected daemon retains one image cache for
 reuse across workflows.
 
+At the final managed-session turn boundary, every Codex turn whose durable
+session metadata admits the scoped container-job capability receives the
+container execution policy as an authoritative generated suffix. This includes
+initial turns, operator follow-ups, steering, and terminal-contract
+continuations, including turns sent to sessions launched before a worker
+upgrade. Repository instructions and Skills remain authoritative for workload
+semantics, including the command, test filter, and expected terminal evidence,
+but direct-Docker instructions cannot override the session's runtime authority.
+Codex routes that workload through `moonmind container run` and treats a
+direct-Docker connectivity failure inside the session as a routing diagnostic,
+not repository test evidence.
+
+The controller derives this instruction only from trusted admitted-capability
+metadata, never from user or repository prompt text. Direct managed-runtime
+launches and sessions without the container-job capability do not receive it;
+those lanes retain their own execution authority. Fallible retrieval/context
+preparation occurs earlier and cannot bypass this final turn boundary.
+
 ## Contract
 
 The bounded session identity remains:

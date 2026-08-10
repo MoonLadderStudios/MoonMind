@@ -66,6 +66,7 @@ from .managed_session_store import (
     ManagedSessionStore,
 )
 from .managed_session_supervisor import ManagedSessionSupervisor
+from .strategies.codex_cli import append_managed_container_execution_note
 
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
@@ -422,6 +423,29 @@ class DockerCodexManagedSessionController:
         self._command_runner = command_runner
         self._github_auth_brokers = github_auth_brokers or GitHubAuthBrokerManager()
         self._owner_workflow_status_resolver = owner_workflow_status_resolver
+
+    def _prepare_managed_container_instructions(
+        self,
+        *,
+        request: CodexManagedSessionLocator,
+        instructions: str,
+    ) -> str:
+        """Apply container policy only for an admitted Codex session capability."""
+
+        if request.runtime_family != "codex" or self._session_store is None:
+            return instructions
+        record = self._session_store.load(request.session_id)
+        if record is None or record.runtime_id != "codex_cli":
+            return instructions
+        capabilities = record.metadata.get("capabilities")
+        if not isinstance(capabilities, Mapping):
+            return instructions
+        container_jobs = capabilities.get("containerJobs")
+        if not isinstance(container_jobs, Mapping):
+            return instructions
+        if container_jobs.get("available") is not True:
+            return instructions
+        return append_managed_container_execution_note(instructions)
 
     @staticmethod
     def _managed_session_user_command_kwargs() -> dict[str, int]:
@@ -2837,6 +2861,14 @@ class DockerCodexManagedSessionController:
             [list[Any], str, CodexManagedSessionLocator], Awaitable[None]
         ] | None = None,
     ) -> CodexManagedSessionTurnResponse:
+        request = request.model_copy(
+            update={
+                "instructions": self._prepare_managed_container_instructions(
+                    request=request,
+                    instructions=request.instructions,
+                )
+            }
+        )
         try:
             payload = await self._invoke_json(
                 container_id=request.container_id,
@@ -2977,6 +3009,14 @@ class DockerCodexManagedSessionController:
         self,
         request: SteerCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
+        request = request.model_copy(
+            update={
+                "instructions": self._prepare_managed_container_instructions(
+                    request=request,
+                    instructions=request.instructions,
+                )
+            }
+        )
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="steer_turn",
