@@ -1065,6 +1065,21 @@ const RemediationLockOutcomeSchema = z
   })
   .passthrough();
 
+const RemediationActionCapabilitySchema = z
+  .object({
+    actionKind: z.string(),
+    requestable: z.boolean(),
+    dryRunSupported: z.boolean(),
+    executionBackendReady: z.boolean(),
+    approvalBackendReady: z.boolean(),
+    verificationBackendReady: z.boolean(),
+    supportedTargetRuntimes: z.array(z.string()),
+    supportedHostModes: z.array(z.string()),
+    requiredEvidenceClasses: z.array(z.string()),
+    blockedReasons: z.array(z.string()),
+  })
+  .passthrough();
+
 const RemediationLinkSchema = z
   .object({
     remediationWorkflowId: z.string(),
@@ -1083,6 +1098,7 @@ const RemediationLinkSchema = z
     selectedSteps: z.array(z.string()).nullable().optional(),
     currentTargetState: z.string().nullable().optional(),
     allowedActions: z.array(z.string()).nullable().optional(),
+    actionCapabilities: z.array(RemediationActionCapabilitySchema).optional().default([]),
     evidenceDegraded: z.boolean().nullable().optional(),
     unavailableEvidenceClasses: z.array(z.string()).nullable().optional(),
     liveObservation: RemediationLiveObservationSchema.nullable().optional(),
@@ -7565,6 +7581,31 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+function RemediationCapabilityMatrix({
+  rows,
+}: {
+  rows: z.infer<typeof RemediationActionCapabilitySchema>[];
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <details>
+      <summary>
+        Action capability matrix ({rows.filter((row) => row.requestable).length} executable / {rows.length} catalog)
+      </summary>
+      <ul className="td-remediation-list">
+        {rows.map((row) => (
+          <li key={row.actionKind}>
+            <code>{row.actionKind}</code>:{' '}
+            {row.requestable
+              ? 'requestable'
+              : `disabled — ${remediationListValue(row.blockedReasons)}`}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 // Post-action verification (issue #3622) publishes a compact classification into
 // the verification artifact metadata so the dashboard can render the trusted
 // repair-verification outcome separately from action delivery without fetching
@@ -7767,6 +7808,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
                 </div>
+                <RemediationCapabilityMatrix rows={item.actionCapabilities} />
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
                     Evidence is degraded. Unavailable: {remediationListValue(item.unavailableEvidenceClasses)}.

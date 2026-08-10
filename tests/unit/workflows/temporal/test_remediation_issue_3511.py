@@ -51,7 +51,7 @@ def test_corrected_execution_choices_require_checkpoint_branch() -> None:
     ) == ("model", "publishMode")
 
 
-def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
+def test_unready_control_plane_actions_are_not_advertised() -> None:
     expected = {
         "host.drain",
         "host.stop",
@@ -76,7 +76,7 @@ def test_requested_control_plane_actions_are_in_typed_catalog() -> None:
         ),
     )
 
-    assert expected == {item["actionKind"] for item in catalog}
+    assert catalog == ()
 
 
 async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approval() -> None:
@@ -106,12 +106,8 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     )
     kwargs = dict(
         remediation_workflow_id="remediation-1",
-        action_kind="host.restart",
-        parameters={
-            "providerProfileId": "profile-1",
-            "hostLeaseRef": "lease-1",
-            "expectedHostState": "running",
-        },
+        action_kind="execution.force_terminate",
+        parameters={"reason": "terminal recovery"},
         dry_run=False,
         idempotency_key="action-1",
         requesting_principal="operator:requester",
@@ -121,7 +117,7 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
         security_profile=RemediationSecurityProfile(
             profile_ref="admin",
             execution_principal="operator:requester",
-            allowed_action_kinds=("host.restart",),
+            allowed_action_kinds=("execution.force_terminate",),
         ),
     )
 
@@ -782,7 +778,12 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
         _production_target_health(),
     )
 
-    assert result["status"] == "applied"
+    assert result["status"] == "accepted"
+    assert result["deliveryStage"] == "branch_graph_created"
+    assert result["branchTurnLaunched"] is False
+    assert result["terminalBranchResultAvailable"] is False
+    assert result["idempotencyIdentity"] == "action-branch"
+    assert result["verificationContract"]["automaticallyVerifiable"] is True
     payload = checkpoint_service.create_branch_graph.await_args.args[0]
     assert payload["source"]["workflowId"] == "target"
     assert payload["source"]["runId"] == "target-run"

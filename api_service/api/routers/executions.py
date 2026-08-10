@@ -41,6 +41,7 @@ from temporalio.service import RPCError
 from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.auth_providers import get_current_user
 from api_service.core import sync as execution_sync
+from api_service.db import models as db_models
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import (
     AgentSkillDefinition,
@@ -89,6 +90,12 @@ from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
     synthesize_workflow_title,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    RemediationCapabilityContext,
+    remediation_action_capability_matrix,
+    remediation_action_kinds,
+)
+from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -659,6 +666,19 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
             raise ValueError("next action baseline must match the persisted head")
         return self
 
+class RemediationActionCapabilityModel(BaseModel):
+    actionKind: str
+    requestable: bool
+    dryRunSupported: bool
+    executionBackendReady: bool
+    approvalBackendReady: bool
+    verificationBackendReady: bool
+    supportedTargetRuntimes: list[str]
+    supportedHostModes: list[str]
+    requiredEvidenceClasses: list[str]
+    blockedReasons: list[str]
+
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -679,6 +699,9 @@ class RemediationLinkSummaryModel(BaseModel):
     selectedSteps: list[str] | None = None
     currentTargetState: str | None = None
     allowedActions: list[str] | None = None
+    actionCapabilities: list[RemediationActionCapabilityModel] = Field(
+        default_factory=list
+    )
     evidenceDegraded: bool | None = None
     unavailableEvidenceClasses: list[str] | None = None
     liveObservation: RemediationLiveObservationModel | None = None
@@ -11785,6 +11808,42 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         status_value=status_value,
     )
 
+    policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
+    target_state = str(getattr(link, "current_target_state", "") or "").strip()
+    unavailable_evidence = set(
+        _bounded_string_list(getattr(link, "unavailable_evidence_classes", None)) or []
+    )
+    known_evidence = {
+        "execution_state",
+        "workflow_history",
+        "target_identity",
+        "action_result",
+        "continuity_boundary",
+    } - unavailable_evidence
+    approval_backend_ready = authority_mode in {"admin_auto", "approval_gated"}
+    executor = build_remediation_action_executor()
+    backend_readiness = {
+        action_kind: action_kind in executor._adapters
+        for action_kind in (row["actionKind"] for row in remediation_action_capability_matrix())
+    }
+    capability_context = RemediationCapabilityContext(
+        target_runtime=(str(getattr(link, "target_runtime", "") or "").strip() or None),
+        host_mode=(str(getattr(link, "host_mode", "") or "").strip() or None),
+        target_state_eligible=target_state.lower() not in {"unknown", "missing"},
+        current_evidence_classes=tuple(sorted(known_evidence)),
+        require_current_evidence=bool(getattr(link, "evidence_degraded", False)),
+        # Missing persisted policy projection is not permission to advertise
+        # every catalog action. Fail closed until the owning projection supplies
+        # the immutable target-policy intersection.
+        policy_allowed_action_kinds=tuple(policy_actions or ()),
+        caller_allowed_action_kinds=tuple(policy_actions or ()),
+        execution_backend_readiness=backend_readiness,
+        approval_backend_ready=approval_backend_ready,
+    )
+    capability_matrix = [
+        dict(row) for row in remediation_action_capability_matrix(context=capability_context)
+    ]
+
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
         remediationRunId=str(getattr(link, "remediation_run_id", "")),
@@ -11801,7 +11860,12 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
         currentTargetState=getattr(link, "current_target_state", None),
-        allowedActions=_bounded_string_list(getattr(link, "allowed_actions", None)),
+        allowedActions=[
+            str(row["actionKind"])
+            for row in capability_matrix
+            if row["requestable"] is True
+        ],
+        actionCapabilities=capability_matrix,
         evidenceDegraded=getattr(link, "evidence_degraded", None),
         unavailableEvidenceClasses=_bounded_string_list(
             getattr(link, "unavailable_evidence_classes", None)
@@ -11817,6 +11881,84 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
+
+
+async def _attach_remediation_capability_projection(
+    link: Any, *, session: AsyncSession
+) -> None:
+    """Resolve exact-target inputs that are intentionally absent from the link row."""
+
+    target = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "target_workflow_id", "")),
+    )
+    remediation = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "remediation_workflow_id", "")),
+    )
+    if target is None or remediation is None:
+        link.current_target_state = "missing"
+        link.allowed_actions = ()
+        link.evidence_degraded = True
+        link.unavailable_evidence_classes = ("target_identity",)
+        return
+
+    link.current_target_state = _enum_value(getattr(target, "state", None))
+    target_parameters = dict(getattr(target, "parameters", None) or {})
+    target_workflow = target_parameters.get("workflow") or target_parameters.get(
+        "task"
+    )
+    target_workflow = target_workflow if isinstance(target_workflow, Mapping) else {}
+    runtime = target_workflow.get("runtime")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    search_attributes = dict(getattr(target, "search_attributes", None) or {})
+    link.target_runtime = (
+        str(
+            runtime.get("mode")
+            or target_parameters.get("targetRuntime")
+            or search_attributes.get("mm_target_runtime")
+            or ""
+        ).strip()
+        or None
+    )
+
+    remediation_parameters = dict(getattr(remediation, "parameters", None) or {})
+    remediation_workflow = remediation_parameters.get(
+        "workflow"
+    ) or remediation_parameters.get("task")
+    remediation_workflow = (
+        remediation_workflow if isinstance(remediation_workflow, Mapping) else {}
+    )
+    policy = remediation_workflow.get("remediation")
+    policy = policy if isinstance(policy, Mapping) else {}
+    link.allowed_actions = (
+        remediation_action_kinds()
+        if policy.get("actionPolicyRef") == "admin_healer_default"
+        else ()
+    )
+
+    bridge = (
+        await session.execute(
+            select(db_models.OmnigentBridgeSession)
+            .where(
+                db_models.OmnigentBridgeSession.moonmind_workflow_id
+                == link.target_workflow_id,
+                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
+            )
+            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    launch = (
+        bridge.effective_launch_snapshot_json
+        if bridge is not None
+        and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+        else {}
+    )
+    link.host_mode = str(launch.get("hostMode") or "").strip() or None
+    link.evidence_degraded = False
+    link.unavailable_evidence_classes = ()
+
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
@@ -11980,6 +12122,7 @@ async def list_execution_remediations(
     workflow_id: str,
     direction: str = Query("inbound"),
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> RemediationLinksResponseModel:
     if direction not in {"inbound", "outbound"}:
@@ -11997,6 +12140,12 @@ async def list_execution_remediations(
     else:
         links = await service.list_remediation_targets(workflow_id)
 
+    await asyncio.gather(
+        *(
+            _attach_remediation_capability_projection(link, session=session)
+            for link in links
+        )
+    )
     return RemediationLinksResponseModel(
         direction=direction,
         items=[_serialize_remediation_link_summary(link) for link in links],
