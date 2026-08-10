@@ -11,11 +11,14 @@ import json
 import os
 import subprocess
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
@@ -31,6 +34,12 @@ from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
     ContainerJobWorkflowInput,
+)
+from moonmind.schemas.agent_runtime_models import (
+    AuthVolumeRef,
+    CredentialMountRef,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workflows.temporal.container_job_backend import (
@@ -569,19 +578,114 @@ async def test_managed_helper_crosses_its_live_trusted_launch_boundary(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_mode", ["static_compose", "on_demand_docker"])
-async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
-    host_mode: str,
+async def test_omnigent_modes_cross_the_real_prepare_host_launch_boundary(
+    host_mode: str, tmp_path: Path
 ) -> None:
-    """Prove both Omnigent modes enter the host adapter's trusted boundary."""
+    """Launch both modes through ``prepare_host``, never its private attestor."""
 
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    attestation = await runtime._attest_egress(
-        {"hostMode": host_mode, "networkRef": OMNIGENT_EGRESS_PROFILE.network_ref}
+    on_demand = host_mode == "on_demand_docker"
+    lease_id = f"egress-live-{uuid.uuid4().hex[:12]}"
+    container_name = f"mm-host-{lease_id}"
+    binding = OmnigentOAuthHostBinding(
+        bindingRef=f"omnigent-oauth:{lease_id}",
+        providerProfileId="codex",
+        endpointRef="default",
+        harness="codex-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="codex",
+                runtimeId="codex_cli",
+                providerId="openai",
+                volumeRef="codex_auth_volume",
+                credentialGeneration=1,
+                ownerUserId="egress-conformance",
+            ),
+            targetPath="/home/app/.codex",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        staticHostId=None if on_demand else "egress-static-host",
+        hostLaunchProfileRef="codex-on-demand" if on_demand else None,
+        executionProfileRef="omnigent-codex@1",
+        launchPolicyRef=(
+            "codex-on-demand@1" if on_demand else "codex-static@1"
+        ),
     )
-    assert attestation.validation_state == "attested"
-    assert attestation.profile_ref == OMNIGENT_EGRESS_PROFILE.ref
-    assert attestation.network_ref == OMNIGENT_EGRESS_PROFILE.network_ref
-    assert attestation.backend_ref == "omnigent-host-runtime"
+    now = datetime.now(UTC)
+    lease = OmnigentHostLease(
+        leaseId=lease_id,
+        providerProfileId="codex",
+        providerLeaseId=f"provider-{lease_id}",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=1,
+        omnigentHostId=None if on_demand else "egress-static-host",
+        containerName=container_name if on_demand else None,
+        status="ready",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(minutes=10),
+    )
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref=("codex-on-demand@1" if on_demand else "codex-static@1"),
+        provider_profile_id="codex",
+    )
+    binding = binding.model_copy(update={"effective_launch_snapshot": launch})
+    workspace = tmp_path / lease_id / "repo"
+    skills = tmp_path / lease_id / "skills_active"
+    workspace.mkdir(parents=True)
+    skills.mkdir(parents=True)
+    host = {
+        "id": "egress-static-host" if not on_demand else lease_id,
+        "name": container_name,
+        "status": "online",
+        "harnesses": ["codex-native"],
+    }
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(list_hosts=AsyncMock(return_value=[host])),
+        workspace_root=tmp_path,
+    )
+    # Keep setup outside the launch authority bounded. The production egress
+    # attestor, static/on-demand launch owner, and attachment inspector remain
+    # unmocked and therefore cross the same Docker handoffs as production.
+    runtime._prepare_skill_projection = AsyncMock(return_value=skills)
+    runtime._prepare_workspace = AsyncMock(return_value=workspace)
+    runtime._align_workspace_ownership = lambda *_args, **_kwargs: None
+    runtime._resolve_daemon_workspace_root = AsyncMock(return_value=tmp_path)
+    runtime._exec_check = AsyncMock()
+    runtime._exec_tools_check = AsyncMock()
+    runtime._preflight_mounted_tools = AsyncMock(
+        return_value={"status": "not_required", "boundaries": []}
+    )
+
+    try:
+        result = await runtime.prepare_host(
+            binding=binding,
+            host_lease=lease,
+            workspace_key=lease_id,
+            workspace_locator={"kind": "sandbox", "workspaceId": lease_id},
+            current_workflow_id="egress-live",
+            current_step_execution_id=lease_id,
+            resolved_skillset_ref="artifact:bounded-by-live-harness",
+            artifact_gateway=SimpleNamespace(),
+            effective_launch=launch,
+        )
+        attestation = result["egressAttestation"]
+        assert attestation["validationResult"] == "passed"
+        assert attestation["profileRef"] == OMNIGENT_EGRESS_PROFILE.ref
+        assert attestation["networkRef"] == OMNIGENT_EGRESS_PROFILE.network_ref
+        assert attestation["backendRef"] == "omnigent-host-runtime"
+        attachment = attestation["attachmentRef"].removeprefix("container:")
+        inspected = _docker(
+            "inspect", "--format", "{{json .NetworkSettings.Networks}}", attachment
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {
+            OMNIGENT_EGRESS_PROFILE.network_ref
+        }
+    finally:
+        if on_demand:
+            _docker("rm", "--force", container_name)
 
 
 @pytest.mark.asyncio
