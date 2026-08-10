@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -101,6 +102,8 @@ ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
 SecretResolver = Callable[[str], Awaitable[str]]
 
+logger = logging.getLogger(__name__)
+
 
 def _redact(text: str, secrets: Sequence[str]) -> str:
     """Remove any resolved credential material from an observable string."""
@@ -157,6 +160,11 @@ _FORBIDDEN_MOUNT_SOURCES = (
     "/var/lib/docker",
 )
 _MIN_VOLUME_SUBPATH_DOCKER_MAJOR = 26
+_MIB = 1024 * 1024
+_AUTO_ACTIVE_MEMORY_FRACTION = 0.70
+_CAPACITY_LOCK_TTL_SECONDS = 60.0
+_CAPACITY_LOCK_WAIT_SECONDS = 15.0
+_CAPACITY_LOCK_POLL_SECONDS = 0.1
 
 
 def _docker_major_version(server_version: str) -> int | None:
@@ -349,6 +357,7 @@ class DockerContainerJobBackend:
         registry_auth_resolver: RegistryAuthResolver | None = None,
         auth_root: str | Path | None = None,
         image_lock: ImageAcquisitionLock | None = None,
+        capacity_lock: ImageAcquisitionLock | None = None,
         image_lock_root: str | Path | None = None,
         pull_lease_ttl_seconds: float = 240.0,
         pull_lock_poll_seconds: float = 2.0,
@@ -386,6 +395,9 @@ class DockerContainerJobBackend:
             else self._workspace_root.parent / ".moonmind-image-acquisition-locks"
         )
         self._image_lock = image_lock or FilesystemImageAcquisitionLock(lock_root)
+        self._capacity_lock = capacity_lock or FilesystemImageAcquisitionLock(
+            lock_root / "capacity"
+        )
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
         self._pull_lock_poll_seconds = pull_lock_poll_seconds
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
@@ -530,10 +542,131 @@ class DockerContainerJobBackend:
         )
         for requested, ceiling, name in checks:
             if requested > ceiling:
-                raise RuntimeError(
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
                     f"{name}={requested} exceeds the deployment ceiling {ceiling} "
-                    "and cannot be raised by a caller"
+                    "and cannot be raised by a caller",
                 )
+
+    def _capacity_lock_key(self) -> str:
+        raw = f"{self._backend_ref}\ncontainer-job-active-memory".encode()
+        return hashlib.sha256(raw).hexdigest()
+
+    async def _acquire_capacity_lock(
+        self, request: ContainerJobActivityRequest
+    ) -> str:
+        key = self._capacity_lock_key()
+        deadline = asyncio.get_running_loop().time() + _CAPACITY_LOCK_WAIT_SECONDS
+        while True:
+            if await self._capacity_lock.try_acquire(
+                key,
+                ttl_seconds=_CAPACITY_LOCK_TTL_SECONDS,
+                owner_id=request.ownership_token,
+            ):
+                return key
+            if asyncio.get_running_loop().time() >= deadline:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.INFRASTRUCTURE,
+                    "container-job capacity admission remained busy",
+                )
+            await asyncio.sleep(_CAPACITY_LOCK_POLL_SECONDS)
+
+    async def _active_memory_budget_mib(self) -> int:
+        code, stdout, _ = await self._runner(
+            ("info", "--format", "{{.MemTotal}}")
+        )
+        try:
+            daemon_memory_bytes = int(stdout.decode(errors="replace").strip())
+        except ValueError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "container backend did not report a valid memory capacity",
+            ) from exc
+        daemon_memory_mib = daemon_memory_bytes // _MIB
+        if code or daemon_memory_mib < 16:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "container backend memory capacity is unavailable",
+            )
+        configured = self._settings.max_active_memory_mib
+        automatic = max(
+            16, int(daemon_memory_mib * _AUTO_ACTIVE_MEMORY_FRACTION)
+        )
+        if configured is None:
+            return automatic
+        if configured > daemon_memory_mib:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                "configured active container-job memory exceeds daemon capacity",
+            )
+        return min(configured, automatic)
+
+    async def _active_container_memory_mib(self, *, exclude: str) -> int:
+        code, stdout, _ = await self._runner(
+            (
+                "ps",
+                "--all",
+                "--filter",
+                f"label={LABEL_CONTAINER_JOB}",
+                "--filter",
+                "status=running",
+                "--format",
+                "{{.Names}}",
+            )
+        )
+        if code:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "active container-job inventory is unavailable",
+            )
+        names = tuple(
+            name
+            for name in stdout.decode(errors="replace").splitlines()
+            if name and name != exclude
+        )
+        if not names:
+            return 0
+        code, stdout, _ = await self._runner(
+            (
+                "inspect",
+                "--format",
+                "{{.HostConfig.Memory}}",
+                *names,
+            )
+        )
+        if code:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "active container-job memory limits are unavailable",
+            )
+        total_bytes = 0
+        try:
+            for raw_limit in stdout.decode(errors="replace").splitlines():
+                memory_bytes = int(raw_limit.strip())
+                if memory_bytes <= 0:
+                    raise ValueError("unbounded memory limit")
+                total_bytes += memory_bytes
+        except ValueError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "active container-job memory limits are invalid",
+            ) from exc
+        return (total_bytes + _MIB - 1) // _MIB
+
+    async def _enforce_active_memory_budget(
+        self, request: ContainerJobActivityRequest, *, container_name: str
+    ) -> None:
+        budget_mib = await self._active_memory_budget_mib()
+        active_mib = await self._active_container_memory_mib(
+            exclude=container_name
+        )
+        requested_mib = request.request.spec.resources.memory_mib
+        if active_mib + requested_mib > budget_mib:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                "container-job active memory budget is exhausted; retry after "
+                "another container job finishes or request less memory",
+            )
 
     @staticmethod
     def _reject_forbidden_launch_args(
@@ -1690,9 +1823,26 @@ class DockerContainerJobBackend:
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
-        await self._checked("start", request.container_ref or self._name(request))
+        container_name = request.container_ref or self._name(request)
+        capacity_key = await self._acquire_capacity_lock(request)
+        try:
+            await self._enforce_active_memory_budget(
+                request, container_name=container_name
+            )
+            await self._checked("start", container_name)
+        finally:
+            try:
+                await self._capacity_lock.release(
+                    capacity_key, request.ownership_token
+                )
+            except Exception:  # noqa: BLE001 - lease expiry preserves recovery
+                logger.warning(
+                    "Container-job capacity lease release failed; the bounded "
+                    "lease will expire automatically",
+                    exc_info=True,
+                )
         return ContainerJobActivityResult(
-            containerRef=request.container_ref or self._name(request), running=True
+            containerRef=container_name, running=True
         )
 
     async def observe_container(self, request: ContainerJobActivityRequest):

@@ -237,9 +237,18 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
 
     api_service = services["api"]
     assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+    assert api_service["restart"] == "unless-stopped"
 
     healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])
     assert "http://localhost:8000/healthz" in healthcheck
+
+    agent_runtime_environment = services["temporal-worker-agent-runtime"][
+        "environment"
+    ]
+    assert any(
+        item.startswith("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=")
+        for item in agent_runtime_environment
+    )
 
     api_env = _env_map(api_service["environment"])
     assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"

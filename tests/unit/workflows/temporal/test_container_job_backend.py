@@ -23,6 +23,8 @@ from moonmind.config.container_backend_settings import (
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
+    ContainerJobBackendError,
+    ContainerJobFailureClass,
 )
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
@@ -584,6 +586,92 @@ async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> No
     )
     with pytest.raises(RuntimeError, match="ceiling"):
         await backend.create_container(_request(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_aggregate_memory_overcommit_before_launch(
+    tmp_path,
+) -> None:
+    lock = AsyncMock()
+    lock.try_acquire.return_value = True
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, str(10 * 1024**3).encode(), b""
+        if args[0] == "ps":
+            return 0, b"existing-container\n", b""
+        if args[0] == "inspect":
+            return 0, str(4 * 1024**3).encode(), b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 1000,
+            "memoryMiB": 4096,
+            "pids": 512,
+        },
+    )
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(request)
+
+    assert (
+        raised.value.failure_class
+        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+    assert "retry after" in str(raised.value)
+    assert not any(command[0] == "start" for command in commands)
+    lock.release.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_serializes_and_admits_within_active_memory_budget(
+    tmp_path,
+) -> None:
+    lock = AsyncMock()
+    lock.try_acquire.return_value = True
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "info":
+            return 0, str(10 * 1024**3).encode(), b""
+        if args[0] == "ps":
+            return 0, b"existing-container\n", b""
+        if args[0] == "inspect":
+            return 0, str(2 * 1024**3).encode(), b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 1000,
+            "memoryMiB": 4096,
+            "pids": 512,
+        },
+    )
+
+    result = await backend.start_container(request)
+
+    assert result.running is True
+    assert any(command[0] == "start" for command in commands)
+    lock.try_acquire.assert_awaited_once()
+    lock.release.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ def test_defaults_are_deployment_safe() -> None:
     assert settings.endpoint == "tcp://docker-proxy:2375"
     # The raw Docker CLI escape hatch is disabled unless explicitly enabled.
     assert settings.raw_cli_enabled is False
+    assert settings.max_active_memory_mib is None
     source = settings.image_source(PYTHON_TEST_IMAGE_SOURCE_REF)
     assert isinstance(source, LocalImageRecipe)
     assert source.image == "moonmind-python-tests:local"
@@ -76,6 +77,7 @@ def test_raw_cli_flag_and_ceilings_are_overridable() -> None:
             "MOONMIND_CONTAINER_BACKEND_RAW_CLI_ENABLED": "true",
             "MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS": "2000",
             "MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB": "1024",
+            "MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB": "768",
             "MOONMIND_CONTAINER_BACKEND_MAX_PIDS": "128",
             "MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB": "32",
             "MOONMIND_CONTAINER_BACKEND_MAX_TIMEOUT_SECONDS": "60",
@@ -84,6 +86,7 @@ def test_raw_cli_flag_and_ceilings_are_overridable() -> None:
     assert settings.raw_cli_enabled is True
     assert settings.max_cpu_millis == 2000
     assert settings.max_memory_mib == 1024
+    assert settings.max_active_memory_mib == 768
     assert settings.max_pids == 128
     assert settings.shm_size_mib == 32
     assert settings.max_timeout_seconds == 60
