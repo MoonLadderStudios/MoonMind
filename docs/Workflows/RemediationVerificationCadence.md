@@ -304,7 +304,7 @@ Verify remediation attempt N of M
 Each remediation step should explicitly instruct the worker to:
 
 - run one named canonical remediation Skill rather than an `auto` Skill selection that can resolve to an empty bundle;
-- receive the exact latest `gateResultRef` and `remainingWorkRef` as direct compact inputs, then read both authoritative artifacts in full before changing anything;
+- receive the exact latest `gateResultRef` and `remainingWorkRef` as direct compact inputs; before runtime launch, the trusted Activity boundary materializes their complete bytes outside workflow history and supplies readable `gateResultPath` and `remainingWorkPath` values to the remediator;
 - address all safe known gaps from that report in one bounded pass;
 - exercise the production workflow, Activity, adapter, persistence, or side-effect-owner boundary when the verifier names that evidence; test-only models, dictionaries, mocks, and hard-coded identities do not satisfy a production-boundary requirement;
 - defer or mark unsafe gaps with evidence instead of silently skipping them;

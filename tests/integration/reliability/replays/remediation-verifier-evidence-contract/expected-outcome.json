@@ -1,6 +1,6 @@
 {
   "invariant": "an admitted remediation attempt runs the canonical implementation Skill and receives the exact durable verifier evidence that admitted it",
-  "selectedSkill": "moonspec-implement",
+  "selectedSkill": "remediate-issue",
   "gateResultRef": "artifact://art_01KZMBV7GKVXHJJDTXXJDKRNWP",
   "remainingWorkRef": "artifact://art_01KZMBV7NA7QR0Y862N4M6235E"
 }

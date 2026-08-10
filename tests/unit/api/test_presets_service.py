@@ -3473,9 +3473,12 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert loop["budgets"]["hardMaxAttempts"] == "6"
     assert loop["remediationTool"]["name"] == "auto"
     assert loop["remediationTool"]["inputs"]["selectedSkill"] == (
-        "moonspec-implement"
+        "remediate-issue"
     )
-    assert "read the complete latest authoritative verifier artifact" in (
+    assert "authoritative verifier evidence materialized by MoonMind" in (
+        loop["remediationTool"]["inputs"]["instructions"]
+    )
+    assert "gateResultPath and remainingWorkPath" in (
         loop["remediationTool"]["inputs"]["instructions"]
     )
     assert "do not substitute test-only models" in (

@@ -28,9 +28,9 @@
           "type": "agent_runtime",
           "name": "auto",
           "inputs": {
-            "selectedSkill": "moonspec-implement",
+            "selectedSkill": "remediate-issue",
             "repositoryOperation": "write",
-            "instructions": "Run the selected moonspec-implement Skill and satisfy every production boundary named by the verifier."
+            "instructions": "Run the selected remediate-issue Skill and satisfy every production boundary named by the verifier."
           }
         },
         "verificationTool": {

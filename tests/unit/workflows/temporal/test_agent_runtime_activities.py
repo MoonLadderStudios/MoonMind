@@ -4082,6 +4082,71 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
     assert "Managed Codex CLI note:" in result
     assert session_controller.repaired_workspace_paths == [str(tmp_path)]
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_evidence_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    workspace = managed_root / "run-remediation" / "repo"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    gate_payload = b'{"verdict":"ADDITIONAL_WORK_NEEDED","gap":"production activity"}\n'
+    remaining_payload = b'{"remainingWork":["exercise the real activity boundary"]}\n'
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_StaticArtifactService(
+            {
+                "art-gate": gate_payload,
+                "art-remaining": remaining_payload,
+            }
+        )
+    )
+    request = {
+        "agentKind": "managed",
+        "agentId": "codex",
+        "correlationId": "corr-remediation",
+        "idempotencyKey": "idem-remediation",
+        "parameters": {
+            "instructions": "Implement the verifier gaps.",
+            "selectedSkill": "remediate-issue",
+            "gateResultRef": "artifact://art-gate",
+            "remainingWorkRef": "artifact://art-remaining",
+        },
+    }
+
+    metadata = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": request,
+            "workspacePath": str(workspace),
+            "metadataOnly": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert metadata["durableRetrievalMetadata"] == {}
+    evidence_root = (
+        managed_root / "run-remediation" / "artifacts" / "remediation-inputs"
+    )
+    gate_path = next(evidence_root.glob("gate-result-*.json"))
+    remaining_path = next(evidence_root.glob("remaining-work-*.json"))
+    assert gate_path.read_bytes() == gate_payload
+    assert remaining_path.read_bytes() == remaining_payload
+
+    prepared = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": request,
+            "workspacePath": str(workspace),
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert "MoonMind materialized authoritative verifier evidence:" in prepared
+    assert f"gateResultPath: `{gate_path}`" in prepared
+    assert f"remainingWorkPath: `{remaining_path}`" in prepared
+    assert "exercise the real activity boundary" not in prepared
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "skill_parameters",
