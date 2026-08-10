@@ -2572,14 +2572,14 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "execute-action-retry"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key=action_id,
             requesting_principal="workflow:remediator",
@@ -2593,7 +2593,7 @@ async def test_remediation_execute_action_reuses_retry_artifacts(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2665,7 +2665,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         action_id = "execute-action-v1"
         authority = await RemediationActionAuthorityService(
             session=session
