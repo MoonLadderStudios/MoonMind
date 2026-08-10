@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +50,7 @@ from moonmind.workflows.provider_failures import (
 )
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
+_STATE_LOCK_FILENAME = ".moonmind-codex-session-state.lock"
 _READY_LOOP_SECONDS = 3600.0
 _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
     float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
@@ -200,6 +202,7 @@ class CodexSessionRuntimeState(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
+    state_revision: int = Field(default=0, alias="stateRevision", ge=0)
     session_id: str = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     logical_thread_id: str = Field(..., alias="logicalThreadId")
@@ -840,10 +843,43 @@ class CodexManagedSessionRuntime:
             self._state_path.read_text(encoding="utf-8")
         )
 
-    def _save_state(self, state: CodexSessionRuntimeState) -> None:
+    @contextmanager
+    def _state_lock(self) -> Iterator[None]:
         self._ensure_directories()
+        lock_path = self._state_path.parent / _STATE_LOCK_FILENAME
+        with lock_path.open("a+b") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            yield
+
+    def _save_state(self, state: CodexSessionRuntimeState) -> None:
+        with self._state_lock():
+            self._save_state_locked(state)
+
+    def _save_state_locked(self, state: CodexSessionRuntimeState) -> None:
+        current: CodexSessionRuntimeState | None = None
+        if self._state_path.is_file():
+            current = CodexSessionRuntimeState.model_validate_json(
+                self._state_path.read_text(encoding="utf-8")
+            )
+            if current.session_id != state.session_id:
+                raise RuntimeError(
+                    "sessionId does not match the active managed session"
+                )
+            if current.state_revision != state.state_revision:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session: "
+                    "managed session state advanced while the action was running"
+                )
+
+        next_revision = (current.state_revision if current is not None else 0) + 1
+        next_state = state.model_copy(update={"state_revision": next_revision})
         payload = (
-            state.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n"
+            next_state.model_dump_json(
+                by_alias=True,
+                exclude_none=True,
+                indent=2,
+            )
+            + "\n"
         )
         temp_fd, temp_name = tempfile.mkstemp(
             prefix=f"{_STATE_FILENAME}.",
@@ -856,6 +892,7 @@ class CodexManagedSessionRuntime:
                 temp_fd = -1
                 handle.write(payload)
             os.replace(temp_path, self._state_path)
+            state.state_revision = next_revision
         finally:
             if temp_fd >= 0:
                 os.close(temp_fd)
@@ -903,8 +940,11 @@ class CodexManagedSessionRuntime:
             metadata=merged,
         )
 
-    def _validate_locator(self, request: CodexManagedSessionLocator) -> CodexSessionRuntimeState:
-        state = self._load_state()
+    @staticmethod
+    def _validate_state_locator(
+        state: CodexSessionRuntimeState,
+        request: CodexManagedSessionLocator,
+    ) -> None:
         if state.session_id != request.session_id:
             raise RuntimeError("sessionId does not match the active managed session")
         if state.session_epoch != request.session_epoch:
@@ -913,6 +953,10 @@ class CodexManagedSessionRuntime:
             raise RuntimeError("containerId does not match the active managed session")
         if state.logical_thread_id != request.thread_id:
             raise RuntimeError("threadId does not match the active managed session")
+
+    def _validate_locator(self, request: CodexManagedSessionLocator) -> CodexSessionRuntimeState:
+        state = self._load_state()
+        self._validate_state_locator(state, request)
         return state
 
     @staticmethod
@@ -2881,6 +2925,28 @@ class CodexManagedSessionRuntime:
     ) -> CodexManagedSessionHandle:
         self._ensure_directories()
         self._seed_codex_home_from_auth_volume()
+        existing_state: CodexSessionRuntimeState | None = None
+        if self._state_path.is_file():
+            existing_state = self._load_state()
+            if existing_state.session_id != request.session_id:
+                raise RuntimeError(
+                    "sessionId does not match the active managed session"
+                )
+            if existing_state.session_epoch != request.session_epoch:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session"
+                )
+            if (
+                existing_state.container_id != self._container_id
+                and not request.replace_existing
+            ):
+                raise RuntimeError(
+                    "containerId does not match the active managed session"
+                )
+            if existing_state.logical_thread_id != request.thread_id:
+                raise RuntimeError(
+                    "threadId does not match the active managed session"
+                )
         client = self._initialized_app_server_client()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
         thread_payload = started.get("thread")
@@ -2892,6 +2958,9 @@ class CodexManagedSessionRuntime:
         vendor_thread_path = self._normalized_thread_path(thread_payload.get("path"))
 
         state = CodexSessionRuntimeState(
+            stateRevision=(
+                existing_state.state_revision if existing_state is not None else 0
+            ),
             sessionId=request.session_id,
             sessionEpoch=request.session_epoch,
             logicalThreadId=request.thread_id,
@@ -2936,44 +3005,63 @@ class CodexManagedSessionRuntime:
         thread_recovery = self._recovery_thread_result(client=client, state=state)
         vendor_thread_id = thread_recovery.vendor_thread_id
         rollout_mirror = self._new_rollout_live_mirror(state)
+        recovered_vendor_thread_path = state.vendor_thread_path
 
-        started = client.request(
-            "turn/start",
-            {
-                "threadId": vendor_thread_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": request.instructions,
-                    }
-                ],
-            },
-        )
-        turn_payload = started.get("turn")
-        if not isinstance(turn_payload, Mapping):
-            raise RuntimeError("codex app-server turn/start did not return a turn")
-        vendor_turn_id = str(turn_payload.get("id") or "").strip()
-        if not vendor_turn_id:
-            raise RuntimeError("codex app-server turn/start returned a blank turn id")
+        # Hold state authority only across the provider admission handoff. The
+        # final locator/revision check happens before the billable turn starts,
+        # and the accepted provider turn id is durable before a concurrent
+        # clear, terminate, or observer can publish another state transition.
+        with self._state_lock():
+            authoritative_state = self._load_state()
+            self._validate_state_locator(authoritative_state, request)
+            if authoritative_state.state_revision != state.state_revision:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session: "
+                    "managed session state advanced before provider turn admission"
+                )
+            authoritative_state.vendor_thread_id = vendor_thread_id
+            authoritative_state.vendor_thread_path = recovered_vendor_thread_path
+            state = authoritative_state
 
-        state.active_turn_id = vendor_turn_id
-        state.last_turn_id = vendor_turn_id
-        state.last_turn_status = "running"
-        state.last_turn_error = None
-        state.observability_events = [
-            {
-                "kind": "turn_started",
-                "turnId": vendor_turn_id,
-                "metadata": {"sourceEventId": f"{vendor_turn_id}:started"},
-            }
-        ]
-        state.last_control_action = "send_turn"
-        state.last_control_at = time.time()
-        rollout_mirror.turn_started_at = state.last_control_at
-        # Clear any stale skill-outcome marker so only a file written during
-        # this turn can upgrade an empty output to a no-op success.
-        self._reset_skill_outcome()
-        self._save_state(state)
+            started = client.request(
+                "turn/start",
+                {
+                    "threadId": vendor_thread_id,
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": request.instructions,
+                        }
+                    ],
+                },
+            )
+            turn_payload = started.get("turn")
+            if not isinstance(turn_payload, Mapping):
+                raise RuntimeError("codex app-server turn/start did not return a turn")
+            vendor_turn_id = str(turn_payload.get("id") or "").strip()
+            if not vendor_turn_id:
+                raise RuntimeError(
+                    "codex app-server turn/start returned a blank turn id"
+                )
+
+            state.active_turn_id = vendor_turn_id
+            state.last_turn_id = vendor_turn_id
+            state.last_turn_status = "running"
+            state.last_turn_error = None
+            state.observability_events = [
+                {
+                    "kind": "turn_started",
+                    "turnId": vendor_turn_id,
+                    "metadata": {"sourceEventId": f"{vendor_turn_id}:started"},
+                }
+            ]
+            state.last_control_action = "send_turn"
+            state.last_control_at = time.time()
+            rollout_mirror.turn_started_at = state.last_control_at
+            # Clear any stale skill-outcome marker so only a file written during
+            # this turn can upgrade an empty output to a no-op success.
+            self._reset_skill_outcome()
+            self._save_state_locked(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
         try:
             thread_payload, outcome = self._wait_for_turn_completion(

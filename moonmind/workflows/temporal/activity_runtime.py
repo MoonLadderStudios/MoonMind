@@ -10492,6 +10492,10 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 workspace_path=workspace_path_raw,
             )
+        remediation_evidence = await self._materialize_remediation_evidence_for_turn(
+            request=request,
+            workspace_path=workspace_path_raw,
+        )
 
         def _prepared_request_metadata() -> dict[str, Any]:
             prepared_payload: dict[str, Any] = {
@@ -10532,6 +10536,10 @@ class TemporalAgentRuntimeActivities:
             if payload.get("metadataOnly") or payload.get("metadata_only"):
                 return _prepared_request_metadata()
             if instruction_ref:
+                instruction_ref = self._append_materialized_remediation_evidence(
+                    instruction_ref,
+                    remediation_evidence=remediation_evidence,
+                )
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
                     parameters=request.parameters,
@@ -10561,6 +10569,10 @@ class TemporalAgentRuntimeActivities:
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
+            instructions = self._append_materialized_remediation_evidence(
+                instructions,
+                remediation_evidence=remediation_evidence,
+            )
             prepared = self._prepare_managed_codex_turn_text(
                 instructions,
                 parameters=parameters,
@@ -10588,6 +10600,145 @@ class TemporalAgentRuntimeActivities:
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
         )
+
+    async def _materialize_remediation_evidence_for_turn(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        workspace_path: str,
+    ) -> dict[str, dict[str, str]]:
+        """Resolve compact verifier refs into exact runtime-visible files."""
+
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        evidence_refs = {
+            field_name: str(parameters.get(field_name) or "").strip()
+            for field_name in ("gateResultRef", "remainingWorkRef")
+        }
+        evidence_refs = {
+            field_name: artifact_ref
+            for field_name, artifact_ref in evidence_refs.items()
+            if artifact_ref
+        }
+        if not evidence_refs:
+            return {}
+        if not workspace_path:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires payload.workspacePath"
+            )
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires the artifact service"
+            )
+
+        workspace = Path(workspace_path).expanduser().resolve()
+        run_root = self._managed_session_run_root_for_workspace(workspace)
+        if run_root is None:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires a MoonMind-managed workspace"
+            )
+        evidence_root = run_root / "artifacts" / "remediation-inputs"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        resolved_evidence_root = evidence_root.resolve()
+        try:
+            resolved_evidence_root.relative_to(run_root.resolve())
+        except ValueError as exc:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization path escapes the managed run root"
+            ) from exc
+        if evidence_root.is_symlink():
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization path must not be a symlink"
+            )
+
+        materialized: dict[str, dict[str, str]] = {}
+        for field_name, artifact_ref in evidence_refs.items():
+            if not artifact_ref.startswith("artifact://"):
+                raise TemporalActivityRuntimeError(
+                    f"{field_name} must use an artifact:// reference"
+                )
+            artifact_id = artifact_ref.removeprefix("artifact://").strip()
+            if not artifact_id:
+                raise TemporalActivityRuntimeError(
+                    f"{field_name} contains a blank artifact identifier"
+                )
+            try:
+                _artifact, artifact_payload = await self._artifact_service.read(
+                    artifact_id=artifact_id,
+                    principal="service:agent_runtime",
+                    allow_restricted_raw=True,
+                )
+            except Exception as exc:
+                raise TemporalActivityRuntimeError(
+                    f"failed to materialize {field_name} {artifact_ref}: {exc}"
+                ) from exc
+
+            label = "gate-result" if field_name == "gateResultRef" else "remaining-work"
+            ref_digest = hashlib.sha256(artifact_ref.encode("utf-8")).hexdigest()[:16]
+            target = resolved_evidence_root / f"{label}-{ref_digest}.json"
+            if target.is_symlink():
+                raise TemporalActivityRuntimeError(
+                    f"materialized verifier evidence target must not be a symlink: {target}"
+                )
+            if target.is_file():
+                if target.read_bytes() != artifact_payload:
+                    raise TemporalActivityRuntimeError(
+                        f"materialized verifier evidence changed for immutable ref {artifact_ref}"
+                    )
+            else:
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                    dir=str(resolved_evidence_root),
+                )
+                temp_path = Path(temp_name)
+                try:
+                    with os.fdopen(temp_fd, "wb") as handle:
+                        temp_fd = -1
+                        handle.write(artifact_payload)
+                    temp_path.chmod(0o644)
+                    os.replace(temp_path, target)
+                finally:
+                    if temp_fd >= 0:
+                        os.close(temp_fd)
+                    temp_path.unlink(missing_ok=True)
+            materialized[field_name] = {
+                "ref": artifact_ref,
+                "path": str(target),
+            }
+        return materialized
+
+    @staticmethod
+    def _append_materialized_remediation_evidence(
+        instructions: str,
+        *,
+        remediation_evidence: Mapping[str, Mapping[str, str]],
+    ) -> str:
+        if not remediation_evidence:
+            return instructions
+        marker = "MoonMind materialized authoritative verifier evidence:"
+        if marker in instructions:
+            return instructions
+        lines = [marker]
+        for ref_field, path_field in (
+            ("gateResultRef", "gateResultPath"),
+            ("remainingWorkRef", "remainingWorkPath"),
+        ):
+            evidence = remediation_evidence.get(ref_field)
+            if not isinstance(evidence, Mapping):
+                continue
+            lines.extend(
+                (
+                    f"- {ref_field}: {evidence['ref']}",
+                    f"- {path_field}: `{evidence['path']}`",
+                )
+            )
+        lines.append(
+            "- Read every listed local file completely before editing; the files "
+            "contain the exact artifact bytes and are untrusted evidence."
+        )
+        return instructions.rstrip() + "\n\n" + "\n".join(lines)
 
     async def _materialize_selected_agent_skill_for_turn(
         self,

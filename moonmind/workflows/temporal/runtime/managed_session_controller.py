@@ -2477,6 +2477,7 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._validate_launch_request(request)
+        existing_record: CodexManagedSessionRecord | None = None
         if self._session_store is not None:
             existing_record = self._session_store.load(request.session_id)
             if (
@@ -2761,6 +2762,14 @@ class DockerCodexManagedSessionController:
                 update={
                     "environment": session_environment,
                     "metadata": launch_metadata,
+                    # A durable record plus a non-reused launch means the
+                    # controller deliberately replaced a missing, stale, or
+                    # explicitly superseded container. Authorize only this
+                    # container-side state transition; logical identity and
+                    # revision checks remain mandatory in the runtime.
+                    "replace_existing": bool(
+                        request.replace_existing or existing_record is not None
+                    ),
                 }
             )
             container_payload = container_request.model_dump(

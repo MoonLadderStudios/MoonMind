@@ -8,6 +8,7 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -233,6 +234,54 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
 
+def test_runtime_launch_session_allows_controller_authorized_container_replacement(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    original_runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-old",
+        app_server_command=("python3", str(script)),
+    )
+    original_runtime.launch_session(request)
+    original_revision = original_runtime._load_state().state_revision
+    original_runtime.close()
+
+    unauthorized_runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-new",
+        app_server_command=("python3", str(script)),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="containerId does not match the active managed session",
+    ):
+        unauthorized_runtime.launch_session(request)
+
+    replacement = request.model_copy(update={"replace_existing": True})
+    handle = unauthorized_runtime.launch_session(replacement)
+
+    assert handle.status == "ready"
+    assert handle.session_state.container_id == "ctr-new"
+    state = unauthorized_runtime._load_state()
+    assert state.container_id == "ctr-new"
+    assert state.session_epoch == request.session_epoch
+    assert state.logical_thread_id == request.thread_id
+    assert state.state_revision == original_revision + 1
+    unauthorized_runtime.close()
+
+
 def test_runtime_state_save_failure_preserves_last_valid_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,6 +334,155 @@ def test_runtime_state_save_failure_preserves_last_valid_state(
 
     assert handle.status == "ready"
     assert handle.session_state.session_epoch == 2
+
+
+def test_runtime_stale_state_write_cannot_rollback_cleared_session(
+    tmp_path: Path,
+) -> None:
+    """Regression for mm:1b5eacdb: an observer must not restore an old epoch."""
+
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    stale_observer_state = runtime._load_state()
+
+    runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+    stale_observer_state.last_control_action = "session_status"
+
+    with pytest.raises(
+        RuntimeError,
+        match="managed session state advanced while the action was running",
+    ):
+        runtime._save_state(stale_observer_state)
+
+    authoritative_state = runtime._load_state()
+    assert authoritative_state.session_epoch == 2
+    assert authoritative_state.logical_thread_id == "logical-thread-2"
+    assert authoritative_state.state_revision > stale_observer_state.state_revision
+
+
+def test_runtime_send_turn_rechecks_revision_before_provider_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    client = runtime._initialized_app_server_client()
+    original_request = client.request
+    turn_start_calls: list[dict[str, object]] = []
+
+    def _record_provider_request(
+        method: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if method == "turn/start":
+            turn_start_calls.append(dict(params))
+        return original_request(method, params)
+
+    monkeypatch.setattr(client, "request", _record_provider_request)
+
+    def _advance_state_during_recovery(
+        *,
+        client: object,
+        state: CodexSessionRuntimeState,
+    ) -> SimpleNamespace:
+        del client
+        concurrent = runtime._load_state()
+        concurrent.last_control_action = "terminate_session"
+        concurrent.last_control_at = time.time()
+        runtime._save_state(concurrent)
+        return SimpleNamespace(
+            vendor_thread_id=state.vendor_thread_id,
+            fallback_started=False,
+        )
+
+    monkeypatch.setattr(runtime, "_recovery_thread_result", _advance_state_during_recovery)
+
+    with pytest.raises(
+        RuntimeError,
+        match="managed session state advanced before provider turn admission",
+    ):
+        runtime.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId=request.session_id,
+                sessionEpoch=request.session_epoch,
+                containerId="ctr-1",
+                threadId=request.thread_id,
+                instructions="Do not start this stale turn",
+            )
+        )
+
+    assert turn_start_calls == []
+    authoritative = runtime._load_state()
+    assert authoritative.last_control_action == "terminate_session"
+    assert authoritative.active_turn_id is None
+    runtime.close()
+
+
+def test_runtime_clear_session_advances_legacy_unrevisioned_state(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = (
+        Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    )
+    legacy_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    legacy_payload.pop("stateRevision")
+    state_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+
+    handle = runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.session_state.session_epoch == 2
+    assert runtime._load_state().state_revision == 1
 
 
 def test_runtime_clear_session_recovers_sqlite_state_runtime_init_failure(

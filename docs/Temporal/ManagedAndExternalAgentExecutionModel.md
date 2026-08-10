@@ -492,6 +492,8 @@ A detached process or provider job is not considered ongoing MoonMind-managed wo
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
 
+Direct managed-session state is written through a monotonic revision compare-and-swap boundary. A provider turn is admitted while holding the state authority lock from the final locator/revision check through persistence of the provider's accepted turn identifier; concurrent control actions therefore cannot create an accepted but untracked turn. Longer provider observation remains outside the lock, and later publications succeed only when the persisted revision they read is still current. A concurrent clear, turn, or observer that advanced the revision makes a stale publication fail as a managed-session locator mismatch; the caller reloads the authoritative epoch, thread, and container locator before deciding whether to retry. An observer must never roll session state back to an older epoch or thread. When the controller deliberately replaces a missing, stale, or explicitly superseded container, it authorizes exactly that container transition while preserving the logical session, epoch, thread, workspace, and revision chain.
+
 ### 16.1.1 Terminal-contract continuation
 
 Terminal-contract continuation is semantic recovery, not an Activity retry. It

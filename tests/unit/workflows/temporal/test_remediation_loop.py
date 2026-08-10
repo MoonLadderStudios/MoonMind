@@ -260,6 +260,34 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
     assert verification["inputs"]["readOnlyWorkspaceHead"] is True
 
 
+def test_materialization_passes_authoritative_verifier_refs_to_remediator() -> None:
+    remediation, _ = materialize_attempt_nodes(
+        spec=_spec(6),
+        workflow_id="wf",
+        run_id="run",
+        ordinal=2,
+        workspace_head_ref="artifact://workspace/C1",
+        runtime=_LOOP_RUNTIME,
+        remediation_inputs={
+            "gateResultRef": "artifact://verification/V1",
+            "remainingWorkRef": "artifact://remaining/R1",
+        },
+    )
+
+    assert remediation["inputs"]["gateResultRef"] == (
+        "artifact://verification/V1"
+    )
+    assert remediation["inputs"]["remainingWorkRef"] == (
+        "artifact://remaining/R1"
+    )
+    assert "- gateResultRef: artifact://verification/V1" in (
+        remediation["inputs"]["instructions"]
+    )
+    assert "- remainingWorkRef: artifact://remaining/R1" in (
+        remediation["inputs"]["instructions"]
+    )
+
+
 @pytest.mark.parametrize("tool_name", ["remediationTool", "verificationTool"])
 def test_remediation_loop_rejects_instructionless_agent_steps(tool_name: str) -> None:
     payload = _spec().model_dump(by_alias=True, mode="json")

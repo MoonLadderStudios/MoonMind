@@ -4040,6 +4040,84 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 
 
 @pytest.mark.asyncio
+async def test_controller_authorizes_replacement_at_container_runtime_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="img",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId=request.session_id,
+            sessionEpoch=request.session_epoch,
+            agentRunId=request.agent_run_id,
+            containerId="ctr-missing",
+            threadId=request.thread_id,
+            runtimeId="codex_cli",
+            imageRef=request.image_ref,
+            controlUrl="docker-exec://ctr-missing",
+            status="ready",
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt="2026-08-09T12:00:00Z",
+        )
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        session_store=store,
+    )
+    monkeypatch.setattr(controller, "_container_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr(controller, "_ensure_workspace_paths", AsyncMock())
+    monkeypatch.setattr(controller, "_remove_container", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        controller,
+        "_configure_session_github_auth",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_run",
+        AsyncMock(return_value=("ctr-new\n", "")),
+    )
+    monkeypatch.setattr(controller, "_wait_ready", AsyncMock())
+    invoked_payloads: list[dict[str, Any]] = []
+
+    async def _invoke_json(**kwargs: Any) -> dict[str, Any]:
+        invoked_payloads.append(dict(kwargs["payload"]))
+        return {
+            "sessionState": {
+                "sessionId": request.session_id,
+                "sessionEpoch": request.session_epoch,
+                "containerId": "ctr-new",
+                "threadId": request.thread_id,
+            },
+            "status": "ready",
+            "imageRef": request.image_ref,
+            "controlUrl": "docker-exec://ctr-new",
+        }
+
+    monkeypatch.setattr(controller, "_invoke_json", _invoke_json)
+
+    handle = await controller.launch_session(request)
+
+    assert handle.session_state.container_id == "ctr-new"
+    assert invoked_payloads[0]["replaceExisting"] is True
+
+
+@pytest.mark.asyncio
 async def test_controller_explicit_replacement_bypasses_live_record_reuse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -457,6 +457,7 @@ def materialize_attempt_nodes(
     ordinal: int,
     workspace_head_ref: str | None,
     runtime: Mapping[str, object],
+    remediation_inputs: Mapping[str, object] | None = None,
     verification_inputs: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build only the admitted attempt pair with deterministic lineage."""
@@ -473,14 +474,37 @@ def materialize_attempt_nodes(
         "moonSpecRemediationAttempt": ordinal,
         "moonSpecRemediationMaxAttempts": spec.budgets.hard_max_attempts,
     }
-    remediation_inputs = dict(spec.remediation_tool.inputs)
-    remediation_inputs.update(
+    compiled_remediation_inputs = dict(spec.remediation_tool.inputs)
+    compiled_remediation_inputs.update(dict(remediation_inputs or {}))
+    compiled_remediation_inputs.update(
         {
             "remediationLoopId": spec.loop_id,
             "remediationAttempt": ordinal,
             "remediationWorkspaceHeadRef": workspace_head_ref,
         }
     )
+    gate_result_ref = str(
+        compiled_remediation_inputs.get("gateResultRef") or ""
+    ).strip()
+    remaining_work_ref = str(
+        compiled_remediation_inputs.get("remainingWorkRef") or ""
+    ).strip()
+    instructions = compiled_remediation_inputs.get("instructions")
+    if (
+        isinstance(instructions, str)
+        and instructions.strip()
+        and gate_result_ref
+        and "MoonMind authoritative verifier evidence:" not in instructions
+    ):
+        evidence_lines = [
+            "MoonMind authoritative verifier evidence:",
+            f"- gateResultRef: {gate_result_ref}",
+        ]
+        if remaining_work_ref:
+            evidence_lines.append(f"- remainingWorkRef: {remaining_work_ref}")
+        compiled_remediation_inputs["instructions"] = (
+            instructions.rstrip() + "\n\n" + "\n".join(evidence_lines)
+        )
     verifier_inputs = dict(spec.verification_tool.inputs)
     verifier_inputs.update(dict(verification_inputs or {}))
     verifier_inputs.update(
@@ -491,17 +515,19 @@ def materialize_attempt_nodes(
             "readOnlyWorkspaceHead": True,
         }
     )
-    remediation_inputs.setdefault("selectedSkill", spec.remediation_tool.name)
+    compiled_remediation_inputs.setdefault(
+        "selectedSkill", spec.remediation_tool.name
+    )
     verifier_inputs.setdefault("selectedSkill", spec.verification_tool.name)
-    remediation_inputs.setdefault("repositoryOperation", "write")
+    compiled_remediation_inputs.setdefault("repositoryOperation", "write")
     verifier_inputs.setdefault("repositoryOperation", "read")
-    remediation_inputs["runtime"] = dict(runtime_block)
+    compiled_remediation_inputs["runtime"] = dict(runtime_block)
     verifier_inputs["runtime"] = dict(runtime_block)
     remediation = {
         "id": remediation_id,
         "title": f"Remediate verification gaps (attempt {ordinal})",
         "tool": {"type": "agent_runtime", "name": runtime_id},
-        "inputs": remediation_inputs,
+        "inputs": compiled_remediation_inputs,
         "annotations": {
             **common_annotations,
             "issueImplementRole": "moonspec-remediation",
