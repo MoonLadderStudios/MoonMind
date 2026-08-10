@@ -16,10 +16,16 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     _MAX_SUMMARY_CHARS,
 )
+from moonmind.schemas.managed_session_models import (
+    SendCodexManagedSessionTurnRequest,
+)
 from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInput
 from moonmind.workflows.provider_failures import ProviderFailureEvent
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_run import (
+    CODEX_TURN_RUNTIME_SELECTION_PATCH_ID,
+    MoonMindAgentRun,
+)
 from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
 
 pytestmark = [pytest.mark.asyncio]
@@ -116,10 +122,21 @@ def _terminal_contract_snapshot(
     }
 
 
+@pytest.mark.parametrize("runtime_selection_patch_enabled", [False, True])
 async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     monkeypatch: pytest.MonkeyPatch,
+    runtime_selection_patch_enabled: bool,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            runtime_selection_patch_enabled
+            if patch_id == CODEX_TURN_RUNTIME_SELECTION_PATCH_ID
+            else True
+        ),
+    )
     run = MoonMindAgentRun()
     request = AgentExecutionRequest.model_validate(
         _request_with_terminal_contract().model_dump(by_alias=True)
@@ -127,6 +144,8 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     request.parameters["_moonmindActiveSkillsDir"] = (
         "/work/runtime/skills_active/snapshot-retry"
     )
+    request.parameters["model"] = "gpt-5.3-codex-spark"
+    request.parameters["effort"] = "xhigh"
     request.step_execution = AgentRuntimeStepExecutionLaunch(
         workflowId="wf-task-1",
         runId="run-1",
@@ -194,11 +213,22 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
         "agent_runtime.fetch_result",
         "agent_runtime.evaluate_terminal_evidence",
     ]
-    turn = calls[2][1]
+    raw_turn = calls[2][1]
+    if runtime_selection_patch_enabled:
+        assert isinstance(raw_turn, SendCodexManagedSessionTurnRequest)
+    else:
+        assert isinstance(raw_turn, dict)
+        assert "model" not in raw_turn
+        assert "effort" not in raw_turn
+    turn = SendCodexManagedSessionTurnRequest.model_validate(raw_turn)
     assert turn.request_id == "idem-managed-1:terminal-contract:1"
     assert turn.session_epoch == 3
     assert turn.container_id == "ctr-reset"
     assert turn.thread_id == "thr-reset"
+    assert turn.model == (
+        "gpt-5.3-codex-spark" if runtime_selection_patch_enabled else None
+    )
+    assert turn.effort == ("xhigh" if runtime_selection_patch_enabled else None)
     assert turn.environment == {
         "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
         "MOONMIND_STEP_EXECUTION_ID": (

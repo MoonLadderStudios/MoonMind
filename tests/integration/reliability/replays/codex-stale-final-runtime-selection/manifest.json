@@ -1,0 +1,10 @@
+{
+  "incidentWorkflowId": "mm:bc689115-e389-4cdf-b221-89df19bcca08-2026-08-10T13:00:00Z",
+  "incidentRunId": "019febc2-3155-74d4-8474-f1425dcf8b3c",
+  "failureShape": "Codex emitted a final_answer rollout event without task_complete while thread/read remained active, so the managed turn retained activeTurnId and held the only OAuth profile slot; the requested model and effort were also absent from turn/start",
+  "boundary": "managed AgentRun request through Codex app-server turn/start and durable rollout terminal recovery",
+  "threadStatusType": "active",
+  "requestedModel": "gpt-5.3-codex-spark",
+  "requestedEffort": "xhigh",
+  "rolloutRelativePath": "sessions/2026/08/10/rollout-2026-08-10T18-10-35-vendor-thread-1.jsonl"
+}

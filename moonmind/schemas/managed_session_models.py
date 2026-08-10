@@ -41,6 +41,7 @@ def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
     return normalized
 
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+CODEX_TURN_RUNTIME_SELECTION_CONTRACT = "codex.turn_runtime_selection.v1"
 _PER_TURN_SESSION_ENV_KEYS = frozenset(
     {
         "MOONMIND_ACTIVE_SKILLS_DIR",
@@ -1242,10 +1243,19 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
     request_id: NonBlankStr | None = Field(None, alias="requestId")
+    model: str | None = Field(None, alias="model")
+    effort: str | None = Field(None, alias="effort")
     bridge_publication: dict[str, Any] | None = Field(
         None, alias="bridgePublication"
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+
+    @field_validator("model", "effort")
+    @classmethod
+    def _validate_runtime_selection(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("runtime selection value must not be blank")
+        return value
 
     @field_validator("environment")
     @classmethod
