@@ -749,6 +749,8 @@ async def test_omnigent_modes_cross_the_real_prepare_host_launch_boundary(
         return_value={"status": "not_required", "boundaries": []}
     )
 
+    attachment_ids: list[str] = []
+    attestation_times: list[str] = []
     try:
         result = await runtime.prepare_host(
             binding=binding,
@@ -774,9 +776,61 @@ async def test_omnigent_modes_cross_the_real_prepare_host_launch_boundary(
         assert set(json.loads(inspected.stdout)) == {
             OMNIGENT_EGRESS_PROFILE.network_ref
         }
+        container = _docker("inspect", attachment)
+        assert container.returncode == 0, container.stderr[-1000:]
+        attachment_ids.append(json.loads(container.stdout)[0]["Id"])
+        attestation_times.append(attestation["validatedAt"])
+
+        if on_demand:
+            # A remediator can replace an owned on-demand host after a crash or
+            # cancellation.  Cross the same production owner a second time:
+            # the replacement must not reuse the removed attachment or merely
+            # carry forward its prior attestation.
+            removed = _docker("rm", "--force", container_name)
+            assert removed.returncode == 0, removed.stderr[-1000:]
+            assert _docker("inspect", container_name).returncode != 0
+
+            replacement = await runtime.prepare_host(
+                binding=binding,
+                host_lease=lease,
+                workspace_key=lease_id,
+                workspace_locator={"kind": "sandbox", "workspaceId": lease_id},
+                current_workflow_id="egress-live",
+                current_step_execution_id=f"{lease_id}-replacement",
+                resolved_skillset_ref="artifact:bounded-by-live-harness",
+                artifact_gateway=SimpleNamespace(),
+                effective_launch=launch,
+            )
+            replacement_attestation = replacement["egressAttestation"]
+            assert replacement_attestation["validationResult"] == "passed"
+            assert replacement_attestation["profileDigest"] == (
+                OMNIGENT_EGRESS_PROFILE.digest
+            )
+            assert replacement_attestation["networkRef"] == (
+                OMNIGENT_EGRESS_PROFILE.network_ref
+            )
+            assert replacement_attestation["backendRef"] == "omnigent-host-runtime"
+            attestation_times.append(replacement_attestation["validatedAt"])
+
+            replacement_attachment = replacement_attestation[
+                "attachmentRef"
+            ].removeprefix("container:")
+            replacement_container = _docker("inspect", replacement_attachment)
+            assert replacement_container.returncode == 0, (
+                replacement_container.stderr[-1000:]
+            )
+            replacement_state = json.loads(replacement_container.stdout)[0]
+            attachment_ids.append(replacement_state["Id"])
+            assert set(replacement_state["NetworkSettings"]["Networks"]) == {
+                OMNIGENT_EGRESS_PROFILE.network_ref
+            }
     finally:
         if on_demand:
             _docker("rm", "--force", container_name)
+
+    if on_demand:
+        assert attachment_ids[0] != attachment_ids[1]
+        assert attestation_times[0] != attestation_times[1]
 
 
 @pytest.mark.asyncio
