@@ -11807,77 +11807,6 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         status_value=status_value,
     )
 
-async def _attach_remediation_capability_projection(
-    link: Any, *, session: AsyncSession
-) -> None:
-    """Resolve exact-target inputs that are intentionally absent from the link row."""
-
-    target = await session.get(
-        db_models.TemporalExecutionCanonicalRecord,
-        str(getattr(link, "target_workflow_id", "")),
-    )
-    remediation = await session.get(
-        db_models.TemporalExecutionCanonicalRecord,
-        str(getattr(link, "remediation_workflow_id", "")),
-    )
-    if target is None or remediation is None:
-        link.current_target_state = "missing"
-        link.allowed_actions = ()
-        link.evidence_degraded = True
-        link.unavailable_evidence_classes = ("target_identity",)
-        return
-
-    link.current_target_state = _enum_value(getattr(target, "state", None))
-    target_parameters = dict(getattr(target, "parameters", None) or {})
-    target_workflow = target_parameters.get("workflow") or target_parameters.get("task")
-    target_workflow = target_workflow if isinstance(target_workflow, Mapping) else {}
-    runtime = target_workflow.get("runtime")
-    runtime = runtime if isinstance(runtime, Mapping) else {}
-    search_attributes = dict(getattr(target, "search_attributes", None) or {})
-    link.target_runtime = (
-        str(
-            runtime.get("mode")
-            or target_parameters.get("targetRuntime")
-            or search_attributes.get("mm_target_runtime")
-            or ""
-        ).strip()
-        or None
-    )
-
-    remediation_parameters = dict(getattr(remediation, "parameters", None) or {})
-    remediation_workflow = remediation_parameters.get("workflow") or remediation_parameters.get("task")
-    remediation_workflow = (
-        remediation_workflow if isinstance(remediation_workflow, Mapping) else {}
-    )
-    policy = remediation_workflow.get("remediation")
-    policy = policy if isinstance(policy, Mapping) else {}
-    link.allowed_actions = (
-        remediation_action_kinds()
-        if policy.get("actionPolicyRef") == "admin_healer_default"
-        else ()
-    )
-
-    bridge = (
-        await session.execute(
-            select(db_models.OmnigentBridgeSession)
-            .where(
-                db_models.OmnigentBridgeSession.moonmind_workflow_id
-                == link.target_workflow_id,
-                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
-            )
-            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    launch = (
-        bridge.effective_launch_snapshot_json
-        if bridge is not None
-        and isinstance(bridge.effective_launch_snapshot_json, Mapping)
-        else {}
-    )
-    link.host_mode = str(launch.get("hostMode") or "").strip() or None
-    link.evidence_degraded = False
-    link.unavailable_evidence_classes = ()
     policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
     target_state = str(getattr(link, "current_target_state", "") or "").strip()
     unavailable_evidence = set(
@@ -11951,6 +11880,84 @@ async def _attach_remediation_capability_projection(
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
+
+
+async def _attach_remediation_capability_projection(
+    link: Any, *, session: AsyncSession
+) -> None:
+    """Resolve exact-target inputs that are intentionally absent from the link row."""
+
+    target = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "target_workflow_id", "")),
+    )
+    remediation = await session.get(
+        db_models.TemporalExecutionCanonicalRecord,
+        str(getattr(link, "remediation_workflow_id", "")),
+    )
+    if target is None or remediation is None:
+        link.current_target_state = "missing"
+        link.allowed_actions = ()
+        link.evidence_degraded = True
+        link.unavailable_evidence_classes = ("target_identity",)
+        return
+
+    link.current_target_state = _enum_value(getattr(target, "state", None))
+    target_parameters = dict(getattr(target, "parameters", None) or {})
+    target_workflow = target_parameters.get("workflow") or target_parameters.get(
+        "task"
+    )
+    target_workflow = target_workflow if isinstance(target_workflow, Mapping) else {}
+    runtime = target_workflow.get("runtime")
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+    search_attributes = dict(getattr(target, "search_attributes", None) or {})
+    link.target_runtime = (
+        str(
+            runtime.get("mode")
+            or target_parameters.get("targetRuntime")
+            or search_attributes.get("mm_target_runtime")
+            or ""
+        ).strip()
+        or None
+    )
+
+    remediation_parameters = dict(getattr(remediation, "parameters", None) or {})
+    remediation_workflow = remediation_parameters.get(
+        "workflow"
+    ) or remediation_parameters.get("task")
+    remediation_workflow = (
+        remediation_workflow if isinstance(remediation_workflow, Mapping) else {}
+    )
+    policy = remediation_workflow.get("remediation")
+    policy = policy if isinstance(policy, Mapping) else {}
+    link.allowed_actions = (
+        remediation_action_kinds()
+        if policy.get("actionPolicyRef") == "admin_healer_default"
+        else ()
+    )
+
+    bridge = (
+        await session.execute(
+            select(db_models.OmnigentBridgeSession)
+            .where(
+                db_models.OmnigentBridgeSession.moonmind_workflow_id
+                == link.target_workflow_id,
+                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
+            )
+            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    launch = (
+        bridge.effective_launch_snapshot_json
+        if bridge is not None
+        and isinstance(bridge.effective_launch_snapshot_json, Mapping)
+        else {}
+    )
+    link.host_mode = str(launch.get("hostMode") or "").strip() or None
+    link.evidence_degraded = False
+    link.unavailable_evidence_classes = ()
+
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
