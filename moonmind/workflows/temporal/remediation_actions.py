@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.remediation_context import (
@@ -381,14 +384,164 @@ _SUPPORTED_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
 
+# Execution readiness is deliberately explicit and conservative. An action is
+# requestable only when both its owning mutation adapter and its authoritative
+# verifier are wired. Keeping unavailable identities in ``_ACTION_CATALOG``
+# lets policy and documentation expose a stable, bounded disabled reason without
+# advertising the action as executable (MoonLadderStudios/MoonMind#3624).
+_EXECUTION_BACKEND_READY = frozenset(
+    {
+        "execution.pause",
+        "execution.resume",
+        "execution.request_rerun_same_workflow",
+        "execution.start_fresh_rerun",
+        "checkpoint_branch.create_from_remediation_context",
+        "execution.cancel",
+        "execution.force_terminate",
+        "session.interrupt_turn",
+        "session.cancel",
+        "provider_profile.evict_stale_lease",
+        "workload.restart_helper_container",
+        "workload.reap_orphan_container",
+        "host.drain",
+        "host.stop",
+        "host.restart",
+        "host.remove",
+        "host_lease.reconcile_stale",
+    }
+)
+
+_OMNIGENT_ONLY_TARGETS = frozenset(
+    {
+        "managed_session",
+        "provider_profile_lease",
+        "workload_container",
+        "omnigent_host",
+        "host_lease",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationCapabilityContext:
+    """Live, exact-target inputs resolved by the owning service boundary."""
+
+    target_runtime: str | None = None
+    host_mode: str | None = None
+    target_state_eligible: bool = True
+    current_evidence_classes: Sequence[str] = field(default_factory=tuple)
+    require_current_evidence: bool = False
+    policy_allowed_action_kinds: Sequence[str] | None = None
+    caller_allowed_action_kinds: Sequence[str] | None = None
+    execution_backend_readiness: Mapping[str, bool] | None = None
+    approval_backend_ready: bool = True
+    verification_backend_readiness: Mapping[str, bool] | None = None
+
+
+def _action_support(action_kind: str) -> tuple[list[str], list[str]]:
+    from moonmind.workflows.executions.execution_contract import SUPPORTED_RUNTIME_MODES
+
+    target_type = str((_ACTION_CATALOG.get(action_kind) or {}).get("target_type") or "")
+    if target_type in _OMNIGENT_ONLY_TARGETS:
+        return ["omnigent"], ["static_compose", "on_demand_docker"]
+    return sorted(SUPPORTED_RUNTIME_MODES | {"temporal"}), []
+
+
+def remediation_action_capability(
+    action_kind: str,
+    *,
+    context: RemediationCapabilityContext | None = None,
+) -> Mapping[str, Any]:
+    """Evaluate one action against catalog and live exact-target readiness."""
+
+    normalized = str(action_kind or "").strip()
+    metadata = _ACTION_CATALOG.get(normalized)
+    contract = verification_contract_for(normalized)
+    catalog_enabled = bool(metadata and metadata.get("enabled"))
+    supported_runtimes, supported_host_modes = _action_support(normalized)
+    execution_ready = normalized in _EXECUTION_BACKEND_READY
+    verification_ready = contract.automatically_verifiable
+    approval_ready = catalog_enabled
+    if context is not None:
+        if context.execution_backend_readiness is not None:
+            execution_ready = execution_ready and bool(
+                context.execution_backend_readiness.get(normalized, False)
+            )
+        if context.verification_backend_readiness is not None:
+            verification_ready = verification_ready and bool(
+                context.verification_backend_readiness.get(normalized, False)
+            )
+        approval_ready = catalog_enabled and context.approval_backend_ready
+    blocked: list[str] = []
+    if not catalog_enabled:
+        blocked.append("action_not_in_enabled_catalog")
+    if not execution_ready:
+        blocked.append("execution_backend_unavailable")
+    if not approval_ready:
+        blocked.append("approval_backend_unavailable")
+    if not verification_ready:
+        blocked.append("authoritative_verifier_unavailable")
+    if context is not None:
+        policy = context.policy_allowed_action_kinds
+        if policy is not None and normalized not in set(policy):
+            blocked.append("target_policy_denied")
+        caller = context.caller_allowed_action_kinds
+        if caller is not None and normalized not in set(caller):
+            blocked.append("caller_permission_denied")
+        if not context.target_state_eligible:
+            blocked.append("target_state_ineligible")
+        if context.target_runtime and context.target_runtime not in supported_runtimes:
+            blocked.append("target_runtime_unsupported")
+        if (
+            context.host_mode
+            and supported_host_modes
+            and context.host_mode not in supported_host_modes
+        ):
+            blocked.append("host_mode_unsupported")
+        required = set(contract.before_evidence_classes)
+        available = set(context.current_evidence_classes)
+        if context.require_current_evidence and not required.issubset(available):
+            blocked.append("required_evidence_unavailable")
+    requestable = not blocked
+    return {
+        "requestable": requestable,
+        "dryRunSupported": False,
+        "executionBackendReady": execution_ready,
+        "approvalBackendReady": approval_ready,
+        "verificationBackendReady": verification_ready,
+        "supportedTargetRuntimes": supported_runtimes,
+        "supportedHostModes": supported_host_modes,
+        "requiredEvidenceClasses": list(
+            dict.fromkeys(
+                contract.before_evidence_classes + contract.after_evidence_classes
+            )
+        ),
+        "blockedReasons": blocked,
+    }
+
+
+def remediation_action_capability_matrix(
+    *, context: RemediationCapabilityContext | None = None
+) -> tuple[Mapping[str, Any], ...]:
+    """Return every catalog identity, including truthfully disabled actions."""
+
+    return tuple(
+        {
+            "actionKind": action_kind,
+            **remediation_action_capability(action_kind, context=context),
+        }
+        for action_kind in _ACTION_CATALOG
+    )
+
 
 def remediation_action_kinds() -> tuple[str, ...]:
-    """Return the canonical enabled action identities for adapter construction."""
+    """Return canonical identities with ready execution and verification owners."""
 
     return tuple(
         action_kind
         for action_kind, metadata in _ACTION_CATALOG.items()
         if metadata.get("enabled") is True
+        and remediation_action_capability(action_kind)["requestable"] is True
     )
 _ABSOLUTE_PATH_PATTERN = re.compile(
     r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
@@ -463,7 +616,7 @@ class RemediationActionAuthorityResult:
                     "resourceKind": _target_type(self.action_kind),
                 },
                 "riskTier": self.risk,
-                "dryRun": self.reason == "dry_run",
+                "dryRun": self.reason.startswith("dry_run"),
                 "idempotencyKey": self.idempotency_key,
                 "params": dict(self.redacted_parameters),
             },
@@ -668,6 +821,7 @@ class RemediationActionAuthorityService:
         *,
         permissions: RemediationPermissionSet,
         security_profile: RemediationSecurityProfile | None,
+        capability_context: RemediationCapabilityContext | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
         """Return enabled action metadata allowed by caller permissions and profile."""
 
@@ -686,6 +840,16 @@ class RemediationActionAuthorityService:
                 continue
             if action_kind not in allowed_by_profile:
                 continue
+            live_context = capability_context or RemediationCapabilityContext()
+            live_context = replace(
+                live_context,
+                caller_allowed_action_kinds=tuple(allowed_by_profile),
+            )
+            capability = remediation_action_capability(
+                action_kind, context=live_context
+            )
+            if not capability["requestable"]:
+                continue
             actions.append(
                 {
                     "actionKind": action_kind,
@@ -697,6 +861,7 @@ class RemediationActionAuthorityService:
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
                     "auditPayloadShape": deepcopy(_COMMON_AUDIT_PAYLOAD_SHAPE),
+                    **capability,
                 }
             )
         return tuple(actions)
@@ -1068,6 +1233,33 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
+        if dry_run:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason="dry_run_unsupported",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+        capability = remediation_action_capability(action_kind)
+        if not capability["requestable"]:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=str(capability["blockedReasons"][0]),
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
         if not permissions.can_view_target:
             return self._linked_result(
                 link=link,
@@ -1088,22 +1280,6 @@ class RemediationActionAuthorityService:
                 risk=risk,
                 decision="denied",
                 reason="unsupported_authority_mode",
-                idempotency_key=idempotency_key,
-                requesting_principal=requesting_principal,
-                security_profile=security_profile,
-                approval_ref=approval_ref,
-                parameters=parameters,
-            )
-        if dry_run:
-            decision: RemediationActionDecision = (
-                "dry_run_only" if authority_mode == "observe_only" else "allowed"
-            )
-            return self._linked_result(
-                link=link,
-                action_kind=action_kind,
-                risk=risk,
-                decision=decision,
-                reason="dry_run",
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,
@@ -2525,6 +2701,7 @@ def remediation_changes_require_checkpoint_branch(
 
 
 __all__ = [
+    "RemediationCapabilityContext",
     "REMEDIATION_BRANCH_SENSITIVE_FIELDS",
     "RemediationActionAuthorityResult",
     "RemediationActionAuthorityService",
@@ -2541,5 +2718,8 @@ __all__ = [
     "RemediationPermissionSet",
     "RemediationSecurityProfile",
     "RemediationTargetFreshnessDecision",
+    "remediation_action_capability",
+    "remediation_action_capability_matrix",
+    "remediation_action_kinds",
     "remediation_changes_require_checkpoint_branch",
 ]

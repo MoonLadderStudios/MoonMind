@@ -5436,10 +5436,22 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:target-workflow/remediations",
-        params={"direction": "inbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:target-workflow/remediations",
+            params={"direction": "inbound"},
+        )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -5461,7 +5473,8 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "contextArtifactRef": "art_context",
                 "selectedSteps": None,
                 "currentTargetState": None,
-                "allowedActions": None,
+                "allowedActions": [],
+                "actionCapabilities": [],
                 "evidenceDegraded": None,
                 "unavailableEvidenceClasses": None,
                 "liveObservation": None,
@@ -5515,10 +5528,22 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:remediation-1/remediations",
-        params={"direction": "outbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:remediation-1/remediations",
+            params={"direction": "outbound"},
+        )
 
     assert response.status_code == 200
     assert response.json()["direction"] == "outbound"
@@ -5538,7 +5563,8 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "contextArtifactRef": None,
         "selectedSteps": None,
         "currentTargetState": None,
-        "allowedActions": None,
+        "allowedActions": [],
+        "actionCapabilities": [],
         "evidenceDegraded": None,
         "unavailableEvidenceClasses": None,
         "liveObservation": None,
@@ -5633,16 +5659,29 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
         )
     ]
 
-    response = test_client.get(
-        "/api/executions/mm:remediation-rich/remediations",
-        params={"direction": "outbound"},
-    )
+    with (
+        patch.object(
+            executions_module,
+            "_attach_remediation_capability_projection",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            executions_module,
+            "remediation_action_capability_matrix",
+            return_value=(),
+        ),
+    ):
+        response = test_client.get(
+            "/api/executions/mm:remediation-rich/remediations",
+            params={"direction": "outbound"},
+        )
 
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["selectedSteps"] == ["collect-context", "repair-runtime"]
     assert item["currentTargetState"] == "awaiting_external"
-    assert item["allowedActions"] == ["inspect_context", "request_approval"]
+    assert item["allowedActions"] == []
+    assert item["actionCapabilities"] == []
     assert item["evidenceDegraded"] is True
     assert item["unavailableEvidenceClasses"] == [
         "runtime_stderr",
