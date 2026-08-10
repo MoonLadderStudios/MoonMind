@@ -3,7 +3,7 @@
 **Status:** Desired-state design refinement
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-07-06
+**Last Updated:** 2026-08-09
 **Related:** `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/UI/WorkflowDetailsPage.md`
 
 ---
@@ -303,8 +303,10 @@ Verify remediation attempt N of M
 
 Each remediation step should explicitly instruct the worker to:
 
-- read the latest verifier artifact before changing anything;
+- run one named canonical remediation Skill rather than an `auto` Skill selection that can resolve to an empty bundle;
+- receive the exact latest `gateResultRef` and `remainingWorkRef` as direct compact inputs, then read both authoritative artifacts in full before changing anything;
 - address all safe known gaps from that report in one bounded pass;
+- exercise the production workflow, Activity, adapter, persistence, or side-effect-owner boundary when the verifier names that evidence; test-only models, dictionaries, mocks, and hard-coded identities do not satisfy a production-boundary requirement;
 - defer or mark unsafe gaps with evidence instead of silently skipping them;
 - record targeted local checks inside the remediation attempt artifact;
 - avoid creating sibling full-verifier steps for local checks;

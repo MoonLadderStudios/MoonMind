@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
@@ -3629,9 +3630,11 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda patch_id: (
-            patch_id == RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH
-        ),
+        lambda patch_id: patch_id
+        in {
+            RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
+            RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
+        },
     )
     ordered_nodes: list[dict[str, Any]] = []
     progress_signature = "sha256:" + ("a" * 64)
@@ -3650,6 +3653,18 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     assert len(ordered_nodes) == 2
     remediation, verification = ordered_nodes
     assert remediation["id"].endswith(":remediation:1")
+    assert remediation["inputs"]["gateResultRef"] == (
+        "artifact://verification/V0"
+    )
+    assert remediation["inputs"]["remainingWorkRef"] == (
+        "artifact://remaining/R0"
+    )
+    assert "- gateResultRef: artifact://verification/V0" in (
+        remediation["inputs"]["instructions"]
+    )
+    assert "- remainingWorkRef: artifact://remaining/R0" in (
+        remediation["inputs"]["instructions"]
+    )
     assert verification["dependsOn"] == [remediation["id"]]
     assert [row["status"] for row in mock_run_workflow._step_ledger_rows] == [
         "ready",
@@ -3664,6 +3679,41 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
         progress_signature
     )
     mock_run_workflow._write_json_artifact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_preserves_legacy_attempt_payload_before_evidence_patch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/legacy"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/legacy",
+        remaining_work_ref="artifact://remaining/legacy",
+    )
+
+    assert admitted is True
+    remediation_inputs = ordered_nodes[0]["inputs"]
+    assert "gateResultRef" not in remediation_inputs
+    assert "remainingWorkRef" not in remediation_inputs
+    assert "MoonMind authoritative verifier evidence:" not in (
+        remediation_inputs["instructions"]
+    )
 
 
 @pytest.mark.asyncio

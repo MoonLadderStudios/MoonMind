@@ -49,6 +49,7 @@ from moonmind.workflows.provider_failures import (
 )
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
+_STATE_LOCK_FILENAME = ".moonmind-codex-session-state.lock"
 _READY_LOOP_SECONDS = 3600.0
 _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
     float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
@@ -200,6 +201,7 @@ class CodexSessionRuntimeState(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
+    state_revision: int = Field(default=0, alias="stateRevision", ge=0)
     session_id: str = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     logical_thread_id: str = Field(..., alias="logicalThreadId")
@@ -842,24 +844,52 @@ class CodexManagedSessionRuntime:
 
     def _save_state(self, state: CodexSessionRuntimeState) -> None:
         self._ensure_directories()
-        payload = (
-            state.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n"
-        )
-        temp_fd, temp_name = tempfile.mkstemp(
-            prefix=f"{_STATE_FILENAME}.",
-            suffix=".tmp",
-            dir=str(self._state_path.parent),
-        )
-        temp_path = Path(temp_name)
-        try:
-            with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
-                temp_fd = -1
-                handle.write(payload)
-            os.replace(temp_path, self._state_path)
-        finally:
-            if temp_fd >= 0:
-                os.close(temp_fd)
-            temp_path.unlink(missing_ok=True)
+        lock_path = self._state_path.parent / _STATE_LOCK_FILENAME
+        with lock_path.open("a+b") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            current: CodexSessionRuntimeState | None = None
+            if self._state_path.is_file():
+                current = CodexSessionRuntimeState.model_validate_json(
+                    self._state_path.read_text(encoding="utf-8")
+                )
+                if current.session_id != state.session_id:
+                    raise RuntimeError(
+                        "sessionId does not match the active managed session"
+                    )
+                if current.state_revision != state.state_revision:
+                    raise RuntimeError(
+                        "sessionEpoch does not match the active managed session: "
+                        "managed session state advanced while the action was running"
+                    )
+
+            next_revision = (current.state_revision if current is not None else 0) + 1
+            next_state = state.model_copy(
+                update={"state_revision": next_revision}
+            )
+            payload = (
+                next_state.model_dump_json(
+                    by_alias=True,
+                    exclude_none=True,
+                    indent=2,
+                )
+                + "\n"
+            )
+            temp_fd, temp_name = tempfile.mkstemp(
+                prefix=f"{_STATE_FILENAME}.",
+                suffix=".tmp",
+                dir=str(self._state_path.parent),
+            )
+            temp_path = Path(temp_name)
+            try:
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+                    temp_fd = -1
+                    handle.write(payload)
+                os.replace(temp_path, self._state_path)
+                state.state_revision = next_revision
+            finally:
+                if temp_fd >= 0:
+                    os.close(temp_fd)
+                temp_path.unlink(missing_ok=True)
 
     def _session_state(self, state: CodexSessionRuntimeState) -> CodexManagedSessionState:
         return CodexManagedSessionState(
@@ -2881,6 +2911,25 @@ class CodexManagedSessionRuntime:
     ) -> CodexManagedSessionHandle:
         self._ensure_directories()
         self._seed_codex_home_from_auth_volume()
+        existing_state: CodexSessionRuntimeState | None = None
+        if self._state_path.is_file():
+            existing_state = self._load_state()
+            if existing_state.session_id != request.session_id:
+                raise RuntimeError(
+                    "sessionId does not match the active managed session"
+                )
+            if existing_state.session_epoch != request.session_epoch:
+                raise RuntimeError(
+                    "sessionEpoch does not match the active managed session"
+                )
+            if existing_state.container_id != self._container_id:
+                raise RuntimeError(
+                    "containerId does not match the active managed session"
+                )
+            if existing_state.logical_thread_id != request.thread_id:
+                raise RuntimeError(
+                    "threadId does not match the active managed session"
+                )
         client = self._initialized_app_server_client()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
         thread_payload = started.get("thread")
@@ -2892,6 +2941,9 @@ class CodexManagedSessionRuntime:
         vendor_thread_path = self._normalized_thread_path(thread_payload.get("path"))
 
         state = CodexSessionRuntimeState(
+            stateRevision=(
+                existing_state.state_revision if existing_state is not None else 0
+            ),
             sessionId=request.session_id,
             sessionEpoch=request.session_epoch,
             logicalThreadId=request.thread_id,

@@ -195,15 +195,22 @@ steps:
         name: auto
         inputs:
           repositoryOperation: write
-          selectedSkill: auto
+          selectedSkill: moonspec-implement
           issue_provider: '{{ inputs.issue_provider }}'
           issue_ref: '{{ inputs.issue_ref }}'
           brief_artifact_path: '{{ inputs.brief_artifact_path }}'
           assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
           verify_artifact_path: '{{ inputs.verify_artifact_path }}'
-          instructions: 'Fix only the gaps identified by the latest authoritative
-            moonspec-verify result and its remainingWorkRef, preserving the cumulative
-            remediation workspace head.'
+          instructions: 'Run the selected moonspec-implement Skill. Before editing,
+            read the complete latest authoritative verifier artifact at gateResultRef
+            and its remainingWorkRef. Implement every safe named gap in one bounded
+            pass while preserving the cumulative remediation workspace head. When
+            the verifier requires production workflow, Activity, adapter, persistence,
+            or side-effect-owner evidence, exercise those production boundaries;
+            do not substitute test-only models, dictionaries, mocks, or hard-coded
+            identities. Run the required targeted checks and record evidence. If a
+            gap is unsafe or cannot be completed, preserve the candidate and report
+            the exact blocker with evidence instead of silently skipping it.'
       verificationTool:
         type: agent_runtime
         name: auto

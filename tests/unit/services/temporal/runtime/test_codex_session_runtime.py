@@ -287,6 +287,86 @@ def test_runtime_state_save_failure_preserves_last_valid_state(
     assert handle.session_state.session_epoch == 2
 
 
+def test_runtime_stale_state_write_cannot_rollback_cleared_session(
+    tmp_path: Path,
+) -> None:
+    """Regression for mm:1b5eacdb: an observer must not restore an old epoch."""
+
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    stale_observer_state = runtime._load_state()
+
+    runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+    stale_observer_state.last_control_action = "session_status"
+
+    with pytest.raises(
+        RuntimeError,
+        match="managed session state advanced while the action was running",
+    ):
+        runtime._save_state(stale_observer_state)
+
+    authoritative_state = runtime._load_state()
+    assert authoritative_state.session_epoch == 2
+    assert authoritative_state.logical_thread_id == "logical-thread-2"
+    assert authoritative_state.state_revision > stale_observer_state.state_revision
+
+
+def test_runtime_clear_session_advances_legacy_unrevisioned_state(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = (
+        Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    )
+    legacy_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    legacy_payload.pop("stateRevision")
+    state_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+
+    handle = runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.session_state.session_epoch == 2
+    assert runtime._load_state().state_revision == 1
+
+
 def test_runtime_clear_session_recovers_sqlite_state_runtime_init_failure(
     tmp_path: Path,
 ) -> None:

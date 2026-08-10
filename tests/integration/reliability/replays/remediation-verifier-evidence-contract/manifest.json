@@ -1,0 +1,59 @@
+{
+  "incidentWorkflowId": "mm:0d128884-4d41-5662-a3b4-bb1d62062551",
+  "replayRunId": "run-remediation-evidence-replay",
+  "failureShapeId": "remediation-verifier-evidence-contract",
+  "boundary": "authoritative verifier result to admitted remediation AgentRun inputs",
+  "escapedFailure": {
+    "verdict": "ADDITIONAL_WORK_NEEDED",
+    "cause": "the remediator resolved an empty auto Skill bundle and received only a generic instruction, then substituted a synthetic test for the production workflow and Activity evidence named by the verifier"
+  },
+  "gateResultRef": "artifact://art_01KZMBV7GKVXHJJDTXXJDKRNWP",
+  "remainingWorkRef": "artifact://art_01KZMBV7NA7QR0Y862N4M6235E",
+  "controllerPlanNode": {
+    "id": "remediation-controller",
+    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+    "inputs": {
+      "runtime": {
+        "mode": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "executionProfileRef": "codex_openai_oauth"
+      }
+    },
+    "annotations": {
+      "remediationLoop": {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {
+          "type": "agent_runtime",
+          "name": "auto",
+          "inputs": {
+            "selectedSkill": "moonspec-implement",
+            "repositoryOperation": "write",
+            "instructions": "Run the selected moonspec-implement Skill and satisfy every production boundary named by the verifier."
+          }
+        },
+        "verificationTool": {
+          "type": "agent_runtime",
+          "name": "auto",
+          "inputs": {
+            "selectedSkill": "moonspec-verify",
+            "repositoryOperation": "read",
+            "instructions": "Run the selected moonspec-verify Skill against the remediated candidate."
+          }
+        },
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+          "fullyImplemented": "advance",
+          "additionalWorkNeeded": "continue_when_allowed",
+          "blocked": "stop",
+          "noDetermination": "retry_evidence_or_stop",
+          "failedUnrecoverable": "stop"
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal"
+      }
+    }
+  }
+}

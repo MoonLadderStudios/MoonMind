@@ -52,7 +52,10 @@ from moonmind.omnigent.profile_bound_execution import (
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
 from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.security.egress import omnigent_proxy_env
-from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
+from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionClearRequest,
+    SendCodexManagedSessionTurnRequest,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -109,6 +112,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -3444,6 +3448,45 @@ async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
     assert classified.retry_recommendation == expected["retryRecommendation"]
 
 
+async def test_codex_stale_observer_cannot_rollback_cleared_session(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:1b5eacdb at the direct managed-session state boundary."""
+
+    replay_id = "managed-session-stale-state-write"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id=manifest["locatorBeforeClear"]["containerId"],
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    stale_observer_state = runtime._load_state()
+
+    runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            **manifest["clearRequest"],
+        )
+    )
+    stale_observer_state.last_control_action = "session_status"
+
+    with pytest.raises(RuntimeError, match=expected["staleWriteError"]):
+        runtime._save_state(stale_observer_state)
+
+    authoritative_state = runtime._load_state()
+    assert authoritative_state.session_epoch == expected["sessionEpoch"]
+    assert authoritative_state.logical_thread_id == expected["threadId"]
+    assert authoritative_state.state_revision > stale_observer_state.state_revision
+
+
 async def test_checkpoint_finalization_fault_is_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3572,6 +3615,69 @@ async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
     # which no provider can satisfy. Keep that boundary failing loudly.
     with pytest.raises(ValueError, match=expected["rejectedDispatchError"]):
         await agent_run_module.resolve_adapter_metadata(expected["rejectedAgentId"])
+
+
+async def test_remediation_attempt_receives_authoritative_verifier_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:0d128884 at verifier-to-remediator admission."""
+
+    replay_id = "remediation-verifier-evidence-contract"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["replayRunId"],
+        parent=None,
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 8, 9, tzinfo=timezone.utc),
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._initialize_remediation_loop_controller(
+        ordered_nodes=[manifest["controllerPlanNode"]]
+    )
+    parent._step_ledger_rows = []
+    parent._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/attempt-6"
+    )
+    ordered_nodes: list[dict[str, object]] = []
+
+    admitted = await parent._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref=manifest["gateResultRef"],
+        remaining_work_ref=manifest["remainingWorkRef"],
+    )
+
+    assert admitted is True
+    remediation_inputs = ordered_nodes[0]["inputs"]
+    assert isinstance(remediation_inputs, dict)
+    assert remediation_inputs["selectedSkill"] == expected["selectedSkill"]
+    assert remediation_inputs["gateResultRef"] == expected["gateResultRef"]
+    assert remediation_inputs["remainingWorkRef"] == expected["remainingWorkRef"]
+    assert f"- gateResultRef: {expected['gateResultRef']}" in (
+        remediation_inputs["instructions"]
+    )
+    request = parent._build_agent_execution_request(
+        node_inputs=remediation_inputs,
+        node_id=str(ordered_nodes[0]["id"]),
+        tool_name=str(ordered_nodes[0]["tool"]["name"]),
+    )
+    assert request.parameters["gateResultRef"] == expected["gateResultRef"]
+    assert request.parameters["remainingWorkRef"] == expected["remainingWorkRef"]
 
 
 async def test_checkpointless_remediation_keeps_the_verified_repository_branch(

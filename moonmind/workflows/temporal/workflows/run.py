@@ -817,6 +817,12 @@ RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH = (
 RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH = (
     "run-remediation-loop-agent-instructions-v1"
 )
+# Pass the exact verifier evidence that admitted an attempt directly to its
+# remediator. Older histories retain the previous nested previousOutputs-only
+# handoff so their materialized plan-node payloads replay unchanged.
+RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH = (
+    "run-remediation-explicit-evidence-inputs-v1"
+)
 # Explicit cutover from the legacy, statically expanded remediation history to
 # the compact controller-owned continuation schema.  Keep this separate from
 # the controller patch so histories that never authored a loop never record the
@@ -4572,6 +4578,16 @@ class MoonMindRunWorkflow:
                 ordinal=state.attempt_ordinal,
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
+                remediation_inputs=(
+                    {
+                        "gateResultRef": gate_result_ref,
+                        "remainingWorkRef": remaining_work_ref,
+                    }
+                    if workflow.patched(
+                        RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH
+                    )
+                    else None
+                ),
             )
             if verified_headless_workspace is not None:
                 verification_workspace = dict(verified_headless_workspace)
@@ -19125,6 +19141,14 @@ class MoonMindRunWorkflow:
             # provider adapter enforce the same contract that admission accepted.
             # Gate the new Activity payload field for replaying histories.
             parameter_keys = (*parameter_keys, "requiredCapabilities")
+        if self._workflow_patch_enabled(
+            RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH
+        ):
+            parameter_keys = (
+                *parameter_keys,
+                "gateResultRef",
+                "remainingWorkRef",
+            )
         for param_key in parameter_keys:
             param_val = runtime_block.get(param_key)
             if param_val is None:
