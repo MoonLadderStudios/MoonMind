@@ -59,6 +59,7 @@ from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
 from moonmind.omnigent.native_chat_telemetry import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
+    STAGE_DIAGNOSTIC_FALLBACK,
     STAGE_NATIVE_UI_COMPATIBILITY,
     STAGE_NATIVE_UI_LOAD,
     record_request as record_native_chat_request,
@@ -410,6 +411,7 @@ async def _serve_native_ui(
     )
     if not rollout.serve_native_ui:
         record_native_chat_request(STAGE_NATIVE_UI_LOAD, OUTCOME_FAILURE)
+        record_native_chat_request(STAGE_DIAGNOSTIC_FALLBACK, OUTCOME_SUCCESS)
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=rollout.reason
         )
@@ -422,6 +424,7 @@ async def _serve_native_ui(
     )
     if not compatibility.ready:
         record_native_chat_request(STAGE_NATIVE_UI_COMPATIBILITY, OUTCOME_FAILURE)
+        record_native_chat_request(STAGE_DIAGNOSTIC_FALLBACK, OUTCOME_SUCCESS)
         reason = (
             "native_ui_serving_disabled"
             if config.enabled and not serving_enabled
@@ -437,6 +440,7 @@ async def _serve_native_ui(
         response = await upstream.fetch(upstream_path_for(ui_path))
     except NativeUiUpstreamError:
         record_native_chat_request(STAGE_NATIVE_UI_LOAD, OUTCOME_FAILURE)
+        record_native_chat_request(STAGE_DIAGNOSTIC_FALLBACK, OUTCOME_SUCCESS)
         logger.info(
             "omnigent.native_ui upstream unavailable binding=%s document=%s",
             chat_binding_id,

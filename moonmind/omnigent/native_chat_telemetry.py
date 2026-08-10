@@ -49,6 +49,8 @@ STAGE_WEBSOCKET = "websocket"
 STAGE_AUTHORIZATION = "authorization"
 STAGE_CAPABILITY = "capability"
 STAGE_SECURITY_SCAN = "security_scan"
+STAGE_RESOURCE = "resource"
+STAGE_TERMINAL = "terminal"
 STAGE_MUTATION = "mutation"
 STAGE_DIAGNOSTIC_FALLBACK = "diagnostic_fallback"
 STAGE_TERMINAL_REPLAY = "terminal_replay"
@@ -67,6 +69,8 @@ NATIVE_CHAT_STAGES: frozenset[str] = frozenset(
         STAGE_AUTHORIZATION,
         STAGE_CAPABILITY,
         STAGE_SECURITY_SCAN,
+        STAGE_RESOURCE,
+        STAGE_TERMINAL,
         STAGE_MUTATION,
         STAGE_DIAGNOSTIC_FALLBACK,
         STAGE_TERMINAL_REPLAY,
@@ -229,6 +233,23 @@ def record_rollout(*, rollout_mode: str, readiness: str) -> None:
         return
 
 
+def record_upstream_latency(seconds: float) -> None:
+    """Record bounded upstream latency without attaching request identity."""
+
+    labels = normalize_labels(
+        "moonmind_omnigent_native_chat_upstream_latency_seconds",
+        {"native_chat_stage": STAGE_UPSTREAM},
+    )
+    try:
+        get_metrics_emitter().observe(
+            "omnigent_native_chat_upstream_latency_seconds",
+            value=max(0.0, float(seconds)),
+            tags=labels,
+        )
+    except Exception:
+        return
+
+
 __all__ = [
     "BOUNDED_VALUES",
     "NATIVE_CHAT_OUTCOMES",
@@ -241,6 +262,7 @@ __all__ = [
     "normalize_labels",
     "record_request",
     "record_rollout",
+    "record_upstream_latency",
     # Stage constants
     "STAGE_AUTHORIZATION",
     "STAGE_BINDING_RESOLUTION",
@@ -252,9 +274,11 @@ __all__ = [
     "STAGE_NATIVE_UI_COMPATIBILITY",
     "STAGE_NATIVE_UI_LOAD",
     "STAGE_NATIVE_UI_RECONNECT",
+    "STAGE_RESOURCE",
     "STAGE_SECURITY_SCAN",
     "STAGE_SSE_STREAM",
     "STAGE_TERMINAL_REPLAY",
+    "STAGE_TERMINAL",
     "STAGE_UPSTREAM",
     "STAGE_WEBSOCKET",
     # Outcome constants

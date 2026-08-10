@@ -72,6 +72,8 @@ def test_stages_cover_every_journey_boundary() -> None:
         tel.STAGE_AUTHORIZATION,
         tel.STAGE_CAPABILITY,
         tel.STAGE_SECURITY_SCAN,
+        tel.STAGE_RESOURCE,
+        tel.STAGE_TERMINAL,
         tel.STAGE_MUTATION,
         tel.STAGE_DIAGNOSTIC_FALLBACK,
         tel.STAGE_TERMINAL_REPLAY,
@@ -110,3 +112,22 @@ def test_production_emission_never_changes_primary_outcome(monkeypatch) -> None:
     monkeypatch.setattr(tel, "get_metrics_emitter", lambda: BrokenEmitter())
     tel.record_request(tel.STAGE_MUTATION, tel.OUTCOME_SUCCESS)
     tel.record_rollout(rollout_mode="read_only", readiness="degraded")
+
+
+def test_upstream_latency_emission_is_identity_free_and_non_negative(monkeypatch) -> None:
+    calls = []
+
+    class Emitter:
+        def observe(self, metric, *, value, tags=None):
+            calls.append((metric, value, dict(tags or {})))
+
+    monkeypatch.setattr(tel, "get_metrics_emitter", lambda: Emitter())
+    tel.record_upstream_latency(-2)
+
+    assert calls == [
+        (
+            "omnigent_native_chat_upstream_latency_seconds",
+            0.0,
+            {"native_chat_stage": tel.STAGE_UPSTREAM},
+        )
+    ]

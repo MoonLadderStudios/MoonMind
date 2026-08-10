@@ -112,11 +112,21 @@ from moonmind.omnigent.native_chat_telemetry import (
     OUTCOME_DENIED,
     OUTCOME_ENFORCEMENT_UNAVAILABLE,
     OUTCOME_FAILURE,
+    OUTCOME_DELIVERY_UNKNOWN,
     OUTCOME_SUCCESS,
     STAGE_AUTHORIZATION,
     STAGE_BINDING_RESOLUTION,
+    STAGE_HTTP_REQUEST,
+    STAGE_MUTATION,
+    STAGE_NATIVE_UI_RECONNECT,
+    STAGE_RESOURCE,
     STAGE_SECURITY_SCAN,
+    STAGE_SSE_STREAM,
+    STAGE_TERMINAL,
+    STAGE_TERMINAL_REPLAY,
+    STAGE_WEBSOCKET,
     record_request as record_native_chat_request,
+    record_upstream_latency as record_native_chat_upstream_latency,
 )
 from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
@@ -3710,6 +3720,15 @@ async def _record_facade_mutation_audit(
         summary=f"workflow chat {control_type} {outcome}",
         metadata=metadata,
     )
+    mutation_outcome = {
+        "pending": OUTCOME_SUCCESS,
+        "accepted": OUTCOME_SUCCESS,
+        "posted": OUTCOME_SUCCESS,
+        "completed": OUTCOME_SUCCESS,
+        "delivery_unknown": OUTCOME_DELIVERY_UNKNOWN,
+        "rejected": OUTCOME_DENIED,
+    }.get(outcome, OUTCOME_FAILURE)
+    record_native_chat_request(STAGE_MUTATION, mutation_outcome)
     return request_time or now
 
 
@@ -3974,8 +3993,45 @@ async def workflow_chat_binding_facade(
     credentials stripped and upstream credentials injected server-side.
     """
 
+    facade_match = match_facade_operation(request.method, omnigent_path)
+    native_match = (
+        None
+        if facade_match is not None
+        else classify_native_ui_http(request.method, omnigent_path)
+    )
+    operation_name = (
+        facade_match.operation.name
+        if facade_match is not None
+        else native_match.route.name if native_match is not None else "unknown"
+    )
+    route = native_match.route if native_match is not None else None
+    if operation_name == "stream_events":
+        telemetry_stage = STAGE_SSE_STREAM
+    elif "terminal" in operation_name:
+        telemetry_stage = STAGE_TERMINAL
+    elif operation_name in {
+        "changed_files",
+        "workspace_files",
+        "workspace_file",
+        "workspace_diff",
+        "session_files",
+        "session_file",
+    }:
+        telemetry_stage = STAGE_RESOURCE
+    elif operation_name in {
+        "liveness",
+        "host_liveness",
+        "runner_liveness",
+        "session_reconnect",
+    }:
+        telemetry_stage = STAGE_NATIVE_UI_RECONNECT
+    elif request.method.upper() != "GET" or bool(route and route.mutation):
+        telemetry_stage = STAGE_MUTATION
+    else:
+        telemetry_stage = STAGE_HTTP_REQUEST
+
     try:
-        return await _dispatch_workflow_chat_facade(
+        result = await _dispatch_workflow_chat_facade(
             chat_binding_id=chat_binding_id,
             omnigent_path=omnigent_path,
             request=request,
@@ -3987,7 +4043,22 @@ async def workflow_chat_binding_facade(
             embedded_facade=embedded_facade,
             registry=registry,
         )
+        record_native_chat_request(telemetry_stage, OUTCOME_SUCCESS)
+        if (
+            operation_name == "get_session"
+            and isinstance(result, Mapping)
+            and result.get("terminal")
+        ):
+            record_native_chat_request(STAGE_TERMINAL_REPLAY, OUTCOME_SUCCESS)
+        return result
     except (WorkflowChatFacadeError, OmnigentBridgeError) as exc:
+        outcome = (
+            OUTCOME_DELIVERY_UNKNOWN
+            if getattr(exc, "code", "") == CODE_SESSION_NOT_READY
+            and telemetry_stage == STAGE_MUTATION
+            else OUTCOME_FAILURE
+        )
+        record_native_chat_request(telemetry_stage, outcome)
         raise _http_error_from_bridge(exc) from exc
 
 
@@ -4317,6 +4388,7 @@ async def _dispatch_native_ui_http(
 
     dispatch_time = datetime.now(tz=UTC).isoformat() if route.mutation else None
     receipt_result: dict[str, Any] | None = None
+    upstream_started = time.monotonic()
     try:
         async with aiohttp.ClientSession(headers=headers) as client:
             async with client.request(
@@ -4377,6 +4449,8 @@ async def _dispatch_native_ui_http(
                 if normalized_json is not None:
                     receipt_result["json"] = normalized_json
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        record_native_chat_upstream_latency(time.monotonic() - upstream_started)
+        record_native_chat_request(STAGE_HTTP_REQUEST, OUTCOME_FAILURE)
         if route.mutation:
             assert effective_key and scan_evidence and request_time
             await _record_facade_mutation_audit(
@@ -4397,6 +4471,8 @@ async def _dispatch_native_ui_http(
             status_code=502,
             code="omnigent_chat_upstream_unavailable",
         ) from exc
+
+    record_native_chat_upstream_latency(time.monotonic() - upstream_started)
 
     if route.mutation:
         assert effective_key and scan_evidence and request_time and receipt_result
@@ -5273,22 +5349,27 @@ async def _relay_native_websocket(
                     # Another relay task may already have closed the browser;
                     # closing a WebSocket is intentionally idempotent here.
                     return
+        record_native_chat_request(STAGE_WEBSOCKET, OUTCOME_SUCCESS)
     except (aiohttp.ClientError, asyncio.TimeoutError):
+        record_native_chat_request(STAGE_WEBSOCKET, OUTCOME_FAILURE)
         await browser.close(
             code=WS_CLOSE_UPSTREAM_UNAVAILABLE,
             reason="omnigent_chat_upstream_unavailable",
         )
     except PermissionError:
+        record_native_chat_request(STAGE_WEBSOCKET, OUTCOME_DENIED)
         await browser.close(
             code=WS_CLOSE_IDENTITY_SUBSTITUTION,
             reason=CODE_SESSION_SUBSTITUTION,
         )
     except WorkflowChatFacadeError as exc:
+        record_native_chat_request(STAGE_WEBSOCKET, OUTCOME_DENIED)
         await browser.close(
             code=WS_CLOSE_CAPABILITY_DENIED,
             reason=exc.code,
         )
     except ValueError:
+        record_native_chat_request(STAGE_WEBSOCKET, OUTCOME_FAILURE)
         await browser.close(
             code=WS_CLOSE_LIMIT_EXCEEDED,
             reason="omnigent_chat_ws_message_too_large",
@@ -5297,6 +5378,8 @@ async def _relay_native_websocket(
         # A browser disconnect is normal terminal evidence for this bounded
         # relay; no payload or terminal input is logged.
         return
+    finally:
+        record_native_chat_upstream_latency(time.monotonic() - started)
 
 
 def _facade_reconnect_state(row: Any) -> str:
