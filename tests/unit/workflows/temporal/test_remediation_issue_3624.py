@@ -136,9 +136,19 @@ def test_live_readiness_transitions_are_bounded(context, reason) -> None:
     assert reason in capability["blockedReasons"]
 
 
-def test_action_specific_runtime_and_host_filtering() -> None:
-    capability = remediation_action_capability(
+@pytest.mark.parametrize(
+    "action_kind",
+    [
         "session.interrupt_turn",
+        "provider_profile.evict_stale_lease",
+        "workload.restart_helper_container",
+        "host.drain",
+        "host_lease.reconcile_stale",
+    ],
+)
+def test_action_specific_runtime_and_host_filtering(action_kind: str) -> None:
+    capability = remediation_action_capability(
+        action_kind,
         context=RemediationCapabilityContext(
             target_runtime="codex_cli", host_mode="external"
         ),

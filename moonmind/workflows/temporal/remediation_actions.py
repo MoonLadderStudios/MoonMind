@@ -413,7 +413,13 @@ _EXECUTION_BACKEND_READY = frozenset(
 )
 
 _OMNIGENT_ONLY_TARGETS = frozenset(
-    {"session", "provider_profile", "workload", "host", "host_lease"}
+    {
+        "managed_session",
+        "provider_profile_lease",
+        "workload_container",
+        "omnigent_host",
+        "host_lease",
+    }
 )
 
 
