@@ -55,7 +55,10 @@ def test_incomplete_owners_are_disabled_with_bounded_reasons() -> None:
             "execution_backend_unavailable",
             "authoritative_verifier_unavailable",
         },
-        "session.clear": {"execution_backend_unavailable"},
+        "session.clear": {
+            "execution_backend_unavailable",
+            "authoritative_verifier_unavailable",
+        },
         "cleanup.request_janitor": {
             "execution_backend_unavailable",
             "authoritative_verifier_unavailable",

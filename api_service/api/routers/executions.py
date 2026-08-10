@@ -41,6 +41,7 @@ from temporalio.service import RPCError
 from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.auth_providers import get_current_user
 from api_service.core import sync as execution_sync
+from api_service.db import models as db_models
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import (
     AgentSkillDefinition,

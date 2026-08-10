@@ -223,7 +223,12 @@ def _admin_profile(**overrides):
     data = {
         "profile_ref": "admin_healer",
         "execution_principal": "service:admin-healer",
-        "allowed_action_kinds": ("workload.restart_helper_container", "session.terminate"),
+        "allowed_action_kinds": (
+            "execution.pause",
+            "execution.force_terminate",
+            "workload.restart_helper_container",
+            "session.terminate",
+        ),
         "enabled": True,
     }
     data.update(overrides)
@@ -2326,13 +2331,13 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         )
         await builder.build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="execute-action-1",
             requesting_principal="workflow:remediator",
@@ -2348,7 +2353,7 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-1",
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2423,8 +2428,8 @@ async def test_execute_action_preserves_approval_lifecycle_artifact_refs(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
-        parameters = {"reason": "restart helper", "containerRef": "container-1"}
+        action_kind = "execution.pause"
+        parameters = {"reason": "pause execution"}
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
@@ -2669,7 +2674,6 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             action_kind=action_kind,
             parameters={
                 "reason": "Authorization: Bearer raw-secret-token",
-                "containerRef": "container-1",
             },
             dry_run=False,
             idempotency_key=action_id,
@@ -2684,7 +2688,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key=action_id,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2714,7 +2718,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         assert request_payload["requester"] == "workflow:remediator"
         assert request_payload["target"] == {
             "workflowId": target.workflow_id,
-            "resourceKind": "workload_container",
+            "resourceKind": "execution",
         }
         assert request_payload["riskTier"] == "medium"
         assert request_payload["dryRun"] is False
@@ -2756,13 +2760,13 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
             artifact_service=artifact_service,
         ).build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="unsupported-status",
             requesting_principal="workflow:remediator",
@@ -2776,7 +2780,7 @@ async def test_remediation_execute_action_rejects_unsupported_result_status(
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="unsupported-status",
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2814,13 +2818,13 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
         )
         await builder.build_context(remediation_workflow_id=remediation.workflow_id)
 
-        action_kind = "workload.restart_helper_container"
+        action_kind = "execution.pause"
         authority = await RemediationActionAuthorityService(
             session=session
         ).evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
             action_kind=action_kind,
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             dry_run=False,
             idempotency_key="execute-action-context",
             requesting_principal="workflow:remediator",
@@ -2836,7 +2840,7 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
             target_run_id=target.run_id,
             action_kind=action_kind,
             idempotency_key="execute-action-context",
-            parameters={"reason": "restart helper", "containerRef": "container-1"},
+            parameters={"reason": "pause execution"},
             policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
             now=datetime(2026, 4, 23, tzinfo=timezone.utc),
         )
@@ -2942,7 +2946,7 @@ async def test_remediation_action_authority_enforces_authority_modes(
 
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": "diagnose only"},
             dry_run=True,
             idempotency_key="observe-dry-run",
@@ -2961,7 +2965,7 @@ async def test_remediation_action_authority_enforces_authority_modes(
 
         denied = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": "side effect"},
             dry_run=False,
             idempotency_key="observe-execute",
@@ -2987,8 +2991,8 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
 
         pending = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
-            parameters={"containerRef": "container-1"},
+            action_kind="execution.pause",
+            parameters={},
             dry_run=False,
             idempotency_key="gated-pending",
             requesting_principal="user:operator",
@@ -3009,8 +3013,8 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
 
         forged = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
-            parameters={"containerRef": "container-1"},
+            action_kind="execution.pause",
+            parameters={},
             dry_run=False,
             idempotency_key="gated-approved",
             requesting_principal="user:operator",
@@ -3036,7 +3040,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         view_only = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="view-only",
@@ -3049,7 +3053,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         disabled_profile = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="disabled-profile",
@@ -3062,8 +3066,8 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
-            parameters={"containerRef": "container-1"},
+            action_kind="execution.pause",
+            parameters={},
             dry_run=False,
             idempotency_key="medium-allowed",
             requesting_principal="user:operator",
@@ -3075,7 +3079,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert allowed.executable is True
         payload = allowed.to_dict()
         assert payload["schemaVersion"] == "v1"
-        assert payload["request"]["actionKind"] == "workload.restart_helper_container"
+        assert payload["request"]["actionKind"] == "execution.pause"
         assert payload["request"]["riskTier"] == "medium"
         assert payload["request"]["dryRun"] is False
         assert payload["result"]["status"] == "applied"
@@ -3086,7 +3090,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="session.terminate",
+            action_kind="execution.force_terminate",
             parameters={},
             dry_run=False,
             idempotency_key="high-risk",
@@ -3119,7 +3123,7 @@ async def test_remediation_action_authority_rejects_unsupported_authority_mode(
         service = RemediationActionAuthorityService(session=session)
         result = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=False,
             idempotency_key="unsupported-authority",
@@ -3146,8 +3150,8 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
-            parameters={"containerRef": "container-1"},
+            action_kind="execution.pause",
+            parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
             requesting_principal="user:operator",
@@ -3156,7 +3160,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="session.terminate",
+            action_kind="execution.force_terminate",
             parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
@@ -3166,7 +3170,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={},
             dry_run=True,
             idempotency_key="same-idempotency-key",
@@ -3342,7 +3346,7 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         )
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
         )
 
         service = RemediationActionAuthorityService(session=session)
@@ -3351,7 +3355,6 @@ async def test_remediation_action_authority_uses_prepared_action_context(
             action_kind=preparation.action_kind,
             parameters={
                 "reason": f"target state was {preparation.target.state}",
-                "containerRef": "container-1",
             },
             dry_run=False,
             idempotency_key="prepared-action",
@@ -3378,7 +3381,7 @@ async def test_remediation_action_authority_validates_action_inputs(
 
         invalid = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"unknown": "value"},
             dry_run=False,
             idempotency_key="invalid-inputs",
@@ -3393,7 +3396,7 @@ async def test_remediation_action_authority_validates_action_inputs(
 
         wrong_type = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="workload.restart_helper_container",
+            action_kind="execution.pause",
             parameters={"reason": False},
             dry_run=False,
             idempotency_key="invalid-input-type",
