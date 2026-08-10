@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from moonmind.observability.metrics import FORBIDDEN_LABELS, MetricDefinition
+from moonmind.utils.metrics import get_metrics_emitter
 
 NATIVE_CHAT_TELEMETRY_VERSION = "moonmind.omnigent.native_chat_telemetry/v1"
 
@@ -192,6 +193,42 @@ def normalize_labels(metric_name: str, labels: Mapping[str, str]) -> dict[str, s
     return result
 
 
+def record_request(stage: str, outcome: str) -> None:
+    """Best-effort emission for one native-chat authority-boundary outcome."""
+
+    labels = normalize_labels(
+        "moonmind_omnigent_native_chat_requests",
+        {"native_chat_stage": stage, "outcome": outcome},
+    )
+    try:
+        get_metrics_emitter().increment(
+            "omnigent_native_chat_requests", tags=labels
+        )
+    except Exception:
+        # Telemetry is auxiliary evidence and must never replace the primary
+        # serving, denial, scan, or mutation outcome.
+        return
+
+
+def record_rollout(*, rollout_mode: str, readiness: str) -> None:
+    """Emit the resolved deployment posture without request identities."""
+
+    rollout_labels = normalize_labels(
+        "moonmind_omnigent_native_chat_rollout_state",
+        {"rollout_mode": rollout_mode},
+    )
+    readiness_labels = normalize_labels(
+        "moonmind_omnigent_native_chat_ui_readiness",
+        {"readiness": readiness},
+    )
+    try:
+        emitter = get_metrics_emitter()
+        emitter.increment("omnigent_native_chat_rollout_state", tags=rollout_labels)
+        emitter.increment("omnigent_native_chat_ui_readiness", tags=readiness_labels)
+    except Exception:
+        return
+
+
 __all__ = [
     "BOUNDED_VALUES",
     "NATIVE_CHAT_OUTCOMES",
@@ -202,6 +239,8 @@ __all__ = [
     "ROLLOUT_MODES",
     "definition",
     "normalize_labels",
+    "record_request",
+    "record_rollout",
     # Stage constants
     "STAGE_AUTHORIZATION",
     "STAGE_BINDING_RESOLUTION",

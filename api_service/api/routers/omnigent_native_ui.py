@@ -52,9 +52,17 @@ from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_se
 from api_service.db.models import User
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
 from moonmind.omnigent.native_chat_acceptance import (
     validate_native_chat_acceptance_report,
+)
+from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
+from moonmind.omnigent.native_chat_telemetry import (
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    STAGE_NATIVE_UI_COMPATIBILITY,
+    STAGE_NATIVE_UI_LOAD,
+    record_request as record_native_chat_request,
+    record_rollout as record_native_chat_rollout,
 )
 from moonmind.omnigent.conformance import ConformanceContractError
 from moonmind.omnigent.native_ui import (
@@ -396,7 +404,12 @@ async def _serve_native_ui(
         mode=rollout_mode,
         acceptance_recorded=acceptance_recorded,
     )
+    record_native_chat_rollout(
+        rollout_mode=rollout.mode.value,
+        readiness=rollout.telemetry_readiness(),
+    )
     if not rollout.serve_native_ui:
+        record_native_chat_request(STAGE_NATIVE_UI_LOAD, OUTCOME_FAILURE)
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=rollout.reason
         )
@@ -408,6 +421,7 @@ async def _serve_native_ui(
         enabled=bool(config.enabled) and serving_enabled,
     )
     if not compatibility.ready:
+        record_native_chat_request(STAGE_NATIVE_UI_COMPATIBILITY, OUTCOME_FAILURE)
         reason = (
             "native_ui_serving_disabled"
             if config.enabled and not serving_enabled
@@ -422,6 +436,7 @@ async def _serve_native_ui(
     try:
         response = await upstream.fetch(upstream_path_for(ui_path))
     except NativeUiUpstreamError:
+        record_native_chat_request(STAGE_NATIVE_UI_LOAD, OUTCOME_FAILURE)
         logger.info(
             "omnigent.native_ui upstream unavailable binding=%s document=%s",
             chat_binding_id,
@@ -475,6 +490,8 @@ async def _serve_native_ui(
         bootstrap=bootstrap,
         scoped_base=scoped_base,
     )
+    record_native_chat_request(STAGE_NATIVE_UI_COMPATIBILITY, OUTCOME_SUCCESS)
+    record_native_chat_request(STAGE_NATIVE_UI_LOAD, OUTCOME_SUCCESS)
     return HTMLResponse(content=rendered, status_code=200, headers=headers)
 
 

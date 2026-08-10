@@ -79,3 +79,34 @@ def test_stages_cover_every_journey_boundary() -> None:
         tel.STAGE_UPSTREAM,
     ):
         assert stage in tel.NATIVE_CHAT_STAGES
+
+
+def test_production_emitters_use_only_normalized_bounded_labels(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class Emitter:
+        def increment(self, metric, *, value=1, tags=None):
+            calls.append((metric, dict(tags or {})))
+
+    monkeypatch.setattr(tel, "get_metrics_emitter", lambda: Emitter())
+    tel.record_request("attacker-controlled-stage", "attacker-controlled-outcome")
+    tel.record_rollout(rollout_mode="canary", readiness="ready")
+
+    assert calls == [
+        (
+            "omnigent_native_chat_requests",
+            {"native_chat_stage": "other", "outcome": "other"},
+        ),
+        ("omnigent_native_chat_rollout_state", {"rollout_mode": "canary"}),
+        ("omnigent_native_chat_ui_readiness", {"readiness": "ready"}),
+    ]
+
+
+def test_production_emission_never_changes_primary_outcome(monkeypatch) -> None:
+    class BrokenEmitter:
+        def increment(self, *args, **kwargs):
+            raise RuntimeError("telemetry backend unavailable")
+
+    monkeypatch.setattr(tel, "get_metrics_emitter", lambda: BrokenEmitter())
+    tel.record_request(tel.STAGE_MUTATION, tel.OUTCOME_SUCCESS)
+    tel.record_rollout(rollout_mode="read_only", readiness="degraded")

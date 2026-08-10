@@ -107,6 +107,17 @@ from moonmind.omnigent.native_ui import (
     evaluate_native_ui_compatibility,
     scoped_api_base,
 )
+from moonmind.omnigent.native_chat_telemetry import (
+    OUTCOME_BLOCKED,
+    OUTCOME_DENIED,
+    OUTCOME_ENFORCEMENT_UNAVAILABLE,
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    STAGE_AUTHORIZATION,
+    STAGE_BINDING_RESOLUTION,
+    STAGE_SECURITY_SCAN,
+    record_request as record_native_chat_request,
+)
 from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
     CODE_TRANSPORT_UNSUPPORTED,
@@ -1213,6 +1224,7 @@ async def _revoke_session_retrieval_authority(
 
     row = await store.get_session_by_provider_session_id(session_id)
     if row is None:
+        record_native_chat_request(STAGE_BINDING_RESOLUTION, OUTCOME_FAILURE)
         if registry.has_live_session_authority(session_id=session_id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2975,6 +2987,14 @@ def _audit_facade(
     locations) is recorded too — never the detected value or the message body.
     """
 
+    bounded_outcome = {
+        "allowed": OUTCOME_SUCCESS,
+        "success": OUTCOME_SUCCESS,
+        "denied": OUTCOME_DENIED,
+        "content_blocked": OUTCOME_BLOCKED,
+        "enforcement_unavailable": OUTCOME_ENFORCEMENT_UNAVAILABLE,
+    }.get(outcome, OUTCOME_FAILURE)
+    record_native_chat_request(STAGE_AUTHORIZATION, bounded_outcome)
     scan_suffix = ""
     if scan_evidence is not None:
         parts = [
@@ -3046,6 +3066,7 @@ async def _resolve_and_authorize_chat_binding(
             reason="binding_unknown",
         )
         raise _binding_unknown_error()
+    record_native_chat_request(STAGE_BINDING_RESOLUTION, OUTCOME_SUCCESS)
     metadata = dict(getattr(row, "metadata_", None) or {})
     caller_authorities = metadata.get("callerAuthorities")
     caller_id = str(getattr(user, "id", "") or "")
@@ -3057,6 +3078,7 @@ async def _resolve_and_authorize_chat_binding(
         and isinstance(caller_authorities.get(caller_id), Mapping)
         and any(value is True for value in caller_authorities[caller_id].values())
     ):
+        record_native_chat_request(STAGE_AUTHORIZATION, OUTCOME_SUCCESS)
         return row
     workflow_id = str(getattr(row, "moonmind_workflow_id", "") or "").strip()
     agent_run_id = str(getattr(row, "moonmind_agent_run_id", "") or "").strip() or None
@@ -3075,6 +3097,7 @@ async def _resolve_and_authorize_chat_binding(
             reason="caller_unauthorized",
         )
         raise _binding_unknown_error()
+    record_native_chat_request(STAGE_AUTHORIZATION, OUTCOME_SUCCESS)
     return row
 
 
@@ -3272,6 +3295,7 @@ def _enforce_native_outbound_scan(
             idempotency_key=idempotency_key,
         )
     except NativeScanBlockedError as exc:
+        record_native_chat_request(STAGE_SECURITY_SCAN, OUTCOME_BLOCKED)
         _audit_facade(
             outcome="content_blocked",
             operation=operation,
@@ -3293,6 +3317,9 @@ def _enforce_native_outbound_scan(
             },
         ) from exc
     except NativeScanEnforcementError as exc:
+        record_native_chat_request(
+            STAGE_SECURITY_SCAN, OUTCOME_ENFORCEMENT_UNAVAILABLE
+        )
         _audit_facade(
             outcome="enforcement_unavailable",
             operation=operation,
@@ -3307,6 +3334,7 @@ def _enforce_native_outbound_scan(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code=CODE_ENFORCEMENT_UNAVAILABLE,
         ) from exc
+    record_native_chat_request(STAGE_SECURITY_SCAN, OUTCOME_SUCCESS)
     return evidence
 
 
