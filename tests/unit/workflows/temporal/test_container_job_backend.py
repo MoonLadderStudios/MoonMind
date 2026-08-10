@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -36,6 +37,7 @@ from moonmind.workflows.temporal.container_job_backend import (
     OWNERSHIP_SCHEMA_VERSION,
     ContainerJobBackend,
     DockerContainerJobBackend,
+    FilesystemCapacityAdmissionLock,
 )
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
@@ -589,11 +591,32 @@ async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_capacity_lock_is_mutually_exclusive_across_workers(
+    tmp_path,
+) -> None:
+    first = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
+    second = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
+    first_lease = await first.acquire(
+        "system", wait_seconds=0.5, poll_seconds=0.01
+    )
+
+    second_acquire = asyncio.create_task(
+        second.acquire("system", wait_seconds=0.5, poll_seconds=0.01)
+    )
+    await asyncio.sleep(0.05)
+    assert not second_acquire.done()
+
+    await first.release(first_lease)
+    second_lease = await asyncio.wait_for(second_acquire, timeout=0.5)
+    await second.release(second_lease)
+
+
+@pytest.mark.asyncio
 async def test_start_rejects_aggregate_memory_overcommit_before_launch(
     tmp_path,
 ) -> None:
     lock = AsyncMock()
-    lock.try_acquire.return_value = True
+    lock.acquire.return_value = object()
     commands: list[tuple[str, ...]] = []
 
     async def runner(args):
@@ -630,7 +653,8 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
     )
     assert "retry after" in str(raised.value)
     assert not any(command[0] == "start" for command in commands)
-    lock.release.assert_awaited_once()
+    lock.acquire.assert_awaited_once()
+    lock.release.assert_awaited_once_with(lock.acquire.return_value)
 
 
 @pytest.mark.asyncio
@@ -638,7 +662,7 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
     tmp_path,
 ) -> None:
     lock = AsyncMock()
-    lock.try_acquire.return_value = True
+    lock.acquire.return_value = object()
     commands: list[tuple[str, ...]] = []
 
     async def runner(args):
@@ -670,8 +694,8 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
 
     assert result.running is True
     assert any(command[0] == "start" for command in commands)
-    lock.try_acquire.assert_awaited_once()
-    lock.release.assert_awaited_once()
+    lock.acquire.assert_awaited_once()
+    lock.release.assert_awaited_once_with(lock.acquire.return_value)
 
 
 @pytest.mark.asyncio

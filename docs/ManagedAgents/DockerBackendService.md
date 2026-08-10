@@ -637,10 +637,12 @@ weaken security defaults.
 
 The trusted Docker launch boundary also enforces an aggregate active-memory
 budget across running MoonMind container jobs. Starts are serialized under a
-backend-scoped lease so concurrent workflows cannot both admit against the same
-capacity snapshot. By default, jobs may consume at most 70 percent of the Docker
-daemon's reported memory; the remaining capacity is reserved for the MoonMind
-control plane and Docker itself. Operators may set
+backend-scoped OS advisory lock so concurrent workflows cannot both admit
+against the same capacity snapshot. The operating system releases the lock if a
+worker exits, so admission never depends on stale-lease reclamation. By default,
+jobs may consume at most 70 percent of the Docker daemon's reported memory; the
+remaining capacity is reserved for the MoonMind control plane and Docker itself.
+Operators may set
 `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB` to a lower explicit ceiling.
 When admitting a job would exceed the budget, the job fails before start with
 `resource_limit_exceeded` and actionable retry guidance; an unbounded or

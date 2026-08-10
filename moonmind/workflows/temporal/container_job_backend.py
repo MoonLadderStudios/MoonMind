@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import mimetypes
 import os
 import re
@@ -35,6 +34,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from logging import getLogger
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
@@ -102,7 +102,7 @@ ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
 SecretResolver = Callable[[str], Awaitable[str]]
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
 def _redact(text: str, secrets: Sequence[str]) -> str:
@@ -162,9 +162,101 @@ _FORBIDDEN_MOUNT_SOURCES = (
 _MIN_VOLUME_SUBPATH_DOCKER_MAJOR = 26
 _MIB = 1024 * 1024
 _AUTO_ACTIVE_MEMORY_FRACTION = 0.70
-_CAPACITY_LOCK_TTL_SECONDS = 60.0
-_CAPACITY_LOCK_WAIT_SECONDS = 15.0
+_CAPACITY_LOCK_WAIT_SECONDS = 45.0
 _CAPACITY_LOCK_POLL_SECONDS = 0.1
+
+
+@dataclass(frozen=True)
+class _CapacityAdmissionLease:
+    file_descriptor: int
+
+
+class CapacityAdmissionLock(Protocol):
+    """Mutually exclusive cross-worker lock for one capacity snapshot."""
+
+    async def acquire(
+        self,
+        key: str,
+        *,
+        wait_seconds: float,
+        poll_seconds: float,
+    ) -> _CapacityAdmissionLease:
+        """Wait for and return exclusive ownership of ``key``."""
+
+    async def release(self, lease: _CapacityAdmissionLease) -> None:
+        """Release a lease returned by ``acquire``."""
+
+
+class FilesystemCapacityAdmissionLock:
+    """OS-held advisory lock that is released automatically on worker death."""
+
+    def __init__(self, root: str | Path) -> None:
+        self._root = Path(root)
+        self._local_lock = asyncio.Lock()
+
+    def _path(self, key: str) -> Path:
+        return self._root / f"{key}.lock"
+
+    @staticmethod
+    def _try_lock(file_descriptor: int) -> None:
+        # Docker Engine workers run on Linux. Keeping the import local avoids
+        # making this production adapter unimportable on non-POSIX dev hosts.
+        import fcntl
+
+        fcntl.flock(file_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def _unlock(file_descriptor: int) -> None:
+        import fcntl
+
+        try:
+            fcntl.flock(file_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(file_descriptor)
+
+    async def acquire(
+        self,
+        key: str,
+        *,
+        wait_seconds: float,
+        poll_seconds: float,
+    ) -> _CapacityAdmissionLease:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_seconds
+        local_acquired = False
+        file_descriptor: int | None = None
+        try:
+            await asyncio.wait_for(
+                self._local_lock.acquire(), timeout=wait_seconds
+            )
+            local_acquired = True
+            self._root.mkdir(parents=True, exist_ok=True)
+            file_descriptor = os.open(
+                self._path(key), os.O_CREAT | os.O_RDWR, 0o600
+            )
+            while True:
+                try:
+                    self._try_lock(file_descriptor)
+                    return _CapacityAdmissionLease(file_descriptor)
+                except BlockingIOError:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "container-job capacity admission remained busy"
+                        ) from None
+                    await asyncio.sleep(min(poll_seconds, remaining))
+        except BaseException:
+            if file_descriptor is not None:
+                os.close(file_descriptor)
+            if local_acquired:
+                self._local_lock.release()
+            raise
+
+    async def release(self, lease: _CapacityAdmissionLease) -> None:
+        try:
+            self._unlock(lease.file_descriptor)
+        finally:
+            self._local_lock.release()
 
 
 def _docker_major_version(server_version: str) -> int | None:
@@ -357,7 +449,7 @@ class DockerContainerJobBackend:
         registry_auth_resolver: RegistryAuthResolver | None = None,
         auth_root: str | Path | None = None,
         image_lock: ImageAcquisitionLock | None = None,
-        capacity_lock: ImageAcquisitionLock | None = None,
+        capacity_lock: CapacityAdmissionLock | None = None,
         image_lock_root: str | Path | None = None,
         pull_lease_ttl_seconds: float = 240.0,
         pull_lock_poll_seconds: float = 2.0,
@@ -395,7 +487,7 @@ class DockerContainerJobBackend:
             else self._workspace_root.parent / ".moonmind-image-acquisition-locks"
         )
         self._image_lock = image_lock or FilesystemImageAcquisitionLock(lock_root)
-        self._capacity_lock = capacity_lock or FilesystemImageAcquisitionLock(
+        self._capacity_lock = capacity_lock or FilesystemCapacityAdmissionLock(
             lock_root / "capacity"
         )
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
@@ -552,24 +644,19 @@ class DockerContainerJobBackend:
         raw = f"{self._backend_ref}\ncontainer-job-active-memory".encode()
         return hashlib.sha256(raw).hexdigest()
 
-    async def _acquire_capacity_lock(
-        self, request: ContainerJobActivityRequest
-    ) -> str:
+    async def _acquire_capacity_lock(self) -> _CapacityAdmissionLease:
         key = self._capacity_lock_key()
-        deadline = asyncio.get_running_loop().time() + _CAPACITY_LOCK_WAIT_SECONDS
-        while True:
-            if await self._capacity_lock.try_acquire(
+        try:
+            return await self._capacity_lock.acquire(
                 key,
-                ttl_seconds=_CAPACITY_LOCK_TTL_SECONDS,
-                owner_id=request.ownership_token,
-            ):
-                return key
-            if asyncio.get_running_loop().time() >= deadline:
-                raise ContainerJobBackendError(
-                    ContainerJobFailureClass.INFRASTRUCTURE,
-                    "container-job capacity admission remained busy",
-                )
-            await asyncio.sleep(_CAPACITY_LOCK_POLL_SECONDS)
+                wait_seconds=_CAPACITY_LOCK_WAIT_SECONDS,
+                poll_seconds=_CAPACITY_LOCK_POLL_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.INFRASTRUCTURE,
+                "container-job capacity admission remained busy",
+            ) from exc
 
     async def _active_memory_budget_mib(self) -> int:
         code, stdout, _ = await self._runner(
@@ -1824,7 +1911,7 @@ class DockerContainerJobBackend:
 
     async def start_container(self, request: ContainerJobActivityRequest):
         container_name = request.container_ref or self._name(request)
-        capacity_key = await self._acquire_capacity_lock(request)
+        capacity_lease = await self._acquire_capacity_lock()
         try:
             await self._enforce_active_memory_budget(
                 request, container_name=container_name
@@ -1832,13 +1919,11 @@ class DockerContainerJobBackend:
             await self._checked("start", container_name)
         finally:
             try:
-                await self._capacity_lock.release(
-                    capacity_key, request.ownership_token
-                )
-            except Exception:  # noqa: BLE001 - lease expiry preserves recovery
+                await self._capacity_lock.release(capacity_lease)
+            except Exception:  # noqa: BLE001 - OS releases locks on worker exit
                 logger.warning(
-                    "Container-job capacity lease release failed; the bounded "
-                    "lease will expire automatically",
+                    "Container-job capacity lock release failed; process exit "
+                    "will release the OS-held lock",
                     exc_info=True,
                 )
         return ContainerJobActivityResult(
