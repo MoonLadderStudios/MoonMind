@@ -2534,14 +2534,14 @@ github-app = ["pyjwt[crypto] (>=2.8.0)"]
 
 [[package]]
 name = "llama-index-readers-google"
-version = "0.7.2"
+version = "0.7.3"
 description = "llama-index readers google integration"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_google-0.7.2-py3-none-any.whl", hash = "sha256:0adcf05c7f9d0fe3bdf5cd147ea9d1e37aa3ec5a1bc0d804be3ffec99d8e0ea1"},
-    {file = "llama_index_readers_google-0.7.2.tar.gz", hash = "sha256:ab28f263dda1b9abb29c6beb4595a0374bdd4d5b00f4e47c3a4803d0e895f1ea"},
+    {file = "llama_index_readers_google-0.7.3-py3-none-any.whl", hash = "sha256:b6aa94dee961148fb7d8f8d6f03ddda6b0b0d443ed5a405d203ff0fe136e2376"},
+    {file = "llama_index_readers_google-0.7.3.tar.gz", hash = "sha256:91b2813ff75a5b62d3dbe76898b15c46d14a14dde112f102c03cba3047280f1f"},
 ]
 
 [package.dependencies]
