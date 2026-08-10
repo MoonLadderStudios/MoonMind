@@ -2440,6 +2440,7 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -2948,6 +2949,7 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -3040,6 +3042,7 @@ def test_runtime_send_turn_stays_running_when_large_rollout_tail_has_active_turn
     )
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
     )
@@ -3175,7 +3178,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                         "type": "event_msg",
                         "payload": {
                             "type": "task_started",
-                            "turn_id": "codex-turn-1",
+                            "turn_id": "vendor-turn-1",
                         },
                     }
                 ),
@@ -3214,7 +3217,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                         "type": "event_msg",
                         "payload": {
                             "type": "task_complete",
-                            "turn_id": "codex-turn-1",
+                            "turn_id": "vendor-turn-1",
                             "last_agent_message": (
                                 "Recovered final answer without vendor turn id"
                             ),
@@ -4249,6 +4252,58 @@ def test_runtime_send_turn_waits_for_fallback_started_turn_visibility(
     )
 
 
+def test_runtime_send_turn_preserves_completion_during_fallback_visibility_grace(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "06"
+        / "28"
+        / "rollout-2026-06-28T13-46-25-vendor-thread-2.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        start_thread_id="vendor-thread-2",
+        start_thread_path=str(transcript_path),
+        completion_notification_assistant_text="OK from terminal notification",
+        completion_visible_on_thread_read=False,
+        omit_turns_on_read=True,
+        omit_turns_when_incomplete=True,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        missing_turn_visibility_grace_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["assistantText"] == "OK from terminal notification"
+    assert response.session_state.active_turn_id is None
+
+
 def test_runtime_send_turn_marks_missing_fallback_turn_subtype_after_grace(
     tmp_path: Path,
 ) -> None:
@@ -4265,6 +4320,7 @@ def test_runtime_send_turn_marks_missing_fallback_turn_subtype_after_grace(
     transcript_path.write_text("", encoding="utf-8")
     script = write_fake_app_server(
         tmp_path,
+        completion_notification_method=None,
         fail_thread_resume=True,
         start_thread_id="vendor-thread-2",
         start_thread_path=str(transcript_path),
