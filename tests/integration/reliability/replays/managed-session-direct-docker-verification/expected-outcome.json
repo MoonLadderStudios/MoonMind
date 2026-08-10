@@ -1,0 +1,10 @@
+{
+  "invariant": "every managed Codex turn rejects direct-Docker execution and routes the unchanged repository workload through the scoped MoonMind container-job boundary when available",
+  "requiredPromptFragments": [
+    "Managed container execution boundary:",
+    "never receive a Docker endpoint, socket, or daemon",
+    "moonmind container run --spec <job.json>",
+    "A direct-Docker daemon failure identifies the wrong execution route",
+    "it is not a repository test result"
+  ]
+}

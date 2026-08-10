@@ -27,6 +27,16 @@ submits typed jobs through MoonMind and receives neither a Docker endpoint nor
 daemon credentials. The deployment-selected daemon retains one image cache for
 reuse across workflows.
 
+Every managed Codex turn states this execution boundary explicitly. Repository
+instructions and Skills remain authoritative for workload semantics, including
+the command, test filter, and expected terminal evidence, but direct-Docker
+instructions cannot override the session's runtime authority. When the scoped
+container-job capability is available, Codex routes that workload through
+`moonmind container run`; otherwise it reports the missing capability or
+approved image source without probing or repeatedly retrying a Docker daemon.
+A direct-Docker connectivity failure inside the session is a routing diagnostic,
+not repository test evidence.
+
 ## Contract
 
 The bounded session identity remains:

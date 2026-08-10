@@ -118,6 +118,12 @@ async def test_codex_launcher_includes_followup_retrieval_capability_note(
     )
     await process.wait()
 
-    prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
+    prompt_arg = next(
+        arg
+        for arg in captured_args
+        if isinstance(arg, str) and "Managed Codex CLI note:" in arg
+    )
     assert "MoonMind retrieval capability:" in prompt_arg
+    assert "Managed container execution boundary:" in prompt_arg
+    assert "moonmind container run --spec <job.json>" in prompt_arg
     assert expected_fragment in prompt_arg

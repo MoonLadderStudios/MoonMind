@@ -30,6 +30,23 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
 _CODEX_PROGRESS_TIMEOUT_SECONDS = 300
 _CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
 _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER = "MoonMind retrieval capability:\n"
+_CODEX_MANAGED_CONTAINER_NOTE_HEADER = "Managed container execution boundary:\n"
+
+_CODEX_MANAGED_CONTAINER_NOTE = (
+    "\n\nManaged container execution boundary:\n"
+    "- Managed sessions never receive a Docker endpoint, socket, or daemon. Do "
+    "not run `docker`, probe `docker info`, or invoke a repository script or Skill "
+    "along a direct-Docker execution path.\n"
+    "- When `MOONMIND_CONTAINER_JOBS_MCP_URL` is nonempty, route containerized "
+    "repository work through `moonmind container run --spec <job.json> "
+    "--request-id <stable-id>` or a repository wrapper that explicitly uses that "
+    "command. Preserve the repository command, test filter, and other workload "
+    "semantics in the typed job spec.\n"
+    "- When the scoped container-job capability or an approved image/cache source "
+    "is unavailable, report that exact capability or provisioning blocker. Do not "
+    "retry direct Docker. A direct-Docker daemon failure identifies the wrong "
+    "execution route; it is not a repository test result.\n"
+)
 
 _CODEX_MANAGED_RUNTIME_NOTE = (
     "\n\nManaged Codex CLI note:\n"
@@ -100,6 +117,8 @@ def append_managed_codex_runtime_note(
         return normalized
     if _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER not in normalized:
         normalized += build_managed_retrieval_capability_note(env_source)
+    if _CODEX_MANAGED_CONTAINER_NOTE_HEADER not in normalized:
+        normalized += _CODEX_MANAGED_CONTAINER_NOTE
     if _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in normalized:
         normalized += _CODEX_MANAGED_RUNTIME_NOTE
     return normalized
