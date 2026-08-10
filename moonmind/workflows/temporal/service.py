@@ -11,7 +11,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -42,6 +42,7 @@ from api_service.db.models import (
     WorkflowCheckpointBranchOperation,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.operator_remediation_gate import allows_autonomous_mutation
 from moonmind.security import scan_outbound_text
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -411,6 +412,7 @@ class TemporalExecutionService:
         run_continue_as_new_step_threshold: int = 500,
         run_continue_as_new_wait_cycle_threshold: int = 200,
         manifest_continue_as_new_phase_threshold: int = 5,
+        autonomous_remediation_authority: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self._session = session
         self._namespace = namespace
@@ -435,6 +437,11 @@ class TemporalExecutionService:
             manifest_continue_as_new_phase_threshold
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
+        # Autonomous remediation is a release-gated capability.  The ordinary
+        # service construction path is deliberately closed; production wiring
+        # must supply a server-owned projection derived from the observed
+        # remediation matrix rather than trusting workflow input.
+        self._autonomous_remediation_authority = autonomous_remediation_authority
 
     def _remediation_context_builder(self) -> RemediationContextBuilder:
         return RemediationContextBuilder(
@@ -689,7 +696,6 @@ class TemporalExecutionService:
                 "Unsupported workflow.remediation.authorityMode "
                 f"'{authority_mode}'. Supported values: {supported}."
             )
-
         target_record = await self._session.get(
             TemporalExecutionCanonicalRecord, target_workflow_id
         )
@@ -706,6 +712,17 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
             )
+        if authority_mode == "admin_auto":
+            release_status = (
+                self._autonomous_remediation_authority()
+                if self._autonomous_remediation_authority is not None
+                else None
+            )
+            if not allows_autonomous_mutation(release_status):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.authorityMode 'admin_auto' is disabled "
+                    "until the server-owned operator remediation release matrix passes."
+                )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
                 getattr(target_record, "workflow_type", None),

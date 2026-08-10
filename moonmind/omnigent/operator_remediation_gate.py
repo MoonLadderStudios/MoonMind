@@ -208,3 +208,28 @@ def release_status(*, artifact_paths: Iterable[Path], release_inputs: Mapping[st
         return {"schemaVersion": COMBINED_SCHEMA_VERSION, "matrixVersion": MATRIX_VERSION,
                 "issue": "MoonLadderStudios/MoonMind#3626", "status": "blocked",
                 "autonomousMutationAllowed": False, "blockers": [str(exc)]}
+
+
+def allows_autonomous_mutation(status: Any) -> bool:
+    """Accept only a complete combined projection, never a caller pass boolean."""
+    if not isinstance(status, Mapping):
+        return False
+    release_inputs = status.get("releaseInputs")
+    rows = status.get("rows")
+    return bool(
+        status.get("schemaVersion") == COMBINED_SCHEMA_VERSION
+        and status.get("matrixVersion") == MATRIX_VERSION
+        and status.get("issue") == "MoonLadderStudios/MoonMind#3626"
+        and status.get("status") == "supported"
+        and status.get("autonomousMutationAllowed") is True
+        and isinstance(release_inputs, Mapping)
+        and release_inputs.get("immutable") is True
+        and bool(release_inputs.get("version"))
+        and isinstance(rows, Mapping)
+        and set(rows) == set(ROW_CATALOG)
+        and all(
+            isinstance(observation, Mapping)
+            and set(observation) >= {"ref", "sha256"}
+            for observation in rows.values()
+        )
+    )

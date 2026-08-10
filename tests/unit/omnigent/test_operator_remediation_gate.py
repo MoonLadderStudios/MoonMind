@@ -6,7 +6,7 @@ import pytest
 
 from moonmind.omnigent.operator_remediation_gate import (
     EVIDENCE_SCHEMA_VERSION, REQUIRED_EVIDENCE_FIELDS, REQUIRED_ROW_CATALOG,
-    RemediationGateError, build_combined_matrix, catalog_document, release_status,
+    RemediationGateError, allows_autonomous_mutation, build_combined_matrix, catalog_document, release_status,
     validate_row_artifact,
 )
 
@@ -62,6 +62,8 @@ def test_release_status_blocks_incomplete_matrix():
     assert status["status"] == "blocked"
     assert status["autonomousMutationAllowed"] is False
     assert "missingRows" in status["blockers"][0]
+    assert allows_autonomous_mutation(status) is False
+    assert allows_autonomous_mutation({"status": "supported", "autonomousMutationAllowed": True}) is False
 
 
 def test_combined_matrix_is_derived_from_all_digest_validated_rows(tmp_path):
@@ -74,6 +76,7 @@ def test_combined_matrix_is_derived_from_all_digest_validated_rows(tmp_path):
     assert result["status"] == "supported"
     assert result["autonomousMutationAllowed"] is True
     assert set(result["rows"]) == {row.row_id for row in REQUIRED_ROW_CATALOG}
+    assert allows_autonomous_mutation(result) is True
 
 
 def test_stale_or_over_threshold_artifact_fails_closed(tmp_path):
