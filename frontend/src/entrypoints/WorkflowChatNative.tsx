@@ -283,7 +283,7 @@ function CapturedEvidencePanel({
  * the linked Workflow is a deliberate follow-up rather than an accidental rerun
  * of the source's old instructions.
  */
-function TerminalWorkflowActions({
+export function TerminalWorkflowActions({
   apiBase,
   workflowId,
 }: {

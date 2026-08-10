@@ -39,7 +39,7 @@ function mockBinding(
   });
 }
 
-function renderRoute(onNavigate = vi.fn()) {
+function renderRoute(onNavigate = vi.fn(), workflowTerminal = false) {
   renderWithClient(
     <WorkflowNativeChatRoute
       apiBase="/api"
@@ -49,6 +49,7 @@ function renderRoute(onNavigate = vi.fn()) {
       workflowTitle="Ship the thing"
       runtimeLabel="Codex via Omnigent"
       pollIntervalMs={5000}
+      workflowTerminal={workflowTerminal}
       onNavigate={onNavigate}
     />,
   );
@@ -104,19 +105,23 @@ describe('WorkflowNativeChatRoute', () => {
     expect(onNavigate).toHaveBeenCalledWith('overview', '/workflows/wf-1/overview?source=temporal');
   });
 
-  it('shows a terminal read-only session and withholds Continue until the handoff exists', async () => {
+  it('shows the authorized continuation action for a terminal read-only session', async () => {
     mockBinding(() => ({
       body: { ...AVAILABLE, state: 'ended', readOnly: true, capabilities: {} },
     }));
-    renderRoute();
+    renderRoute(vi.fn(), true);
     await screen.findByTitle('Ship the thing — Omnigent chat');
     expect(screen.getByText(/session ended/i)).toBeTruthy();
-    // The continuation handoff (linked execution + authorized source identity)
-    // does not exist yet, so the misleading "Continue" affordance is withheld
-    // rather than pointed at the source workflow's Overview.
+    const continueButton = screen.getByRole('button', {
+      name: 'Continue in a new workflow',
+    });
+    fireEvent.click(continueButton);
+    expect(screen.getByText('New instructions')).toBeTruthy();
     expect(
-      screen.queryByRole('link', { name: 'Continue in a new workflow' }),
-    ).toBeNull();
+      (screen.getByRole('button', {
+        name: 'Start continuation',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('renders an explicit unsupported-runtime state with no iframe', async () => {
