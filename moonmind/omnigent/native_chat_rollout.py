@@ -70,17 +70,16 @@ REASON_UNKNOWN_MODE_FAILED_CLOSED = "unknown_rollout_mode_failed_closed"
 def parse_rollout_mode(value: str | None) -> NativeChatRolloutMode:
     """Map a raw flag value to a mode, failing closed on an unknown value.
 
-    An unset value selects :data:`NativeChatRolloutMode.ENABLED` — the canonical
-    Compose deployment serves native Chat by default (the default experience is
-    an executable contract, and the dependency issues already ship the feature
-    default-on). An explicitly set but unrecognized value degrades to
-    ``read_only`` rather than crashing serving or silently enabling interactive
-    Chat.
+    An unset value selects :data:`NativeChatRolloutMode.CANARY`: interactive
+    Chat remains fail-closed until current deterministic and protected-live
+    acceptance evidence is recorded. An explicitly set but unrecognized value
+    degrades to ``read_only`` rather than crashing serving or silently enabling
+    interactive Chat.
     """
 
     raw = str(value or "").strip().lower()
     if not raw:
-        return NativeChatRolloutMode.ENABLED
+        return NativeChatRolloutMode.CANARY
     try:
         return NativeChatRolloutMode(raw)
     except ValueError:

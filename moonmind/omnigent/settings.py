@@ -137,10 +137,9 @@ def resolved_native_chat_rollout_mode(*, env: Mapping[str, Any] | None = None) -
     MoonLadderStudios/MoonMind#3642 §10. Selects whether interactive native Chat
     is served (``enabled``), gated behind recorded acceptance evidence
     (``canary``), rolled back to read-only diagnostics (``read_only``), or
-    disabled (``disabled``). Unset defaults to ``enabled`` so the canonical
-    Compose deployment keeps serving native Chat (the dependency issues ship the
-    feature default-on); an operator opts into a staged rollout by setting a more
-    restrictive posture. The raw value is normalized/failed-closed by
+    disabled (``disabled``). Unset defaults to the fail-closed ``canary``
+    posture; interactive Chat is admitted only by current acceptance evidence.
+    The raw value is normalized/failed-closed by
     :func:`moonmind.omnigent.native_chat_rollout.parse_rollout_mode`.
 
     This flag is deliberately temporary: it is retired after the deterministic

@@ -451,22 +451,18 @@ def test_native_chat_acceptance_journey_gates_rollout() -> None:
         proof()
         proven.add(scenario)
 
-    # 2. The protected-live rows run in a separate credentialed job; supply
-    #    well-formed evidence so the full gate contract is exercised.
-    for name, lane in SCENARIO_LANES.items():
-        if lane == "protected_live":
-            proven.add(name)
+    # 2. Hermetic tests must never synthesize protected-live success. The
+    #    combined gate therefore refuses this deterministic-only matrix until a
+    #    credentialed producer supplies observed protected-live evidence.
+    assert proven == {
+        name for name, lane in SCENARIO_LANES.items() if lane == "deterministic"
+    }
+    with pytest.raises(ConformanceContractError):
+        build_native_chat_acceptance_report(
+            _acceptance_source(proven=proven), now=_NOW
+        )
 
-    assert proven == set(REQUIRED_SCENARIOS)
-
-    # 3. The complete matrix builds one passing gate report.
-    report = build_native_chat_acceptance_report(
-        _acceptance_source(proven=proven), now=_NOW
-    )
-    assert report["status"] == "passed"
-    assert report["issue"] == "MoonLadderStudios/MoonMind#3642"
-
-    # 4. Fail-closed: if a real deterministic row regresses, the gate refuses to
+    # 3. Fail-closed: if a deterministic row regresses, the gate also refuses to
     #    publish (implementation PRs are never enough on their own).
     regressed = set(proven)
     regressed.discard(SCENARIO_OUTBOUND_SCAN)

@@ -17,9 +17,9 @@ from moonmind.omnigent.settings import (
 )
 
 
-def test_unset_flag_defaults_to_enabled() -> None:
-    assert parse_rollout_mode(None) is NativeChatRolloutMode.ENABLED
-    assert parse_rollout_mode("") is NativeChatRolloutMode.ENABLED
+def test_unset_flag_defaults_to_canary() -> None:
+    assert parse_rollout_mode(None) is NativeChatRolloutMode.CANARY
+    assert parse_rollout_mode("") is NativeChatRolloutMode.CANARY
     assert parse_rollout_mode("  ENABLED ") is NativeChatRolloutMode.ENABLED
 
 
@@ -73,8 +73,8 @@ def test_canary_requires_recorded_acceptance_evidence() -> None:
 
 
 def test_settings_defaults_are_gated_off_until_configured() -> None:
-    # Empty env: rollout flag resolves blank (→ ENABLED default) and no recorded
-    # acceptance ref (→ canary would gate).
+    # Empty env: rollout flag resolves blank (→ CANARY default) and no
+    # recorded acceptance ref, so interactive Chat remains gated.
     assert resolved_native_chat_rollout_mode(env={}) == ""
     assert resolved_native_chat_acceptance_ref(env={}) == ""
     assert (

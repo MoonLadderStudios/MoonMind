@@ -70,8 +70,8 @@ on every request:
 
 | Mode | Behavior |
 | --- | --- |
-| `enabled` (default when unset) | Serve interactive native Chat. Post-proof steady state; matches the dependency default-on behavior. |
-| `canary` | Serve interactive Chat **only** when the deployment has recorded a passing acceptance report ref (`OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF`); otherwise degrade to read-only diagnostics. |
+| `enabled` | Serve interactive native Chat. This is the explicit post-proof steady-state override. |
+| `canary` (default when unset) | Serve interactive Chat **only** when the deployment has recorded a passing acceptance report ref (`OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF`); otherwise degrade to read-only diagnostics. |
 | `read_only` | Roll back: never serve the interactive native UI; present the durable read-only diagnostics projection. Historical reads are preserved. |
 | `disabled` | Interactive native Chat is unavailable. |
 
