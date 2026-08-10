@@ -2875,6 +2875,7 @@ class DockerCodexManagedSessionController:
                 action="send_turn",
                 payload=request.model_dump(
                     by_alias=True,
+                    exclude_none=True,
                     exclude={"bridge_publication", "environment"},
                 ),
                 extra_env=request.environment or None,
@@ -2888,6 +2889,40 @@ class DockerCodexManagedSessionController:
             if recovered is None:
                 raise
             response = self._with_runtime_family(recovered, request)
+
+        runtime_selection: dict[str, str] = {}
+        if request.model is not None:
+            runtime_selection["model"] = request.model
+        if request.effort is not None:
+            runtime_selection["effort"] = request.effort
+        if runtime_selection and self._session_store is not None:
+            admitted_record = self._session_store.load(request.session_id)
+            if admitted_record is not None:
+                admitted_metadata = dict(admitted_record.metadata)
+                admitted_metadata.update(runtime_selection)
+                admitted_record = await self._session_store.update(
+                    request.session_id,
+                    session_epoch=response.session_state.session_epoch,
+                    container_id=response.session_state.container_id,
+                    thread_id=response.session_state.thread_id,
+                    active_turn_id=response.session_state.active_turn_id,
+                    status=self._record_status_from_turn_status(response.status),
+                    updated_at=datetime.now(tz=UTC),
+                    metadata=admitted_metadata,
+                )
+                if (
+                    request.model is not None
+                    and self._observability_bridge is not None
+                ):
+                    model_metadata: dict[str, object] = {"action": "send_turn"}
+                    if request.effort is not None:
+                        model_metadata["effort"] = request.effort
+                    self._observability_bridge.emit_model_status(
+                        record=admitted_record,
+                        model=request.model,
+                        metadata=model_metadata,
+                        active_turn_id=response.turn_id,
+                    )
 
         initial_observations = response.metadata.get("observabilityEvents")
         if observation_sink is not None and isinstance(initial_observations, list):
@@ -2906,10 +2941,21 @@ class DockerCodexManagedSessionController:
             )
             terminal_response = self._with_runtime_family(terminal_response, request)
 
+        if runtime_selection:
+            terminal_response = terminal_response.model_copy(
+                update={
+                    "metadata": {
+                        **terminal_response.metadata,
+                        **runtime_selection,
+                    }
+                }
+            )
+
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
                 record_metadata = dict(record.metadata)
+                record_metadata.update(runtime_selection)
                 assistant_text = terminal_response.metadata.get("assistantText")
                 if isinstance(assistant_text, str) and assistant_text.strip():
                     record_metadata.update(_last_assistant_text_metadata(assistant_text))

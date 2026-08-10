@@ -2692,6 +2692,9 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
         commands.append(command)
         environments.append(dict(env or {}))
         if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            invoked = json.loads(input_text or "{}")
+            assert invoked["model"] == "gpt-5.3-codex-spark"
+            assert invoked["effort"] == "xhigh"
             payload = {
                 "sessionState": {
                     "sessionId": "sess-1",
@@ -2721,6 +2724,8 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
             containerId="ctr-1",
             threadId="logical-thread-1",
             instructions="Reply with exactly the word OK",
+            model="gpt-5.3-codex-spark",
+            effort="xhigh",
             environment={
                 "MOONMIND_ACTIVE_SKILLS_DIR": (
                     "/work/runtime/skills_active/snapshot-retry"
@@ -2732,6 +2737,8 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
     assert response.status == "completed"
     assert response.metadata["assistantText"] == "OK"
+    assert response.metadata["model"] == "gpt-5.3-codex-spark"
+    assert response.metadata["effort"] == "xhigh"
     assert len(commands) == 1
     exec_command = commands[0]
     assert exec_command[:3] == ("docker", "exec", "-i")
@@ -2752,11 +2759,110 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
         "workflow:step:execution:2"
     )
 
+
 @pytest.mark.asyncio
-async def test_controller_send_turn_polls_session_status_until_completed() -> None:
+@pytest.mark.parametrize(
+    ("model", "effort", "expected_selection"),
+    [
+        (None, None, {}),
+        (
+            "  gpt-5.3-codex-spark  ",
+            "  xhigh  ",
+            {
+                "model": "  gpt-5.3-codex-spark  ",
+                "effort": "  xhigh  ",
+            },
+        ),
+    ],
+)
+async def test_controller_serializes_runtime_selection_without_transforming_it(
+    model: str | None,
+    effort: str | None,
+    expected_selection: dict[str, str],
+) -> None:
+    invoked_payloads: list[dict[str, object]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del env
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            invoked_payloads.append(json.loads(input_text or "{}"))
+            return 0, json.dumps(
+                {
+                    "sessionState": {
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 1,
+                        "containerId": "ctr-1",
+                        "threadId": "logical-thread-1",
+                        "activeTurnId": None,
+                    },
+                    "turnId": "vendor-turn-1",
+                    "status": "completed",
+                    "metadata": {"assistantText": "OK"},
+                }
+            ), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+    )
+
+    await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+            model=model,
+            effort=effort,
+        )
+    )
+
+    assert len(invoked_payloads) == 1
+    assert {key: invoked_payloads[0][key] for key in expected_selection} == (
+        expected_selection
+    )
+    if model is None:
+        assert "model" not in invoked_payloads[0]
+    if effort is None:
+        assert "effort" not in invoked_payloads[0]
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_polls_session_status_until_completed(
+    tmp_path: Path,
+) -> None:
     commands: list[tuple[str, ...]] = []
     session_status_calls = 0
     session_status_payloads: list[dict[str, object]] = []
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock()
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -2781,6 +2887,12 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
             }
             return 0, json.dumps(payload), ""
         if command[:3] == ("docker", "exec", "-i") and "session_status" in command:
+            emitted = session_supervisor.emit_session_event.call_args_list
+            assert [call.kwargs["kind"] for call in emitted] == ["model_status"]
+            admitted = store.load("sess-1")
+            assert admitted is not None
+            assert admitted.metadata["model"] == "gpt-5.3-codex-spark"
+            assert admitted.metadata["effort"] == "xhigh"
             session_status_payloads.append(json.loads(input_text or "{}"))
             session_status_calls += 1
             if session_status_calls == 1:
@@ -2821,6 +2933,8 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
         command_runner=_fake_runner,
         turn_poll_interval_seconds=0,
     )
@@ -2832,12 +2946,16 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
             containerId="ctr-1",
             threadId="logical-thread-1",
             instructions="Reply with exactly the word OK",
+            model="gpt-5.3-codex-spark",
+            effort="xhigh",
         )
     )
 
     assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "OK"
+    assert response.metadata["model"] == "gpt-5.3-codex-spark"
+    assert response.metadata["effort"] == "xhigh"
     assert len(session_status_payloads) == 2
     for payload in session_status_payloads:
         assert payload["sessionId"] == "sess-1"
@@ -3287,6 +3405,8 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
             threadId="thread-1",
             instructions="Reply with exactly the word OK",
             reason="Operator follow-up",
+            model="gpt-5.3-codex-spark",
+            effort="xhigh",
         )
     )
 
@@ -3298,7 +3418,12 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         call.kwargs.get("kind")
         for call in session_supervisor.emit_session_event.call_args_list
     ]
+    stored = store.load("sess-1")
+    assert stored is not None
+    assert stored.metadata["model"] == "gpt-5.3-codex-spark"
+    assert stored.metadata["effort"] == "xhigh"
     assert emitted_kinds == [
+        "model_status",
         "user_message_submitted",
         "turn_started",
         "assistant_message",
@@ -3306,6 +3431,11 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         "turn_completed",
     ]
     assert emitted_metadata == [
+        {
+            "action": "send_turn",
+            "model": "gpt-5.3-codex-spark",
+            "effort": "xhigh",
+        },
         {
             "action": "send_turn",
             "messageLength": len("Reply with exactly the word OK"),

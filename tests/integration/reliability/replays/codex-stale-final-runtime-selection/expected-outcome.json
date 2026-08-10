@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "activeTurnId": null,
+  "assistantText": "Queued the requested Dependabot workflows.",
+  "turnStart": {
+    "model": "gpt-5.3-codex-spark",
+    "effort": "xhigh"
+  }
+}
