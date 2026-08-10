@@ -293,7 +293,7 @@ class TestManagedRuntimeWorkspaceCleanupSchedule:
             MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE
         )
         assert schedule.action.task_queue == "mm.workflow"
-        assert schedule.action.static_summary == "Managed runtime workspace cleanup"
+        assert schedule.action.static_summary == "Deployment storage maintenance"
         assert schedule.spec.cron_expressions == ["0 * * * *"]
         assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
         assert schedule.policy.catchup_window == timedelta(minutes=15)

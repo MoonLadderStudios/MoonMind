@@ -1192,6 +1192,10 @@ class ManagedSessionController(Protocol):
     async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
         pass
 
+    async def reclaim_docker_storage_pressure(self, *, config: Any = None) -> Any:
+        pass
+
+
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
 
@@ -1557,6 +1561,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.cleanup_managed_runtime_files": (
         "agent_runtime",
         "agent_runtime_cleanup_managed_runtime_files",
+    ),
+    "agent_runtime.reclaim_docker_storage": (
+        "agent_runtime",
+        "agent_runtime_reclaim_docker_storage",
     ),
     "agent_runtime.restore_workspace_checkpoint": (
         "agent_runtime",
@@ -12588,6 +12596,43 @@ class TemporalAgentRuntimeActivities:
                 pass_errors[:5],
             )
         return result_payload
+
+    async def agent_runtime_reclaim_docker_storage(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        """Run bounded image/cache reclamation at the trusted Docker boundary."""
+        from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
+            DockerStorageMaintenanceConfig,
+        )
+
+        if payload:
+            raise TemporalActivityRuntimeError(
+                "agent_runtime.reclaim_docker_storage does not accept overrides"
+            )
+        if self._session_controller is None or not hasattr(
+            self._session_controller, "reclaim_docker_storage_pressure"
+        ):
+            raise TemporalActivityRuntimeError(
+                "Docker storage maintenance requires the managed session controller"
+            )
+        result = await _await_with_activity_heartbeats(
+            self._session_controller.reclaim_docker_storage_pressure(
+                config=DockerStorageMaintenanceConfig.from_env()
+            ),
+            heartbeat_payload={
+                "activityType": "agent_runtime.reclaim_docker_storage",
+            },
+        )
+        if isinstance(result, Mapping):
+            return dict(result)
+        to_dict = getattr(result, "to_dict", None)
+        if not callable(to_dict):
+            raise TemporalActivityRuntimeError(
+                "Docker storage maintenance returned an invalid result"
+            )
+        return dict(to_dict())
 
     @staticmethod
     def _agent_runtime_request_identifiers(

@@ -322,6 +322,18 @@ def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
     assert {key: api_env[key] for key in expected} == expected
     assert {key: worker_env[key] for key in expected} == expected
 
+    docker_storage_expected = {
+        "MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED": "${MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED:-true}",
+        "MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT:-80}",
+        "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT": "${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}",
+        "MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}",
+        "MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS": "${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}",
+    }
+    assert {
+        key: worker_env[key] for key in docker_storage_expected
+    } == docker_storage_expected
+
+
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()
 

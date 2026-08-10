@@ -2,7 +2,7 @@
 
 - **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-04
+- **Last updated:** 2026-08-10
 - **Document class:** Canonical declarative design
 
 **Related:**
@@ -603,9 +603,23 @@ orphan reconciliation.
 ### 11.7 Image lifetime
 
 Images survive job, session, and workflow completion. Deployment-level retention
-may evict unused images under disk pressure while protecting images used by
-active containers and operator-pinned digests. Job cleanup never performs global
-image pruning.
+evicts unused images and build cache under disk pressure while protecting images
+used by containers. Job cleanup never performs global image pruning.
+
+The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow asks
+the trusted agent-runtime worker to inspect the filesystem that contains
+`/work/agent_jobs`. Below the default 80% high watermark it performs no Docker
+mutation. At or above that watermark it removes unused images older than seven
+days and build cache older than one day. If the filesystem remains at or above
+the default 90% critical watermark, it removes all remaining unused images and
+build cache. Docker volumes and containers are never targets of this automatic
+pressure pass, and failures are surfaced as degraded maintenance for retry on
+the next hourly run.
+
+Operators can disable the pressure pass or tune its two watermarks and minimum
+ages with the documented `MOONMIND_DOCKER_STORAGE_*` settings. The high
+watermark must be lower than the critical watermark; invalid values fail before
+any prune command runs.
 
 The operator recovery path is `tools/cleanup-docker-space.sh`. It must remain
 usable when the Docker data root has no free space: inspection must not launch a
