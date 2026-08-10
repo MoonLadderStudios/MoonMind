@@ -19,6 +19,8 @@ from hashlib import sha256
 import json
 import logging
 import os
+from pathlib import Path
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -108,6 +110,8 @@ from moonmind.omnigent.native_ui import (
     scoped_api_base,
 )
 from moonmind.omnigent.native_ui_compat import (
+    CLASS_TERMINAL_INPUT,
+    CLASS_TERMINAL_RESIZE,
     CODE_COMPAT_REVIEW_REQUIRED,
     CODE_TRANSPORT_UNSUPPORTED,
     CODE_WS_SUBPROTOCOL_REJECTED,
@@ -3994,8 +3998,10 @@ async def _read_bounded_facade_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _validate_native_resource_path(value: str | None) -> None:
-    """Reject encoded traversal, absolute, drive/UNC, and NUL-bearing paths."""
+def _validate_native_resource_path(
+    value: str | None, *, workspace_root: Path | None = None
+) -> None:
+    """Reject lexical traversal and, when materialized locally, symlink escape."""
 
     from urllib.parse import unquote
 
@@ -4020,15 +4026,77 @@ def _validate_native_resource_path(value: str | None) -> None:
             status_code=403,
             code=CODE_OPERATION_DENIED,
         )
+    if workspace_root is not None:
+        try:
+            root = workspace_root.resolve()
+            resolved = (root / normalized).resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise WorkflowChatFacadeError(
+                "The requested resource path is not permitted.",
+                failure_class="user_error",
+                status_code=403,
+                code=CODE_OPERATION_DENIED,
+            ) from exc
+        if not resolved.is_relative_to(root):
+            raise WorkflowChatFacadeError(
+                "The requested resource path is not permitted.",
+                failure_class="user_error",
+                status_code=403,
+                code=CODE_OPERATION_DENIED,
+            )
 
 
-def _validate_native_match_paths(match: Any) -> None:
+def _safe_native_content_disposition(value: str | None) -> str | None:
+    """Construct a bounded disposition without trusting an upstream filename."""
+
+    from pathlib import PurePath
+
+    raw = str(value or "")
+    if not raw or "\r" in raw or "\n" in raw:
+        return None
+    disposition = "inline" if raw.lstrip().lower().startswith("inline") else "attachment"
+    match = re.search(r"filename\s*=\s*(?:\"([^\"]*)\"|([^;]*))", raw, re.I)
+    if match is None:
+        return disposition
+    filename = PurePath((match.group(1) or match.group(2) or "").replace("\\", "/")).name
+    filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename).strip(" .")[:180]
+    if not filename or filename in {".", ".."}:
+        filename = "download"
+    return f'{disposition}; filename="{filename}"'
+
+
+def _terminal_frame_operation(payload: str | bytes, is_binary: bool) -> str:
+    """Classify the pinned terminal protocol's resize control separately from input."""
+
+    if not is_binary and isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except (json.JSONDecodeError, ValueError):
+            decoded = None
+        if isinstance(decoded, Mapping) and str(decoded.get("type") or "").lower() == "resize":
+            return CLASS_TERMINAL_RESIZE
+    return CLASS_TERMINAL_INPUT
+
+
+def _trusted_native_workspace_root(row: Any) -> Path | None:
+    """Read an optional server-owned materialized workspace path from the binding."""
+
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    value = metadata.get("workspacePath")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else None
+
+
+def _validate_native_match_paths(match: Any, *, row: Any | None = None) -> None:
     """Validate every caller-controlled captured or wildcard path segment."""
 
+    workspace_root = _trusted_native_workspace_root(row) if row is not None else None
     for name, value in match.params.items():
         if name in {"session_id", "runner_id"}:
             continue
-        _validate_native_resource_path(value)
+        _validate_native_resource_path(value, workspace_root=workspace_root)
 
 
 def _identity_query_values(query_params: Any) -> list[dict[str, str]]:
@@ -4144,7 +4212,7 @@ async def _dispatch_native_ui_http(
             status_code=403,
             code=CODE_OPERATION_DENIED,
         )
-    _validate_native_match_paths(match)
+    _validate_native_match_paths(match, row=row)
 
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
         raise WorkflowChatFacadeError(
@@ -4324,9 +4392,11 @@ async def _dispatch_native_ui_http(
                         normalized_json = value
                         payload = json.dumps(value, separators=(",", ":")).encode()
                 response_headers: dict[str, str] = {}
-                disposition = str(upstream.headers.get("content-disposition") or "")
-                if disposition and "\r" not in disposition and "\n" not in disposition:
-                    response_headers["Content-Disposition"] = disposition[:512]
+                disposition = _safe_native_content_disposition(
+                    upstream.headers.get("content-disposition")
+                )
+                if disposition:
+                    response_headers["Content-Disposition"] = disposition
                 location = str(upstream.headers.get("location") or "")
                 if location and "\r" not in location and "\n" not in location:
                     response_headers["Location"] = _rewrite_native_facade_location(
@@ -5418,7 +5488,7 @@ async def workflow_chat_binding_facade_ws(
         return
     route = match.route
     try:
-        _validate_native_match_paths(match)
+        _validate_native_match_paths(match, row=row)
     except WorkflowChatFacadeError:
         await websocket.close(
             code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
@@ -5473,7 +5543,7 @@ async def workflow_chat_binding_facade_ws(
         required_capabilities = (
             ("viewTerminal",)
             if terminal_read_only
-            else ("attachTerminal", "writeTerminal")
+            else ("attachTerminal",)
         )
     if any(
         not capabilities.get(capability, False) for capability in required_capabilities
@@ -5606,13 +5676,23 @@ async def workflow_chat_binding_facade_ws(
             refreshed_capabilities = _effective_capabilities(
                 refreshed, user
             ).capabilities
+            frame_operation = (
+                _terminal_frame_operation(payload, is_binary)
+                if operation == "terminal_attach"
+                else f"{operation}_frame"
+            )
+            frame_capabilities = (
+                ("writeTerminal",)
+                if operation == "terminal_attach"
+                else required_capabilities
+            )
             if (
                 is_read_only(str(getattr(refreshed, "status", "") or ""))
                 or str(getattr(refreshed, "omnigent_session_id", "") or "").strip()
                 != provider_session_id
                 or any(
                     not refreshed_capabilities.get(capability, False)
-                    for capability in required_capabilities
+                    for capability in frame_capabilities
                 )
             ):
                 raise WorkflowChatFacadeError(
@@ -5629,7 +5709,7 @@ async def workflow_chat_binding_facade_ws(
                 idempotency_key=frame_key,
                 chat_binding_id=chat_binding_id,
                 user=user,
-                operation=f"{operation}:frame",
+                operation=frame_operation,
             )
             if canonical_payload_digest(scan_payload) != evidence.payload_digest:
                 raise WorkflowChatFacadeError(
@@ -5642,7 +5722,7 @@ async def workflow_chat_binding_facade_ws(
             claimed = await _claim_facade_message(
                 store=store,
                 row=refreshed,
-                event_type=f"{operation}_frame",
+                event_type=frame_operation,
                 actor=str(user.id),
                 idempotency_key=frame_key,
                 payload_digest=evidence.payload_digest,
@@ -5662,13 +5742,14 @@ async def workflow_chat_binding_facade_ws(
                 "evidence": evidence,
                 "requestTime": request_time,
                 "dispatchTime": datetime.now(tz=UTC).isoformat(),
+                "frameOperation": frame_operation,
             }
 
         async def browser_frame_audit(receipt: Mapping[str, Any], outcome: str) -> None:
             await _record_facade_mutation_audit(
                 store=store,
                 row=receipt["row"],
-                control_type=f"{operation}_frame",
+                control_type=str(receipt["frameOperation"]),
                 outcome=outcome,
                 actor=str(user.id),
                 idempotency_key=str(receipt["key"]),

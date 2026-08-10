@@ -45,6 +45,7 @@ from api_service.api.routers.omnigent_bridge import (
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError
 
 _USER_ID = uuid4()
 _UNSET = object()
@@ -383,6 +384,38 @@ def test_terminal_attach_relays_when_durable_policy_explicitly_grants_it() -> No
     assert disconnect.code == 1000
 
 
+def test_terminal_attach_and_frame_write_are_separately_authorized(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def relay(*, browser: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
+    grants = dict(_row().metadata_["callerAuthorities"][str(_USER_ID)])
+    grants.update({"attachTerminal": True, "writeTerminal": False})
+    store = _FakeStore(
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "callerAuthorities": {str(_USER_ID): grants},
+            }
+        )
+    )
+    client = _build(store=store)
+
+    disconnect = _connect_expect_close(
+        client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
+    )
+    assert disconnect.code == 1000
+    with pytest.raises(WorkflowChatFacadeError) as exc_info:
+        asyncio.run(captured["browser_frame_guard"]("echo denied", False))
+    assert getattr(exc_info.value, "code", None) == "omnigent_chat_operation_denied"
+
+
 def test_terminal_input_frame_is_scanned_and_durably_receipted(
     monkeypatch,
 ) -> None:
@@ -426,6 +459,17 @@ def test_terminal_input_frame_is_scanned_and_durably_receipted(
     assert claim["metadata"]["scanSurface"] == "websocket_frame"
     posted = next(entry for entry in store.lifecycle if entry["kind"] == "record")
     assert posted["metadata"]["controlOutcome"] == "posted"
+
+    _, resize_receipt = asyncio.run(
+        guard('{"type":"resize","cols":120,"rows":40}', False)
+    )
+    asyncio.run(audit(resize_receipt, "posted"))
+    assert resize_receipt["frameOperation"] == "terminal_resize"
+    assert any(
+        entry.get("event_type") == "terminal_resize"
+        for entry in store.lifecycle
+        if entry["kind"] == "claim"
+    )
 
 
 def test_unknown_terminal_create_websocket_is_not_proxied() -> None:

@@ -11,6 +11,7 @@ credentials, and forwards only to the server-resolved provider session.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -28,6 +29,8 @@ from api_service.api.routers.omnigent_bridge import (
     _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
+    _safe_native_content_disposition,
+    _terminal_frame_operation,
     _validate_native_resource_path,
     workflow_chat_router,
 )
@@ -80,6 +83,39 @@ def test_native_resource_path_rejects_escape_forms(path: str) -> None:
 
 def test_native_resource_path_accepts_scoped_relative_path() -> None:
     _validate_native_resource_path("src/package/file name.py")
+
+
+def test_native_resource_path_rejects_symlink_escape(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "outside").symlink_to(tmp_path)
+
+    with pytest.raises(WorkflowChatFacadeError):
+        _validate_native_resource_path(
+            "outside/secret.txt", workspace_root=workspace
+        )
+
+
+@pytest.mark.parametrize(
+    ("upstream", "expected"),
+    [
+        ('attachment; filename="../../secret.txt"', 'attachment; filename="secret.txt"'),
+        ('inline; filename="report\n.txt"', None),
+        ('attachment; filename="résumé?.pdf"', 'attachment; filename="r_sum__.pdf"'),
+    ],
+)
+def test_native_content_disposition_is_reconstructed_safely(
+    upstream: str, expected: str | None
+) -> None:
+    assert _safe_native_content_disposition(upstream) == expected
+
+
+def test_terminal_frames_have_distinct_operations() -> None:
+    assert _terminal_frame_operation("echo hello", False) == "terminal_input"
+    assert (
+        _terminal_frame_operation('{"type":"resize","cols":120,"rows":40}', False)
+        == "terminal_resize"
+    )
 
 
 def test_websocket_stream_is_explicitly_allowlisted() -> None:
