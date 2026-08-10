@@ -3898,6 +3898,8 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
     request.parameters["_moonmindActiveSkillsDir"] = (
         "/work/runtime/skills_active/snapshot-retry"
     )
+    request.parameters["model"] = "gpt-5.3-codex-spark"
+    request.parameters["effort"] = "xhigh"
 
     handle = await adapter.start(request)
 
@@ -3911,6 +3913,8 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             "wf-user-1:run-user-1:queue-github-issues:execution:2"
         ),
     }
+    assert send_turn_calls[0].model == "gpt-5.3-codex-spark"
+    assert send_turn_calls[0].effort == "xhigh"
     assert request.parameters["_moonmindActiveSkillsDir"] == (
         "/work/runtime/skills_active/snapshot-retry"
     )

@@ -139,6 +139,19 @@ Preferred command order for new histories:
 Changes to this order are replay-visible and require Temporal patch/version
 markers or Worker Versioning so in-flight histories replay their recorded path.
 
+### 3.3 Turn runtime selection
+
+The resolved Codex `model` and `effort` values travel on the managed-session
+turn request and map directly to the App Server `turn/start` fields of the same
+names. MoonMind does not translate or clamp explicit values at this boundary;
+Codex remains the validation authority and returns its normal protocol error for
+an unsupported value. Omitted values remain omitted so the provider profile or
+sticky thread setting applies.
+
+The override is applied to the first turn even when MoonMind reuses an existing
+workflow-scoped session, and terminal-contract continuation turns retain the
+same resolved selection.
+
 ---
 
 ## 4. Session identity

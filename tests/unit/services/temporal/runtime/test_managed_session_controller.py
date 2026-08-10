@@ -2692,6 +2692,9 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
         commands.append(command)
         environments.append(dict(env or {}))
         if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            invoked = json.loads(input_text or "{}")
+            assert invoked["model"] == "gpt-5.3-codex-spark"
+            assert invoked["effort"] == "xhigh"
             payload = {
                 "sessionState": {
                     "sessionId": "sess-1",
@@ -2721,6 +2724,8 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
             containerId="ctr-1",
             threadId="logical-thread-1",
             instructions="Reply with exactly the word OK",
+            model="gpt-5.3-codex-spark",
+            effort="xhigh",
             environment={
                 "MOONMIND_ACTIVE_SKILLS_DIR": (
                     "/work/runtime/skills_active/snapshot-retry"
@@ -2732,6 +2737,8 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
     assert response.status == "completed"
     assert response.metadata["assistantText"] == "OK"
+    assert response.metadata["model"] == "gpt-5.3-codex-spark"
+    assert response.metadata["effort"] == "xhigh"
     assert len(commands) == 1
     exec_command = commands[0]
     assert exec_command[:3] == ("docker", "exec", "-i")
@@ -3287,6 +3294,8 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
             threadId="thread-1",
             instructions="Reply with exactly the word OK",
             reason="Operator follow-up",
+            model="gpt-5.3-codex-spark",
+            effort="xhigh",
         )
     )
 
@@ -3298,9 +3307,14 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         call.kwargs.get("kind")
         for call in session_supervisor.emit_session_event.call_args_list
     ]
+    stored = store.load("sess-1")
+    assert stored is not None
+    assert stored.metadata["model"] == "gpt-5.3-codex-spark"
+    assert stored.metadata["effort"] == "xhigh"
     assert emitted_kinds == [
         "user_message_submitted",
         "turn_started",
+        "model_status",
         "assistant_message",
         "assistant_message_completed",
         "turn_completed",
@@ -3312,6 +3326,11 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
             "reason": "Operator follow-up",
         },
         {"action": "send_turn", "reason": "Operator follow-up"},
+        {
+            "action": "send_turn",
+            "model": "gpt-5.3-codex-spark",
+            "effort": "xhigh",
+        },
         {
             "action": "send_turn",
             "contentLength": len("OK"),

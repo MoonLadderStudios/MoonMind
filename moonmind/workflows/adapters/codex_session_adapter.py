@@ -160,6 +160,8 @@ _SESSION_ARTIFACT_METADATA_FIELDS = (
     "canaryEvidence",
 )
 _TURN_METADATA_SCALAR_FIELDS = (
+    "model",
+    "effort",
     "reason",
     "continuationFailureType",
     "failureCause",
@@ -806,6 +808,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             threadId=current_locator.thread_id,
                             instructions=instructions,
                             requestId=f"{request.idempotency_key}:initial",
+                            model=request.parameters.get("model"),
+                            effort=request.parameters.get("effort"),
                             bridgePublication=bridge_publication,
                             environment=turn_environment,
                         )

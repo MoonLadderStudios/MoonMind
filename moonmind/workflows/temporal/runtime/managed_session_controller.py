@@ -2906,10 +2906,26 @@ class DockerCodexManagedSessionController:
             )
             terminal_response = self._with_runtime_family(terminal_response, request)
 
+        runtime_selection: dict[str, str] = {}
+        if request.model is not None:
+            runtime_selection["model"] = request.model
+        if request.effort is not None:
+            runtime_selection["effort"] = request.effort
+        if runtime_selection:
+            terminal_response = terminal_response.model_copy(
+                update={
+                    "metadata": {
+                        **terminal_response.metadata,
+                        **runtime_selection,
+                    }
+                }
+            )
+
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
                 record_metadata = dict(record.metadata)
+                record_metadata.update(runtime_selection)
                 assistant_text = terminal_response.metadata.get("assistantText")
                 if isinstance(assistant_text, str) and assistant_text.strip():
                     record_metadata.update(_last_assistant_text_metadata(assistant_text))
@@ -2948,6 +2964,18 @@ class DockerCodexManagedSessionController:
                             turn_id=response.turn_id,
                             reason=request.reason,
                         )
+                        if request.model is not None:
+                            model_metadata: dict[str, object] = {
+                                "action": "send_turn"
+                            }
+                            if request.effort is not None:
+                                model_metadata["effort"] = request.effort
+                            self._observability_bridge.emit_model_status(
+                                record=updated_record,
+                                model=request.model,
+                                metadata=model_metadata,
+                                active_turn_id=response.turn_id,
+                            )
                         self._observability_bridge.emit_native_observations(
                             record=updated_record,
                             observations=terminal_response.metadata.get(

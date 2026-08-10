@@ -3240,18 +3240,20 @@ class CodexManagedSessionRuntime:
             authoritative_state.vendor_thread_path = recovered_vendor_thread_path
             state = authoritative_state
 
-            started = client.request(
-                "turn/start",
-                {
-                    "threadId": vendor_thread_id,
-                    "input": [
-                        {
-                            "type": "text",
-                            "text": request.instructions,
-                        }
-                    ],
-                },
-            )
+            turn_start_params: dict[str, Any] = {
+                "threadId": vendor_thread_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": request.instructions,
+                    }
+                ],
+            }
+            if request.model is not None:
+                turn_start_params["model"] = request.model
+            if request.effort is not None:
+                turn_start_params["effort"] = request.effort
+            started = client.request("turn/start", turn_start_params)
             turn_payload = started.get("turn")
             if not isinstance(turn_payload, Mapping):
                 raise RuntimeError("codex app-server turn/start did not return a turn")

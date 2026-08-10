@@ -1242,6 +1242,8 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
     request_id: NonBlankStr | None = Field(None, alias="requestId")
+    model: NonBlankStr | None = Field(None, alias="model")
+    effort: NonBlankStr | None = Field(None, alias="effort")
     bridge_publication: dict[str, Any] | None = Field(
         None, alias="bridgePublication"
     )
