@@ -2616,6 +2616,93 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
+    async def operator_remediation_persist_observed_row(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Persist one catalog-owned row from trusted scenario measurements."""
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "operator_remediation.persist_observed_row requires an object"
+            )
+        principal = str(request.get("principal") or "").strip()
+        row_id = str(request.get("rowId") or "").strip()
+        observations = request.get("observations")
+        measurements = request.get("measurements")
+        if (
+            not principal
+            or not row_id
+            or not isinstance(observations, Mapping)
+            or not isinstance(measurements, Mapping)
+        ):
+            raise TemporalArtifactValidationError(
+                "principal, rowId, observations, and measurements are required"
+            )
+        from moonmind.omnigent.operator_remediation_gate import (
+            RemediationGateError,
+            ScenarioMeasurements,
+            persist_observed_row,
+        )
+
+        try:
+            parsed = ScenarioMeasurements(
+                started_at=datetime.fromisoformat(
+                    str(measurements["startedAt"]).replace("Z", "+00:00")
+                ),
+                completed_at=datetime.fromisoformat(
+                    str(measurements["completedAt"]).replace("Z", "+00:00")
+                ),
+                host_mode=str(measurements["hostMode"]),
+                architecture=str(measurements["architecture"]),
+                remaining_live_resources=int(measurements["remainingLiveResources"]),
+                secret_findings=int(measurements["secretFindings"]),
+                prohibited_authority_findings=int(
+                    measurements["prohibitedAuthorityFindings"]
+                ),
+            )
+            return await persist_observed_row(
+                self._service,
+                principal=principal,
+                row_id=row_id,
+                observations=observations,
+                measurements=parsed,
+            )
+        except (KeyError, TypeError, ValueError, RemediationGateError) as exc:
+            raise TemporalArtifactValidationError(str(exc)) from exc
+
+    async def operator_remediation_publish_release_projection(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Publish the release projection after all scenario cleanup completes."""
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "operator_remediation.publish_release_projection requires an object"
+            )
+        principal = str(request.get("principal") or "").strip()
+        row_refs = request.get("rowRefs")
+        release_inputs = request.get("releaseInputs")
+        if (
+            not principal
+            or not isinstance(row_refs, list)
+            or not isinstance(release_inputs, Mapping)
+        ):
+            raise TemporalArtifactValidationError(
+                "principal, rowRefs, and releaseInputs are required"
+            )
+        from moonmind.omnigent.operator_remediation_gate import (
+            RemediationGateError,
+            publish_release_projection,
+        )
+
+        try:
+            return await publish_release_projection(
+                self._service,
+                principal=principal,
+                row_refs=row_refs,
+                release_inputs=release_inputs,
+            )
+        except (KeyError, TypeError, ValueError, RemediationGateError) as exc:
+            raise TemporalArtifactValidationError(str(exc)) from exc
+
     async def publication_recovery_persist_result(
         self, request: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:

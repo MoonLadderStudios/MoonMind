@@ -1347,6 +1347,14 @@ class TemporalActivityBinding:
     handler: Callable[..., Any]
 
 _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
+    "operator_remediation.persist_observed_row": (
+        "artifacts",
+        "operator_remediation_persist_observed_row",
+    ),
+    "operator_remediation.publish_release_projection": (
+        "artifacts",
+        "operator_remediation_publish_release_projection",
+    ),
     "artifact.create": ("artifacts", "artifact_create"),
     "artifact.write_complete": ("artifacts", "artifact_write_complete"),
     "artifact.publish_report_bundle": ("artifacts", "artifact_publish_report_bundle"),
