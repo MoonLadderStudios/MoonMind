@@ -330,6 +330,10 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               title: "Assess existing implementation state",
               type: "skill",
               instructions: "Assess MM-901.",
+              annotations: {
+                issueImplementRole: "moonspec-remediation-loop",
+                remediationLoop: { hardMaxAttempts: 6 },
+              },
               skill: { id: "auto", args: {} },
             },
           ],
@@ -344,6 +348,10 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       "Load Jira preset brief",
       "Assess existing implementation state",
     ]);
+    expect(draft.steps[1]?.annotations).toEqual({
+      issueImplementRole: "moonspec-remediation-loop",
+      remediationLoop: { hardMaxAttempts: 6 },
+    });
     expect(draft.appliedTemplates).toEqual([
       {
         slug: "jira-implement",
