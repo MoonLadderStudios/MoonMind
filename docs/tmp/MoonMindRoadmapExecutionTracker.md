@@ -219,17 +219,6 @@ These are shipped assumptions supporting the milestones below:
 
 ---
 
-## Retained Pentest disposition tasks
-
-The declarative disposition and shared safety gate live in the canonical roadmap. The concrete execution tasks are:
-
-- [ ] **Superseded Pentest stack disposition** — `moonmind/integrations/pentest/`, `moonmind/workflows/temporal/activities/pentest_activities.py`, `PentestSettings`, submission validation, and Pentest provider-lease machinery remain first-class surfaces. Replace them with a thin skill or preset over the generic workload path, or remove them cohesively with their docs and tests.
-- [ ] **External-target enablement fail-fast** — current `main` still permits the legacy path described by the prior audit. PR #3555 proposes default-off external targets plus exact reviewed egress-profile, approval, security-review, and in-profile target requirements. Treat this as unshipped until merged and verified.
-
-The cross-project dependency remains #3516: external targets stay gated until enforcement exists and the live negative-conformance matrix passes.
-
----
-
 ## Current tracker map
 
 ### Open acceptance and product trackers
@@ -294,4 +283,3 @@ Closing every currently open issue would still leave the residual work from clos
 | Embedded mode | #3549 strengthened implementation but supplied no stock-host proof; the closed issue needs successor ownership and the mode remains experimental. |
 | Claude parity | #3550 landed early foundation before the Codex dependency; the closed issue needs successor ownership and no parity/support claim is made. |
 | Workflow reliability | #3553 and #3556 repaired recent recovery/failure paths; #3556 stopped the checkpointless-remediation crash but did not make that path fail closed. |
-| PentestGPT | Still de-scoped as a product area; #3555 proposes the external-target fail-fast correction, while superseded-stack disposition remains untracked. |

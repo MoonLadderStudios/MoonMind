@@ -294,7 +294,7 @@ Recommended keys under `ArtifactMetadata.metadata`:
 - `description`
   - Short display description
 - `producer`
-  - Workflow/tool/adapter identity such as `pytest`, `pentestgpt`, `benchmark-runner`
+  - Workflow/tool/adapter identity such as `pytest` or `benchmark-runner`
 - `subject`
   - Bounded target description such as repo, test suite, hostname, challenge, or environment
 - `render_hint`
@@ -625,7 +625,7 @@ A pentest-style workflow might publish:
 Recommended metadata:
 
 - `artifact_type=security_pentest_report`
-- `producer=pentestgpt` or equivalent adapter name
+- `producer=<security assessment adapter name>`
 - `subject=<target/engagement>`
 - `severity_counts={ critical, high, medium, low, info }`
 - `sensitivity=restricted`
