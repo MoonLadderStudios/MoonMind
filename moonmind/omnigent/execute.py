@@ -1898,7 +1898,21 @@ async def run_omnigent_execution(
                             }
                         )
                         continue
-                    if normalized in {"completed", "failed", "canceled", "timed_out"}:
+                    if normalized in {
+                        "completed",
+                        "failed",
+                        "canceled",
+                        "timed_out",
+                        "idle",
+                    }:
+                        # Native Codex reports a successful turn by returning
+                        # the interactive session to idle. Treat that edge as
+                        # a completion candidate only; the marked-turn
+                        # structural and quiescence checks below still own the
+                        # terminal decision.
+                        terminal_event_status = (
+                            "completed" if normalized == "idle" else normalized
+                        )
                         terminal_snapshot = await client.get_session(session_id)
                         current_turn_progress = (
                             _snapshot_confirms_current_turn_terminal(
@@ -1943,7 +1957,7 @@ async def run_omnigent_execution(
                             marker=marker,
                             baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
-                            terminal_status=normalized,
+                            terminal_status=terminal_event_status,
                         )
                         heartbeat_status["value"] = terminal_status
                         break
