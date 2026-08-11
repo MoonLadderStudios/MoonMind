@@ -16,7 +16,6 @@ on:
         type: choice
         options:
           - app
-          - pentestgpt-runner
       source_tag:
         description: "Existing tag to promote, e.g. 20260624.123"
         required: true
@@ -88,9 +87,6 @@ jobs:
           case '${{ inputs.image }}' in
             app)
               image="ghcr.io/${owner}/${repo}"
-              ;;
-            pentestgpt-runner)
-              image="ghcr.io/${owner}/${repo}-pentestgpt"
               ;;
             *)
               echo "::error::Unknown image '${{ inputs.image }}'"

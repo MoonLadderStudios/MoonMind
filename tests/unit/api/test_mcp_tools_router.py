@@ -51,7 +51,7 @@ def router_app(
     monkeypatch.setattr(
         mcp_tools_router,
         "_execution_tool_registry",
-        ExecutableToolDiscoveryRegistry(pentest_enabled=True),
+        ExecutableToolDiscoveryRegistry(),
     )
     monkeypatch.setattr(
         mcp_tools_router,
@@ -510,7 +510,6 @@ async def test_streamable_http_tools_list_uses_callable_tools(
     tools = response.json()["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert "jira.get_issue" in names
-    assert "security.pentest.run" not in names
 
 
 async def test_streamable_http_tools_call_dispatches_to_trusted_tool(
@@ -665,30 +664,6 @@ async def test_streamable_http_get_reports_sse_not_available(
 
     assert response.status_code == 405
 
-async def test_list_tools_includes_curated_pentest_execution_tool(
-    router_app: FastAPI,
-) -> None:
-    async with AsyncClient(
-        transport=ASGITransport(app=router_app),
-        base_url="http://testserver",
-    ) as client:
-        response = await client.get("/api/mcp/tools")
-
-    assert response.status_code == 200
-    tools = {tool["name"]: tool for tool in response.json()["tools"]}
-    pentest = tools["security.pentest.run"]
-    assert "PentestGPT" in pentest["description"]
-    assert pentest["inputSchema"]["required"] == ["target"]
-    assert pentest["inputSchema"]["properties"]["operation_mode"]["default"] == (
-        "recon_only"
-    )
-    assert pentest["inputSchema"]["properties"]["runner_profile_id"]["default"] == (
-        "pentestgpt-claude-oauth"
-    )
-    assert (
-        pentest["inputSchema"]["x-moonmind-invocation"]
-        == "temporal_task_submission"
-    )
 
 async def test_list_resources_returns_mcp_resource_catalog(
     router_app: FastAPI,
@@ -722,24 +697,6 @@ async def test_resource_metadata_allows_optional_mcp_fields() -> None:
             }
         ]
     }
-
-async def test_call_curated_execution_tool_requires_task_submission(
-    router_app: FastAPI,
-) -> None:
-    async with AsyncClient(
-        transport=ASGITransport(app=router_app),
-        base_url="http://testserver",
-    ) as client:
-        response = await client.post(
-            "/api/mcp/tools/call",
-            json={"tool": "security.pentest.run", "arguments": {}},
-        )
-
-    assert response.status_code == 409
-    assert (
-        response.json()["detail"]["code"]
-        == "execution_tool_requires_task_submission"
-    )
 
 async def test_call_tool_dispatches_to_jira_service(
     router_app: FastAPI,

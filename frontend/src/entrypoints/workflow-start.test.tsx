@@ -553,6 +553,17 @@ const mockPayload: BootPayload = {
   },
 };
 
+function defaultBranchOptionsResponse(): Response {
+  return {
+    ok: true,
+    json: async () => ({
+      items: [{ value: "main", label: "main", source: "github" }],
+      defaultBranch: "main",
+      error: null,
+    }),
+  } as Response;
+}
+
 describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   let fetchSpy: MockInstance;
   let readinessRequests: number;
@@ -582,6 +593,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -700,6 +714,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       if (url.startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
       }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
 
@@ -729,6 +746,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -822,6 +842,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-active-policy" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -945,10 +968,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
             targetRuntime: "omnigent",
             profileId: "oauth-1",
             repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
             publishMode: "pr",
             inputParameters: {
               targetRuntime: "omnigent",
               repository: "MoonLadderStudios/MoonMind",
+              branch: "main",
               profileId: "oauth-1",
               publishMode: "pr",
               reportOutput: { enabled: false },
@@ -980,6 +1005,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
             execution: { workflowId: "mm:omnigent-history-rerun" },
           }),
         } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -1095,6 +1123,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       if (url === "/api/executions" && init?.method === "POST") {
         return Promise.resolve({ ok: true, json: async () => ({ workflowId: `mm:omnigent-${mode}` }) } as Response);
       }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
 
@@ -1132,6 +1163,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url === "/api/omnigent/agent-profiles") {
         return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
@@ -1183,6 +1217,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }
       if (url === "/api/omnigent/agent-profiles") {
         return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
       }
       return Promise.resolve({
         ok: true,
@@ -10613,39 +10650,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(task.git).toEqual({ branch: "trunk" });
   });
 
-  it("omits git branch when a user explicitly clears the branch field", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const branchInput = (await screen.findByLabelText(
-      "Branch",
-    )) as HTMLInputElement;
-    await waitFor(() => {
-      expect(branchInput.disabled).toBe(false);
-    });
-
-    fireEvent.change(branchInput, {
-      target: { value: "feature/create-page" },
-    });
-    fireEvent.change(branchInput, {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Submit with an intentionally blank branch." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-
-    const payload = latestCreateRequest().payload as Record<string, unknown>;
-    const task = payload.task as Record<string, unknown>;
-    expect(task).not.toHaveProperty("git");
-  });
-
   it("keeps branch loading text inside the dropdown only", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -14742,6 +14746,104 @@ describe("Task Create MM-641 authoring validation", () => {
     fetchSpy.mockRestore();
   });
 
+  it("blocks repository-backed submission when no default branch is available", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [], defaultBranch: null, error: null }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch without complete repository authority." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "No repository default branch is available. Enter a branch before starting this workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks repository-backed submission while the default branch is loading", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch before repository authority is complete." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Wait for the repository default branch to load, or enter a branch before starting this workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks repository-backed submission after an authored branch is cleared", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
+    });
+    fireEvent.change(branchInput, { target: { value: "feature/mm-641" } });
+    fireEvent.change(branchInput, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Keep repository authority explicit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Choose a branch before starting this repository-backed workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
   it("renders repository branch and publish mode inside the floating Submit bar", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -15279,6 +15381,8 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => [],
             } as Response);
+          case url.startsWith("/api/github/branches"):
+            return Promise.resolve(defaultBranchOptionsResponse());
           case url === "/api/executions":
             return new Promise<Response>((resolve) => {
               resolveExecution = resolve;
@@ -15388,6 +15492,8 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => [],
             } as Response);
+          case url.startsWith("/api/github/branches"):
+            return Promise.resolve(defaultBranchOptionsResponse());
           case url === "/api/executions":
             return Promise.resolve(
               new Response(
@@ -15660,10 +15766,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           state: "executing",
           targetRuntime: "codex_cli",
           repository: "MoonLadderStudios/MoonMind",
+          branch: "main",
           publishMode: "pr",
           inputParameters: {
             targetRuntime: "codex_cli",
             repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
             workflow: {
               instructions: "Edit a trusted preset draft.",
               runtime: { mode: "codex_cli" },
@@ -15703,10 +15811,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           state: "executing",
           targetRuntime: "codex_cli",
           repository: "MoonLadderStudios/MoonMind",
+          branch: "main",
           publishMode: "pr",
           inputParameters: {
             targetRuntime: "codex_cli",
             repository: "MoonLadderStudios/MoonMind",
+            branch: "main",
             workflow: {
               instructions: "Run Jira Implement for MM-901.",
               runtime: { mode: "codex_cli" },
@@ -19209,6 +19319,9 @@ describe("Task Create runtime command previews", () => {
             ok: true,
             json: async () => [],
           } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve(defaultBranchOptionsResponse());
         }
         if (url === "/api/executions") {
           return Promise.resolve({

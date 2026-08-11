@@ -1898,7 +1898,21 @@ async def run_omnigent_execution(
                             }
                         )
                         continue
-                    if normalized in {"completed", "failed", "canceled", "timed_out"}:
+                    if normalized in {
+                        "completed",
+                        "failed",
+                        "canceled",
+                        "timed_out",
+                        "idle",
+                    }:
+                        # Native Codex reports a successful turn by returning
+                        # the interactive session to idle. Treat that edge as
+                        # a completion candidate only; the marked-turn
+                        # structural and quiescence checks below still own the
+                        # terminal decision.
+                        terminal_event_status = (
+                            "completed" if normalized == "idle" else normalized
+                        )
                         terminal_snapshot = await client.get_session(session_id)
                         current_turn_progress = (
                             _snapshot_confirms_current_turn_terminal(
@@ -1943,8 +1957,46 @@ async def run_omnigent_execution(
                             marker=marker,
                             baseline_item_ids=pre_dispatch_item_ids,
                             event_count=event_count["value"],
-                            terminal_status=normalized,
+                            terminal_status=terminal_event_status,
                         )
+                        if normalized == "idle" and terminal_status == "completed":
+                            completed_snapshot = dict(
+                                terminal_snapshot_override or terminal_snapshot
+                            )
+                            completed_snapshot["status"] = "completed"
+                            normalized_bridge_event = build_omnigent_bridge_event(
+                                payload={
+                                    "type": "session.final_snapshot",
+                                    "session": completed_snapshot,
+                                },
+                                sequence=event_count["value"] + 1,
+                                request=request,
+                                omnigent_session_id=session_id,
+                                bridge_session_id=bridge_session_id,
+                            )
+                            normalized_events.append(normalized_bridge_event.event)
+                            event_count["value"] += 1
+                            if run_store is not None and bridge_session_id:
+                                raw_ref, normalized_ref = (
+                                    await _publish_active_journals(
+                                        artifact_gateway=artifact_gateway,
+                                        request=request,
+                                        raw_events=raw_events,
+                                        normalized_events=normalized_events,
+                                    )
+                                )
+                                normalized_bridge_event.event["artifactRef"] = (
+                                    normalized_ref
+                                )
+                                await run_store.attach_active_journal_refs(
+                                    bridge_session_id,
+                                    raw_ref=raw_ref,
+                                    normalized_ref=normalized_ref,
+                                )
+                                await run_store.append_events(
+                                    bridge_session_id,
+                                    [normalized_bridge_event.event],
+                                )
                         heartbeat_status["value"] = terminal_status
                         break
                     if event_count["value"] % 8 == 0:

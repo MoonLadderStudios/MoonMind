@@ -107,7 +107,10 @@ _PRESET_SEED_DIR = (
 # One-time pre-release seed cleanup for databases that were created before
 # MoonSpec became the canonical bundle identity. Remove after the submodule
 # cutover has run through existing development installations.
-_LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
+_LEGACY_PRESET_SLUGS_TO_DEACTIVATE = (
+    "pentest-recon",
+    "speckit-orchestrate",
+)
 
 async def _sync_env_managed_secrets() -> int:
     """Seed or refresh managed secrets from environment values."""

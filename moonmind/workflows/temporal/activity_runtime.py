@@ -40,31 +40,6 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.integrations.pentest.models import (
-    PENTEST_HEARTBEAT_PHASES,
-    PENTEST_RUNTIME_ID,
-    PentestApprovedScope,
-    PentestExecutionPolicy,
-    PentestLaunchPolicyError,
-    PentestProviderMaterializationError,
-    PentestScopeValidationError,
-    PentestWorkloadRequest,
-    PentestWorkloadResult,
-    build_pentest_execution_materialization,
-    build_pentest_launch_plan,
-    build_pentest_provider_cooldown_diagnostic,
-    build_pentest_progress_annotation,
-    build_pentest_publication_result,
-    build_pentest_terminal_cleanup_result,
-    classify_pentest_failure,
-    materialize_pentest_provider_profile,
-    pentest_cleanup_selector,
-    pentest_provider_lease_metadata,
-    redact_pentest_diagnostic_value,
-    redact_pentest_human_text,
-    resolve_pentest_provider_profile,
-    strictly_normalize_pentest_finding_set,
-)
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
@@ -343,7 +318,6 @@ def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
-_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
@@ -441,455 +415,20 @@ class _HashingArchiveReader:
         return self._hash.hexdigest()
 
 
-class PentestWorkloadHandle(Protocol):
-    async def poll(self) -> Any | None:
-        """Return a workload result once complete, otherwise None."""
-
-    async def stop(self, *, grace_seconds: int) -> Mapping[str, Any] | None:
-        """Attempt graceful workload termination."""
-
-    async def remove(self) -> Mapping[str, Any] | None:
-        """Remove workload runtime resources."""
 
 
-class PentestProviderLeaseManager(Protocol):
-    async def acquire(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        metadata: Mapping[str, Any],
-    ) -> str:
-        """Acquire provider capacity for one PentestGPT attempt."""
-
-    async def release(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        lease_id: str,
-    ) -> None:
-        """Release provider capacity for one PentestGPT attempt."""
-
-    async def record_cooldown(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        cooldown_seconds: int,
-        reason: str,
-    ) -> None:
-        """Record provider cooldown for a quota or rate-limit failure."""
 
 
-class TemporalPentestProviderLeaseManager:
-    def __init__(self, client_adapter: Any) -> None:
-        self._client_adapter = client_adapter
-
-    async def _ensure_manager_started(self, runtime_id: str) -> str:
-        from temporalio.exceptions import WorkflowAlreadyStartedError
-
-        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
-        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            workflow_id_for_runtime,
-        )
-
-        workflow_id = workflow_id_for_runtime(runtime_id)
-        get_client = getattr(self._client_adapter, "get_client", None)
-        if get_client is None:
-            return workflow_id
-        client = await get_client()
-        try:
-            await client.start_workflow(
-                PROVIDER_PROFILE_MANAGER_WF,
-                {"runtime_id": runtime_id},
-                id=workflow_id,
-                task_queue=get_workflow_task_queue(),
-            )
-        except WorkflowAlreadyStartedError:
-            logger.debug(
-                "Provider profile manager %s is already running", workflow_id
-            )
-        return workflow_id
-
-    async def _assert_profile_known(
-        self,
-        *,
-        workflow_id: str,
-        profile_id: str,
-    ) -> None:
-        get_client = getattr(self._client_adapter, "get_client", None)
-        if get_client is None:
-            return
-        client = await get_client()
-        handle = client.get_workflow_handle(workflow_id)
-        last_error: Exception | None = None
-        for _attempt in range(_PROFILE_MANAGER_READY_POLL_ATTEMPTS):
-            try:
-                state = await handle.query("get_state")
-            except Exception as exc:
-                last_error = exc
-                await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
-                continue
-            last_error = None
-            profiles = state.get("profiles") if isinstance(state, Mapping) else None
-            if isinstance(profiles, Mapping) and profile_id in profiles:
-                return
-            await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError(
-            f"Provider profile {profile_id!r} is not launch-ready in {workflow_id}"
-        )
-
-    async def acquire(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        metadata: Mapping[str, Any],
-    ) -> str:
-        update_workflow = getattr(self._client_adapter, "update_workflow", None)
-        if update_workflow is None:
-            raise RuntimeError("Temporal client adapter does not support workflow updates")
-        workflow_id = await self._ensure_manager_started(runtime_id)
-        await self._assert_profile_known(
-            workflow_id=workflow_id,
-            profile_id=profile_id,
-        )
-        await update_workflow(
-            workflow_id,
-            "AcquireSlot",
-            {
-                "requester_workflow_id": owner,
-                "runtime_id": runtime_id,
-                "execution_profile_ref": profile_id,
-                "metadata": dict(metadata),
-            },
-        )
-        return owner
-
-    async def release(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        lease_id: str,
-    ) -> None:
-        await self._client_adapter.signal_workflow(
-            await self._ensure_manager_started(runtime_id),
-            "release_slot",
-            {
-                "requester_workflow_id": owner,
-                "runtime_id": runtime_id,
-                "profile_id": profile_id,
-                "lease_id": lease_id,
-            },
-        )
-
-    async def record_cooldown(
-        self,
-        *,
-        runtime_id: str,
-        profile_id: str,
-        owner: str,
-        cooldown_seconds: int,
-        reason: str,
-    ) -> None:
-        await self._client_adapter.signal_workflow(
-            await self._ensure_manager_started(runtime_id),
-            "report_cooldown",
-            {
-                "runtime_id": runtime_id,
-                "profile_id": profile_id,
-                "requester_workflow_id": owner,
-                "cooldown_seconds": cooldown_seconds,
-                "reason": reason,
-            },
-        )
 
 
-def _pentest_provider_lease_owner(
-    *,
-    agent_run_id: str,
-    step_id: str,
-    attempt: int,
-) -> str:
-    return f"pentest:{agent_run_id}:{step_id}:{attempt}"
 
 
-def _pentest_target_hash(target: str) -> str:
-    return hashlib.sha256(target.encode("utf-8")).hexdigest()
 
 
-def _pentest_provider_lease_safe_metadata(
-    request: PentestWorkloadRequest,
-    *,
-    runtime_id: str,
-    profile_id: str,
-) -> dict[str, Any]:
-    return {
-        "tool": "security.pentest.run",
-        "runtime_id": runtime_id,
-        "profile_id": profile_id,
-        "agent_run_id": request.agent_run_id,
-        "step_id": request.step_id,
-        "attempt": request.attempt,
-        "target_hash": _pentest_target_hash(request.target),
-        "mode": request.operation_mode,
-        "runner_profile": request.runner_profile_id,
-    }
 
-def emit_pentest_activity_heartbeat(
-    *,
-    phase: str,
-    agent_run_id: str | None = None,
-    step_id: str | None = None,
-    attempt: int | None = None,
-    message: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
-    elapsed_seconds: float | None = None,
-) -> dict[str, Any]:
-    """Emit and return a compact redacted Pentest activity heartbeat payload."""
 
-    dropped_metadata_keys = {
-        "stdout",
-        "stderr",
-        "logs",
-        "raw_logs",
-        "raw_evidence",
-        "evidence",
-        "diagnostics_body",
-        "env",
-        "env_overrides",
-        "command",
-        "credentials",
-        "secrets",
-    }
-    compact_metadata = {
-        str(key): redact_pentest_diagnostic_value(value)
-        for key, value in dict(metadata or {}).items()
-        if value is not None
-        and str(key) not in dropped_metadata_keys
-        and not re.search(r"(?i)(api[_-]?key|token|password|secret)", str(key))
-    }
-    payload: dict[str, Any] = {
-        "phase": build_pentest_progress_annotation(
-            phase=phase,
-            message=message or f"Pentest phase {phase}.",
-        ).phase,
-    }
-    if agent_run_id:
-        payload["agent_run_id"] = str(agent_run_id)
-    if step_id:
-        payload["step_id"] = str(step_id)
-    if attempt is not None:
-        payload["attempt"] = int(attempt)
-    if elapsed_seconds is not None:
-        payload["elapsed_seconds"] = max(0.0, round(float(elapsed_seconds), 3))
-    if message:
-        payload["message"] = redact_pentest_human_text(str(message))
-    if compact_metadata:
-        payload["metadata"] = compact_metadata
-    try:
-        temporal_activity.heartbeat(payload)
-    except RuntimeError:
-        # Unit tests and trusted internal callers may exercise the helper
-        # outside a live Temporal activity context.
-        pass
-    return payload
 
-async def _await_pentest_workload_with_activity_heartbeats(
-    workload_awaitable: Awaitable[Any],
-    *,
-    request: PentestWorkloadRequest,
-    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
-) -> Any:
-    """Await a launched Pentest workload while emitting bounded running heartbeats."""
 
-    started_at = time.monotonic()
-    task = asyncio.ensure_future(workload_awaitable)
-    emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id=request.agent_run_id,
-        step_id=request.step_id,
-        attempt=request.attempt,
-        message="Pentest workload is running.",
-        elapsed_seconds=0.0,
-    )
-    interval = max(0.001, float(heartbeat_interval_seconds))
-    try:
-        while not task.done():
-            done, _pending = await asyncio.wait({task}, timeout=interval)
-            if done:
-                break
-            emit_pentest_activity_heartbeat(
-                phase="running",
-                agent_run_id=request.agent_run_id,
-                step_id=request.step_id,
-                attempt=request.attempt,
-                message="Pentest workload is still running.",
-                elapsed_seconds=time.monotonic() - started_at,
-            )
-        return await task
-    except asyncio.CancelledError:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        raise
-
-async def _supervise_pentest_workload_with_activity_heartbeats(
-    launcher: Any,
-    validated_workload_request: Any,
-    *,
-    request: PentestWorkloadRequest,
-    timeout_seconds: float,
-    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
-) -> WorkloadResult:
-    """Run a Pentest workload with activity-visible heartbeats and cleanup."""
-
-    if not callable(getattr(launcher, "start", None)):
-        raw_result = await _await_pentest_workload_with_activity_heartbeats(
-            launcher.run(validated_workload_request),
-            request=request,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
-        )
-        if isinstance(raw_result, WorkloadResult):
-            return raw_result
-        return WorkloadResult.model_validate(raw_result)
-
-    started_at = datetime.now(UTC)
-    monotonic_started_at = time.monotonic()
-    interval = max(0.001, float(heartbeat_interval_seconds))
-    timeout = max(0.001, float(timeout_seconds))
-    cleanup_metadata: dict[str, Any] = {
-        "gracefulTerminationAttempted": False,
-        "killEscalated": False,
-        "containerRemoved": False,
-        "cleanupErrors": [],
-    }
-
-    def _cleanup_metadata() -> dict[str, Any]:
-        return redact_sensitive_payload(dict(cleanup_metadata))
-
-    def _kill_grace_seconds() -> int:
-        profile = getattr(validated_workload_request, "profile", None)
-        cleanup = getattr(profile, "cleanup", None)
-        return int(getattr(cleanup, "kill_grace_seconds", 30) or 30)
-
-    async def _stop_and_remove(*, terminal_reason: str) -> None:
-        cleanup_metadata["terminalReason"] = terminal_reason
-        cleanup_metadata["gracefulTerminationAttempted"] = True
-        try:
-            stop_result = await handle.stop(grace_seconds=_kill_grace_seconds())
-            if isinstance(stop_result, Mapping):
-                cleanup_metadata.update(dict(stop_result))
-        except Exception as exc:
-            cleanup_metadata["killEscalated"] = True
-            cleanup_metadata["cleanupErrors"].append(
-                redact_pentest_human_text(str(exc))
-            )
-        try:
-            remove_result = await handle.remove()
-            cleanup_metadata["containerRemoved"] = True
-            if isinstance(remove_result, Mapping):
-                cleanup_metadata.update(dict(remove_result))
-        except Exception as exc:
-            cleanup_metadata["containerRemoved"] = False
-            cleanup_metadata["cleanupErrors"].append(
-                redact_pentest_human_text(str(exc))
-            )
-
-    handle: PentestWorkloadHandle = await launcher.start(validated_workload_request)
-    emit_pentest_activity_heartbeat(
-        phase="running",
-        agent_run_id=request.agent_run_id,
-        step_id=request.step_id,
-        attempt=request.attempt,
-        message="Pentest workload is running.",
-        elapsed_seconds=0.0,
-    )
-    try:
-        while True:
-            raw_result = await handle.poll()
-            if raw_result is not None:
-                result = (
-                    raw_result
-                    if isinstance(raw_result, WorkloadResult)
-                    else WorkloadResult.model_validate(raw_result)
-                )
-                result.metadata.setdefault("cleanup", _cleanup_metadata())
-                return result
-            elapsed = time.monotonic() - monotonic_started_at
-            if elapsed >= timeout:
-                await _stop_and_remove(terminal_reason="timeout")
-                completed_at = datetime.now(UTC)
-                return WorkloadResult(
-                    requestId=getattr(
-                        validated_workload_request,
-                        "container_name",
-                        f"pentest-{request.agent_run_id}-{request.step_id}-{request.attempt}",
-                    ),
-                    profileId=request.runner_profile_id,
-                    status="timed_out",
-                    exitCode=None,
-                    startedAt=started_at,
-                    completedAt=completed_at,
-                    durationSeconds=(completed_at - started_at).total_seconds(),
-                    timeoutReason="workload exceeded timeoutSeconds",
-                    metadata={"cleanup": _cleanup_metadata()},
-                )
-            await asyncio.sleep(min(interval, max(0.001, timeout - elapsed)))
-            emit_pentest_activity_heartbeat(
-                phase="running",
-                agent_run_id=request.agent_run_id,
-                step_id=request.step_id,
-                attempt=request.attempt,
-                message="Pentest workload is still running.",
-                elapsed_seconds=time.monotonic() - monotonic_started_at,
-            )
-    except asyncio.CancelledError:
-        await _stop_and_remove(terminal_reason="cancellation")
-        raise
-    except Exception:
-        await _stop_and_remove(terminal_reason="failure")
-        raise
-
-async def cleanup_pentest_orphan_containers(
-    janitor: Any,
-    *,
-    agent_run_id: str | None = None,
-    step_id: str | None = None,
-    runner_profile_id: str | None = None,
-) -> dict[str, Any]:
-    """Remove orphaned Pentest containers selected by deterministic labels."""
-
-    selector = pentest_cleanup_selector(
-        agent_run_id=agent_run_id,
-        step_id=step_id,
-        runner_profile_id=runner_profile_id,
-    )
-    container_ids = await janitor.find_by_labels(selector)
-    removed: list[str] = []
-    errors: list[str] = []
-    for container_id in container_ids:
-        try:
-            await janitor.remove(container_id)
-            removed.append(str(container_id))
-        except Exception as exc:
-            errors.append(redact_pentest_human_text(str(exc)))
-    return {
-        "selector": selector,
-        "selected_count": len(container_ids),
-        "removed_count": len(removed),
-        "removed_container_ids": removed,
-        "cleanup_errors": errors,
-    }
 
 _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
@@ -1093,25 +632,6 @@ def _log_managed_session_activity(
         extra={"managed_session": context},
     )
 
-def _artifact_ref_for_pentest_name(
-    publication: Mapping[str, Any],
-    name: str,
-) -> str | None:
-    """Return the compact artifact ref for a named Pentest publication artifact."""
-
-    artifact_publication = publication.get("artifact_publication")
-    if not isinstance(artifact_publication, Mapping):
-        return None
-    artifacts = artifact_publication.get("artifacts")
-    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
-        return None
-    for artifact in artifacts:
-        if not isinstance(artifact, Mapping):
-            continue
-        if artifact.get("name") == name:
-            ref = artifact.get("artifact_ref")
-            return str(ref).strip() if ref else None
-    return None
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
@@ -1602,7 +1122,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
             "cleanup",
         )
     },
-    "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -1864,227 +1383,6 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if name == OPS_DIAGNOSE_STACK_TOOL_NAME:
         return build_ops_diagnose_stack_tool_definition_payload()
 
-    if name == "security.pentest.run":
-        return {
-            "name": name,
-            "type": "skill",
-            "description": (
-                "Run an authorized PentestGPT workload against an approved "
-                "target scope and publish normalized findings plus evidence "
-                "artifacts."
-            ),
-            "inputs": {
-                "schema": {
-                    "type": "object",
-                    "required": ["target"],
-                    "properties": {
-                        "target": {"type": "string"},
-                        "scope_artifact_ref": {
-                            "type": "string",
-                            "description": (
-                                "Advanced: ArtifactRef for the approved pentest "
-                                "scope document. Execution still fails closed "
-                                "until MoonMind has an approved scope for the "
-                                "target."
-                            ),
-                        },
-                        "objective": {"type": "string"},
-                        "operation_mode": {
-                            "type": "string",
-                            "enum": [
-                                "recon_only",
-                                "validate_hypothesis",
-                                "full_authorized",
-                            ],
-                            "default": "recon_only",
-                        },
-                        "runner_profile_id": {
-                            "type": "string",
-                            "default": "pentestgpt-claude-oauth",
-                        },
-                        "execution_profile_ref": {
-                            "type": "string",
-                            "description": (
-                                "Exact Provider Profile to use for PentestGPT."
-                            ),
-                        },
-                        "provider_selector": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "provider_id": {"type": "string"},
-                                "tags_any": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "tags_all": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                            },
-                        },
-                        "provider_runtime_state": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "object",
-                                "properties": {
-                                    "profile_id": {"type": "string"},
-                                    "current_leases": {
-                                        "type": "array",
-                                        "items": {"type": "string"},
-                                    },
-                                    "available_slots": {
-                                        "type": "integer",
-                                        "minimum": 0,
-                                    },
-                                    "cooldown_until": {"type": "string"},
-                                },
-                            },
-                        },
-                        "time_budget_minutes": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 480,
-                            "default": 60,
-                        },
-                        "repo_dir": {"type": "string"},
-                        "artifacts_dir": {
-                            "type": "string",
-                            "description": (
-                                "Task artifact directory for PentestGPT evidence "
-                                "outputs. Supplied by the runtime when not "
-                                "provided by a trusted caller."
-                            ),
-                        },
-                        "evidence_level": {
-                            "type": "string",
-                            "enum": ["minimal", "standard", "full"],
-                            "default": "standard",
-                        },
-                        "network_attachment_ref": {
-                            "type": "string",
-                            "description": (
-                                "Optional artifact or ref reserved for future "
-                                "elevated-network runner profiles."
-                            ),
-                        },
-                    },
-                }
-            },
-            "outputs": {
-                "schema": {
-                    "type": "object",
-                    "required": [
-                        "status",
-                        "target",
-                        "runner_profile_id",
-                        "launch_plan",
-                    ],
-                    "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["launch_plan_ready", "provider_cooldown"],
-                        },
-                        "target": {"type": "string"},
-                        "runner_profile_id": {"type": "string"},
-                        "provider_profile": {"type": "object"},
-                        "provider_lease": {"type": "object"},
-                        "provider_cooldown": {
-                            "type": "object",
-                            "properties": {
-                                "profile_id": {"type": "string"},
-                                "cooldown_seconds": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                },
-                                "failure_category": {"type": "string"},
-                                "retry_allowed": {"type": "boolean"},
-                            },
-                        },
-                        "instruction_bundle": {"type": "object"},
-                        "runtime_paths": {"type": "object"},
-                        "wrapper_invocation": {"type": "object"},
-                        "launch_plan": {
-                            "type": "object",
-                            "required": [
-                                "profile_id",
-                                "container_name",
-                                "image",
-                                "entrypoint",
-                                "workdir",
-                                "network_policy",
-                                "linux_capabilities",
-                                "devices",
-                                "labels",
-                                "cleanup_selector",
-                            ],
-                            "properties": {
-                                "profile_id": {"type": "string"},
-                                "container_name": {"type": "string"},
-                                "image": {"type": "string"},
-                                "entrypoint": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "workdir": {"type": "string"},
-                                "mounts": {
-                                    "type": "array",
-                                    "items": {"type": "object"},
-                                },
-                                "env_keys": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "network_policy": {"type": "string"},
-                                "linux_capabilities": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "devices": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "resources": {"type": "object"},
-                                "timeout_seconds": {"type": "integer"},
-                                "cleanup": {"type": "object"},
-                                "labels": {
-                                    "type": "object",
-                                    "additionalProperties": {"type": "string"},
-                                },
-                                "cleanup_selector": {
-                                    "type": "object",
-                                    "additionalProperties": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                }
-            },
-            "executor": {
-                "activity_type": "security.pentest.execute",
-                "selector": {"mode": "by_capability"},
-                "binding_reason": "stronger_isolation",
-            },
-            "requirements": {"capabilities": ["agent_runtime"]},
-            "policies": {
-                "timeouts": {
-                    "start_to_close_seconds": 28800,
-                    "schedule_to_close_seconds": 32400,
-                },
-                "retries": {
-                    "max_attempts": 1,
-                    "backoff": "none",
-                    "non_retryable_error_codes": [
-                        "INVALID_SCOPE",
-                        "PERMISSION_DENIED",
-                        "UNAPPROVED_TARGET",
-                        "UNSUPPORTED_PROFILE",
-                        "NON_IDEMPOTENT_OPERATION",
-                    ],
-                },
-            },
-            "security": {"allowed_roles": ["admin", "security_operator"]},
-        }
 
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
         return {
@@ -7268,7 +6566,6 @@ class TemporalAgentRuntimeActivities:
         workflow_docker_mode: str = "profiles",
         raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
-        pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
         workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -7290,10 +6587,6 @@ class TemporalAgentRuntimeActivities:
 
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
-        self._pentest_provider_lease_manager = (
-            pentest_provider_lease_manager
-            or TemporalPentestProviderLeaseManager(client_adapter)
-        )
         self._supervision_tasks: set[asyncio.Task] = set()
         from moonmind.workflows.temporal.runtime.checkpoint_restore import (
             ManagedCheckpointRestoreService,
@@ -7305,13 +6598,6 @@ class TemporalAgentRuntimeActivities:
             run_store=run_store,
         )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
-        # Pentest-specific activity logic lives in a dedicated module/class.
-        # Imported lazily to avoid an import cycle (that module imports this one).
-        from moonmind.workflows.temporal.activities.pentest_activities import (
-            TemporalPentestActivities,
-        )
-
-        self._pentest_activities = TemporalPentestActivities(self)
 
     async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
         """Translate a publication checkpoint into the typed managed restore plane."""
@@ -8655,38 +7941,7 @@ class TemporalAgentRuntimeActivities:
     async def container_job_cleanup(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("cleanup", payload)
 
-    async def security_pentest_execute(
-        self,
-        payload: Mapping[str, Any],
-        /,
-    ) -> dict[str, Any]:
-        """Registry-dispatched PentestGPT activity boundary (untrusted input).
 
-        Thin delegate to :class:`TemporalPentestActivities`. This is the
-        entrypoint bound to the ``security.pentest.execute`` activity type, so
-        its payload may originate from a caller-supplied plan and is always
-        treated as untrusted: an inline ``approved_scope`` is rejected and the
-        scope is always loaded from the artifact store.
-        """
-
-        return await self._pentest_activities.security_pentest_execute(payload)
-
-    async def _security_pentest_execute_trusted_internal(
-        self,
-        payload: Mapping[str, Any],
-        /,
-    ) -> dict[str, Any]:
-        """Internal entrypoint that may honor an inline ``approved_scope``.
-
-        Thin delegate to :class:`TemporalPentestActivities`. Intentionally
-        **not** registered in ``_ACTIVITY_HANDLER_ATTRS`` so it cannot be
-        reached through registry/plan dispatch; only trusted workflow-internal
-        code can call it.
-        """
-
-        return await self._pentest_activities._security_pentest_execute_trusted_internal(
-            payload
-        )
 
     async def agent_runtime_publish_artifacts(
         self,

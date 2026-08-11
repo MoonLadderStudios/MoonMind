@@ -113,63 +113,6 @@ describe("Task Create Step Type authoring", () => {
             json: async () => ({
               tools: [
                 {
-                  name: "security.pentest.run",
-                  description: "Run an authorized PentestGPT workload.",
-                  inputSchema: {
-                    type: "object",
-                    required: [
-                      "target",
-                      "scope_artifact_ref",
-                      "operation_mode",
-                      "runner_profile_id",
-                    ],
-                    properties: {
-                      target: {
-                        type: "string",
-                        title: "Target",
-                        description:
-                          "Approved target URL, host, CIDR, FQDN, or application.",
-                      },
-                      scope_artifact_ref: {
-                        type: "string",
-                        title: "Approved scope artifact",
-                        description:
-                          "ArtifactRef for the approved pentest scope document.",
-                      },
-                      operation_mode: {
-                        type: "string",
-                        title: "Operation mode",
-                        enum: ["recon_only", "validate_hypothesis"],
-                        default: "recon_only",
-                      },
-                      runner_profile_id: {
-                        type: "string",
-                        title: "Runner profile",
-                        enum: ["pentestgpt-claude-oauth"],
-                        default: "pentestgpt-claude-oauth",
-                      },
-                      objective: {
-                        type: "string",
-                        title: "Objective",
-                      },
-                      time_budget_minutes: {
-                        type: "integer",
-                        title: "Time budget minutes",
-                        minimum: 1,
-                        maximum: 120,
-                        default: 60,
-                      },
-                      evidence_level: {
-                        type: "string",
-                        title: "Evidence level",
-                        enum: ["minimal", "standard"],
-                        default: "standard",
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                },
-                {
                   name: "example.raw_tool",
                   description: "Raw tool.",
                 },
@@ -181,25 +124,25 @@ describe("Task Create Step Type authoring", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              artifact_ref: { artifact_id: "art_scope_123" },
+              artifact_ref: { artifact_id: "art_test_123" },
               upload: {
                 mode: "single_put",
-                upload_url: "/api/artifacts/art_scope_123/content",
+                upload_url: "/api/artifacts/art_test_123/content",
                 required_headers: {},
               },
             }),
           } as Response);
         }
-        if (url === "/api/artifacts/art_scope_123/content") {
+        if (url === "/api/artifacts/art_test_123/content") {
           return Promise.resolve({
             ok: true,
-            json: async () => ({ artifact_id: "art_scope_123" }),
+            json: async () => ({ artifact_id: "art_test_123" }),
           } as Response);
         }
-        if (url === "/api/artifacts/art_scope_123/complete") {
+        if (url === "/api/artifacts/art_test_123/complete") {
           return Promise.resolve({
             ok: true,
-            json: async () => ({ artifact_id: "art_scope_123" }),
+            json: async () => ({ artifact_id: "art_test_123" }),
           } as Response);
         }
         if (url === "/api/executions") {
@@ -615,105 +558,4 @@ describe("Task Create Step Type authoring", () => {
     ).toBe("new issue");
   });
 
-  it("renders PentestGPT schema fields and blocks missing required inputs", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const step = (await screen.findByText("Step 1")).closest(
-      "section",
-    ) as HTMLElement;
-    selectStepType(step, "Tool");
-    fireEvent.click(
-      await screen.findByRole("button", { name: "security.pentest.run" }),
-    );
-
-    const targetFields = await screen.findAllByLabelText(/^Target/);
-    expect(targetFields[0]).toBeTruthy();
-    expect(screen.getByLabelText(/^Operation mode/)).toBeTruthy();
-    expect(
-      (screen.getByLabelText(/^Operation mode/) as HTMLSelectElement).value,
-    ).toBe("recon_only");
-    expect(
-      (screen.getByLabelText(/^Runner profile/) as HTMLSelectElement).value,
-    ).toBe("pentestgpt-claude-oauth");
-    expect(screen.getByText("Approved Scope")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    expect(await screen.findAllByText("Target is required.")).toHaveLength(2);
-  });
-
-  it("generates and attaches a Pentest scope artifact before canonical tool submit", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const step = (await screen.findByText("Step 1")).closest(
-      "section",
-    ) as HTMLElement;
-    selectStepType(step, "Tool");
-    fireEvent.click(
-      await screen.findByRole("button", { name: "security.pentest.run" }),
-    );
-    const [targetField] = await screen.findAllByLabelText(/^Target/);
-    expect(targetField).toBeTruthy();
-    fireEvent.change(targetField!, {
-      target: { value: "https://lab-app.internal.example" },
-    });
-    fireEvent.click(
-      screen.getByLabelText(
-        "I confirm I am authorized to test this target within the selected scope.",
-      ),
-    );
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Generate and attach scope",
-      }),
-    );
-
-    await screen.findByText("Approved scope attached: art_scope_123");
-
-    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-
-    await waitFor(() => {
-      const createCall = fetchSpy.mock.calls.find(
-        ([url]) => String(url) === "/api/executions",
-      );
-      expect(createCall).toBeTruthy();
-      const body = JSON.parse(String(createCall?.[1]?.body || "{}"));
-      const tool =
-        body.payload.task.steps[0].tool as Record<string, Record<string, unknown>>;
-      expect(tool.id).toBe("security.pentest.run");
-      expect(tool.inputs).toMatchObject({
-        target: "https://lab-app.internal.example",
-        scope_artifact_ref: "art_scope_123",
-        operation_mode: "recon_only",
-        runner_profile_id: "pentestgpt-claude-oauth",
-        time_budget_minutes: 60,
-        evidence_level: "standard",
-      });
-      expect(tool.inputs).not.toHaveProperty("approved_scope");
-    });
-
-    const artifactCreateCall = fetchSpy.mock.calls.find(
-      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
-    );
-    const artifactBody = JSON.parse(
-      String(artifactCreateCall?.[1]?.body || "{}"),
-    );
-    expect(artifactBody.retention_class).toBe("pinned");
-    expect(artifactBody.metadata.artifact_type).toBe("approved_pentest_scope");
-
-    const artifactContentCall = fetchSpy.mock.calls.find(
-      ([url]) => String(url) === "/api/artifacts/art_scope_123/content",
-    );
-    const generatedScope = JSON.parse(
-      String(artifactContentCall?.[1]?.body || "{}"),
-    );
-    expect(generatedScope.required_network_attachment_type).toBeNull();
-    expect(generatedScope).not.toHaveProperty("authorized_principals");
-    expect(generatedScope.targets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ value: "https://lab-app.internal.example" }),
-        expect.objectContaining({ value: "lab-app.internal.example" }),
-      ]),
-    );
-  });
 });

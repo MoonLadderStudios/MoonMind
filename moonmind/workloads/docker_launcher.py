@@ -253,11 +253,6 @@ def _profile_network_args(network_policy: str) -> tuple[str, list[str]]:
             ),
             [],
         )
-    if network_policy == "pentest_approved_lab":
-        raise DockerWorkloadLauncherError(
-            "pentest_approved_lab requires a target-specific reviewed egress "
-            "profile before launch"
-        )
     raise DockerWorkloadLauncherError("unsupported workload network policy")
 
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:

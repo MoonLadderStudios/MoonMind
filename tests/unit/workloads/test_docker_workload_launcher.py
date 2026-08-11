@@ -1874,19 +1874,6 @@ def test_docker_proxy_profile_preserves_its_target_specific_route(
     assert not any("moonmind.egress.profile=" in value for value in args)
 
 
-def test_pentest_lab_profile_fails_before_a_target_profile_exists(
-    tmp_path: Path,
-) -> None:
-    request = _validated_request(
-        tmp_path,
-        profiles=[_profile_payload(network_policy="pentest_approved_lab")],
-    )
-
-    with pytest.raises(
-        DockerWorkloadLauncherError,
-        match="target-specific reviewed egress profile",
-    ):
-        DockerWorkloadLauncher().build_run_args(request)
 
 
 @pytest.mark.asyncio
