@@ -1494,7 +1494,6 @@ async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fl
 
 
 
-@pytest.fixture(autouse=True)
 
 
 

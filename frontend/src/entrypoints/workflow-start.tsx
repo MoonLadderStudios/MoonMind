@@ -4063,38 +4063,6 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
 }
 
-function slugPart(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "target"
-  );
-}
-
-function targetHostFromValue(value: string): string {
-  const target = value.trim();
-  if (!target) {
-    return "";
-  }
-  try {
-    return new URL(target).hostname;
-  } catch {
-    return target.replace(/^https?:\/\//i, "").split(/[/:?#]/, 1)[0] || target;
-  }
-}
-
-function datetimeLocalToIso(value: unknown): string {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  }
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime()) ? raw : date.toISOString();
-}
-
 function SchemaCapabilityFields({
   fields,
   detail,
@@ -4674,77 +4642,6 @@ async function createInputArtifact(
   await completeArtifactUpload(
     artifactId,
     "Failed to finalize workflow input artifact upload.",
-  );
-  return { artifactId };
-}
-
-async function createJsonArtifact(
-  createEndpoint: string,
-  body: string,
-  metadata: Record<string, unknown>,
-  failureLabel: string,
-): Promise<{ artifactId: string }> {
-  const createResponse = await fetch(createEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      content_type: "application/json; charset=utf-8",
-      size_bytes: new TextEncoder().encode(body).length,
-      retention_class: "pinned",
-      metadata,
-    }),
-  });
-  if (!createResponse.ok) {
-    throw new Error(
-      await responseErrorMessage(createResponse, `Failed to create ${failureLabel}.`),
-    );
-  }
-  const created = (await createResponse.json()) as {
-    artifact_ref?: { artifact_id?: string };
-    upload?: {
-      mode?: string;
-      upload_url?: string;
-      required_headers?: Record<string, string>;
-    };
-  };
-  const artifactId = String(created.artifact_ref?.artifact_id || "").trim();
-  const uploadMode = String(created.upload?.mode || "single_put")
-    .trim()
-    .toLowerCase();
-  if (!artifactId) {
-    throw new Error(`${failureLabel} upload details were incomplete.`);
-  }
-  if (uploadMode === "multipart") {
-    throw new Error(`${failureLabel} is too large for browser upload.`);
-  }
-  const uploadUrl =
-    String(created.upload?.upload_url || "").trim() ||
-    `/api/artifacts/${encodeURIComponent(artifactId)}/content`;
-  const uploadHeaders = new Headers(
-    created.upload?.required_headers &&
-      typeof created.upload.required_headers === "object"
-      ? created.upload.required_headers
-      : {},
-  );
-  if (!uploadHeaders.has("content-type")) {
-    uploadHeaders.set("content-type", "application/json; charset=utf-8");
-  }
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: uploadHeaders,
-    body,
-  });
-  if (!uploadResponse.ok) {
-    throw new Error(
-      await responseErrorMessage(uploadResponse, `Failed to upload ${failureLabel}.`),
-    );
-  }
-  await completeArtifactUpload(
-    artifactId,
-    `Failed to finalize ${failureLabel}.`,
   );
   return { artifactId };
 }

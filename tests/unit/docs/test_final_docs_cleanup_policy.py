@@ -15,6 +15,10 @@ RUN_HISTORY_DOC = (
 ROADMAP_DOC = REPO_ROOT / "docs" / "MoonMindRoadmap.md"
 TEMP_PLAN = REPO_ROOT / "docs" / "tmp" / "StepExecutionsCheckpointingGapPlan.md"
 RUN_WORKFLOW = REPO_ROOT / "moonmind" / "workflows" / "temporal" / "workflows" / "run.py"
+CONDITIONAL_DOCS = (
+    REPO_ROOT / "docs" / "ManagedAgents" / "DockerBackendService.md",
+    REPO_ROOT / "docs" / "Security" / "SecretsSystem.md",
+)
 
 
 CANONICAL_DOCS = (

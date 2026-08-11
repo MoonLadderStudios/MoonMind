@@ -7592,15 +7592,6 @@ def test_create_task_shaped_execution_keeps_meaningful_title_after_synthesis(
 
 
 
-@pytest.mark.parametrize("role", ["admin", "security_operator"])
-
-@pytest.mark.parametrize("roles", [[], [""], ["developer"], ["viewer", "auditor"]])
-
-
-
-
-
-
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
