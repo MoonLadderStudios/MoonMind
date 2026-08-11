@@ -15688,6 +15688,14 @@ describe("Task Create MM-578 Preset expansion", () => {
               id: "tpl:mm-578-preset:1:02",
               title: "Implement preset story",
               instructions: "Implement MM-578.",
+              annotations: {
+                issueImplementRole: "moonspec-remediation-loop",
+                remediationLoop: {
+                  hardMaxAttempts: 6,
+                  remediationTool: { selectedSkill: "remediate-issue" },
+                  verificationTool: { selectedSkill: "moonspec-verify" },
+                },
+              },
               skill: {
                 id: "moonspec-orchestrate",
                 args: { issueKey: "MM-578" },
@@ -16463,6 +16471,14 @@ describe("Task Create MM-578 Preset expansion", () => {
       title: "Implement preset story",
       type: "skill",
       instructions: "Implement MM-578.",
+      annotations: {
+        issueImplementRole: "moonspec-remediation-loop",
+        remediationLoop: {
+          hardMaxAttempts: 6,
+          remediationTool: { selectedSkill: "remediate-issue" },
+          verificationTool: { selectedSkill: "moonspec-verify" },
+        },
+      },
       skill: {
         id: "moonspec-orchestrate",
         args: { issueKey: "MM-578" },
@@ -16498,6 +16514,94 @@ describe("Task Create MM-578 Preset expansion", () => {
           presetDigest: "digest-1",
         },
       ],
+    });
+  });
+
+  it("preserves remediation-loop annotations in artifact-backed preset submissions", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/artifacts") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifact_ref: { artifact_id: "art-remediation-loop" },
+            upload: {
+              mode: "single_put",
+              upload_url: "/api/artifacts/art-remediation-loop/content",
+            },
+          }),
+        } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/content") {
+        return Promise.resolve({ ok: true, text: async () => "" } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/complete") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: "art-remediation-loop" }),
+        } as Response);
+      }
+      if (url === "/api/artifacts/art-remediation-loop/links") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: "art-remediation-loop" }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    const remediationInstructions = await screen.findByDisplayValue(
+      "Implement MM-578.",
+    );
+
+    fireEvent.change(remediationInstructions, {
+      target: { value: "Continue remediation work. ".repeat(400) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/artifacts/art-remediation-loop/content",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const uploadCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/artifacts/art-remediation-loop/content",
+      )
+      .at(-1);
+    const artifactInput = JSON.parse(String(uploadCall?.[1]?.body || "{}")) as {
+      workflow?: { steps?: Array<Record<string, unknown>> };
+    };
+    expect(artifactInput.workflow?.steps?.[1]?.annotations).toEqual({
+      issueImplementRole: "moonspec-remediation-loop",
+      remediationLoop: {
+        hardMaxAttempts: 6,
+        remediationTool: { selectedSkill: "remediate-issue" },
+        verificationTool: { selectedSkill: "moonspec-verify" },
+      },
     });
   });
 

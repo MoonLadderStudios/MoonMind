@@ -906,6 +906,7 @@ interface ExpandedStepPayload {
   skill?: PresetStepSkill;
   tool?: PresetStepSkill;
   type?: string;
+  annotations?: Record<string, unknown>;
   source?: Record<string, unknown>;
   presetProvenance?: Record<string, unknown>;
   inputAttachments?: StepAttachmentRef[];
@@ -1090,6 +1091,7 @@ interface StepState {
   templateAttachments: StepAttachmentRef[];
   generatedTool?: PresetStepSkill;
   generatedSkill?: PresetStepSkill;
+  annotations?: Record<string, unknown>;
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
@@ -2240,6 +2242,9 @@ function createStepStateEntriesFromTemporalDraft(
       templateAttachments:
         step.templateAttachments ||
         (step.inputAttachments || []).map(stepAttachmentRefFromTemporal),
+      ...(step.annotations && Object.keys(step.annotations).length > 0
+        ? { annotations: { ...step.annotations } }
+        : {}),
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
@@ -3322,6 +3327,7 @@ function mapExpandedStepToState(
   const jiraOrchestration =
     nonEmptyRecordValue(step.jiraOrchestration) ||
     nonEmptyRecordValue(step.jira_orchestration);
+  const annotations = nonEmptyRecordValue(step.annotations);
   const source =
     nonEmptyRecordValue(step.source) ||
     compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
@@ -3352,6 +3358,7 @@ function mapExpandedStepToState(
     templateAttachments,
     ...(step.tool ? { generatedTool: step.tool } : {}),
     ...(step.skill ? { generatedSkill: step.skill } : {}),
+    ...(annotations ? { annotations: { ...annotations } } : {}),
     ...(normalizedSource ? { source: normalizedSource } : {}),
     ...(storyOutput ? { storyOutput } : {}),
     ...(jiraOrchestration ? { jiraOrchestration } : {}),
@@ -10473,6 +10480,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     : {}),
                 }
               : undefined;
+          const submittedAnnotations =
+            sourceStep.annotations &&
+            Object.keys(sourceStep.annotations).length > 0
+              ? { ...sourceStep.annotations }
+              : undefined;
           const hasPayloadContent = Object.entries(entry.payload).some(
             ([key, value]) =>
               !(
@@ -10485,6 +10497,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             hasPayloadContent ||
             Boolean((sourceStep.id || "").trim()) ||
             Boolean(sourceStep.title.trim()) ||
+            Boolean(submittedAnnotations) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
               submittedSource && Object.keys(submittedSource).length > 0,
@@ -10509,6 +10522,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(submittedAnnotations
+              ? { annotations: submittedAnnotations }
               : {}),
             ...(submittedSource && Object.keys(submittedSource).length > 0
               ? { source: submittedSource }
