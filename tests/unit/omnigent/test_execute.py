@@ -1383,6 +1383,131 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_accepts_native_idle_turn_edge(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base, OmnigentBridgeSession
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+    awaited: dict[str, object] = {}
+    terminal_snapshot = {
+        "status": "idle",
+        "active_response_id": None,
+        "summary": "done after native idle edge",
+        "items": [
+            {
+                "id": "current-assistant",
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            }
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            yield {"type": "session.status", "status": "idle"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return (
+                terminal_snapshot
+                if self.posted.is_set()
+                else {"status": "idle", "items": []}
+            )
+
+    async def capture_terminal_wait(**kwargs: object):
+        awaited.update(kwargs)
+        return "completed", terminal_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        capture_terminal_wait,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(session_maker)
+
+    try:
+        result = await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-idle-edge",
+                idempotencyKey="idem-idle-edge",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=store,
+        )
+
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(OmnigentBridgeSession).where(
+                        OmnigentBridgeSession.idempotency_key == "idem-idle-edge"
+                    )
+                )
+            ).scalar_one()
+            bridge_session_id = row.bridge_session_id
+        indexed_events = await store.list_events(bridge_session_id)
+    finally:
+        await engine.dispose()
+
+    assert result.summary == "done after native idle edge"
+    assert result.metadata["normalizedStatus"] == "completed"
+    assert awaited["terminal_status"] == "completed"
+    assert awaited["baseline_item_ids"] == frozenset()
+    assert indexed_events[-1].event_type == "session.final_snapshot"
+    assert indexed_events[-1].normalized_status == "completed"
+
+    normalized_path = tmp_path / "corr-idle-edge" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert normalized_events[-1]["type"] == "session.final_snapshot"
+    assert normalized_events[-1]["normalizedStatus"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_reports_httpx_transport_errors(
     monkeypatch,
 ) -> None:
