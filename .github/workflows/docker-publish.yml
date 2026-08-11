@@ -3,7 +3,6 @@ name: Release / Build App Image
 on:
   push:
     branches: [ main ]
-    paths-ignore:
   workflow_dispatch:
 
 env:

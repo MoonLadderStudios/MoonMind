@@ -54,6 +54,27 @@ distribution, recreate or drain stale workers, rerun the canary, then explicitly
 retry or recover the parent. Repeated unregistered-workflow task failures and
 mixed incompatible builds on one queue require an operator alert.
 
+### Removed activity cutovers
+
+Removing an Activity Type is a controlled deployment cutover, not an ordinary
+rolling worker update. Before deploying a build that removes an Activity
+binding, stop new admission for the owning capability while the previous worker
+build remains on its existing Task Queue. Use Temporal visibility to identify
+every open workflow with the removed Activity pending or running, and either
+allow each workflow to reach a terminal state or explicitly cancel it and verify
+its cleanup. Deploy the replacement worker only after no non-terminal history
+can schedule or retry that Activity Type. Record the environment, old and new
+build identities, query used, terminal workflow count, and operator decision as
+the cutover evidence.
+
+The PentestGPT removal follows this procedure for
+`security.pentest.execute`: disable Pentest submissions, drain or cancel every
+admitted Pentest workflow on the old worker build, verify that Temporal reports
+zero pending or running instances of the Activity, and only then replace the
+worker with the build where the binding is absent. Never place old and new
+workers on the same queue and assume an in-flight Pentest Activity will select
+the compatible build.
+
 ### Execution Observability
 
 - **Metrics detail**: Temporal workflows increment standard Prometheus series automatically:
