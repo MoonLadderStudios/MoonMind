@@ -3,9 +3,6 @@ name: Release / Build App Image
 on:
   push:
     branches: [ main ]
-    paths-ignore:
-      - "docker/pentestgpt-runner/**"
-      - ".github/workflows/pentestgpt-runner.yml"
   workflow_dispatch:
 
 env:
@@ -202,9 +199,8 @@ jobs:
             exit 1
           fi
 
-          # Mirror the PentestGPT runner summary so promotion is copy/paste low
-          # friction: `latest` is the current build channel, `stable` is moved
-          # later by the Release / Promote Stable workflow.
+          # `latest` is the current build channel; `stable` is moved later by
+          # the Release / Promote Stable workflow.
           {
             echo "### App image published"
             echo ""

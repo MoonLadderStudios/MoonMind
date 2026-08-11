@@ -105,9 +105,8 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
 
 
 def test_docker_publish_writes_build_summary_for_promotion() -> None:
-    # The app build mirrors the PentestGPT runner summary so an operator can copy
-    # the version tag / digest straight into the Release / Promote Stable
-    # workflow. `latest` stays the automatic current-build channel.
+    # The summary lets an operator copy the version tag and digest straight into
+    # the Release / Promote Stable workflow.
     workflow = _load_workflow()
     merge_steps = workflow["jobs"]["merge"]["steps"]
 
@@ -129,17 +128,6 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
 
 
-def test_docker_publish_no_longer_builds_pentestgpt_runner() -> None:
-    # MM-867: PentestGPT runner publishing lives in pentestgpt-runner.yml so
-    # runner-only changes do not publish the app image.
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    metadata_outputs = jobs["metadata"].get("outputs", {})
-
-    assert "PENTEST_RUNNER_VULN_SEVERITY_THRESHOLD" not in workflow.get("env", {})
-    assert "pentest_image_name" not in metadata_outputs
-    assert "build-pentestgpt" not in jobs
-    assert "merge-pentestgpt" not in jobs
 
 
 def test_docker_publish_frontend_checks_do_not_duplicate_production_build() -> None:

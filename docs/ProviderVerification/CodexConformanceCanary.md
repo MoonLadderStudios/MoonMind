@@ -49,9 +49,6 @@ fresh Codex conformance result validates for the exact candidate digest being
 promoted. The accepted freshness window is 72 hours. Digest mismatches and stale
 results fail closed.
 
-PentestGPT runner promotion is not gated by the Codex canary because that image
-does not carry the managed Codex runtime.
-
 ## CONTRACT-005 Last-Known-Good Rollback
 
 Operators should retain the previous `stable` digest as the last-known-good

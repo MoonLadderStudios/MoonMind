@@ -67,7 +67,6 @@ These exact identifiers are pinned by `tests/unit/docs/test_final_docs_cleanup_p
 - [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps** — isolated corrected-instruction turns, selectors, compare, promote, and archive in Workflow Detail.
 - [ ] **6.2 Omnigent remediation context enrichment** — bounded evidence with target-authorized typed actions and closed residual authority gaps.
 - [ ] **7.1 Initial context injection for Omnigent** — durable controlling verification evidence for first-message `ContextPack` injection.
-- [ ] **11.1 Restricted egress boundary for PentestGPT external targets** — live backend enforcement plus negative-conformance evidence, retained as a cross-project safety gate.
 
 Changing an identifier above is a deliberate owner-approved invariant change. Update the pinning contract tests in the same change rather than deleting an identifier to make a roadmap edit pass.
 
@@ -83,14 +82,6 @@ These are shipped, durable capability statements that the roadmap treats as base
 - The run workflow records per-step Omnigent identity, so Omnigent checkpoint captures select the `external_state_ref` lane, and restore validation rejects stale, mismatched, non-artifact, local-path, or credential-shaped authority.
 - The Checkpoint Branch API and persistence model already support create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, immutable instruction digests, workspace policy, git binding, and remediation-created branches.
 - Persistent immutable Omnigent policy versions and agent-profile versions exist with authenticated lifecycle APIs, effective-launch linkage, and bridge evidence; complete cross-boundary consumption, approvals, ownership, and product-management journeys remain tracked execution work.
-
----
-
-## Retained Pentest disposition and shared safety gate
-
-Pentest remains de-scoped as a first-class product area. Any retained capability should be a thin skill or preset over the generic workload path, remain disabled by default and lab-oriented, or be removed cohesively with its docs and tests. That disposition is a target state, not the current `main` tree; the concrete stack-disposition and enablement fail-fast tasks are tracked in the execution tracker.
-
-The cross-project dependency remains the restricted-egress boundary: Docker `bridge`, an `internal` network declaration, or a configured proxy is not by itself independently proven restricted egress. The rule is unchanged: external targets stay gated until enforcement exists and the live negative-conformance matrix passes. Even after enforcement exists, external-target work requires an explicit reviewed egress profile, target scope, approval evidence, and operator-visible diagnostics.
 
 ---
 

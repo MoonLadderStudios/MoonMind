@@ -6,8 +6,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from moonmind.config.settings import PentestSettings
-from moonmind.integrations.pentest.models import get_pentest_runner_profile
 from moonmind.schemas.workload_models import (
     UnrestrictedContainerRequest,
     UnrestrictedDockerRequest,
@@ -21,7 +19,6 @@ from moonmind.workloads.registry import (
 )
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 
 def _profile_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -118,9 +115,9 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
 def test_registry_includes_runtime_id_label_when_supplied(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    validated = registry.validate_request(_request(runtimeId="pentestgpt"))
+    validated = registry.validate_request(_request(runtimeId="example-runtime"))
 
-    assert validated.ownership.labels["moonmind.runtime_id"] == "pentestgpt"
+    assert validated.ownership.labels["moonmind.runtime_id"] == "example-runtime"
     assert validated.container_name == "mm-workload-task-1-step-test-1"
 
 def test_registry_loads_yaml_profiles(tmp_path: Path) -> None:
@@ -399,49 +396,8 @@ def test_default_registry_contains_unreal_pilot_profile() -> None:
     assert profile.max_timeout_seconds == 7200
     assert profile.max_concurrency == 1
 
-def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from moonmind.config.settings import settings
-
-    default_image = PentestSettings.model_fields["runner_image"].default
-    monkeypatch.setattr(settings.pentest, "runner_image", default_image)
-
-    settings_image = settings.pentest.runner_image
-    domain_profile = get_pentest_runner_profile("pentestgpt-claude-oauth")
-    registry = RunnerProfileRegistry.load_file(
-        Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root=WORKSPACE_ROOT,
-        allowed_image_registries=("ghcr.io",),
-    )
-    workload_profile = registry.get("pentestgpt-claude-oauth")
-    publish_workflow = Path(".github/workflows/docker-publish.yml").read_text(
-        encoding="utf-8"
-    )
-
-    assert domain_profile.image == settings_image
-    assert workload_profile is not None
-    assert workload_profile.image == settings_image
-    assert settings_image == PENTEST_RUNNER_IMAGE
-    assert "pentest_image_name=${IMAGE_NAME}-pentestgpt" not in publish_workflow
-    assert "./docker/pentestgpt-runner/Dockerfile" not in publish_workflow
 
 
-def test_runner_profile_registry_can_override_pentest_image_from_settings() -> None:
-    settings_image = PENTEST_RUNNER_IMAGE
-    registry = RunnerProfileRegistry.load_file(
-        Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root=WORKSPACE_ROOT,
-        allowed_image_registries=("ghcr.io",),
-        profile_image_overrides={
-            "pentestgpt-claude-oauth": settings_image,
-        },
-    )
-
-    workload_profile = registry.get("pentestgpt-claude-oauth")
-
-    assert workload_profile is not None
-    assert workload_profile.image == settings_image
 
 
 @pytest.mark.parametrize("unsafe_image", ["python", "python:latest"])
@@ -453,7 +409,7 @@ def test_runner_profile_registry_revalidates_image_overrides(
             Path("config/workloads/default-runner-profiles.yaml"),
             workspace_root=WORKSPACE_ROOT,
             profile_image_overrides={
-                "pentestgpt-claude-oauth": unsafe_image,
+                "moonmind-integration-ci": unsafe_image,
             },
         )
 
