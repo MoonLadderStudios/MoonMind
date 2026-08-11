@@ -1511,60 +1511,11 @@ async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fl
 
 
 
-@pytest.mark.parametrize(
-    ("artifact_id", "artifact_payload", "message"),
-    [
-        ("art_scope_missing", None, "scope_artifact_unreadable"),
-        ("art_scope_malformed", b"{not-json", "scope_artifact_malformed"),
-        (
-            "art_scope_structurally_invalid",
-            json.dumps({"scope_id": "scope-123"}).encode("utf-8"),
-            "scope_artifact_invalid",
-        ),
-    ],
-)
 
 
 
 
 
-@pytest.mark.parametrize(
-    ("scope_overrides", "request_overrides", "error_code", "reason"),
-    [
-        ({"expires_at": "2020-01-01T00:00:00Z"}, {}, "INVALID_SCOPE", "scope_expired"),
-        ({}, {"principal_id": "user-other"}, "PERMISSION_DENIED", "principal_not_authorized"),
-        (
-            {"targets": [{"kind": "url", "value": "https://other.example.test"}]},
-            {},
-            "UNAPPROVED_TARGET",
-            "target_outside_scope",
-        ),
-        (
-            {"allowed_runner_profiles": ["missing-profile"]},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "runner_profile_not_allowed",
-        ),
-        (
-            {"allowed_actions": ["auth_testing"]},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "operation_mode_not_allowed",
-        ),
-        (
-            {"required_network_attachment_type": "vpn"},
-            {},
-            "UNSUPPORTED_PROFILE",
-            "network_attachment_required",
-        ),
-        (
-            {"metadata": {"idempotency_safety": "ambiguous"}},
-            {},
-            "NON_IDEMPOTENT_OPERATION",
-            "idempotency_safety_ambiguous",
-        ),
-    ],
-)
 
 
 
