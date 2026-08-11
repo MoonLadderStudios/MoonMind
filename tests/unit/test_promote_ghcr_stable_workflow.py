@@ -39,7 +39,7 @@ def test_promote_workflow_is_manual_dispatch_only_with_typed_inputs() -> None:
     image = inputs["image"]
     assert image["type"] == "choice"
     assert image["required"] is True
-    assert image["options"] == ["app", "pentestgpt-runner"]
+    assert image["options"] == ["app"]
 
     source_tag = inputs["source_tag"]
     assert source_tag["type"] == "string"
@@ -90,11 +90,10 @@ def test_promote_job_is_gated_by_required_reviewer_environment() -> None:
     assert promote_job["runs-on"] == "ubuntu-latest"
 
 
-def test_promote_resolves_image_name_for_both_targets() -> None:
+def test_promote_resolves_app_image_name() -> None:
     run = _promote_step("Resolve image name")["run"]
     assert "tr '[:upper:]' '[:lower:]'" in run
     assert 'image="ghcr.io/${owner}/${repo}"' in run
-    assert 'image="ghcr.io/${owner}/${repo}-pentestgpt"' in run
     # An unknown image selection must fail rather than silently promote.
     assert "Unknown image" in run
     assert "exit 64" in run

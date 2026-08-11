@@ -408,7 +408,6 @@ RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
     "run-pr-resolver-continuation-identity-v1"
 )
-_REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
     {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
@@ -15895,16 +15894,6 @@ class MoonMindRunWorkflow:
                 self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
 
-        report_not_required_reason = self._report_only_publish_not_required_reason(
-            outputs
-        )
-        if report_not_required_reason is not None:
-            self._publish_status = "not_required"
-            self._publish_reason = report_not_required_reason
-            if self._merge_automation_requested(parameters):
-                self._publish_context["mergeAutomationStatus"] = "not_applicable"
-            return
-
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
             return
@@ -16158,45 +16147,6 @@ class MoonMindRunWorkflow:
             if evidence.pr_url:
                 self._pull_request_url = evidence.pr_url
 
-    def _report_only_publish_not_required_reason(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        report_type = self._coerce_text(
-            outputs.get("report_type") or outputs.get("reportType"),
-            max_chars=120,
-        )
-        report_bundle = outputs.get("report_bundle") or outputs.get("reportBundle")
-        if not report_type and isinstance(report_bundle, Mapping):
-            report_type = self._coerce_text(
-                report_bundle.get("report_type") or report_bundle.get("reportType"),
-                max_chars=120,
-            )
-        if report_type not in _REPORT_ONLY_PUBLISH_TYPES:
-            return None
-
-        primary_ref = self._coerce_text(
-            outputs.get("primary_report_ref") or outputs.get("primaryReportRef"),
-            max_chars=200,
-        )
-        if not primary_ref and isinstance(report_bundle, Mapping):
-            primary_bundle_ref = report_bundle.get(
-                "primary_report_ref"
-            ) or report_bundle.get("primaryReportRef")
-            if isinstance(primary_bundle_ref, Mapping):
-                primary_ref = self._coerce_text(
-                    primary_bundle_ref.get("artifact_id")
-                    or primary_bundle_ref.get("artifactId"),
-                    max_chars=200,
-                )
-            else:
-                primary_ref = self._coerce_text(primary_bundle_ref, max_chars=200)
-        if not primary_ref:
-            return None
-        return (
-            "security.pentest.run produced a final report artifact; "
-            "PR/branch publication is not applicable"
-        )
 
     def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
         for source in self._publish_outcome_sources(outputs):

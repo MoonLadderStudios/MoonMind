@@ -27,9 +27,8 @@ secondary network or launch a helper outside the trusted backend. Static
 Compose and on-demand hosts use the same Omnigent profile, internal network,
 isolated listener, and gateway. Deployment-owned runner profiles select an
 explicit network policy: `restricted_egress` uses the provider profile,
-`docker_proxy` reaches only the trusted Docker proxy, and a PentestGPT lab run
-fails before launch until its approved target maps to a reviewed lab egress
-profile. Plain Docker `bridge`, `local-network`, and local application URL
+`docker_proxy` reaches only the trusted Docker proxy. Plain Docker `bridge`,
+`local-network`, and local application URL
 allowlists are non-enforcing development mechanisms and must never be reported
 in `enforcedNetworkRefs`.
 
@@ -94,8 +93,3 @@ cleanup outcome. The production-shaped local
 conformance suite is `tests/integration/security/test_restricted_egress_live.py`;
 operators run it against the supported Compose topology with
 `MOONMIND_RUN_EGRESS_CONFORMANCE=1` before approving an external-target profile.
-
-External PentestGPT targets remain gated. Enabling one additionally requires an
-exact reviewed egress profile, approved target scope, and durable approval
-evidence; the general provider profile in this document is not authority for
-external penetration-test targets.

@@ -56,7 +56,6 @@ RunnerNetworkPolicy = Literal[
     "none",
     "restricted_egress",
     "docker_proxy",
-    "pentest_approved_lab",
 ]
 WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
 WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_docker_cli"]
