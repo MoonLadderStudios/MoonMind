@@ -1387,6 +1387,13 @@ async def test_run_omnigent_execution_accepts_native_idle_turn_edge(
     monkeypatch,
     tmp_path,
 ) -> None:
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base, OmnigentBridgeSession
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
     awaited: dict[str, object] = {}
     terminal_snapshot = {
         "status": "idle",
@@ -1445,27 +1452,59 @@ async def test_run_omnigent_execution_accepts_native_idle_turn_edge(
         capture_terminal_wait,
     )
 
-    result = await run_omnigent_execution(
-        AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            correlationId="corr-idle-edge",
-            idempotencyKey="idem-idle-edge",
-            parameters={
-                "omnigent": {
-                    "agent": {"agentName": "codex-native-ui"},
-                    "session": {"allowEmptyWorkspace": True},
-                    "prompt": {"text": "Do the task"},
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(session_maker)
+
+    try:
+        result = await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-idle-edge",
+                idempotencyKey="idem-idle-edge",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
                 },
-            },
-        ),
-        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
-    )
+            ),
+            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=store,
+        )
+
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(OmnigentBridgeSession).where(
+                        OmnigentBridgeSession.idempotency_key == "idem-idle-edge"
+                    )
+                )
+            ).scalar_one()
+            bridge_session_id = row.bridge_session_id
+        indexed_events = await store.list_events(bridge_session_id)
+    finally:
+        await engine.dispose()
 
     assert result.summary == "done after native idle edge"
     assert result.metadata["normalizedStatus"] == "completed"
     assert awaited["terminal_status"] == "completed"
     assert awaited["baseline_item_ids"] == frozenset()
+    assert indexed_events[-1].event_type == "session.final_snapshot"
+    assert indexed_events[-1].normalized_status == "completed"
+
+    normalized_path = tmp_path / "corr-idle-edge" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert normalized_events[-1]["type"] == "session.final_snapshot"
+    assert normalized_events[-1]["normalizedStatus"] == "completed"
 
 
 @pytest.mark.asyncio

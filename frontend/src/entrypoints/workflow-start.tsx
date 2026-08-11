@@ -9531,15 +9531,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    if (
-      normalizedRepository &&
-      !effectiveBranch &&
-      (branchOptionsQuery.isLoading || branchTouched)
-    ) {
+    if (normalizedRepository && !effectiveBranch) {
       setSubmitMessage(
         branchOptionsQuery.isLoading
           ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
-          : "Choose a branch before starting this repository-backed workflow.",
+          : branchTouched
+            ? "Choose a branch before starting this repository-backed workflow."
+            : branchOptionsQuery.isError
+              ? "The repository default branch could not be loaded. Enter a branch before starting this workflow."
+              : "No repository default branch is available. Enter a branch before starting this workflow.",
       );
       clearSubmitBusy();
       return;
