@@ -14742,6 +14742,67 @@ describe("Task Create MM-641 authoring validation", () => {
     fetchSpy.mockRestore();
   });
 
+  it("blocks repository-backed submission while the default branch is loading", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch before repository authority is complete." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Wait for the repository default branch to load, or enter a branch before starting this workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks repository-backed submission after an authored branch is cleared", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
+    });
+    fireEvent.change(branchInput, { target: { value: "feature/mm-641" } });
+    fireEvent.change(branchInput, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Keep repository authority explicit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Choose a branch before starting this repository-backed workflow.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
   it("renders repository branch and publish mode inside the floating Submit bar", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

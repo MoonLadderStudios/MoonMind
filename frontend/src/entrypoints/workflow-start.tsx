@@ -10082,6 +10082,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
+    if (
+      normalizedRepository &&
+      !effectiveBranch &&
+      (branchOptionsQuery.isLoading || branchTouched)
+    ) {
+      setSubmitMessage(
+        branchOptionsQuery.isLoading
+          ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
+          : "Choose a branch before starting this repository-backed workflow.",
+      );
+      clearSubmitBusy();
+      return;
+    }
     if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
         setSubmitMessage("Attachments are disabled for this runtime.");
