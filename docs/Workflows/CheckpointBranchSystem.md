@@ -683,6 +683,23 @@ workflow replay reuses the persisted Step Execution, Agent Run, bridge, and
 workflow identities and cannot post a second first message. A branch always
 uses fresh host/session authority and never reuses the source session or its
 mutable OAuth lease.
+The caller key deduplicates its API operation; the server derives the single
+runtime launch identity from workflow, branch, and turn identity, so recovery
+through another authorized API operation still reattaches to that same owner.
+
+The operation ledger claims the launch before branch-turn artifacts are
+created, so concurrent callers serialize on one launch. Context, manifest,
+request, result, and diagnostics artifacts use the branch turn plus artifact
+kind as their stable ownership key. A retry reuses and byte-validates the exact
+completed artifact; it does not allocate a replacement ref after a partial
+Activity or process failure.
+
+Before terminal evidence becomes branch state, MoonMind resolves every retained
+artifact ref and rejects local paths, raw credentials or provider grants, and
+unrestricted runtime authority. The retained Agent Run and authority-chain
+projections contain durable evidence refs and bounded completion facts only;
+live host, lease, credential, bridge, and provider-session authority remains
+with its owning runtime lifecycle.
 
 ### 8.6 Compare branches
 

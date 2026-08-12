@@ -618,6 +618,11 @@ runtime and host support, live owning execution-adapter readiness, durable
 approval support, and authoritative verifier readiness. The owning service
 evaluates those inputs for the exact remediation link; static catalog
 enablement is not backend readiness.
+Checkpoint Branch execution readiness is derived from the registered production
+workflow, Activity catalog, and Activity handlers. Its verification readiness
+is derived independently from the registered remediation-verifier classifier;
+bridge metadata or a declared contract cannot make either boundary ready by
+itself.
 Actions without both an execution owner and verifier remain visible only in the
 capability matrix and are rejected before mutation. In particular, managed
 session terminate/restart, targeted janitor cleanup, cleanup verification,

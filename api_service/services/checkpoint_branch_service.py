@@ -1145,6 +1145,48 @@ class CheckpointBranchService:
         await self._session.refresh(turn)
         return turn
 
+    async def lock_turn_execution(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        branch_turn_id: str,
+    ) -> tuple[WorkflowCheckpointBranch, WorkflowCheckpointBranchTurn]:
+        """Serialize launch/finalization against the durable turn identity.
+
+        The lock is held by the caller's transaction.  Artifact IO must use a
+        separate transaction so it cannot accidentally release this authority
+        boundary before the branch graph is updated.
+        """
+
+        branch = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranch)
+                .where(
+                    WorkflowCheckpointBranch.branch_id == branch_id,
+                    WorkflowCheckpointBranch.workflow_id == workflow_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if branch is None:
+            raise ValueError("checkpoint branch was not found")
+        turn = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchTurn)
+                .where(
+                    WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id,
+                    WorkflowCheckpointBranchTurn.branch_id == branch_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if turn is None:
+            raise ValueError("checkpoint branch turn was not found")
+        return branch, turn
+
     async def mark_turn_running(
         self,
         *,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -206,7 +207,6 @@ async def checkpoint_branch_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
         turn = await owner._session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
         assert turn is not None
         if turn.created_step_execution_id:
-            assert turn.diagnostics["operatorLaunchIdempotencyKey"] == operator_key
             return turn
         branch = await owner._session.get(WorkflowCheckpointBranch, branch_id)
         assert branch is not None
@@ -1046,6 +1046,62 @@ async def test_checkpoint_branch_api_launch_rejects_caller_runtime_authority(
         )
         assert response.status_code == 422
         assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_api_serializes_concurrent_launch_and_recovers_preclaim(
+    checkpoint_branch_client: AsyncClient,
+) -> None:
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("mm-1100:create-concurrent-launch"),
+    )
+    branch_id = created.json()["branchId"]
+    turns = await checkpoint_branch_client.get(
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns"
+    )
+    branch_turn_id = turns.json()["items"][0]["branchTurnId"]
+    endpoint = (
+        f"/api/executions/mm:wf-branch/checkpoint-branches/{branch_id}/turns/"
+        f"{branch_turn_id}/launch"
+    )
+    launch_body = {"idempotencyKey": "mm-1100:explicit-launch"}
+
+    first, raced = await asyncio.gather(
+        checkpoint_branch_client.post(endpoint, json=launch_body),
+        checkpoint_branch_client.post(endpoint, json=launch_body),
+    )
+
+    assert first.status_code == raced.status_code == 200
+    assert first.json()["createdStepExecutionId"] == raced.json()[
+        "createdStepExecutionId"
+    ]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        operation = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.operation
+                    == "checkpoint_branch.turn.launch",
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == launch_body["idempotencyKey"],
+                )
+            )
+        ).scalar_one()
+        operation.response_payload = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "immutableLaunchFields": {},
+            "claimState": "claimed",
+        }
+        await session.commit()
+
+    recovered = await checkpoint_branch_client.post(endpoint, json=launch_body)
+    assert recovered.status_code == 200
+    assert recovered.json()["createdStepExecutionId"] == first.json()[
+        "createdStepExecutionId"
+    ]
 
 
 @pytest.mark.asyncio

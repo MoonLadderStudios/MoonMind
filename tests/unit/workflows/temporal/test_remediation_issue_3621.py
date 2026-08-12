@@ -10,12 +10,18 @@ import pytest
 
 from api_service.api.routers.executions import _serialize_remediation_link_summary
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from api_service.services.checkpoint_branch_turn_execution import (
+    checkpoint_branch_turn_owner_operational,
+)
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationCapabilityContext,
     remediation_action_capability,
 )
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationTargetHealthSnapshot,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_backend_operational,
 )
 
 
@@ -159,6 +165,12 @@ def test_checkpoint_branch_capability_requires_owner_and_verifier() -> None:
     ]
     assert ready["requestable"] is True
     assert ready["blockedReasons"] == []
+
+
+def test_checkpoint_branch_readiness_uses_registered_production_boundaries() -> None:
+    assert checkpoint_branch_turn_owner_operational() is True
+    assert verification_backend_operational(ACTION) is True
+    assert verification_backend_operational("unwired.action") is False
 
 
 def test_checkpoint_branch_link_projection_requires_both_wired_boundaries() -> None:

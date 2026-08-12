@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import logging
@@ -32,6 +33,7 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
@@ -76,6 +78,7 @@ from api_service.services.checkpoint_branch_service import (
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
+    checkpoint_branch_turn_owner_operational,
     get_checkpoint_branch_artifact_service,
 )
 from moonmind.config.settings import settings
@@ -100,6 +103,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     remediation_action_kinds,
 )
 from moonmind.workflows.temporal.remediation_verification import (
+    verification_backend_operational,
     verification_contract_for,
 )
 from api_service.services.remediation_actions import build_remediation_action_executor
@@ -11946,6 +11950,7 @@ async def _attach_remediation_capability_projection(
     link.unavailable_evidence_classes = ()
     link.checkpoint_branch_owner_ready = bool(
         bridge is not None
+        and checkpoint_branch_turn_owner_operational()
         and all(
             str(launch.get(field) or "").strip()
             for field in (
@@ -11957,12 +11962,8 @@ async def _attach_remediation_capability_projection(
     )
     # The verifier is an independent authority boundary. Keep its readiness
     # separate so graph/executor availability cannot advertise repair proof.
-    verification_contract = verification_contract_for(
+    link.checkpoint_branch_verifier_ready = verification_backend_operational(
         "checkpoint_branch.create_from_remediation_context"
-    )
-    link.checkpoint_branch_verifier_ready = bool(
-        verification_contract.automatically_verifiable
-        and verification_contract.verifier == "checkpoint_branch"
     )
 
 
@@ -14043,10 +14044,84 @@ async def launch_checkpoint_branch_turn(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "branch_turn_launch_state_missing"},
             )
-        _require_branch_turn_immutable_snapshot(
-            replayed, existing_op.response_payload.get("immutableLaunchFields")
-        )
+        # A durable pre-claim intentionally contains the pre-launch snapshot.
+        # If the process crashed after the owner persisted runtime identities,
+        # let that owner recover/reattach before replacing the ledger response.
+        # Completed ledger records still require an exact immutable replay.
+        if existing_op.response_payload.get("claimState") != "claimed":
+            _require_branch_turn_immutable_snapshot(
+                replayed, existing_op.response_payload.get("immutableLaunchFields")
+            )
+        try:
+            replayed = await CheckpointBranchTurnExecutionOwner(
+                session,
+                principal=_owner_id(user),
+            ).launch(
+                workflow_id=workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                intent=payload,
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "reason": exc.reason},
+            ) from exc
+        existing_op.response_payload = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "contextBundleRef": replayed.context_bundle_ref,
+            "stepExecutionManifestRef": replayed.step_execution_manifest_ref,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(replayed),
+        }
+        await session.commit()
         return _turn_to_model(replayed)
+
+    pending_turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if pending_turn is None or pending_turn.branch_id != branch_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "branch_turn_launch_state_missing"},
+        )
+    launch_operation = WorkflowCheckpointBranchOperation(
+        workflow_id=workflow_id,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        operation="checkpoint_branch.turn.launch",
+        idempotency_key=payload.idempotency_key,
+        request_digest=request_digest,
+        response_payload={
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(pending_turn),
+            "claimState": "claimed",
+        },
+    )
+    session.add(launch_operation)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raced_op = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == payload.idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if raced_op is None or (
+            raced_op.operation != "checkpoint_branch.turn.launch"
+            or raced_op.branch_id != branch_id
+            or raced_op.branch_turn_id != branch_turn_id
+            or raced_op.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        launch_operation = raced_op
 
     try:
         launched = await CheckpointBranchTurnExecutionOwner(
@@ -14064,23 +14139,13 @@ async def launch_checkpoint_branch_turn(
             detail={"code": exc.code, "reason": exc.reason},
         ) from exc
 
-    session.add(
-        WorkflowCheckpointBranchOperation(
-            workflow_id=workflow_id,
-            branch_id=branch_id,
-            branch_turn_id=branch_turn_id,
-            operation="checkpoint_branch.turn.launch",
-            idempotency_key=payload.idempotency_key,
-            request_digest=request_digest,
-            response_payload={
-                "branchId": branch_id,
-                "branchTurnId": branch_turn_id,
-                "contextBundleRef": launched.context_bundle_ref,
-                "stepExecutionManifestRef": launched.step_execution_manifest_ref,
-                "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
-            },
-        )
-    )
+    launch_operation.response_payload = {
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
+        "contextBundleRef": launched.context_bundle_ref,
+        "stepExecutionManifestRef": launched.step_execution_manifest_ref,
+        "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
+    }
     await session.commit()
     await session.refresh(launched)
     return _turn_to_model(launched)
@@ -14474,6 +14539,36 @@ async def fork_checkpoint_branch(
     forked.publish_status = "unpublished"
     forked.idempotency_key = payload.idempotency_key
     forked.created_by = getattr(user, "email", None) or _owner_id(user)
+    inherited_selection = copy.deepcopy(
+        dict((parent.diagnostics or {}).get("runtimeSelection") or {})
+    )
+    inherited_selection["runtimeContextPolicy"] = payload.runtime_context_policy
+    inherited_selection["gitWorkBranch"] = forked.git_work_branch
+    forked.diagnostics = {
+        **(forked.diagnostics or {}),
+        "runtimeSelection": inherited_selection,
+    }
+    parent_profile_usage = (
+        await session.execute(
+            select(db_models.OmnigentAgentProfileUsage).where(
+                db_models.OmnigentAgentProfileUsage.consumer_type == "checkpoint",
+                db_models.OmnigentAgentProfileUsage.consumer_id == parent.branch_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if parent_profile_usage is not None:
+        session.add(
+            db_models.OmnigentAgentProfileUsage(
+                consumer_type="checkpoint",
+                consumer_id=forked_branch_id,
+                profile_id=parent_profile_usage.profile_id,
+                version=parent_profile_usage.version,
+                digest=parent_profile_usage.digest,
+                effective_snapshot=copy.deepcopy(
+                    parent_profile_usage.effective_snapshot
+                ),
+            )
+        )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,

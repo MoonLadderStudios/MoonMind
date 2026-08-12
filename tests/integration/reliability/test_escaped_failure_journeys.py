@@ -98,9 +98,13 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+from moonmind.workflows.temporal.workflows import (
+    checkpoint_branch_turn as checkpoint_branch_turn_module,
+)
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+    MoonMindCheckpointBranchTurnWorkflow,
     checkpoint_branch_turn_terminal_disposition,
 )
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
@@ -4280,3 +4284,74 @@ async def test_checkpoint_branch_turn_success_remains_verification_pending() -> 
         checkpoint_ref="artifact://checkpoint/branch-turn",
         authority_chain=authority_chain,
     ) == "verification_pending"
+
+
+async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay a failure after immutable terminal evidence persistence starts."""
+
+    terminal_payloads: list[dict] = []
+
+    async def execute_activity(name: str, payload: dict, **_kwargs: object) -> object:
+        if name == "checkpoint_branch.turn.persist_terminal":
+            terminal_payloads.append(payload)
+            raise RuntimeError("injected partial terminal persistence failure")
+        assert name == "checkpoint_branch.turn.mark_running"
+        return None
+
+    async def execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
+        return AgentRunResult(
+            summary="provider failed after dispatch",
+            failureClass="execution_error",
+            providerErrorCode="provider_terminal_failed",
+        )
+
+    monkeypatch.setattr(
+        checkpoint_branch_turn_module.workflow,
+        "execute_activity",
+        execute_activity,
+    )
+    monkeypatch.setattr(
+        checkpoint_branch_turn_module.workflow,
+        "execute_child_workflow",
+        execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        checkpoint_branch_turn_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="checkpoint-branch-turn-test"),
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="partial-terminal-turn",
+        idempotencyKey="branch-turn:partial-terminal-turn",
+    )
+    owner = MoonMindCheckpointBranchTurnWorkflow()
+
+    with pytest.raises(
+        RuntimeError, match="injected partial terminal persistence failure"
+    ):
+        await owner.run(
+            {
+                "schemaVersion": "checkpoint-branch-turn-execution/v1",
+                "workflowId": "source-workflow",
+                "branchId": "branch-1",
+                "branchTurnId": "turn-1",
+                "principal": "service:test",
+                "sourceNamespace": "default",
+                "sourceRunId": "source-run",
+                "agentRunWorkflowId": "checkpoint-branch-agent:turn-1",
+                "agentRequest": request.model_dump(
+                    by_alias=True, mode="json", exclude_none=True
+                ),
+            }
+        )
+
+    assert len(terminal_payloads) == 1
+    assert terminal_payloads[0]["agentResult"]["failureClass"] == "execution_error"
+    assert terminal_payloads[0]["agentResult"]["providerErrorCode"] == (
+        "provider_terminal_failed"
+    )

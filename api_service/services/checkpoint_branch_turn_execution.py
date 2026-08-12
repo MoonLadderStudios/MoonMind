@@ -9,17 +9,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.common import WorkflowIDReusePolicy
 
+from api_service.db.base import async_session_maker
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentAgentProfileUsage,
     ProviderProfileAuthState,
+    TemporalArtifact,
     TemporalArtifactRetentionClass,
     TemporalExecutionCanonicalRecord,
     WorkflowCheckpointBranch,
@@ -32,7 +37,12 @@ from api_service.services.checkpoint_branch_service import (
     build_branch_turn_launch_idempotency_key,
 )
 from api_service.services.omnigent_policies import OmnigentPolicyService
+from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import validate_restore_material
+from moonmind.omnigent.profile_bound_execution import (
+    compile_follow_up_retrieval_policy,
+    enforce_required_follow_up_retrieval,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.checkpoint_branch_models import CheckpointBranchTurnLaunchRequest
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
@@ -40,7 +50,6 @@ from moonmind.workflows import (
     get_temporal_artifact_repository,
     get_temporal_artifact_service,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactService,
@@ -105,6 +114,44 @@ def build_branch_turn_execution_identity(
     )
 
 
+def checkpoint_branch_turn_owner_operational() -> bool:
+    """Return readiness from the exact production workflow/activity registry."""
+
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
+    from moonmind.workflows.temporal.workflow_registry import (
+        workflow_fleet_activity_handlers,
+        workflow_fleet_workflow_types,
+    )
+
+    required_activities = {
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+    }
+    try:
+        workflow_types = set(workflow_fleet_workflow_types(settings.temporal))
+        catalog = build_default_activity_catalog(settings.temporal)
+        for activity_type in required_activities:
+            catalog.resolve_activity(activity_type)
+        registered_handlers = {
+            str(
+                getattr(
+                    getattr(handler, "__temporal_activity_definition", None),
+                    "name",
+                    "",
+                )
+            )
+            for handler in workflow_fleet_activity_handlers()
+        }
+    except Exception:
+        return False
+    return (
+        WORKFLOW_TYPE in workflow_types
+        and required_activities <= registered_handlers
+    )
+
+
 def _sha256(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
@@ -159,10 +206,29 @@ class CheckpointBranchTurnExecutionOwner:
         self._session = session
         self._principal = principal
         self._client = client or TemporalClientAdapter()
-        self._artifacts = artifact_service or get_checkpoint_branch_artifact_service(
-            session
-        )
+        # Production artifact writes use their own short transaction.  The
+        # owner session can therefore retain its branch-turn row lock across
+        # artifact commits and serialize simultaneous launch requests.  Tests
+        # may inject the real boundary fake directly.
+        self._artifacts = artifact_service
         self._artifact_link: dict[str, Any] | None = None
+
+    @asynccontextmanager
+    async def _artifact_service(
+        self,
+    ) -> AsyncIterator[tuple[AsyncSession | None, TemporalArtifactService]]:
+        if self._artifacts is not None:
+            yield None, self._artifacts
+            return
+        bound_factory = (
+            async_sessionmaker(self._session.bind, expire_on_commit=False)
+            if self._session.bind is not None
+            else async_session_maker
+        )
+        async with bound_factory() as artifact_session:
+            yield artifact_session, get_checkpoint_branch_artifact_service(
+                artifact_session
+            )
 
     async def _read_ref(self, ref: str, *, field_name: str) -> bytes:
         if str(ref).startswith("artifact://omnigent/"):
@@ -177,11 +243,12 @@ class CheckpointBranchTurnExecutionOwner:
                     "authority_ref_unavailable", f"{field_name} is unavailable"
                 ) from exc
         try:
-            _artifact, payload = await self._artifacts.read(
-                artifact_id=_artifact_id(ref, field_name=field_name),
-                principal=self._principal,
-                allow_restricted_raw=True,
-            )
+            async with self._artifact_service() as (_session, artifacts):
+                _artifact, payload = await artifacts.read(
+                    artifact_id=_artifact_id(ref, field_name=field_name),
+                    principal=self._principal,
+                    allow_restricted_raw=True,
+                )
         except CheckpointBranchTurnLaunchError:
             raise
         except Exception as exc:
@@ -193,26 +260,77 @@ class CheckpointBranchTurnExecutionOwner:
     async def _write_artifact(
         self, *, content_type: str, payload: bytes, kind: str, branch_turn_id: str
     ) -> str:
-        artifact, _upload = await self._artifacts.create(
-            principal=self._principal,
-            content_type=content_type,
-            size_bytes=len(payload),
-            sha256=_sha256(payload).removeprefix("sha256:"),
-            retention_class=TemporalArtifactRetentionClass.LONG,
-            link=self._artifact_link,
-            metadata_json={
-                "kind": kind,
-                "branchTurnId": branch_turn_id,
-                "issue": "MoonLadderStudios/MoonMind#3621",
-            },
-        )
-        await self._artifacts.write_complete(
-            artifact_id=artifact.artifact_id,
-            principal=self._principal,
-            payload=payload,
-            content_type=content_type,
-        )
-        return f"artifact://{artifact.artifact_id}"
+        digest = _sha256(payload).removeprefix("sha256:")
+        async with self._artifact_service() as (artifact_session, artifacts):
+            artifact: TemporalArtifact | None = None
+            if artifact_session is not None:
+                # Artifact creation commits independently from the launch
+                # claim.  Resolve an earlier owned artifact first so a crash
+                # after blob persistence but before claim persistence reuses
+                # the exact immutable ref.
+                artifact = (
+                    await artifact_session.execute(
+                        select(TemporalArtifact)
+                        .where(
+                            TemporalArtifact.created_by_principal
+                            == self._principal,
+                            TemporalArtifact.metadata_json["kind"].as_string()
+                            == kind,
+                            TemporalArtifact.metadata_json[
+                                "branchTurnId"
+                            ].as_string()
+                            == branch_turn_id,
+                        )
+                        .order_by(
+                            TemporalArtifact.created_at,
+                            TemporalArtifact.artifact_id,
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            if artifact is not None:
+                if (
+                    artifact.sha256 not in {None, digest}
+                    or artifact.size_bytes not in {None, len(payload)}
+                    or artifact.content_type not in {None, content_type}
+                ):
+                    raise CheckpointBranchTurnLaunchError(
+                        "launch_artifact_conflict",
+                        f"owned branch-turn artifact {kind} changed across retry",
+                    )
+                if getattr(artifact.status, "value", artifact.status) == "complete":
+                    _stored, existing_payload = await artifacts.read(
+                        artifact_id=artifact.artifact_id,
+                        principal=self._principal,
+                        allow_restricted_raw=True,
+                    )
+                    if existing_payload != payload:
+                        raise CheckpointBranchTurnLaunchError(
+                            "launch_artifact_conflict",
+                            f"owned branch-turn artifact {kind} changed across retry",
+                        )
+                    return f"artifact://{artifact.artifact_id}"
+            else:
+                artifact, _upload = await artifacts.create(
+                    principal=self._principal,
+                    content_type=content_type,
+                    size_bytes=len(payload),
+                    sha256=digest,
+                    retention_class=TemporalArtifactRetentionClass.LONG,
+                    link=self._artifact_link,
+                    metadata_json={
+                        "kind": kind,
+                        "branchTurnId": branch_turn_id,
+                        "issue": "MoonLadderStudios/MoonMind#3621",
+                    },
+                )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=self._principal,
+                payload=payload,
+                content_type=content_type,
+            )
+            return f"artifact://{artifact.artifact_id}"
 
     async def persist_instruction_text(
         self, *, text: str, branch_turn_id: str
@@ -236,12 +354,28 @@ class CheckpointBranchTurnExecutionOwner:
         WorkflowCheckpointBranchGitBinding,
         TemporalExecutionCanonicalRecord,
     ]:
-        branch = await self._session.get(WorkflowCheckpointBranch, branch_id)
+        branch = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranch)
+                .where(WorkflowCheckpointBranch.branch_id == branch_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if branch is None or branch.workflow_id != workflow_id:
             raise CheckpointBranchTurnLaunchError(
                 "branch_not_found", "checkpoint branch was not found"
             )
-        turn = await self._session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        turn = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchTurn)
+                .where(
+                    WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if turn is None or turn.branch_id != branch_id:
             raise CheckpointBranchTurnLaunchError(
                 "branch_turn_not_found", "checkpoint branch turn was not found"
@@ -266,18 +400,40 @@ class CheckpointBranchTurnExecutionOwner:
         binding: WorkflowCheckpointBranchGitBinding,
         source: TemporalExecutionCanonicalRecord,
         expected_head_version: int | None,
-    ) -> tuple[StepExecutionCheckpointModel, ManagedAgentProviderProfile, dict[str, Any]]:
+    ) -> tuple[
+        StepExecutionCheckpointModel,
+        ManagedAgentProviderProfile,
+        dict[str, Any],
+    ]:
         """Reject changed authority before a lease, host, session, or message."""
 
         if source.run_id != branch.source_run_id:
             raise CheckpointBranchTurnLaunchError(
                 "source_run_stale", "pinned source run no longer matches"
             )
+        if branch.root_workflow_id != branch.workflow_id:
+            raise CheckpointBranchTurnLaunchError(
+                "root_workflow_mismatch", "stored root Workflow authority changed"
+            )
         if expected_head_version is not None and (
             branch.current_head_version != expected_head_version
         ):
             raise CheckpointBranchTurnLaunchError(
                 "branch_head_stale", "expected branch head version does not match"
+            )
+        if branch.current_head_checkpoint_ref != turn.source_checkpoint_ref:
+            raise CheckpointBranchTurnLaunchError(
+                "branch_head_checkpoint_changed",
+                "turn source no longer matches the persisted branch head",
+            )
+        if branch.workspace_policy != turn.workspace_policy:
+            raise CheckpointBranchTurnLaunchError(
+                "workspace_policy_changed", "stored workspace policy changed"
+            )
+        if branch.runtime_context_policy != turn.runtime_context_policy:
+            raise CheckpointBranchTurnLaunchError(
+                "runtime_context_policy_changed",
+                "stored runtime-context policy changed",
             )
         if turn.runtime_context_policy != "fresh_agent_run":
             raise CheckpointBranchTurnLaunchError(
@@ -297,6 +453,39 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "git_binding_changed", "stored git binding authority changed"
             )
+
+        branch_state_authority = (
+            branch.source_state_kind,
+            branch.source_state_ref,
+            branch.source_state_digest,
+        )
+        turn_state_authority = (
+            turn.source_state_kind,
+            turn.source_state_ref,
+            turn.source_state_digest,
+        )
+        if branch_state_authority != turn_state_authority:
+            raise CheckpointBranchTurnLaunchError(
+                "source_state_authority_changed",
+                "stored source-state authority changed",
+            )
+        if any(turn_state_authority):
+            if not turn.source_state_kind or not turn.source_state_ref:
+                raise CheckpointBranchTurnLaunchError(
+                    "source_state_authority_invalid",
+                    "stored source-state authority is incomplete",
+                )
+            source_state_bytes = await self._read_ref(
+                turn.source_state_ref, field_name="sourceStateRef"
+            )
+            if (
+                turn.source_state_digest
+                and _sha256(source_state_bytes) != turn.source_state_digest
+            ):
+                raise CheckpointBranchTurnLaunchError(
+                    "source_state_digest_mismatch",
+                    "stored source-state authority changed",
+                )
 
         checkpoint_bytes = await self._read_ref(
             turn.source_checkpoint_ref, field_name="sourceCheckpointRef"
@@ -330,6 +519,26 @@ class CheckpointBranchTurnExecutionOwner:
                 "checkpoint_validation_failed", "source checkpoint is not valid"
             )
         source_identity = checkpoint.source
+        if (
+            checkpoint.omnigent.workflow_id,
+            checkpoint.omnigent.run_id,
+            checkpoint.omnigent.logical_step_id,
+            checkpoint.omnigent.boundary,
+        ) != (
+            source_identity.workflow_id,
+            source_identity.run_id,
+            source_identity.logical_step_id,
+            checkpoint.boundary,
+        ):
+            raise CheckpointBranchTurnLaunchError(
+                "checkpoint_semantic_identity_mismatch",
+                "source checkpoint semantic identity changed",
+            )
+        if checkpoint.boundary != branch.source_checkpoint_boundary:
+            raise CheckpointBranchTurnLaunchError(
+                "checkpoint_boundary_mismatch",
+                "source checkpoint boundary changed",
+            )
         parent_turn_id = turn.parent_turn_id or branch.parent_turn_id
         if parent_turn_id:
             parent_turn = await self._session.get(
@@ -339,6 +548,12 @@ class CheckpointBranchTurnExecutionOwner:
                 raise CheckpointBranchTurnLaunchError(
                     "parent_turn_authority_missing",
                     "parent turn has no server-owned Step Execution authority",
+                )
+            expected_parent_branch_id = branch.parent_branch_id or branch.branch_id
+            if parent_turn.branch_id != expected_parent_branch_id:
+                raise CheckpointBranchTurnLaunchError(
+                    "parent_turn_branch_mismatch",
+                    "parent turn does not belong to the persisted parent branch",
                 )
             parent_checkpoint = (
                 await self._session.execute(
@@ -403,8 +618,77 @@ class CheckpointBranchTurnExecutionOwner:
                 "instruction_digest_mismatch", "branch instructions changed"
             )
 
+        follow_up_retrieval_value = (turn.diagnostics or {}).get(
+            "followUpRetrieval"
+        )
+        if follow_up_retrieval_value is not None and not isinstance(
+            follow_up_retrieval_value, Mapping
+        ):
+            raise CheckpointBranchTurnLaunchError(
+                "retrieval_authority_invalid",
+                "stored follow-up retrieval authority is invalid",
+            )
+        follow_up_retrieval = _canonical_follow_up_retrieval(
+            follow_up_retrieval_value
+        )
+        if follow_up_retrieval is not None:
+            try:
+                AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId=turn.branch_turn_id,
+                    idempotencyKey=f"checkpoint-branch-retrieval:{turn.branch_turn_id}",
+                    parameters={"followUpRetrieval": follow_up_retrieval},
+                )
+            except Exception as exc:
+                raise CheckpointBranchTurnLaunchError(
+                    "retrieval_authority_invalid",
+                    "stored follow-up retrieval authority is invalid",
+                ) from exc
+
         omnigent = checkpoint.omnigent
         selection = dict((branch.diagnostics or {}).get("runtimeSelection") or {})
+        selected_runtime_policy = str(
+            selection.get("runtimeContextPolicy") or ""
+        ).strip()
+        if selected_runtime_policy and selected_runtime_policy != (
+            turn.runtime_context_policy
+        ):
+            raise CheckpointBranchTurnLaunchError(
+                "runtime_selection_policy_mismatch",
+                "runtime selection differs from the stored turn policy",
+            )
+        selected_work_branch = str(selection.get("gitWorkBranch") or "").strip()
+        if selected_work_branch and selected_work_branch != binding.work_branch:
+            raise CheckpointBranchTurnLaunchError(
+                "runtime_selection_branch_mismatch",
+                "runtime selection differs from the isolated git binding",
+            )
+        for field_name in ("model", "effort"):
+            selected_value = selection.get(field_name)
+            if selected_value is not None and (
+                not isinstance(selected_value, str) or not selected_value.strip()
+            ):
+                raise CheckpointBranchTurnLaunchError(
+                    f"{field_name}_selection_invalid",
+                    f"stored {field_name} selection is invalid",
+                )
+        publish_mode = str(selection.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"none", "branch", "pull_request"}:
+            raise CheckpointBranchTurnLaunchError(
+                "publish_intent_unsupported", "stored publish intent is unsupported"
+            )
+        selected_launch_policy = str(
+            selection.get("launchPolicyRef") or ""
+        ).strip()
+        if (
+            selected_launch_policy
+            and selected_launch_policy != omnigent.launch_policy_ref
+        ):
+            raise CheckpointBranchTurnLaunchError(
+                "launch_policy_mismatch",
+                "stored launch policy differs from checkpoint authority",
+            )
         selected_profile = str(selection.get("providerProfileRef") or "").strip()
         if selected_profile and selected_profile != omnigent.provider_profile_id:
             raise CheckpointBranchTurnLaunchError(
@@ -446,6 +730,19 @@ class CheckpointBranchTurnExecutionOwner:
                     "agent_profile_provider_mismatch",
                     "Agent Profile snapshot Provider Profile changed",
                 )
+            usage = (
+                await self._session.execute(
+                    select(OmnigentAgentProfileUsage).where(
+                        OmnigentAgentProfileUsage.consumer_type == "checkpoint",
+                        OmnigentAgentProfileUsage.consumer_id == branch.branch_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if usage is None or usage.effective_snapshot != dict(agent_snapshot):
+                raise CheckpointBranchTurnLaunchError(
+                    "agent_profile_snapshot_unavailable",
+                    "immutable Agent Profile snapshot authority is unavailable",
+                )
         profile = await self._session.get(
             ManagedAgentProviderProfile, omnigent.provider_profile_id
         )
@@ -454,7 +751,10 @@ class CheckpointBranchTurnExecutionOwner:
                 "provider_profile_missing", "Provider Profile is missing"
             )
         auth_state = getattr(profile.auth_state, "value", profile.auth_state)
-        if not profile.enabled or auth_state != ProviderProfileAuthState.CONNECTED.value:
+        if (
+            not profile.enabled
+            or auth_state != ProviderProfileAuthState.CONNECTED.value
+        ):
             raise CheckpointBranchTurnLaunchError(
                 "provider_profile_not_ready", "Provider Profile is not launch ready"
             )
@@ -462,6 +762,15 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "credential_generation_changed",
                 "Provider Profile credential generation changed",
+            )
+        selected_runtime = str(selection.get("runtimeId") or "").strip()
+        current_runtime = str(
+            getattr(profile.runtime_id, "value", profile.runtime_id)
+        ).strip()
+        if selected_runtime and selected_runtime != current_runtime:
+            raise CheckpointBranchTurnLaunchError(
+                "runtime_selection_mismatch",
+                "stored runtime selection differs from the Provider Profile",
             )
         if binding.base_commit != omnigent.baseline_commit:
             raise CheckpointBranchTurnLaunchError(
@@ -477,6 +786,30 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "policy_authority_unavailable", "launch policy authority is unavailable"
             ) from exc
+        if follow_up_retrieval is not None:
+            try:
+                compiled_retrieval = compile_follow_up_retrieval_policy(
+                    policy_snapshot,
+                    {"followUpRetrieval": follow_up_retrieval},
+                    repository=binding.repository,
+                    tenant_id=str(
+                        follow_up_retrieval.get("tenantId")
+                        or os.getenv(
+                            "MOONMIND_FOLLOWUP_RETRIEVAL_DEFAULT_TENANT",
+                            "default",
+                        )
+                    ).strip(),
+                )
+                enforce_required_follow_up_retrieval(
+                    follow_up_retrieval,
+                    compiled_retrieval,
+                )
+            except Exception as exc:
+                raise CheckpointBranchTurnLaunchError(
+                    "retrieval_authority_incompatible",
+                    "stored follow-up retrieval authority is incompatible with "
+                    "the current launch policy",
+                ) from exc
 
         referenced: dict[str, bytes] = {}
         refs = [
@@ -548,15 +881,7 @@ class CheckpointBranchTurnExecutionOwner:
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
         )
-        existing_operator_key = str(
-            (turn.diagnostics or {}).get("operatorLaunchIdempotencyKey") or ""
-        )
         if turn.created_step_execution_id:
-            if existing_operator_key != request.idempotency_key:
-                raise CheckpointBranchTurnLaunchError(
-                    "launch_idempotency_conflict",
-                    "launch idempotency key is already bound to this turn",
-                )
             await self._start_claimed_turn(branch=branch, turn=turn, binding=binding)
             return turn
 
@@ -586,7 +911,9 @@ class CheckpointBranchTurnExecutionOwner:
             logical_step_id=logical_step_id,
             ordinal=max(count, 1),
         )
-        locator_id = hashlib.sha256(identity.step_execution_id.encode()).hexdigest()[:24]
+        locator_id = hashlib.sha256(
+            identity.step_execution_id.encode()
+        ).hexdigest()[:24]
         runtime_selection = dict(
             (branch.diagnostics or {}).get("runtimeSelection") or {}
         )
@@ -597,6 +924,24 @@ class CheckpointBranchTurnExecutionOwner:
         effort = runtime_selection.get("effort") or profile.default_effort
         publish_mode = str(runtime_selection.get("publishMode") or "none")
         repository_branch = binding.work_branch
+        runtime_selection = {
+            **runtime_selection,
+            "providerProfileRef": profile.profile_id,
+            "executionProfileRef": checkpoint.omnigent.execution_profile_ref,
+            "runtimeId": str(
+                getattr(profile.runtime_id, "value", profile.runtime_id)
+            ),
+            "launchPolicyRef": checkpoint.omnigent.launch_policy_ref,
+            "model": model,
+            "effort": effort,
+            "runtimeContextPolicy": turn.runtime_context_policy,
+            "publishMode": publish_mode,
+            "gitWorkBranch": binding.work_branch,
+        }
+        branch.diagnostics = {
+            **(branch.diagnostics or {}),
+            "runtimeSelection": runtime_selection,
+        }
         source_immutable = {
             "instructionDigest": f"source:{checkpoint.omnigent.idempotency_key}",
             "runtimeId": str(getattr(profile.runtime_id, "value", profile.runtime_id)),
@@ -862,5 +1207,6 @@ __all__ = [
     "CheckpointBranchTurnLaunchError",
     "WORKFLOW_TYPE",
     "build_branch_turn_execution_identity",
+    "checkpoint_branch_turn_owner_operational",
     "get_checkpoint_branch_artifact_service",
 ]

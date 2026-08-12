@@ -5955,10 +5955,10 @@ export interface components {
             workspacePolicy: "continue_from_previous_execution" | "restore_pre_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source";
             /**
              * Runtimecontextpolicy
-             * @default reuse_session_new_epoch
-             * @enum {string}
+             * @default fresh_agent_run
+             * @constant
              */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            runtimeContextPolicy: "fresh_agent_run";
             /** Idempotencykey */
             idempotencyKey: string;
             /** Maxbudgetusd */
@@ -5982,9 +5982,9 @@ export interface components {
             /**
              * Runtimecontextpolicy
              * @default fresh_agent_run
-             * @enum {string}
+             * @constant
              */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            runtimeContextPolicy: "fresh_agent_run";
             /**
              * Publishmode
              * @default none
@@ -6028,9 +6028,9 @@ export interface components {
             /**
              * Runtimecontextpolicy
              * @default fresh_agent_run
-             * @enum {string}
+             * @constant
              */
-            runtimeContextPolicy: "fresh_agent_run" | "reuse_session_new_epoch" | "reuse_session_same_epoch" | "external_provider_continuation";
+            runtimeContextPolicy: "fresh_agent_run";
             /** Idempotencykey */
             idempotencyKey: string;
             /** Maxbudgetusd */
@@ -6204,34 +6204,19 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
-        /** CheckpointBranchTurnLaunchRequest */
+        /**
+         * CheckpointBranchTurnLaunchRequest
+         * @description Operator intent for launching an already-persisted branch turn.
+         *
+         *     Runtime identities and evidence are deliberately absent.  The branch-turn
+         *     execution owner allocates them after validating the persisted source
+         *     authority (MoonLadderStudios/MoonMind#3621).
+         */
         CheckpointBranchTurnLaunchRequest: {
-            /** Createdstepexecutionid */
-            createdStepExecutionId: string;
-            /** Runtimeagentrunid */
-            runtimeAgentRunId?: string | null;
-            /** Providersessionid */
-            providerSessionId?: string | null;
-            /** Workspacebaseline */
-            workspaceBaseline?: {
-                [key: string]: unknown;
-            };
-            /** Priorevidencerefs */
-            priorEvidenceRefs?: string[];
-            /** Boundedsummaries */
-            boundedSummaries?: {
-                [key: string]: unknown;
-            }[];
-            /** Buildermetadata */
-            builderMetadata?: {
-                [key: string]: unknown;
-            };
-            /** Runtimerequestref */
-            runtimeRequestRef?: string | null;
-            /** Runtimeresultref */
-            runtimeResultRef?: string | null;
-            /** Diagnosticsref */
-            diagnosticsRef?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Expectedbranchheadversion */
+            expectedBranchHeadVersion?: number | null;
         };
         /** CheckpointBranchTurnListResponse */
         CheckpointBranchTurnListResponse: {

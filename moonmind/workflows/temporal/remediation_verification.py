@@ -794,6 +794,17 @@ _CLASSIFIERS: dict[
 }
 
 
+def verification_backend_operational(action_kind: str) -> bool:
+    """Prove that a contract's classifier is wired into the production verifier."""
+
+    contract = verification_contract_for(action_kind)
+    return bool(
+        contract.automatically_verifiable
+        and contract.verifier
+        and contract.verifier in _CLASSIFIERS
+    )
+
+
 # ---------------------------------------------------------------------------
 # Resulting identity extraction
 # ---------------------------------------------------------------------------
@@ -1209,4 +1220,5 @@ __all__ = [
     "resolve_verification_target",
     "snapshot_from_health",
     "verification_contract_for",
+    "verification_backend_operational",
 ]

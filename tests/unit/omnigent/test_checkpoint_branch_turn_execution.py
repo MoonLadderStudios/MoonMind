@@ -66,9 +66,22 @@ def _authority_graph():
     branch = SimpleNamespace(
         branch_id="branch-1",
         workflow_id="source-workflow",
+        root_workflow_id="source-workflow",
+        source_run_id="source-run",
         logical_step_id="implement",
+        source_execution_ordinal=1,
+        source_checkpoint_boundary="after_execution",
+        source_checkpoint_ref="artifact://source-checkpoint",
+        source_checkpoint_digest="sha256:" + "a" * 64,
         parent_branch_id=None,
         parent_turn_id=None,
+        current_head_version=1,
+        current_head_checkpoint_ref="artifact://source-checkpoint",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        runtime_context_policy="fresh_agent_run",
+        git_repository="MoonLadderStudios/MoonMind",
+        git_base_branch="main",
+        git_base_commit="abc123",
         git_work_branch="mm/source/branch-1",
         diagnostics={
             "runtimeSelection": {
@@ -197,7 +210,7 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         workflow_id="source-workflow",
         branch_id="branch-1",
         branch_turn_id="turn-1",
-        intent={"idempotencyKey": "operator-launch-1"},
+        intent={"idempotencyKey": "authorized-recovery-operation"},
     )
     assert events == ["claim", "start", "start"]
     assert owner._validate_source_authority.await_count == 1
@@ -302,3 +315,117 @@ def test_branch_turn_execution_identity_is_replay_stable_and_turn_scoped() -> No
     assert replay == first
     assert next_turn.step_execution_id != first.step_execution_id
     assert next_turn.agent_run_workflow_id != first.agent_run_workflow_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        (
+            lambda branch, turn, binding, source: setattr(
+                source, "run_id", "new-run"
+            ),
+            "source_run_stale",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "root_workflow_id", "other-workflow"
+            ),
+            "root_workflow_mismatch",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "current_head_version", 2
+            ),
+            "branch_head_stale",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "current_head_checkpoint_ref", "artifact://other"
+            ),
+            "branch_head_checkpoint_changed",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "workspace_policy", "clean_checkout"
+            ),
+            "workspace_policy_changed",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "runtime_context_policy", "reuse_session_same_epoch"
+            ),
+            "runtime_context_policy_changed",
+        ),
+        (
+            lambda branch, turn, binding, source: (
+                setattr(branch, "runtime_context_policy", "reuse_session_same_epoch"),
+                setattr(turn, "runtime_context_policy", "reuse_session_same_epoch"),
+            ),
+            "runtime_context_policy_unsupported",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "source_state_kind", "external_state_ref"
+            ),
+            "source_state_authority_changed",
+        ),
+        (
+            lambda branch, turn, binding, source: (
+                setattr(branch, "source_state_kind", "external_state_ref"),
+                setattr(turn, "source_state_kind", "external_state_ref"),
+            ),
+            "source_state_authority_invalid",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                binding, "work_branch", "main"
+            ),
+            "git_binding_not_isolated",
+        ),
+        (
+            lambda branch, turn, binding, source: setattr(
+                branch, "git_repository", "other/repo"
+            ),
+            "git_binding_changed",
+        ),
+    ],
+)
+async def test_owner_rejects_stored_authority_mismatches_before_artifact_or_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation,
+    code: str,
+) -> None:
+    session = _Session()
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    branch, turn, binding, source, *_rest = _authority_graph()
+    mutation(branch, turn, binding, source)
+    owner._load_graph_authority = AsyncMock(  # type: ignore[method-assign]
+        return_value=(branch, turn, binding, source)
+    )
+    owner._read_ref = AsyncMock()  # type: ignore[method-assign]
+    start = AsyncMock()
+    claim = AsyncMock()
+    owner._start_claimed_turn = start  # type: ignore[method-assign]
+    monkeypatch.setattr(CheckpointBranchService, "claim_turn_execution", claim)
+
+    with pytest.raises(CheckpointBranchTurnLaunchError) as exc_info:
+        await owner.launch(
+            workflow_id="source-workflow",
+            branch_id="branch-1",
+            branch_turn_id="turn-1",
+            intent={
+                "idempotencyKey": "operator-launch-1",
+                "expectedBranchHeadVersion": 1,
+            },
+        )
+
+    assert exc_info.value.code == code
+    owner._read_ref.assert_not_awaited()
+    claim.assert_not_awaited()
+    start.assert_not_awaited()
