@@ -15671,6 +15671,7 @@ describe("Task Create MM-578 Preset expansion", () => {
               id: "tpl:mm-578-preset:1:01",
               title: "Fetch Jira issue",
               instructions: "Fetch MM-578.",
+              repositoryOperation: "read",
               tool: {
                 type: "tool",
                 id: "jira.get_issue",
@@ -15688,6 +15689,7 @@ describe("Task Create MM-578 Preset expansion", () => {
               id: "tpl:mm-578-preset:1:02",
               title: "Implement preset story",
               instructions: "Implement MM-578.",
+              repositoryOperation: "write",
               annotations: {
                 issueImplementRole: "moonspec-remediation-loop",
                 remediationLoop: {
@@ -16451,6 +16453,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       id: "tpl:mm-578-preset:1:01",
       title: "Fetch Jira issue",
       type: "tool",
+      repositoryOperation: "read",
       instructions: "Fetch MM-578.",
       tool: {
         type: "tool",
@@ -16470,6 +16473,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       id: "tpl:mm-578-preset:1:02",
       title: "Implement preset story",
       type: "skill",
+      repositoryOperation: "write",
       instructions: "Implement MM-578.",
       annotations: {
         issueImplementRole: "moonspec-remediation-loop",
@@ -16627,6 +16631,10 @@ describe("Task Create MM-578 Preset expansion", () => {
     const steps = latestCreateTaskSteps();
     expect(steps).toHaveLength(2);
     expect(steps.map((entry) => entry.type)).toEqual(["tool", "skill"]);
+    expect(steps.map((entry) => entry.repositoryOperation)).toEqual([
+      "read",
+      "write",
+    ]);
     expect(steps.some((entry) => entry.type === "preset")).toBe(false);
     expect(steps[0]?.source).toEqual({
       kind: "preset-derived",
@@ -17807,8 +17815,11 @@ describe("Task Create schema-driven capability inputs", () => {
 
     const issueInput = await within(step).findByLabelText("GitHub issue");
     fireEvent.change(issueInput, {
-      target: { value: "https://github.com/MoonLadderStudios/MoonMind/issues/123" },
+      target: { value: "https://github.com/MoonLadderStudios/Tactics/issues/123" },
     });
+    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).value).toBe(
+      "MoonLadderStudios/Tactics",
+    );
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
@@ -17821,9 +17832,9 @@ describe("Task Create schema-driven capability inputs", () => {
             inputs?: { github_issue?: { repository?: string; number?: number; url?: string } };
           };
           return (
-            payload.inputs?.github_issue?.repository === "MoonLadderStudios/MoonMind" &&
+            payload.inputs?.github_issue?.repository === "MoonLadderStudios/Tactics" &&
             payload.inputs?.github_issue?.number === 123 &&
-            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/MoonMind/issues/123"
+            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/Tactics/issues/123"
           );
         }),
       ).toBe(true);

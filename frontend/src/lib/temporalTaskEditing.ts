@@ -131,6 +131,7 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    repositoryOperation?: 'read' | 'write';
     runtime?: {
       mode?: string | null;
       model?: string | null;
@@ -540,6 +541,14 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
           ? 'tool'
           : 'skill';
   const instructions = stringValue(step.instructions);
+  const rawRepositoryOperation = stringValue(
+    step.repositoryOperation,
+    step.repository_operation,
+  ).toLowerCase();
+  const repositoryOperation: 'read' | 'write' | null =
+    rawRepositoryOperation === 'read' || rawRepositoryOperation === 'write'
+      ? rawRepositoryOperation
+      : null;
   const id = stringValue(step.id);
   const templateStepId = stringValue(
     step.templateStepId,
@@ -569,6 +578,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    ...(repositoryOperation ? { repositoryOperation } : {}),
     ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
     stepType,
     ...(Object.keys(tool).length > 0 ? { tool } : {}),
@@ -625,6 +635,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    Boolean(result.repositoryOperation) ||
     Object.keys(runtime).length > 0 ||
     result.stepType !== 'skill' ||
     result.skillId ||
