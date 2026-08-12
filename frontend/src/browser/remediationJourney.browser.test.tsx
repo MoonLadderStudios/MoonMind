@@ -325,6 +325,11 @@ beforeEach(() => {
       if (url.startsWith('/api/omnigent/codex-catalog-readiness')) {
         return jsonResponse(readyOmnigentCatalog);
       }
+      if (url === '/api/v1/secrets') {
+        return jsonResponse({
+          items: [{ slug: 'GITHUB_TOKEN', status: 'active' }],
+        });
+      }
       if (url === '/api/omnigent/agent-profiles') {
         return jsonResponse([
           {
