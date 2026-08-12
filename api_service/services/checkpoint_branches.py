@@ -67,8 +67,6 @@ async def prepare_checkpoint_branch_workspace(
     parent_turn_id: str | None = None,
     runtime_context_policy: str | None = None,
     follow_up_retrieval: Mapping[str, Any] | None = None,
-    step_execution_manifest_ref: str | None = None,
-    created_step_execution_id: str | None = None,
     created_at: datetime | None = None,
 ) -> CheckpointBranchWorkspacePreparation:
     """Validate, emit artifacts, and persist a checkpoint branch git binding."""
@@ -119,8 +117,6 @@ async def prepare_checkpoint_branch_workspace(
         parent_turn_id=parent_turn_id,
         runtime_context_policy=runtime_context_policy,
         follow_up_retrieval=follow_up_retrieval,
-        step_execution_manifest_ref=step_execution_manifest_ref,
-        created_step_execution_id=created_step_execution_id,
     )
 
     return CheckpointBranchWorkspacePreparation(
@@ -183,8 +179,6 @@ async def _persist_prepared_checkpoint_branch(
     parent_turn_id: str | None,
     runtime_context_policy: str | None,
     follow_up_retrieval: Mapping[str, Any] | None,
-    step_execution_manifest_ref: str | None,
-    created_step_execution_id: str | None,
 ) -> None:
     binding = prepared.binding
     branch = await session.get(WorkflowCheckpointBranch, binding.product_branch_id)
@@ -192,8 +186,6 @@ async def _persist_prepared_checkpoint_branch(
         "workspace_restore": workspace_restore_ref,
         "git_binding": git_binding_ref,
     }
-    if step_execution_manifest_ref:
-        artifact_refs["step_execution_manifest"] = step_execution_manifest_ref
     diagnostics = dict(prepared.diagnostics)
     diagnostics["workspaceRestoreRef"] = workspace_restore_ref
     diagnostics["gitBindingRef"] = git_binding_ref
@@ -292,8 +284,7 @@ async def _persist_prepared_checkpoint_branch(
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
             parent_turn_id=parent_turn_id,
-            step_execution_manifest_ref=step_execution_manifest_ref,
-            created_step_execution_id=created_step_execution_id,
+            runtime_context_policy=runtime_context_policy,
             follow_up_retrieval=follow_up_retrieval,
         )
 
@@ -327,8 +318,7 @@ async def _persist_branch_turn(
     instruction_ref: str,
     instruction_digest: str,
     parent_turn_id: str | None,
-    step_execution_manifest_ref: str | None,
-    created_step_execution_id: str | None,
+    runtime_context_policy: str | None,
     follow_up_retrieval: Mapping[str, Any] | None,
 ) -> None:
     binding = prepared.binding
@@ -348,11 +338,10 @@ async def _persist_branch_turn(
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
             workspace_policy=str(binding.workspace_policy),
+            runtime_context_policy=runtime_context_policy,
             git_work_branch=binding.work_branch,
             workspace_restore_ref=workspace_restore_ref,
             git_binding_ref=git_binding_ref,
-            step_execution_manifest_ref=step_execution_manifest_ref,
-            created_step_execution_id=created_step_execution_id,
             idempotency_key=binding.idempotency_key,
             status="preparing",
             diagnostics=diagnostics,
@@ -368,9 +357,8 @@ async def _persist_branch_turn(
         "instruction_digest": instruction_digest,
         "idempotency_key": binding.idempotency_key,
         "workspace_policy": str(binding.workspace_policy),
+        "runtime_context_policy": runtime_context_policy,
         "git_work_branch": binding.work_branch,
-        "step_execution_manifest_ref": step_execution_manifest_ref,
-        "created_step_execution_id": created_step_execution_id,
     }
     for field_name, expected_value in expected.items():
         if getattr(turn, field_name) != expected_value:

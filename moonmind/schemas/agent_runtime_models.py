@@ -779,7 +779,25 @@ class AgentExecutionRequest(BaseModel):
             for item in self.input_refs
         ]
 
-        if _contains_sensitive_key(self.parameters):
+        parameters_for_secret_scan = dict(self.parameters)
+        follow_up_retrieval = parameters_for_secret_scan.get("followUpRetrieval")
+        if isinstance(follow_up_retrieval, dict):
+            follow_up_for_secret_scan = dict(follow_up_retrieval)
+            max_context_tokens = follow_up_for_secret_scan.pop(
+                "maxContextTokens", None
+            )
+            if max_context_tokens is not None and (
+                not isinstance(max_context_tokens, int)
+                or isinstance(max_context_tokens, bool)
+                or max_context_tokens <= 0
+            ):
+                raise ValueError(
+                    "parameters.followUpRetrieval.maxContextTokens must be a positive integer"
+                )
+            parameters_for_secret_scan["followUpRetrieval"] = (
+                follow_up_for_secret_scan
+            )
+        if _contains_sensitive_key(parameters_for_secret_scan):
             raise ValueError("parameters must not contain raw credential keys")
         if _contains_sensitive_key(self.workspace_spec):
             raise ValueError("workspaceSpec must not contain raw credential keys")

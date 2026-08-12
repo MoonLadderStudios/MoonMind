@@ -1336,23 +1336,28 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
                 "idempotencyKey": f"{branch_id}:create",
             }
         )
-        await branch_service.launch_turn(
+        await branch_service.claim_turn_execution(
             workflow_id=target.workflow_id,
             branch_id=branch_id,
             branch_turn_id=first_turn_id,
             context_bundle_ref="artifact://context/turn-1",
             step_execution_manifest_ref="artifact://manifest/turn-1",
-            checkpoint_ref="artifact://checkpoint/turn-1",
             diagnostics_ref="artifact://diagnostics/turn-1",
-            created_step_execution_id="repair:execution:1",
-            runtime_agent_run_id="agent-run-1",
-            provider_session_id="provider-session-1",
-            agent_result_ref="artifact://result/turn-1",
-            idempotency_key=build_branch_turn_launch_idempotency_key(
+            launch_idempotency_key=build_branch_turn_launch_idempotency_key(
                 workflow_id=target.workflow_id,
                 branch_id=branch_id,
                 branch_turn_id=first_turn_id,
             ),
+            created_step_execution_id="repair:execution:1",
+            runtime_agent_run_id="agent-run-1",
+            agent_request_ref="artifact://agent-request/turn-1",
+            execution_workflow_id=f"checkpoint-branch-turn:{first_turn_id}",
+        )
+        await branch_service.mark_turn_running(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=first_turn_id,
+            runtime_agent_run_id="agent-run-1",
         )
         second_turn_id = f"{branch_id}-turn-2"
         second_turn = await branch_service.continue_branch(
@@ -1366,23 +1371,38 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
             },
         )
         assert second_turn.parent_turn_id == first_turn_id
-        await branch_service.launch_turn(
+        await branch_service.claim_turn_execution(
             workflow_id=target.workflow_id,
             branch_id=branch_id,
             branch_turn_id=second_turn_id,
             context_bundle_ref="artifact://context/turn-2",
             step_execution_manifest_ref="artifact://manifest/turn-2",
-            checkpoint_ref="artifact://checkpoint/turn-2",
-            diagnostics_ref="artifact://diagnostics/turn-2",
-            created_step_execution_id="repair:execution:2",
-            runtime_agent_run_id="agent-run-2",
-            provider_session_id="provider-session-2",
-            agent_result_ref="artifact://result/turn-2",
-            idempotency_key=build_branch_turn_launch_idempotency_key(
+            diagnostics_ref="artifact://launch-diagnostics/turn-2",
+            launch_idempotency_key=build_branch_turn_launch_idempotency_key(
                 workflow_id=target.workflow_id,
                 branch_id=branch_id,
                 branch_turn_id=second_turn_id,
             ),
+            created_step_execution_id="repair:execution:2",
+            runtime_agent_run_id="agent-run-2",
+            agent_request_ref="artifact://agent-request/turn-2",
+            execution_workflow_id=f"checkpoint-branch-turn:{second_turn_id}",
+        )
+        await branch_service.mark_turn_running(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            runtime_agent_run_id="agent-run-2",
+        )
+        await branch_service.finalize_turn_execution(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=second_turn_id,
+            outcome="succeeded",
+            agent_result_ref="artifact://result/turn-2",
+            diagnostics_ref="artifact://diagnostics/turn-2",
+            checkpoint_ref="artifact://checkpoint/turn-2",
+            provider_session_id="provider-session-2",
         )
         await branch_service.record_artifact(
             branch_id=branch_id,
@@ -1420,9 +1440,7 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
         ]
         assert projected_branch["turns"][0]["status"] == "running"
         assert projected_branch["turns"][0]["runtimeAgentRunId"] == "agent-run-1"
-        assert projected_branch["turns"][0]["providerSessionId"] == (
-            "provider-session-1"
-        )
+        assert projected_branch["turns"][0]["providerSessionId"] is None
         assert projected_branch["turns"][0]["startedAt"]
         assert projected_branch["turns"][1]["parentTurnId"] == first_turn_id
         assert projected_branch["turns"][1]["instructionRef"] == (
@@ -1431,6 +1449,9 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
         assert projected_branch["turns"][1]["outputArtifacts"] == {
             "output.branch_turn.step_execution_manifest.json": (
                 "artifact://manifest/turn-2"
+            ),
+            "output.branch_turn.launch_diagnostics.json": (
+                "artifact://launch-diagnostics/turn-2"
             ),
             "output.branch_turn.checkpoint.json": "artifact://checkpoint/turn-2",
             "output.branch_turn.diagnostics.json": "artifact://diagnostics/turn-2",

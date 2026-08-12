@@ -94,6 +94,10 @@ Every branch turn that executes agent/tool work must:
 6. declare runtime/session policy before launch;
 7. write or update Step Execution manifest evidence.
 
+The branch-turn execution owner allocates the Step Execution, Agent Run, bridge,
+host, lease, and provider-session identities. API callers select immutable
+intent only; they cannot submit runtime identities or claim runtime results.
+
 ### 2.4 Branches are candidates until promoted
 
 Creating, continuing, or publishing a branch does not automatically make it the canonical continuation of the workflow. A branch becomes canonical only through an explicit promotion operation.
@@ -254,11 +258,12 @@ terminal checkpoint publication = preserve authoritative work after controlled f
 14. **No silent fallback.** If checkpoint validation, workspace restoration, or provider continuation fails, MoonMind must fail closed or request a safer branch mode.
 15. **Controlled failures preserve work before disposal.** When eligible, terminal checkpoint publication is awaited before the authoritative workspace is cleaned up.
 16. **Saved work does not change the outcome.** A failed workflow remains failed even when its recovery branch is pushed successfully.
-17. **Primary failure wins.** Publication failure, scan rejection, or remote verification failure is secondary evidence and must not replace the original workflow failure.
-18. **Remote verification is required.** MoonMind may expose a Saved Work Branch only after independently verifying the remote ref and expected head SHA, or after adopting equivalent provider-native evidence.
-19. **No false claims after infrastructure loss.** A sudden infrastructure failure must not be reported as saved unless a remote branch or PR head was already verified.
-20. **Retries are idempotent.** Retrying terminal publication must not create duplicate commits, branches, or publication records.
-21. **Requested and produced branches are distinct.** `startingBranch` and `targetBranch` describe workflow input; `outputBranch` describes verified output.
+17. **Branch budgets are launch authority.** An authored `maxBudgetUsd` is carried with the immutable branch-turn request and the selected profile-bound runtime must enforce it prospectively. A runtime without a provider-native USD hard stop rejects the launch before capacity, host, session, or billing authority is acquired; terminal cost observation is not budget enforcement.
+18. **Primary failure wins.** Publication failure, scan rejection, or remote verification failure is secondary evidence and must not replace the original workflow failure.
+19. **Remote verification is required.** MoonMind may expose a Saved Work Branch only after independently verifying the remote ref and expected head SHA, or after adopting equivalent provider-native evidence.
+20. **No false claims after infrastructure loss.** A sudden infrastructure failure must not be reported as saved unless a remote branch or PR head was already verified.
+21. **Retries are idempotent.** Retrying terminal publication must not create duplicate commits, branches, or publication records.
+22. **Requested and produced branches are distinct.** `startingBranch` and `targetBranch` describe workflow input; `outputBranch` describes verified output.
 
 ---
 
@@ -603,6 +608,11 @@ Representative request:
 }
 ```
 
+Create, continue, and fork requests persist branch intent and immediately route
+the initial turn through the same server-owned execution owner. They never
+prepopulate Step Execution, Agent Run, bridge, host, lease, session, checkpoint,
+result, publication, diagnostics, capture, cleanup, or terminal evidence.
+
 ### 8.3 Continue branch
 
 ```http
@@ -618,7 +628,7 @@ Representative request:
     "text": "Continue this branch. Add tests for the API contract fix. Do not broaden the public interface."
   },
   "workspacePolicy": "continue_from_previous_execution",
-  "runtimeContextPolicy": "reuse_session_new_epoch",
+  "runtimeContextPolicy": "fresh_agent_run",
   "idempotencyKey": "mm:wf:cbr_01J:turn:add-tests"
 }
 ```
@@ -643,7 +653,72 @@ Representative request:
 }
 ```
 
-### 8.5 Compare branches
+Continue and fork each allocate a new semantic Step Execution. Their source is
+the exact accepted output checkpoint of the recorded parent turn, including its
+artifact digest and parent Step Execution identity; the branch-root checkpoint
+is not silently reused after the branch has advanced.
+
+### 8.5 Launch branch turn
+
+```http
+POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/turns/{branchTurnId}/launch
+```
+
+The launch body is intent-only: a stable `idempotencyKey` and, when required by
+the caller's concurrency model, `expectedBranchHeadVersion`. Unknown fields are
+rejected with the typed API validation response. In particular, callers cannot
+provide Step Execution, Agent Run, bridge, host, lease, provider-session,
+workspace, request, result, checkpoint, publication, diagnostics, capture,
+cleanup, or terminal authority.
+
+One durable owner performs the full lifecycle:
+
+1. validate the pinned source, lineage, checkpoint ref and digest, immutable
+   instructions, git binding, stored policies and profiles, current credential
+   generation, and expected branch head before external mutation;
+2. claim the turn and stable launch identity, allocate server-owned Step
+   Execution and Agent Run identities, and persist them before dispatch;
+3. compile the canonical profile-bound `external/omnigent` execution request
+   with the wire decision `checkpointRecovery.recoveryAction = branch_required`
+   and dispatch the ordinary `MoonMind.AgentRun` path; the Omnigent Activity
+   maps that decision to the coordinator's `branch_from_checkpoint` method;
+4. harvest terminal, workspace, checkpoint, output, publication, diagnostics,
+   capture, and cleanup evidence; then release host and Provider Profile
+   authority in the normal release-last order; and
+5. persist the terminal turn state and the separate remediation-verification
+   handoff.
+
+The idempotency key deterministically names the execution boundary. A retry or
+workflow replay reuses the persisted Step Execution, Agent Run, bridge, and
+workflow identities and cannot post a second first message. A branch always
+uses fresh host/session authority and never reuses the source session or its
+mutable OAuth lease.
+The caller key deduplicates its API operation; the server derives the single
+runtime launch identity from workflow, branch, and turn identity, so recovery
+through another authorized API operation still reattaches to that same owner.
+
+The operation ledger claims the launch before branch-turn artifacts are
+created, so concurrent callers serialize on one launch. Context, manifest,
+request, result, and diagnostics artifacts use the branch turn plus artifact
+kind as their stable ownership key. A retry reuses and byte-validates the exact
+completed artifact; it does not allocate a replacement ref after a partial
+Activity or process failure.
+
+Before terminal evidence becomes branch state, MoonMind resolves every retained
+artifact ref and rejects local paths, raw credentials or provider grants, and
+unrestricted runtime authority. The retained Agent Run and authority-chain
+projections contain durable evidence refs and bounded completion facts only;
+live host, lease, credential, bridge, and provider-session authority remains
+with its owning runtime lifecycle.
+
+Each accepted Temporal artifact is linked to the branch turn and pinned before
+its ref is recorded. Omnigent-local artifact refs are copied into that same
+durable artifact owner, then linked and pinned; nested checkpoint refs receive
+the same treatment. If validation or retention cannot complete after bounded
+Activity retries, a separate sanitized Activity records a blocked terminal
+state using only the digest of the unchanged original terminal payload.
+
+### 8.6 Compare branches
 
 ```http
 GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}
@@ -651,7 +726,7 @@ GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against=
 
 Comparison produces an artifact-backed branch comparison record, including git range diff refs, gate verdict summaries, diagnostics refs, and a bounded natural-language summary.
 
-### 8.6 Promote branch
+### 8.7 Promote branch
 
 ```http
 POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/promote
@@ -668,7 +743,7 @@ Representative request:
 }
 ```
 
-### 8.7 Archive branch
+### 8.8 Archive branch
 
 ```http
 POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/archive
@@ -676,7 +751,7 @@ POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/archive
 
 Archive is non-destructive. It hides the branch from active work but keeps records, artifacts, git refs, and provider diagnostics inspectable.
 
-### 8.8 Execution detail output branch
+### 8.9 Execution detail output branch
 
 The execution detail contract should expose a first-class optional `outputBranch` field. It is derived from the verified checkpoint git binding when available, with the canonical finish summary as a compatibility fallback.
 

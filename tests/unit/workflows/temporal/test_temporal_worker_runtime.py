@@ -4254,6 +4254,12 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.container_job import (
         MoonMindContainerJobWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+        MoonMindCheckpointBranchTurnWorkflow,
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
+    )
     from moonmind.workflows.temporal.workflows.control_stop_continuation import (
         MoonMindControlStopContinuationWorkflow,
     )
@@ -4287,6 +4293,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedSessionReconcileWorkflow,
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
         MoonMindAgentRun,
+        MoonMindCheckpointBranchTurnWorkflow,
         MoonMindOAuthSession,
         MoonMindOmnigentOAuthHostJanitorWorkflow,
         MoonMindMergeAutomationWorkflow,
@@ -4298,6 +4305,9 @@ async def test_main_async_workflow_fleet(
         get_activity_route,
         resolve_external_adapter,
         external_adapter_execution_style,
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
     )
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs

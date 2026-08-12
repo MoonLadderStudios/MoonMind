@@ -1765,3 +1765,78 @@ def test_recover_from_selected_step_route_contract_is_registered() -> None:
     assert {"sourceWorkflowId", "sourceRunId", "selectedStartStepId"}.issubset(
         set(request_contract["required"])
     )
+
+
+def _request_component_for(path: str) -> dict[str, object]:
+    schema = app.openapi()
+    request = schema["paths"][path]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    ref = request["$ref"].removeprefix("#/components/schemas/")
+    return schema["components"]["schemas"][ref]
+
+
+def test_checkpoint_branch_launch_openapi_is_intent_only_and_closed() -> None:
+    contract = _request_component_for(
+        "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/turns/"
+        "{branch_turn_id}/launch"
+    )
+
+    assert contract["additionalProperties"] is False
+    assert set(contract["properties"]) == {
+        "idempotencyKey",
+        "expectedBranchHeadVersion",
+    }
+    assert contract["required"] == ["idempotencyKey"]
+
+
+def test_checkpoint_branch_current_write_contracts_exclude_runtime_authority() -> None:
+    forbidden = {
+        "createdStepExecutionId",
+        "runtimeAgentRunId",
+        "providerSessionId",
+        "workspaceBaseline",
+        "workspaceRestoreRef",
+        "runtimeRequestRef",
+        "runtimeResultRef",
+        "diagnosticsRef",
+        "checkpointRef",
+        "captureRef",
+        "publicationRef",
+        "cleanupRef",
+        "hostRef",
+        "leaseRef",
+        "terminalRef",
+    }
+    contracts = [
+        _request_component_for(
+            "/api/executions/{workflow_id}/checkpoint-branches"
+        ),
+        _request_component_for(
+            "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/continue"
+        ),
+        _request_component_for(
+            "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/fork"
+        ),
+    ]
+
+    for contract in contracts:
+        assert contract["additionalProperties"] is False
+        assert forbidden.isdisjoint(contract["properties"])
+        runtime_policy = contract["properties"].get("runtimeContextPolicy")
+        if runtime_policy is not None:
+            assert (
+                runtime_policy.get("const") == "fresh_agent_run"
+                or runtime_policy.get("enum") == ["fresh_agent_run"]
+            )
+
+
+def test_checkpoint_branch_read_contract_retains_historical_runtime_identity() -> None:
+    schema = app.openapi()
+    read_contract = schema["components"]["schemas"]["CheckpointBranchTurnModel"]
+
+    assert {
+        "createdStepExecutionId",
+        "runtimeAgentRunId",
+        "providerSessionId",
+    }.issubset(read_contract["properties"])

@@ -221,6 +221,12 @@ FROM runtime-dependencies AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
 COPY api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends postgresql
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \

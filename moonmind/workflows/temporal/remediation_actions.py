@@ -143,6 +143,13 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
             "checkpointRef": {"type": "string", "required": True},
             "instructionRef": {"type": "string", "required": True},
             "instructionDigest": {"type": "string", "required": True},
+            "repository": {"type": "string", "required": True},
+            "baseBranch": {"type": "string", "required": True},
+            "baseCommit": {"type": "string", "required": True},
+            "gitWorkBranch": {"type": "string", "required": False},
+            "providerProfileRef": {"type": "string", "required": False},
+            "logicalStepId": {"type": "string", "required": True},
+            "executionOrdinal": {"type": "integer", "required": True},
             "runtimeContextPolicy": {
                 "type": "string",
                 "required": False,

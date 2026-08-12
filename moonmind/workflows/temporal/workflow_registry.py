@@ -65,6 +65,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindAgentRun",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.checkpoint_branch_turn",
+        "MoonMindCheckpointBranchTurnWorkflow",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.oauth_session",
         "MoonMindOAuthSessionWorkflow",
     ),
@@ -119,10 +123,18 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
         resolve_adapter_metadata,
         resolve_external_adapter,
     )
+    from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
+    )
 
     return (
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
         external_adapter_execution_style,
+        mark_checkpoint_branch_turn_running,
+        persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
     )
