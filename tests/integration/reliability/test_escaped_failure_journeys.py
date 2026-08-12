@@ -4292,15 +4292,28 @@ async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
     """Replay a failure after immutable terminal evidence persistence starts."""
 
     terminal_payloads: list[dict] = []
+    rejection_payloads: list[dict] = []
 
     async def execute_activity(name: str, payload: dict, **_kwargs: object) -> object:
         if name == "checkpoint_branch.turn.persist_terminal":
             terminal_payloads.append(payload)
             raise RuntimeError("injected partial terminal persistence failure")
+        if name == "checkpoint_branch.turn.persist_terminal_rejection":
+            rejection_payloads.append(payload)
+            return {
+                "branchId": payload["branchId"],
+                "branchTurnId": payload["branchTurnId"],
+                "status": "blocked",
+                "deliveryOutcome": "blocked",
+                "terminalDisposition": "retained_evidence_rejected",
+                "verificationPending": False,
+            }
         assert name == "checkpoint_branch.turn.mark_running"
         return None
 
-    async def execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
+    async def execute_child_workflow(
+        *_args: object, **_kwargs: object
+    ) -> AgentRunResult:
         return AgentRunResult(
             summary="provider failed after dispatch",
             failureClass="execution_error",
@@ -4331,27 +4344,34 @@ async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
     )
     owner = MoonMindCheckpointBranchTurnWorkflow()
 
-    with pytest.raises(
-        RuntimeError, match="injected partial terminal persistence failure"
-    ):
-        await owner.run(
-            {
-                "schemaVersion": "checkpoint-branch-turn-execution/v1",
-                "workflowId": "source-workflow",
-                "branchId": "branch-1",
-                "branchTurnId": "turn-1",
-                "principal": "service:test",
-                "sourceNamespace": "default",
-                "sourceRunId": "source-run",
-                "agentRunWorkflowId": "checkpoint-branch-agent:turn-1",
-                "agentRequest": request.model_dump(
-                    by_alias=True, mode="json", exclude_none=True
-                ),
-            }
-        )
+    result = await owner.run(
+        {
+            "schemaVersion": "checkpoint-branch-turn-execution/v1",
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "agentRunWorkflowId": "checkpoint-branch-agent:turn-1",
+            "agentRequest": request.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+        }
+    )
 
     assert len(terminal_payloads) == 1
+    assert len(rejection_payloads) == 1
+    assert result["status"] == "blocked"
+    assert result["terminalDisposition"] == "retained_evidence_rejected"
     assert terminal_payloads[0]["agentResult"]["failureClass"] == "execution_error"
     assert terminal_payloads[0]["agentResult"]["providerErrorCode"] == (
         "provider_terminal_failed"
     )
+    expected_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            terminal_payloads[0], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    assert rejection_payloads[0]["terminalPayloadDigest"] == expected_digest
+    assert "agentResult" not in rejection_payloads[0]

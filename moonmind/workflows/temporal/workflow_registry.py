@@ -126,6 +126,7 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
     from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
         mark_checkpoint_branch_turn_running,
         persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
     )
 
     return (
@@ -135,4 +136,5 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
         external_adapter_execution_style,
         mark_checkpoint_branch_turn_running,
         persist_checkpoint_branch_turn_terminal,
+        persist_checkpoint_branch_turn_terminal_rejection,
     )

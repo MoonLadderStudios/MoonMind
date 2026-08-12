@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import AsyncExitStack
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -18,6 +20,8 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from api_service.db.models import (
     Base,
     TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalArtifactPin,
     TemporalArtifactRetentionClass,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
@@ -50,6 +54,7 @@ from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
     CheckpointBranchRetainedEvidenceError,
     MoonMindCheckpointBranchTurnWorkflow,
     persist_checkpoint_branch_turn_terminal,
+    persist_checkpoint_branch_turn_terminal_rejection,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -178,6 +183,19 @@ async def _persist_terminal(payload: dict) -> dict:
     }
 
 
+@activity.defn(name="checkpoint_branch.turn.persist_terminal_rejection")
+async def _persist_terminal_rejection(payload: dict) -> dict:
+    CALLS.append(("terminal_rejection", payload["terminalPayloadDigest"]))
+    return {
+        "branchId": payload["branchId"],
+        "branchTurnId": payload["branchTurnId"],
+        "status": "blocked",
+        "deliveryOutcome": "blocked",
+        "terminalDisposition": "retained_evidence_rejected",
+        "verificationPending": False,
+    }
+
+
 def _request(correlation_id: str) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
@@ -270,7 +288,11 @@ async def _run(
                         MoonMindCheckpointBranchTurnWorkflow,
                         MoonMindAgentRun if real_agent_run else _FakeAgentRun,
                     ],
-                    activities=[_mark_running, _persist_terminal],
+                    activities=[
+                        _mark_running,
+                        _persist_terminal,
+                        _persist_terminal_rejection,
+                    ],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 )
             )
@@ -486,7 +508,7 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
                 content_type=content_type,
                 size_bytes=len(body),
                 sha256=None,
-                retention_class=TemporalArtifactRetentionClass.LONG,
+                retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
                 metadata_json={"kind": f"seed.{kind}"},
             )
             await artifacts.write_complete(
@@ -566,9 +588,16 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             content_type="application/json",
         )
         refs = {
+            "external": external_ref,
+            "head": head_ref,
+            "workspace": workspace_ref,
+            "instruction": instruction_ref,
             "output": await _seed("output"),
             "diagnostics": await _seed("diagnostics"),
             "terminal": await _seed("terminal"),
+            "capture": await _seed("capture-manifest"),
+            "cleanup": await _seed("resource-manifest"),
+            "publication": await _seed("publication"),
             "checkpoint": checkpoint_ref,
         }
     return engine, sessions, refs
@@ -862,4 +891,217 @@ async def test_terminal_activity_rejects_unresolvable_durable_ref(
                 "checkpoint": {},
             }
         )
+    await engine.dispose()
+
+
+async def test_terminal_rejection_activity_is_retry_stable_and_terminalizes_row(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, sessions, _refs = await _terminal_activity_database(
+        tmp_path, monkeypatch
+    )
+    payload = {
+        "workflowId": "source-workflow",
+        "branchId": "branch-1",
+        "branchTurnId": "turn-1",
+        "principal": "service:test",
+        "sourceNamespace": "default",
+        "sourceRunId": "source-run",
+        "requestedOutcome": "succeeded",
+        "terminalPayloadDigest": "sha256:" + "9" * 64,
+    }
+
+    first = await persist_checkpoint_branch_turn_terminal_rejection(payload)
+    replay = await persist_checkpoint_branch_turn_terminal_rejection(payload)
+
+    assert replay == first
+    assert first["status"] == "blocked"
+    assert first["terminalDisposition"] == "retained_evidence_rejected"
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        branch = await session.get(WorkflowCheckpointBranch, "branch-1")
+        assert turn is not None and turn.status == "blocked"
+        assert branch is not None and branch.state == "blocked"
+        assert turn.diagnostics["terminalDisposition"] == (
+            "retained_evidence_rejected"
+        )
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        rejection_id = first["agentResultRef"].removeprefix("artifact://")
+        _artifact, body = await artifacts.read(
+            artifact_id=rejection_id,
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        assert b"terminalPayloadDigest" in body
+        assert b"unsafe" not in body
+    await engine.dispose()
+
+
+async def test_terminal_handoff_pins_every_retained_ref_across_lifecycle_sweep(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
+    result = await persist_checkpoint_branch_turn_terminal(
+        {
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "outcome": "succeeded",
+            "agentResult": {
+                "outputRefs": [refs["output"]],
+                "diagnosticsRef": refs["diagnostics"],
+                "summary": "durable branch evidence",
+                "metadata": {
+                    "omnigentCheckpointCapture": {
+                        "omnigentSessionId": "fresh-session-turn-1",
+                        "externalStateRef": refs["external"],
+                        "terminalRef": refs["terminal"],
+                        "diagnosticsRef": refs["diagnostics"],
+                        "captureManifestRef": refs["capture"],
+                        "resourceManifestRef": refs["cleanup"],
+                        "headRef": refs["head"],
+                        "workspaceCheckpointRef": refs["workspace"],
+                    },
+                    "authorityChain": {
+                        "schemaVersion": "omnigent-authority-chain-v1",
+                        "workspace": {"restoreInputRefs": [refs["workspace"]]},
+                        "publication": {
+                            "declaredOutputRefs": [refs["output"]],
+                            "evidenceRefs": {
+                                "commitRef": refs["publication"]
+                            },
+                        },
+                        "terminal": {
+                            "cleanupCompleted": True,
+                            "leaseReleased": True,
+                            "janitorRequired": False,
+                        },
+                    },
+                },
+            },
+            "checkpoint": {"checkpointRef": refs["checkpoint"]},
+        }
+    )
+
+    retained_refs = {
+        *refs.values(),
+        result["agentResultRef"],
+        result["diagnosticsRef"],
+        result["checkpointRef"],
+        result["terminalRef"],
+    }
+    retained_ids = {
+        ref.removeprefix("artifact://") for ref in retained_refs if ref
+    }
+    async with sessions() as session:
+        pins = set(
+            (
+                await session.execute(
+                    select(TemporalArtifactPin.artifact_id).where(
+                        TemporalArtifactPin.artifact_id.in_(retained_ids)
+                    )
+                )
+            ).scalars()
+        )
+        links = set(
+            (
+                await session.execute(
+                    select(TemporalArtifactLink.artifact_id).where(
+                        TemporalArtifactLink.artifact_id.in_(retained_ids),
+                        TemporalArtifactLink.link_type
+                        == "checkpoint_branch.retained_evidence",
+                    )
+                )
+            ).scalars()
+        )
+        assert pins == retained_ids
+        assert links == retained_ids
+
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        swept = await artifacts.sweep_lifecycle(
+            principal="service:lifecycle",
+            now=datetime.now(UTC) + timedelta(days=3650),
+        )
+        assert swept.soft_deleted_count == 0
+        for artifact_id in retained_ids:
+            _artifact, body = await artifacts.read(
+                artifact_id=artifact_id,
+                principal="service:checkpoint-branch-turn",
+                allow_restricted_raw=True,
+            )
+            assert body
+    await engine.dispose()
+
+
+async def test_terminal_handoff_promotes_omnigent_refs_before_recording(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, sessions, _refs = await _terminal_activity_database(
+        tmp_path, monkeypatch
+    )
+    payloads = {
+        "artifact://omnigent/turn/output.txt": b"branch output",
+        "artifact://omnigent/turn/diagnostics.json": b'{"ok":true}',
+        "artifact://omnigent/turn/terminal.json": b'{"state":"failed"}',
+    }
+
+    class _Gateway:
+        async def read_bytes(self, ref: str) -> bytes:
+            return payloads[ref]
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.bridge_artifacts.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    result = await persist_checkpoint_branch_turn_terminal(
+        {
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "outcome": "failed",
+            "agentResult": {
+                "outputRefs": ["artifact://omnigent/turn/output.txt"],
+                "diagnosticsRef": "artifact://omnigent/turn/diagnostics.json",
+                "summary": "provider failed",
+                "failureClass": "execution_error",
+                "metadata": {
+                    "omnigentCheckpointCapture": {
+                        "terminalRef": "artifact://omnigent/turn/terminal.json"
+                    }
+                },
+            },
+            "checkpoint": {},
+        }
+    )
+
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        _artifact, body = await artifacts.read(
+            artifact_id=result["agentResultRef"].removeprefix("artifact://"),
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        stored = json.loads(body)
+        retained = [
+            *stored["outputRefs"],
+            stored["diagnosticsRef"],
+            stored["metadata"]["omnigentCheckpointCapture"]["terminalRef"],
+        ]
+        assert all(ref.startswith("artifact://art_") for ref in retained)
+        assert all("artifact://omnigent/" not in ref for ref in retained)
     await engine.dispose()

@@ -670,8 +670,9 @@ One durable owner performs the full lifecycle:
 2. claim the turn and stable launch identity, allocate server-owned Step
    Execution and Agent Run identities, and persist them before dispatch;
 3. compile the canonical profile-bound `external/omnigent` execution request
-   with `checkpointRecovery.mode = branch_from_checkpoint` and dispatch the
-   ordinary `MoonMind.AgentRun` path;
+   with the wire decision `checkpointRecovery.recoveryAction = branch_required`
+   and dispatch the ordinary `MoonMind.AgentRun` path; the Omnigent Activity
+   maps that decision to the coordinator's `branch_from_checkpoint` method;
 4. harvest terminal, workspace, checkpoint, output, publication, diagnostics,
    capture, and cleanup evidence; then release host and Provider Profile
    authority in the normal release-last order; and
@@ -700,6 +701,13 @@ unrestricted runtime authority. The retained Agent Run and authority-chain
 projections contain durable evidence refs and bounded completion facts only;
 live host, lease, credential, bridge, and provider-session authority remains
 with its owning runtime lifecycle.
+
+Each accepted Temporal artifact is linked to the branch turn and pinned before
+its ref is recorded. Omnigent-local artifact refs are copied into that same
+durable artifact owner, then linked and pinned; nested checkpoint refs receive
+the same treatment. If validation or retention cannot complete after bounded
+Activity retries, a separate sanitized Activity records a blocked terminal
+state using only the digest of the unchanged original terminal payload.
 
 ### 8.6 Compare branches
 

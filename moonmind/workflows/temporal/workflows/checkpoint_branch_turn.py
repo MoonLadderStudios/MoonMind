@@ -67,6 +67,8 @@ _FORBIDDEN_AUTHORITY_KEYS = frozenset(
         "hostpath",
     }
 )
+_RETENTION_PRINCIPAL = "service:checkpoint-branch-turn"
+_RETENTION_LINK_TYPE = "checkpoint_branch.retained_evidence"
 
 
 class CheckpointBranchRetainedEvidenceError(ValueError):
@@ -296,6 +298,27 @@ def _artifact_refs_in(value: Any) -> list[str]:
     return list(dict.fromkeys(refs))
 
 
+def _replace_artifact_refs(value: Any, replacements: Mapping[str, str]) -> Any:
+    """Replace promoted refs without changing any non-reference evidence."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _replace_artifact_refs(nested, replacements)
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_replace_artifact_refs(nested, replacements) for nested in value]
+    if isinstance(value, tuple):
+        return [_replace_artifact_refs(nested, replacements) for nested in value]
+    if isinstance(value, str) and (
+        value.strip().startswith("artifact://")
+        or re.fullmatch(r"art_[0-9A-HJKMNP-TV-Z]{26}", value.strip())
+    ):
+        normalized = _require_durable_artifact_ref(value, path="retained.ref")
+        return replacements.get(normalized, normalized)
+    return value
+
+
 def checkpoint_branch_turn_terminal_disposition(
     *,
     result: AgentRunResult,
@@ -437,31 +460,213 @@ async def _write_result_artifact(
         return f"artifact://{artifact.artifact_id}"
 
 
-async def _read_retained_artifact(*, ref: str, path: str) -> bytes:
+def _retention_link(
+    *,
+    source_namespace: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    branch_turn_id: str,
+) -> dict[str, str]:
+    return {
+        "namespace": source_namespace,
+        "workflow_id": source_workflow_id,
+        "run_id": source_run_id,
+        "link_type": _RETENTION_LINK_TYPE,
+        "label": f"Checkpoint Branch retained evidence {branch_turn_id}",
+    }
+
+
+async def _pin_temporal_artifact(
+    *,
+    artifact_id: str,
+    source_namespace: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    branch_turn_id: str,
+) -> bytes:
+    """Read, durably link, and pin one Temporal-owned evidence artifact."""
+
+    async with async_session_maker() as session:
+        artifacts = get_checkpoint_branch_artifact_service(session)
+        try:
+            _artifact, data = await artifacts.read(
+                artifact_id=artifact_id,
+                principal=_RETENTION_PRINCIPAL,
+                allow_restricted_raw=True,
+            )
+            _metadata, links, pinned, _read_policy = await artifacts.get_metadata(
+                artifact_id=artifact_id,
+                principal=_RETENTION_PRINCIPAL,
+            )
+            expected_link = _retention_link(
+                source_namespace=source_namespace,
+                source_workflow_id=source_workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
+            )
+            if not any(
+                link.namespace == expected_link["namespace"]
+                and link.workflow_id == expected_link["workflow_id"]
+                and link.run_id == expected_link["run_id"]
+                and link.link_type == expected_link["link_type"]
+                for link in links
+            ):
+                await artifacts.link_artifact(
+                    artifact_id=artifact_id,
+                    principal=_RETENTION_PRINCIPAL,
+                    execution_ref=expected_link,
+                )
+            if not pinned:
+                await artifacts.pin(
+                    artifact_id=artifact_id,
+                    principal=_RETENTION_PRINCIPAL,
+                    reason=f"checkpoint-branch-turn:{branch_turn_id}",
+                )
+            return data
+        except Exception as exc:
+            raise CheckpointBranchRetainedEvidenceError(
+                "retained artifact is not resolvable or retainable"
+            ) from exc
+
+
+async def _promote_omnigent_artifact(
+    *,
+    ref: str,
+    data: bytes,
+    source_namespace: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    branch_turn_id: str,
+) -> str:
+    """Copy local Omnigent evidence into the durable Temporal artifact owner."""
+
+    digest = _sha256(data).removeprefix("sha256:")
+    source_ref_digest = hashlib.sha256(ref.encode()).hexdigest()
+    kind = f"retained.omnigent.{source_ref_digest}"
+    async with async_session_maker() as session:
+        artifacts = get_checkpoint_branch_artifact_service(session)
+        artifact = (
+            await session.execute(
+                select(TemporalArtifact)
+                .where(
+                    TemporalArtifact.created_by_principal == _RETENTION_PRINCIPAL,
+                    TemporalArtifact.metadata_json["kind"].as_string() == kind,
+                    TemporalArtifact.metadata_json["branchTurnId"].as_string()
+                    == branch_turn_id,
+                )
+                .order_by(TemporalArtifact.created_at, TemporalArtifact.artifact_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if artifact is not None:
+            if (
+                artifact.sha256 not in {None, digest}
+                or artifact.size_bytes not in {None, len(data)}
+            ):
+                raise CheckpointBranchRetainedEvidenceError(
+                    "promoted Omnigent evidence changed across retry"
+                )
+            if getattr(artifact.status, "value", artifact.status) == "complete":
+                _stored, existing = await artifacts.read(
+                    artifact_id=artifact.artifact_id,
+                    principal=_RETENTION_PRINCIPAL,
+                    allow_restricted_raw=True,
+                )
+                if existing != data:
+                    raise CheckpointBranchRetainedEvidenceError(
+                        "promoted Omnigent evidence changed across retry"
+                    )
+            else:
+                await artifacts.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal=_RETENTION_PRINCIPAL,
+                    payload=data,
+                    content_type="application/octet-stream",
+                )
+        else:
+            artifact, _upload = await artifacts.create(
+                principal=_RETENTION_PRINCIPAL,
+                content_type="application/octet-stream",
+                size_bytes=len(data),
+                sha256=digest,
+                retention_class=TemporalArtifactRetentionClass.PINNED,
+                link=_retention_link(
+                    source_namespace=source_namespace,
+                    source_workflow_id=source_workflow_id,
+                    source_run_id=source_run_id,
+                    branch_turn_id=branch_turn_id,
+                ),
+                metadata_json={
+                    "kind": kind,
+                    "branchTurnId": branch_turn_id,
+                    "sourceArtifactRef": ref,
+                    "issue": "MoonLadderStudios/MoonMind#3621",
+                },
+            )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=_RETENTION_PRINCIPAL,
+                payload=data,
+                content_type="application/octet-stream",
+            )
+        _metadata, _links, pinned, _read_policy = await artifacts.get_metadata(
+            artifact_id=artifact.artifact_id,
+            principal=_RETENTION_PRINCIPAL,
+        )
+        if not pinned:
+            await artifacts.pin(
+                artifact_id=artifact.artifact_id,
+                principal=_RETENTION_PRINCIPAL,
+                reason=f"checkpoint-branch-turn:{branch_turn_id}",
+            )
+        return f"artifact://{artifact.artifact_id}"
+
+
+async def _retain_artifact(
+    *,
+    ref: str,
+    path: str,
+    source_namespace: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    branch_turn_id: str,
+) -> tuple[str, bytes]:
+    """Resolve evidence and transfer lifecycle authority before it is recorded."""
+
     durable_ref = _require_durable_artifact_ref(ref, path=path)
     if durable_ref.startswith("artifact://omnigent/"):
         from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 
         try:
-            return await LocalOmnigentArtifactGateway().read_bytes(durable_ref)
+            data = await LocalOmnigentArtifactGateway().read_bytes(durable_ref)
+            promoted_ref = await _promote_omnigent_artifact(
+                ref=durable_ref,
+                data=data,
+                source_namespace=source_namespace,
+                source_workflow_id=source_workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
+            )
+            return promoted_ref, data
+        except CheckpointBranchRetainedEvidenceError:
+            raise
         except Exception as exc:
             raise CheckpointBranchRetainedEvidenceError(
                 f"{path} is not resolvable"
             ) from exc
     artifact_id = durable_ref.removeprefix("artifact://")
     try:
-        async with async_session_maker() as session:
-            _artifact, data = await get_checkpoint_branch_artifact_service(
-                session
-            ).read(
-                artifact_id=artifact_id,
-                principal="service:checkpoint-branch-turn",
-                allow_restricted_raw=True,
-            )
-            return data
-    except Exception as exc:
+        data = await _pin_temporal_artifact(
+            artifact_id=artifact_id,
+            source_namespace=source_namespace,
+            source_workflow_id=source_workflow_id,
+            source_run_id=source_run_id,
+            branch_turn_id=branch_turn_id,
+        )
+        return durable_ref, data
+    except CheckpointBranchRetainedEvidenceError as exc:
         raise CheckpointBranchRetainedEvidenceError(
-            f"{path} is not resolvable"
+            f"{path} is not resolvable or retainable"
         ) from exc
 
 
@@ -489,6 +694,8 @@ async def persist_checkpoint_branch_turn_terminal(
     branch_id = str(payload["branchId"])
     branch_turn_id = str(payload["branchTurnId"])
     principal = str(payload["principal"])
+    source_namespace = str(payload["sourceNamespace"])
+    source_run_id = str(payload["sourceRunId"])
     raw_result = _mapping(payload.get("agentResult"))
     result = AgentRunResult.model_validate(raw_result)
     async with async_session_maker() as session:
@@ -510,19 +717,25 @@ async def persist_checkpoint_branch_turn_terminal(
             )
 
         checkpoint = _mapping(payload.get("checkpoint"))
-        checkpoint_ref = (
+        submitted_checkpoint_ref = (
             _require_durable_artifact_ref(
                 checkpoint.get("checkpointRef"), path="checkpointRef"
             )
             if checkpoint.get("checkpointRef")
             else None
         )
+        checkpoint_ref = submitted_checkpoint_ref
         checkpoint_digest: str | None = None
         checkpoint_model: StepExecutionCheckpointModel | None = None
+        checkpoint_bytes: bytes | None = None
         if checkpoint_ref:
-            checkpoint_bytes = await _read_retained_artifact(
+            checkpoint_ref, checkpoint_bytes = await _retain_artifact(
                 ref=checkpoint_ref,
                 path="checkpointRef",
+                source_namespace=source_namespace,
+                source_workflow_id=workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
             )
             try:
                 checkpoint_model = StepExecutionCheckpointModel.model_validate_json(
@@ -578,6 +791,8 @@ async def persist_checkpoint_branch_turn_terminal(
         refs_to_resolve = [
             *safe_output_refs,
             *([runtime_diagnostics_ref] if runtime_diagnostics_ref else []),
+            *_artifact_refs_in(result.summary),
+            *_artifact_refs_in(result.metrics),
             *_artifact_refs_in(safe_capture),
             *_artifact_refs_in(safe_authority),
         ]
@@ -589,11 +804,69 @@ async def persist_checkpoint_branch_turn_terminal(
                     )
                 )
             )
+        replacements: dict[str, str] = {}
         for index, ref in enumerate(dict.fromkeys(refs_to_resolve)):
-            await _read_retained_artifact(
+            retained_ref, _data = await _retain_artifact(
                 ref=ref,
                 path=f"retainedRefs[{index}]",
+                source_namespace=source_namespace,
+                source_workflow_id=workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
             )
+            if retained_ref != ref:
+                replacements[ref] = retained_ref
+
+        safe_output_refs = list(
+            _replace_artifact_refs(safe_output_refs, replacements)
+        )
+        safe_summary = _replace_artifact_refs(result.summary, replacements)
+        safe_metrics = _mapping(
+            _replace_artifact_refs(result.metrics, replacements)
+        )
+        runtime_diagnostics_ref = (
+            str(_replace_artifact_refs(runtime_diagnostics_ref, replacements))
+            if runtime_diagnostics_ref
+            else None
+        )
+        safe_capture = _mapping(
+            _replace_artifact_refs(safe_capture, replacements)
+        )
+        safe_authority = _mapping(
+            _replace_artifact_refs(safe_authority, replacements)
+        )
+        terminal_ref = safe_capture.get("terminalRef")
+        if checkpoint_model is not None and checkpoint_bytes is not None:
+            checkpoint_payload = checkpoint_model.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
+            retained_checkpoint_payload = _mapping(
+                _replace_artifact_refs(checkpoint_payload, replacements)
+            )
+            retained_checkpoint_bytes = json.dumps(
+                retained_checkpoint_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            if replacements and retained_checkpoint_payload != checkpoint_payload:
+                checkpoint_ref = await _write_result_artifact(
+                    principal=principal,
+                    payload=retained_checkpoint_payload,
+                    kind="output.branch_turn.retained_checkpoint.json",
+                    branch_turn_id=branch_turn_id,
+                    source_namespace=source_namespace,
+                    source_workflow_id=workflow_id,
+                    source_run_id=source_run_id,
+                )
+                checkpoint_digest = _sha256(retained_checkpoint_bytes)
+                await _retain_artifact(
+                    ref=checkpoint_ref,
+                    path="retainedCheckpointRef",
+                    source_namespace=source_namespace,
+                    source_workflow_id=workflow_id,
+                    source_run_id=source_run_id,
+                    branch_turn_id=branch_turn_id,
+                )
 
         disposition = checkpoint_branch_turn_terminal_disposition(
             result=result,
@@ -612,8 +885,8 @@ async def persist_checkpoint_branch_turn_terminal(
 
         result_payload = {
             "outputRefs": safe_output_refs,
-            "summary": result.summary,
-            "metrics": result.metrics,
+            "summary": safe_summary,
+            "metrics": safe_metrics,
             "diagnosticsRef": runtime_diagnostics_ref,
             "failureClass": result.failure_class,
             "providerErrorCode": result.provider_error_code,
@@ -631,9 +904,17 @@ async def persist_checkpoint_branch_turn_terminal(
             payload=result_payload,
             kind="runtime.branch_turn.agent_result.json",
             branch_turn_id=branch_turn_id,
-            source_namespace=str(payload["sourceNamespace"]),
+            source_namespace=source_namespace,
             source_workflow_id=workflow_id,
-            source_run_id=str(payload["sourceRunId"]),
+            source_run_id=source_run_id,
+        )
+        await _retain_artifact(
+            ref=agent_result_ref,
+            path="agentResultRef",
+            source_namespace=source_namespace,
+            source_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+            branch_turn_id=branch_turn_id,
         )
         diagnostics_payload = {
             "schemaVersion": "checkpoint-branch-terminal-diagnostics/v1",
@@ -651,9 +932,17 @@ async def persist_checkpoint_branch_turn_terminal(
             payload=diagnostics_payload,
             kind="output.branch_turn.diagnostics.json",
             branch_turn_id=branch_turn_id,
-            source_namespace=str(payload["sourceNamespace"]),
+            source_namespace=source_namespace,
             source_workflow_id=workflow_id,
-            source_run_id=str(payload["sourceRunId"]),
+            source_run_id=source_run_id,
+        )
+        await _retain_artifact(
+            ref=diagnostics_ref,
+            path="diagnosticsRef",
+            source_namespace=source_namespace,
+            source_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+            branch_turn_id=branch_turn_id,
         )
         turn = await service.finalize_turn_execution(
             workflow_id=workflow_id,
@@ -684,6 +973,116 @@ async def persist_checkpoint_branch_turn_terminal(
         }
 
 
+@activity.defn(name="checkpoint_branch.turn.persist_terminal_rejection")
+async def persist_checkpoint_branch_turn_terminal_rejection(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Terminalize a turn after unsafe or unretainable evidence is rejected.
+
+    The original terminal Activity input is represented only by its canonical
+    digest. No rejected value or exception text crosses this fallback boundary.
+    """
+
+    workflow_id = str(payload["workflowId"])
+    branch_id = str(payload["branchId"])
+    branch_turn_id = str(payload["branchTurnId"])
+    principal = str(payload["principal"])
+    source_namespace = str(payload["sourceNamespace"])
+    source_run_id = str(payload["sourceRunId"])
+    terminal_payload_digest = str(payload.get("terminalPayloadDigest") or "").strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", terminal_payload_digest):
+        raise ValueError("terminal payload digest is invalid")
+    requested_outcome = str(payload.get("requestedOutcome") or "failed").lower()
+    if requested_outcome not in {"succeeded", "failed", "canceled", "blocked"}:
+        requested_outcome = "failed"
+
+    async with async_session_maker() as session:
+        service = CheckpointBranchService(session)
+        _branch, locked_turn = await service.lock_turn_execution(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+        )
+        existing = dict(locked_turn.diagnostics or {})
+        if existing.get("agentResultRef"):
+            return {
+                "branchId": branch_id,
+                "branchTurnId": branch_turn_id,
+                "status": locked_turn.status,
+                "deliveryOutcome": existing.get("deliveryStage", "failed"),
+                "terminalDisposition": existing.get("terminalDisposition"),
+                "verificationPending": bool(existing.get("verificationPending")),
+                "agentResultRef": existing.get("agentResultRef"),
+                "diagnosticsRef": existing.get("diagnosticsRef"),
+                "checkpointRef": _branch.current_head_checkpoint_ref,
+                "terminalRef": existing.get("terminalRef"),
+            }
+
+        rejection_payload = {
+            "schemaVersion": "checkpoint-branch-terminal-rejection/v1",
+            "terminalPayloadDigest": terminal_payload_digest,
+            "requestedOutcome": requested_outcome,
+            "terminalDisposition": "retained_evidence_rejected",
+            "summary": "Terminal evidence was rejected at the retention boundary.",
+        }
+        agent_result_ref = await _write_result_artifact(
+            principal=principal,
+            payload=rejection_payload,
+            kind="runtime.branch_turn.terminal_rejection.json",
+            branch_turn_id=branch_turn_id,
+            source_namespace=source_namespace,
+            source_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+        )
+        diagnostics_ref = await _write_result_artifact(
+            principal=principal,
+            payload={
+                **rejection_payload,
+                "verificationPending": False,
+                "remediationAction": "replace_or_restore_terminal_evidence",
+            },
+            kind="output.branch_turn.terminal_rejection_diagnostics.json",
+            branch_turn_id=branch_turn_id,
+            source_namespace=source_namespace,
+            source_workflow_id=workflow_id,
+            source_run_id=source_run_id,
+        )
+        for path, ref in (
+            ("terminalRejectionRef", agent_result_ref),
+            ("terminalRejectionDiagnosticsRef", diagnostics_ref),
+        ):
+            await _retain_artifact(
+                ref=ref,
+                path=path,
+                source_namespace=source_namespace,
+                source_workflow_id=workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
+            )
+        turn = await service.finalize_turn_execution(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            outcome="blocked",
+            agent_result_ref=agent_result_ref,
+            diagnostics_ref=diagnostics_ref,
+            terminal_disposition="retained_evidence_rejected",
+        )
+        await session.commit()
+        return {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "status": turn.status,
+            "deliveryOutcome": "blocked",
+            "terminalDisposition": "retained_evidence_rejected",
+            "verificationPending": False,
+            "agentResultRef": agent_result_ref,
+            "diagnosticsRef": diagnostics_ref,
+            "checkpointRef": None,
+            "terminalRef": None,
+        }
+
+
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindCheckpointBranchTurnWorkflow:
     """Execute, checkpoint, and retain one fresh Omnigent branch turn."""
@@ -704,27 +1103,56 @@ class MoonMindCheckpointBranchTurnWorkflow:
         outcome: str,
         checkpoint: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return _mapping(
-            await workflow.execute_activity(
-                "checkpoint_branch.turn.persist_terminal",
-                {
-                    "workflowId": payload["workflowId"],
-                    "branchId": payload["branchId"],
-                    "branchTurnId": payload["branchTurnId"],
-                    "principal": payload["principal"],
-                    "sourceNamespace": payload["sourceNamespace"],
-                    "sourceRunId": payload["sourceRunId"],
-                    "outcome": outcome,
-                    "agentResult": result.model_dump(
-                        by_alias=True, mode="json", exclude_none=True
-                    ),
-                    "checkpoint": dict(checkpoint or {}),
-                },
-                start_to_close_timeout=timedelta(minutes=2),
-                schedule_to_close_timeout=timedelta(minutes=5),
-                retry_policy=_RETRY,
+        terminal_payload = {
+            "workflowId": payload["workflowId"],
+            "branchId": payload["branchId"],
+            "branchTurnId": payload["branchTurnId"],
+            "principal": payload["principal"],
+            "sourceNamespace": payload["sourceNamespace"],
+            "sourceRunId": payload["sourceRunId"],
+            "outcome": outcome,
+            "agentResult": result.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+            "checkpoint": dict(checkpoint or {}),
+        }
+        try:
+            return _mapping(
+                await workflow.execute_activity(
+                    "checkpoint_branch.turn.persist_terminal",
+                    terminal_payload,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=_RETRY,
+                )
             )
-        )
+        except Exception:
+            self._phase = "terminal_evidence_blocked"
+            terminal_payload_digest = _sha256(
+                json.dumps(
+                    terminal_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            )
+            return _mapping(
+                await workflow.execute_activity(
+                    "checkpoint_branch.turn.persist_terminal_rejection",
+                    {
+                        "workflowId": payload["workflowId"],
+                        "branchId": payload["branchId"],
+                        "branchTurnId": payload["branchTurnId"],
+                        "principal": payload["principal"],
+                        "sourceNamespace": payload["sourceNamespace"],
+                        "sourceRunId": payload["sourceRunId"],
+                        "requestedOutcome": outcome,
+                        "terminalPayloadDigest": terminal_payload_digest,
+                    },
+                    start_to_close_timeout=timedelta(minutes=2),
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=_RETRY,
+                )
+            )
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -859,7 +1287,11 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 checkpoint=checkpoint,
             )
             terminal_handoff_started = False
-            self._phase = "completed"
+            self._phase = (
+                "completed"
+                if self._result.get("verificationPending")
+                else str(self._result.get("status") or "failed")
+            )
             return self._result
         except CancelledError:
             self._phase = "canceled"
@@ -873,12 +1305,9 @@ class MoonMindCheckpointBranchTurnWorkflow:
             )
             raise
         except Exception as exc:
-            # A terminal Activity retry must always receive byte-identical
-            # evidence. If that Activity exhausts retries after persisting only
-            # part of its immutable artifact set, do not replace the original
-            # payload with a different synthetic result under the same owned
-            # artifact keys. Temporal will retain the failed Activity evidence
-            # and an operator can retry the same handoff safely.
+            # If even the sanitized fallback Activity cannot persist, retain the
+            # original terminal Activity failure rather than authoring a second
+            # payload under its immutable artifact keys.
             if terminal_handoff_started:
                 raise
             self._phase = "failed"
@@ -901,4 +1330,5 @@ __all__ = [
     "WORKFLOW_NAME",
     "mark_checkpoint_branch_turn_running",
     "persist_checkpoint_branch_turn_terminal",
+    "persist_checkpoint_branch_turn_terminal_rejection",
 ]

@@ -128,6 +128,7 @@ def checkpoint_branch_turn_owner_operational() -> bool:
     required_activities = {
         "checkpoint_branch.turn.mark_running",
         "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
     }
     try:
         workflow_types = set(workflow_fleet_workflow_types(settings.temporal))

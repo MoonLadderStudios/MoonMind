@@ -1139,6 +1139,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
         ),
         TemporalActivityDefinition(
+            activity_type="checkpoint_branch.turn.persist_terminal_rejection",
+            family="checkpoint_branch_turn",
+            capability_class="workflow",
+            task_queue=workflow_task_queue,
+            fleet=WORKFLOW_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
             activity_type="memory.evaluate_proposals",
             family="memory",
             capability_class="integrations",

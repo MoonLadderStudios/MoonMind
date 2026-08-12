@@ -1142,6 +1142,7 @@ _EXTERNALLY_BOUND_CATALOG_ACTIVITIES = frozenset(
         "integration.resolve_adapter_metadata",
         "checkpoint_branch.turn.mark_running",
         "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
     }
 )
 
