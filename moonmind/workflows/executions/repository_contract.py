@@ -8,10 +8,12 @@ drift across authoring and runtime code.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
 import json
+import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -24,6 +26,7 @@ REPOSITORY_CONNECTION_MISMATCH = "REPOSITORY_CONNECTION_MISMATCH"
 REPOSITORY_CLIENT_MISMATCH = "REPOSITORY_CLIENT_MISMATCH"
 REPOSITORY_CREDENTIAL_UNAVAILABLE = "REPOSITORY_CREDENTIAL_UNAVAILABLE"
 REPOSITORY_REMOTE_TIP_MISMATCH = "REPOSITORY_REMOTE_TIP_MISMATCH"
+_GITHUB_REPOSITORY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class RepositoryContractError(ValueError):
@@ -287,6 +290,41 @@ def repository_name_from_value(
         return ""
     name = repository.get("name")
     return name.strip() if isinstance(name, str) else ""
+
+
+def github_repository_name_from_value(value: object) -> str:
+    """Project supported GitHub repository forms to ``owner/repository``."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    direct = raw.rstrip("/").removesuffix(".git")
+    if _GITHUB_REPOSITORY_NAME_PATTERN.fullmatch(direct):
+        return direct
+
+    if raw.startswith("git@github.com:"):
+        candidate = raw.removeprefix("git@github.com:").rstrip("/")
+        candidate = candidate.removesuffix(".git")
+        return candidate if _GITHUB_REPOSITORY_NAME_PATTERN.fullmatch(candidate) else ""
+
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or (parsed.hostname or "").lower() not in {"github.com", "www.github.com"}
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return ""
+    candidate = f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    return candidate if _GITHUB_REPOSITORY_NAME_PATTERN.fullmatch(candidate) else ""
 
 
 def repository_branch_from_value(value: object) -> str:
@@ -655,6 +693,7 @@ __all__ = [
     "decode_legacy_repository_history_v1",
     "derive_repository_capabilities",
     "ensure_repository_ready",
+    "github_repository_name_from_value",
     "load_repository_connection",
     "materialize_resolved_repository_target",
     "persist_repository_connection",

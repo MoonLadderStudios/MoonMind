@@ -16,6 +16,7 @@ from moonmind.workflows.executions.repository_contract import (
     decode_legacy_repository_history_v1,
     derive_repository_capabilities,
     ensure_repository_ready,
+    github_repository_name_from_value,
     load_repository_connection,
     materialize_resolved_repository_target,
     persist_repository_connection,
@@ -93,6 +94,30 @@ def test_repository_projection_helpers_support_scalar_and_structured_values() ->
     )
     assert repository_name_from_value(target, provider="lore") == ""
     assert repository_branch_from_value(target) == "feature/repository-target"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("MoonLadderStudios/MoonMind", "MoonLadderStudios/MoonMind"),
+        (
+            "https://github.com/MoonLadderStudios/MoonMind",
+            "MoonLadderStudios/MoonMind",
+        ),
+        (
+            "https://www.github.com/MoonLadderStudios/MoonMind.git/",
+            "MoonLadderStudios/MoonMind",
+        ),
+        (
+            "git@github.com:MoonLadderStudios/MoonMind.git",
+            "MoonLadderStudios/MoonMind",
+        ),
+        ("https://gitlab.com/MoonLadderStudios/MoonMind", ""),
+        ("https://github.com/owner/repo/issues", ""),
+    ],
+)
+def test_github_repository_name_projection(value: str, expected: str) -> None:
+    assert github_repository_name_from_value(value) == expected
 
 
 @pytest.mark.parametrize("legacy", ["owner/repo", None, 123])

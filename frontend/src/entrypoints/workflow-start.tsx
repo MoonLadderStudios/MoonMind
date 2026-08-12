@@ -906,6 +906,7 @@ interface ExpandedStepPayload {
   skill?: PresetStepSkill;
   tool?: PresetStepSkill;
   type?: string;
+  repositoryOperation?: "read" | "write";
   annotations?: Record<string, unknown>;
   source?: Record<string, unknown>;
   presetProvenance?: Record<string, unknown>;
@@ -987,6 +988,7 @@ interface StepAttachmentRef {
 }
 
 type StepType = "tool" | "skill" | "preset";
+type RepositoryOperation = "" | "read" | "write";
 
 type OmnigentAgentProfileVersionOption = {
   version: number;
@@ -1060,6 +1062,7 @@ interface StepState {
   title: string;
   stepType: StepType;
   instructions: string;
+  repositoryOperation: RepositoryOperation;
   toolId: string;
   toolInputs: string;
   toolInputValues: Record<string, unknown>;
@@ -1887,6 +1890,7 @@ function createStepStateEntry(
     title: "",
     stepType: "skill",
     instructions: "",
+    repositoryOperation: "",
     toolId: "",
     toolInputs: "{}",
     toolInputValues: {},
@@ -2193,6 +2197,7 @@ function createStepStateEntriesFromTemporalDraft(
       title: step.title,
       stepType: step.stepType,
       instructions: step.instructions,
+      repositoryOperation: step.repositoryOperation || "",
       skillId:
         step.stepType === "skill"
           ? shouldUsePrimarySkill
@@ -3342,6 +3347,11 @@ function mapExpandedStepToState(
     title: String(step.title || "").trim(),
     stepType: isToolStep ? "tool" : "skill",
     instructions,
+    repositoryOperation:
+      step.repositoryOperation === "read" ||
+      step.repositoryOperation === "write"
+        ? step.repositoryOperation
+        : "",
     toolId: isToolStep ? String(tool.id || tool.name || "").trim() : "",
     toolInputs: isToolStep ? JSON.stringify(inlineInputs, null, 2) : "{}",
     toolInputValues: isToolStep
@@ -4079,6 +4089,7 @@ function SchemaCapabilityFields({
   repositoryOptions,
   branchOptions,
   onChange,
+  onGitHubIssueRepositoryChange,
 }: {
   fields: Array<[string, unknown]>;
   detail: Pick<PresetDetail, "uiSchema" | "defaults">;
@@ -4088,6 +4099,7 @@ function SchemaCapabilityFields({
   repositoryOptions: RepositoryOption[];
   branchOptions: BranchOption[];
   onChange: (name: string, value: unknown) => void;
+  onGitHubIssueRepositoryChange?: (repository: string) => void;
 }): ReactElement | null {
   if (fields.length === 0) {
     return null;
@@ -4152,13 +4164,27 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => {
                   if (provider === "github") {
-                    onChange(
-                      name,
-                      normalizeGitHubIssueInput(
-                        event.target.value,
-                        String(issueValue.repository || readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY) || ""),
+                    const normalizedIssue = normalizeGitHubIssueInput(
+                      event.target.value,
+                      String(
+                        issueValue.repository ||
+                          readLocalPreference(
+                            LAST_REPOSITORY_OPTION_PREFERENCE_KEY,
+                          ) ||
+                          "",
                       ),
                     );
+                    onChange(name, normalizedIssue);
+                    const issueRepository = String(
+                      normalizedIssue.repository || "",
+                    ).trim();
+                    if (
+                      issueRepository &&
+                      Number.isInteger(normalizedIssue.number) &&
+                      Number(normalizedIssue.number) > 0
+                    ) {
+                      onGitHubIssueRepositoryChange?.(issueRepository);
+                    }
                     return;
                   }
                   onChange(name, {
@@ -5723,6 +5749,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [modelTier, setModelTier] = useState("");
   const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
   const [repository, setRepository] = useState(initialRepository);
+  const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
   const [agentProfile, setAgentProfile] = useState("");
   const [branch, setBranch] = useState("");
@@ -6383,6 +6410,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.repository) {
       setRepository(draft.repository);
+      setRepositoryTouched(true);
     }
     if (draft.branch) {
       setBranch(draft.branch);
@@ -6457,6 +6485,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     remediationDraftIdRef.current = draftId;
     setRemediationDraft(draft);
     setRepository(draft.repository || "MoonLadderStudios/MoonMind");
+    setRepositoryTouched(true);
     if (draft.branch) {
       setBranch(draft.branch);
       setBranchTouched(false);
@@ -7997,8 +8026,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   })();
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
+    setRepositoryTouched(true);
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
+  };
+  const handleGitHubIssueRepositoryChange = (issueRepository: string) => {
+    if (repositoryTouched || repository.trim() === issueRepository) {
+      return;
+    }
+    setRepository(issueRepository);
+    setBranch("");
+    setBranchTouched(false);
   };
 
   function stepPresetStatusText(step: StepState): string {
@@ -8363,6 +8401,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const nextStep: StepState = {
           ...step,
           stepType: nextType,
+          repositoryOperation: "",
         };
 
         // MM-936: explicitRequiredCapabilities is a step-level field that is
@@ -10517,6 +10556,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
+            ...(sourceStep.repositoryOperation && !sourceInstructionsChanged
+              ? { repositoryOperation: sourceStep.repositoryOperation }
+              : {}),
             ...(hasSubmittedStepShape && shouldSubmitStepType
               ? { type: submittedStepType }
               : {}),
@@ -12095,6 +12137,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             disabled={false}
                             repositoryOptions={repositoryOptions}
                             branchOptions={branchOptions}
+                            onGitHubIssueRepositoryChange={
+                              handleGitHubIssueRepositoryChange
+                            }
                             onChange={(name, value) =>
                               updateToolInputValue(step.localId, name, value)
                             }
@@ -12110,6 +12155,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                                 disabled={false}
                                 repositoryOptions={repositoryOptions}
                                 branchOptions={branchOptions}
+                                onGitHubIssueRepositoryChange={
+                                  handleGitHubIssueRepositoryChange
+                                }
                                 onChange={(name, value) =>
                                   updateToolInputValue(step.localId, name, value)
                                 }
@@ -12299,6 +12347,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           disabled={false}
                           repositoryOptions={repositoryOptions}
                           branchOptions={branchOptions}
+                          onGitHubIssueRepositoryChange={
+                            handleGitHubIssueRepositoryChange
+                          }
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,
@@ -12586,6 +12637,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           disabled={isApplyingPreset}
                           repositoryOptions={repositoryOptions}
                           branchOptions={branchOptions}
+                          onGitHubIssueRepositoryChange={
+                            handleGitHubIssueRepositoryChange
+                          }
                           onChange={(name, value) =>
                             updateStepPresetInputValue(
                               step.localId,

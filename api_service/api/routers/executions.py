@@ -281,6 +281,7 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
     compile_repository_target,
+    github_repository_name_from_value,
     repository_branch_from_value,
     repository_name_from_value,
 )
@@ -10182,6 +10183,91 @@ def _selected_repository_skill_names(
     return names
 
 
+def _selected_github_issue_repositories(
+    task_payload: Mapping[str, Any],
+) -> set[str]:
+    input_payloads: list[Mapping[str, Any]] = []
+
+    def collect_binding_inputs(binding: object) -> None:
+        if not isinstance(binding, Mapping):
+            return
+        inputs = binding.get("inputs")
+        if not isinstance(inputs, Mapping):
+            inputs = binding.get("args")
+        if isinstance(inputs, Mapping):
+            input_payloads.append(inputs)
+
+    task_inputs = task_payload.get("inputs")
+    if isinstance(task_inputs, Mapping):
+        input_payloads.append(task_inputs)
+    collect_binding_inputs(task_payload.get("tool"))
+    collect_binding_inputs(task_payload.get("skill"))
+
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            collect_binding_inputs(step.get("tool"))
+            collect_binding_inputs(step.get("skill"))
+
+    applied_templates = task_payload.get("appliedStepTemplates")
+    if isinstance(applied_templates, list):
+        for template in applied_templates:
+            if not isinstance(template, Mapping):
+                continue
+            template_inputs = template.get("inputs")
+            if isinstance(template_inputs, Mapping):
+                input_payloads.append(template_inputs)
+
+    repositories_by_identity: dict[str, str] = {}
+    for inputs in input_payloads:
+        issue = inputs.get("github_issue")
+        if not isinstance(issue, Mapping):
+            continue
+        repository = str(issue.get("repository") or "").strip()
+        if repository:
+            repositories_by_identity.setdefault(repository.casefold(), repository)
+    return set(repositories_by_identity.values())
+
+
+def _validate_github_issue_repository_authority(
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any],
+) -> None:
+    submitted_repository = repository_name_from_value(repository_payload)
+    issue_repositories = _selected_github_issue_repositories(task_payload)
+    if not issue_repositories:
+        return
+    if len(issue_repositories) > 1:
+        raise _invalid_workflow_request(
+            "GitHub issue inputs target multiple repositories: "
+            + ", ".join(sorted(issue_repositories))
+            + ". Submit one repository authority per workflow."
+        )
+    issue_repository = next(iter(issue_repositories))
+    if not submitted_repository:
+        raise _invalid_workflow_request(
+            "payload.repository is required when GitHub issue inputs select "
+            f"repository '{issue_repository}'."
+        )
+    submitted_identity = (
+        github_repository_name_from_value(submitted_repository)
+        or submitted_repository
+    ).casefold()
+    issue_identity = (
+        github_repository_name_from_value(issue_repository) or issue_repository
+    ).casefold()
+    if issue_identity == submitted_identity:
+        return
+    raise _invalid_workflow_request(
+        f"payload.repository '{submitted_repository}' does not match the GitHub "
+        f"issue repository '{issue_repository}'. Choose the issue repository as "
+        "the workflow repository before submission."
+    )
+
+
 def _validate_repository_submission_compatibility(
     *,
     repository_payload: str | Mapping[str, Any] | None,
@@ -10194,6 +10280,10 @@ def _validate_repository_submission_compatibility(
             "payload.workflow.repository must not contain a repository target; "
             "use payload.repository."
         )
+    _validate_github_issue_repository_authority(
+        repository_payload=repository_payload,
+        task_payload=task_payload,
+    )
     if not isinstance(repository_payload, Mapping):
         return
     if "git" in task_payload:

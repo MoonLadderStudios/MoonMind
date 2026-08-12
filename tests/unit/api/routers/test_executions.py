@@ -7469,6 +7469,7 @@ def test_create_task_shaped_execution_enriches_github_issue_preset_title(
         json={
             "type": "workflow",
             "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
                 "workflow": {
                     "title": "GitHub Issue Implement",
                     "instructions": "Implement the selected GitHub issue.",
@@ -8141,6 +8142,199 @@ def test_create_task_shaped_execution_accepts_provider_repository_for_resolvers(
     create_kwargs = service.create_execution.await_args.kwargs
     assert create_kwargs["repository"] == "Moon/Mind"
     assert create_kwargs["initial_parameters"]["repository"] == repository_target
+
+
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        "MoonLadderStudios/MoonMind",
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {"name": "MoonLadderStudios/MoonMind"},
+            "branch": {"name": "main"},
+        },
+    ],
+)
+@pytest.mark.parametrize(
+    "issue_authority",
+    [
+        {
+            "inputs": {
+                "github_issue": {
+                    "repository": "MoonLadderStudios/Tactics",
+                    "number": 2490,
+                }
+            }
+        },
+        {
+            "appliedStepTemplates": [
+                {
+                    "slug": "github-issue-implement",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                }
+            ]
+        },
+        {
+            "steps": [
+                {
+                    "type": "tool",
+                    "tool": {
+                        "id": "github.load_issue_preset_brief",
+                        "inputs": {
+                            "github_issue": {
+                                "repository": "MoonLadderStudios/Tactics",
+                                "number": 2490,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        {
+            "steps": [
+                {
+                    "type": "skill",
+                    "skill": {
+                        "id": "github-issue-verify",
+                        "args": {
+                            "github_issue": {
+                                "repository": "MoonLadderStudios/Tactics",
+                                "number": 2490,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+    ],
+)
+def test_create_execution_rejects_github_issue_repository_mismatch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    repository_payload: object,
+    issue_authority: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_payload,
+                "targetRuntime": "omnigent",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    **issue_authority,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    message = response.json()["detail"]["message"]
+    assert "MoonLadderStudios/MoonMind" in message
+    assert "MoonLadderStudios/Tactics" in message
+    assert "does not match the GitHub issue repository" in message
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        "MoonLadderStudios/Tactics",
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {
+                "name": "https://github.com/MoonLadderStudios/Tactics"
+            },
+            "branch": {"name": "main"},
+        },
+        {
+            "provider": "git",
+            "connectionRef": "repository-connection:git-default",
+            "repository": {
+                "name": "git@github.com:MoonLadderStudios/Tactics.git"
+            },
+            "branch": {"name": "main"},
+        },
+    ],
+)
+def test_create_execution_accepts_matching_github_issue_repository(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    repository_payload: object,
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_payload,
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "github-issue-implement",
+                            "inputs": {
+                                "github_issue": {
+                                    "repository": "moonladderstudios/tactics",
+                                    "number": 2490,
+                                }
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    service.create_execution.assert_awaited_once()
+
+
+def test_create_execution_requires_repository_for_github_issue_authority(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "omnigent",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.repository is required" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
 def test_create_task_shaped_execution_rejects_malformed_repository_target(

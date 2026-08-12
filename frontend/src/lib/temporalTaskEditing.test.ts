@@ -322,6 +322,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               id: "tpl:jira-implement:1.0.0:01",
               title: "Load Jira preset brief",
               type: "tool",
+              repositoryOperation: "read",
               instructions: "Load MM-901.",
               tool: { id: "jira.load_preset_brief", inputs: { issueKey: "MM-901" } },
             },
@@ -329,6 +330,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
               id: "tpl:jira-implement:1.0.0:02",
               title: "Assess existing implementation state",
               type: "skill",
+              repositoryOperation: "write",
               instructions: "Assess MM-901.",
               annotations: {
                 issueImplementRole: "moonspec-remediation-loop",
@@ -347,6 +349,10 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     expect(draft.steps.map((step) => step.title)).toEqual([
       "Load Jira preset brief",
       "Assess existing implementation state",
+    ]);
+    expect(draft.steps.map((step) => step.repositoryOperation)).toEqual([
+      "read",
+      "write",
     ]);
     expect(draft.steps[1]?.annotations).toEqual({
       issueImplementRole: "moonspec-remediation-loop",
