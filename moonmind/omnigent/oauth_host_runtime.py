@@ -53,8 +53,10 @@ from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
 from moonmind.security.egress import (
+    EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
     attest_docker_egress,
+    attest_docker_workload_egress,
     omnigent_proxy_env,
 )
 from moonmind.utils.logging import redact_sensitive_text
@@ -357,6 +359,7 @@ class OmnigentOAuthHostRuntime:
                 github_token=github_token,
                 container_job_environment=container_job_environment,
                 effective_launch=launch,
+                egress_attestation=egress_attestation,
             )
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
@@ -364,9 +367,42 @@ class OmnigentOAuthHostRuntime:
             await self._compose_static_check(
                 binding=binding,
                 workspace_source=daemon_workspace_source,
-                skill_projection=daemon_skill_projection, effective_launch=launch
+                skill_projection=daemon_skill_projection,
+                effective_launch=launch,
+                egress_attestation=egress_attestation,
             )
 
+        # Record the actual Docker container attached to the attested egress
+        # network, not the logical/UUID registered host id. A logical id proves
+        # nothing about the running workload's network attachment, so the
+        # authority chain could otherwise claim an attachment that was never
+        # inspected.
+        attachment_identity = await self._resolve_workload_attachment_identity(
+            binding=binding,
+            host_lease=host_lease,
+            container_name=launched_container_name,
+        )
+        egress_evidence = await self._attest_launched_workload_egress(
+            attestation=egress_attestation,
+            attachment_identity=attachment_identity,
+        )
+        egress_evidence["attachmentRef"] = f"container:{attachment_identity}"
+        egress_evidence.update(
+            {
+                "executionProfileRef": launch.get("executionProfileRef"),
+                "launchPolicyRef": launch.get("launchPolicyRef"),
+                "policyAuthority": launch.get("policyAuthority"),
+                "serverImageRef": launch.get("serverImageRef"),
+                "hostImageRef": launch.get("hostImageRef"),
+                "releasedArchitectures": list(launch.get("architectures") or ()),
+                "hostMode": launch.get("hostMode"),
+                "runtimeProvenance": "omnigent",
+            }
+        )
+        # Attachment evidence is an authority gate: do not contact the host,
+        # inspect provider state, or run mounted-tool preflight until the exact
+        # production-created container is proven to have only the approved
+        # network attachment.
         host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
         host_id = str(host.get("id") or host.get("host_id") or host.get("hostId") or "")
         if adapter["harness"] not in self._ready_host_harnesses(host):
@@ -381,18 +417,6 @@ class OmnigentOAuthHostRuntime:
             repository=target_repository,
             mutation_required=github_mutation_required,
         )
-        egress_evidence = egress_attestation.model_dump(by_alias=True, mode="json")
-        # Record the actual Docker container attached to the attested egress
-        # network, not the logical/UUID registered host id. A logical id proves
-        # nothing about the running workload's network attachment, so the
-        # authority chain could otherwise claim an attachment that was never
-        # inspected.
-        attachment_identity = await self._attest_workload_attachment(
-            binding=binding,
-            host_lease=host_lease,
-            container_name=launched_container_name,
-        )
-        egress_evidence["attachmentRef"] = f"container:{attachment_identity}"
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
@@ -723,20 +747,37 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
             ) from exc
 
-    async def _attest_workload_attachment(
+    async def _attest_launched_workload_egress(
+        self,
+        *,
+        attestation: EgressAttestation,
+        attachment_identity: str,
+    ) -> dict[str, object]:
+        async def runner(args):
+            code, stdout, stderr = await self._run("docker", *args, check=False)
+            return code, stdout.encode(), stderr.encode()
+
+        try:
+            return await attest_docker_workload_egress(
+                runner=runner,
+                profile=OMNIGENT_EGRESS_PROFILE,
+                attestation=attestation,
+                attachment_identity=attachment_identity,
+            )
+        except RuntimeError as exc:
+            raise OmnigentOAuthHostError(
+                "launched host egress attachment attestation failed",
+                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
+            ) from exc
+
+    async def _resolve_workload_attachment_identity(
         self,
         *,
         binding: OmnigentOAuthHostBinding,
         host_lease: OmnigentHostLease,
         container_name: str | None,
     ) -> str:
-        """Resolve and verify the launched host's Docker network attachment.
-
-        Returns the actual Docker container identity after confirming it is
-        attached to the attested Omnigent egress network. Fails closed when the
-        container cannot be resolved or is not attached to that network, so
-        attachment evidence can never name a workload that was never inspected.
-        """
+        """Resolve the actual host container selected by the production owner."""
 
         if binding.host_launch_profile_ref:
             identity = container_name or deterministic_host_container_name(
@@ -765,34 +806,6 @@ class OmnigentOAuthHostRuntime:
                     "attachment attestation",
                     code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
                 )
-        code, out, _err = await self._run(
-            "docker",
-            "inspect",
-            "--format",
-            "{{json .NetworkSettings.Networks}}",
-            identity,
-            check=False,
-        )
-        if code != 0 or not out.strip():
-            raise OmnigentOAuthHostError(
-                "Omnigent host attachment evidence is unavailable",
-                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
-            )
-        try:
-            networks = json.loads(out)
-        except json.JSONDecodeError as exc:
-            raise OmnigentOAuthHostError(
-                "Omnigent host attachment evidence is malformed",
-                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
-            ) from exc
-        if (
-            not isinstance(networks, dict)
-            or OMNIGENT_EGRESS_PROFILE.network_ref not in networks
-        ):
-            raise OmnigentOAuthHostError(
-                "Omnigent host is not attached to the attested egress network",
-                code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
-            )
         return identity
 
     @staticmethod
@@ -1251,6 +1264,7 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         container_job_environment: Mapping[str, str] | None = None,
         effective_launch: Mapping[str, Any],
+        egress_attestation: EgressAttestation,
     ) -> None:
         if await self.container_exists(container_name):
             await self._assert_container_owned(container_name, host_lease.lease_id)
@@ -1288,6 +1302,18 @@ class OmnigentOAuthHostRuntime:
             "--rm",
             "--user",
             "0:0",
+            "--network",
+            "none",
+            "--privileged=false",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "CHOWN",
+            "--security-opt",
+            "no-new-privileges",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=16m",
             "--mount",
             f"type=volume,src={mount.auth_volume_ref.volume_ref},dst={adapter['home']}",
             "--mount",
@@ -1318,6 +1344,11 @@ class OmnigentOAuthHostRuntime:
             "moonmind.cleanup_mode": str(effective_launch["cleanup"]["mode"]),
             "moonmind.control_capabilities": ",".join(effective_launch["controlCapabilities"]),
             "moonmind.timeout_seconds": str(effective_launch["limits"]["timeoutSeconds"]),
+            "moonmind.egress.profile": egress_attestation.profile_ref,
+            "moonmind.egress.profile_digest": egress_attestation.profile_digest,
+            "moonmind.egress.applied_rule_digest": (
+                egress_attestation.applied_rule_digest
+            ),
         }
         args = [
             "docker",
@@ -2537,6 +2568,7 @@ class OmnigentOAuthHostRuntime:
         workspace_source: Path,
         skill_projection: Path | None = None,
         effective_launch: Mapping[str, Any] | None = None,
+        egress_attestation: EgressAttestation | None = None,
     ) -> None:
         child_env = dict(os.environ)
         child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
@@ -2580,6 +2612,18 @@ class OmnigentOAuthHostRuntime:
                     "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
                     "OMNIGENT_CONTROL_CAPABILITIES": ",".join(
                         effective_launch["controlCapabilities"]
+                    ),
+                }
+            )
+        if egress_attestation is not None:
+            child_env.update(
+                {
+                    "OMNIGENT_EGRESS_PROFILE_REF": egress_attestation.profile_ref,
+                    "OMNIGENT_EGRESS_PROFILE_DIGEST": (
+                        egress_attestation.profile_digest
+                    ),
+                    "OMNIGENT_EGRESS_APPLIED_RULE_DIGEST": (
+                        egress_attestation.applied_rule_digest
                     ),
                 }
             )

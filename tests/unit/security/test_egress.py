@@ -15,13 +15,32 @@ from moonmind.security.egress import (
     EGRESS_NETWORK_REF,
     EGRESS_PROFILE_SET_DIGEST,
     ENFORCER_IMPLEMENTATION,
+    EgressAttestation,
     OMNIGENT_EGRESS_NETWORK_REF,
     attest_docker_egress,
+    attest_docker_workload_egress,
     bounded_denial_diagnostics,
     denied_connection_count,
     omnigent_proxy_env,
     restricted_proxy_env,
 )
+
+
+def _attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=DEFAULT_EGRESS_PROFILE.ref,
+        profileDigest=DEFAULT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="test",
+        networkRef=DEFAULT_EGRESS_PROFILE.network_ref,
+        gatewayRef=DEFAULT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=UTC),
+        validationResult="passed",
+    )
 
 
 def test_denial_diagnostics_are_bounded_scoped_and_strip_request_data():
@@ -227,6 +246,110 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
     assert evidence.health_result == "healthy"
     assert calls[0][0:2] == ("network", "inspect")
     assert calls[-1][0:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref)
+
+
+@pytest.mark.asyncio
+async def test_workload_attestation_binds_exact_sole_attachment_image_and_denials():
+    attestation = _attestation()
+    client_address = "172.31.0.7"
+    denial_time = datetime(2026, 8, 12, tzinfo=UTC).timestamp()
+
+    async def runner(args):
+        if args[0] == "inspect":
+            return 0, json.dumps(
+                {
+                    "labels": {
+                        "moonmind.egress.profile": attestation.profile_ref,
+                        "moonmind.egress.profile_digest": attestation.profile_digest,
+                        "moonmind.egress.applied_rule_digest": (
+                            attestation.applied_rule_digest
+                        ),
+                    },
+                    "networks": {
+                        DEFAULT_EGRESS_PROFILE.network_ref: {
+                            "NetworkID": "network-id",
+                            "EndpointID": "endpoint-id",
+                            "IPAddress": client_address,
+                        }
+                    },
+                    "image": "sha256:" + "c" * 64,
+                }
+            ).encode(), b""
+        if args[0:2] == ("image", "inspect"):
+            return 0, b'"amd64"', b""
+        assert args[0:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref)
+        return 0, (
+            f"{denial_time} 2 {client_address} TCP_DENIED/403 0 CONNECT "
+            "metadata.invalid:443/ - HIER_NONE/- text/html\n"
+        ).encode(), b""
+
+    evidence = await attest_docker_workload_egress(
+        runner=runner,
+        profile=DEFAULT_EGRESS_PROFILE,
+        attestation=attestation,
+        attachment_identity="container-id",
+        started_at=datetime(2026, 8, 11, tzinfo=UTC),
+        finished_at=datetime(2026, 8, 13, tzinfo=UTC),
+    )
+
+    assert evidence["attachmentIdentity"] == "container-id"
+    assert evidence["networkIdentity"] == "network-id"
+    assert evidence["endpointIdentity"] == "endpoint-id"
+    assert evidence["workloadImageDigest"] == "sha256:" + "c" * 64
+    assert evidence["architecture"] == "amd64"
+    assert evidence["deniedConnectionCount"] == 1
+    assert evidence["denialDiagnostics"] == [
+        "denied metadata.invalid:443 TCP_DENIED/403"
+    ]
+    assert client_address not in json.dumps(evidence)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("secondary_network", "sole approved network"),
+        ("stale_label", "labels are unattested"),
+        ("mutable_image", "image is unattested"),
+    ],
+)
+async def test_workload_attestation_rejects_bypass_or_unbound_authority(
+    mutation, message
+):
+    attestation = _attestation()
+    labels = {
+        "moonmind.egress.profile": attestation.profile_ref,
+        "moonmind.egress.profile_digest": attestation.profile_digest,
+        "moonmind.egress.applied_rule_digest": attestation.applied_rule_digest,
+    }
+    networks = {
+        DEFAULT_EGRESS_PROFILE.network_ref: {
+            "NetworkID": "network-id",
+            "EndpointID": "endpoint-id",
+            "IPAddress": "172.31.0.7",
+        }
+    }
+    image = "sha256:" + "c" * 64
+    if mutation == "secondary_network":
+        networks["bridge"] = {"IPAddress": "172.17.0.2"}
+    elif mutation == "stale_label":
+        labels["moonmind.egress.applied_rule_digest"] = "sha256:stale"
+    else:
+        image = "mutable:latest"
+
+    async def runner(args):
+        assert args[0] == "inspect"
+        return 0, json.dumps(
+            {"labels": labels, "networks": networks, "image": image}
+        ).encode(), b""
+
+    with pytest.raises(RuntimeError, match=message):
+        await attest_docker_workload_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            attestation=attestation,
+            attachment_identity="container-id",
+        )
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Production-shaped restricted-egress network conformance for #3516.
+"""Production-shaped restricted-egress network conformance for #3625.
 
 Set ``MOONMIND_RUN_EGRESS_CONFORMANCE=1`` after starting the normal Compose
 deployment. The suite creates only short-lived, labelled probe containers and
@@ -11,11 +11,13 @@ import json
 import os
 import subprocess
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
@@ -26,16 +28,25 @@ from moonmind.security.egress import (
 )
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
+    serialize_conformance_evidence,
+)
+from moonmind.schemas.agent_runtime_models import (
+    AuthVolumeRef,
+    CredentialMountRef,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
     ContainerJobWorkflowInput,
 )
+from moonmind.schemas.workload_models import RunnerProfile, WorkloadRequest
 from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
 )
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
+from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.integration]
 
@@ -67,7 +78,7 @@ def rebound_allowed_name() -> None:
                 "--name",
                 name,
                 "--label",
-                "moonmind.test.scope=MoonLadderStudios/MoonMind#3516",
+                "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
                 "--network",
                 EGRESS_NETWORK_REF,
                 "--network-alias",
@@ -97,7 +108,7 @@ def _probe(
         "--name",
         f"moonmind-test-egress-{uuid.uuid4().hex[:10]}",
         "--label",
-        "moonmind.test.scope=MoonLadderStudios/MoonMind#3516",
+        "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
         "--network",
         EGRESS_NETWORK_REF,
         "--cap-drop",
@@ -464,35 +475,257 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
 
 
 @pytest.mark.asyncio
-async def test_managed_helper_crosses_its_live_trusted_attestation_boundary() -> None:
-    """Exercise the real managed-helper adapter instead of relabelling raw Docker."""
+async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Launch and stop through the production helper owner, then resolve evidence."""
 
-    launcher = DockerWorkloadLauncher()
-    request = SimpleNamespace(
-        profile=SimpleNamespace(network_policy="restricted_egress")
+    workspace_root = tmp_path / "helper-workspace"
+    artifacts_dir = workspace_root / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    volume_name = f"moonmind-egress-helper-{uuid.uuid4().hex[:12]}"
+    created = _docker("volume", "create", volume_name)
+    assert created.returncode == 0, created.stderr[-1000:]
+    profile = {
+        "id": "egress-live-helper",
+        "kind": "bounded_service",
+        "image": "alpine:3.21",
+        "entrypoint": ["sh", "-c"],
+        "commandWrapper": [],
+        "workdirTemplate": str(workspace_root),
+        "requiredMounts": [
+            {"type": "volume", "source": volume_name, "target": str(workspace_root)}
+        ],
+        "envAllowlist": [],
+        "networkPolicy": "restricted_egress",
+        "resources": {"cpu": "0.25", "memory": "64m"},
+        "timeoutSeconds": 30,
+        "maxTimeoutSeconds": 30,
+        "maxConcurrency": 1,
+        "helperTtlSeconds": 120,
+        "maxHelperTtlSeconds": 120,
+        "readinessProbe": {
+            "type": "exec",
+            "command": ["sh", "-c", "test -f /etc/alpine-release"],
+            "intervalSeconds": 1,
+            "timeoutSeconds": 5,
+            "retries": 3,
+        },
+        "cleanup": {"removeContainerOnExit": True, "killGraceSeconds": 1},
+        "devicePolicy": {"mode": "none"},
+    }
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(profile)],
+        workspace_root=workspace_root,
+        allowed_image_registries=["docker.io"],
     )
-    attestation = await launcher._attest_egress_before_launch(request)
-    assert attestation is not None
-    assert attestation.validation_state == "attested"
-    assert attestation.network_ref == EGRESS_NETWORK_REF
-    assert attestation.backend_ref == "docker-workload-launcher"
+    request = registry.validate_request(
+        WorkloadRequest.model_validate(
+            {
+                "profileId": "egress-live-helper",
+                "agentRunId": "egress-live",
+                "stepId": uuid.uuid4().hex[:12],
+                "attempt": 1,
+                "toolName": "container.start_helper",
+                "repoDir": str(workspace_root),
+                "artifactsDir": str(artifacts_dir),
+                "command": ["sleep 120"],
+                "ttlSeconds": 120,
+            }
+        )
+    )
+    launcher = DockerWorkloadLauncher()
+    try:
+        started = await launcher.start_helper(request)
+        assert started.status == "ready"
+        helper_name = request.container_name
+        inspected = _docker(
+            "inspect", "--format", "{{json .NetworkSettings.Networks}}", helper_name
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
+        assert _docker(
+            "exec", helper_name, "sh", "-c", "test ! -S /var/run/docker.sock"
+        ).returncode == 0
+
+        stopped = await launcher.stop_helper(request)
+        assert stopped.status == "stopped"
+        assert _docker("inspect", helper_name).returncode != 0
+        resolved = parse_and_verify_conformance_evidence(
+            Path(stopped.output_refs["security.egress"]).read_bytes(),
+            location="managed-helper-egress",
+        )
+        assert resolved["conformanceRow"] == "managed_helper"
+        assert resolved["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
+        assert resolved["cleanupResult"] == "succeeded"
+        assert resolved["reconciliationResult"] == "succeeded"
+    finally:
+        _docker("rm", "--force", request.container_name)
+        _docker("volume", "rm", "--force", volume_name)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_mode", ["static_compose", "on_demand_docker"])
 async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     host_mode: str,
+    tmp_path: Path,
 ) -> None:
-    """Prove both Omnigent modes enter the host adapter's trusted boundary."""
+    """Cross ``prepare_host`` while leaving launch and attachment owners real."""
 
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    attestation = await runtime._attest_egress(
-        {"hostMode": host_mode, "networkRef": OMNIGENT_EGRESS_PROFILE.network_ref}
+    for variable in ("OMNIGENT_IMAGE_REF", "OMNIGENT_HOST_IMAGE_REF"):
+        if not os.getenv(variable, "").strip():
+            pytest.fail(f"{variable} immutable image is required for live proof")
+    now = datetime.now(UTC)
+    on_demand = host_mode == "on_demand_docker"
+    container_name = f"mm-host-egress-{uuid.uuid4().hex[:12]}"
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:egress-live",
+        providerProfileId="egress-live",
+        endpointRef="default",
+        harness="codex-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="egress-live",
+                runtimeId="codex_cli",
+                providerId="openai",
+                volumeRef="codex_auth_volume",
+                credentialGeneration=1,
+                ownerUserId="egress-live",
+            ),
+            targetPath="/home/app/.codex",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        staticHostId=None if on_demand else "egress-live-static",
+        hostLaunchProfileRef="codex-oauth-v1" if on_demand else None,
     )
-    assert attestation.validation_state == "attested"
-    assert attestation.profile_ref == OMNIGENT_EGRESS_PROFILE.ref
-    assert attestation.network_ref == OMNIGENT_EGRESS_PROFILE.network_ref
-    assert attestation.backend_ref == "omnigent-host-runtime"
+    lease = OmnigentHostLease(
+        leaseId=f"egress-live-{uuid.uuid4().hex}",
+        providerProfileId="egress-live",
+        providerLeaseId=f"provider-egress-live-{uuid.uuid4().hex}",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=1,
+        omnigentHostId=None if on_demand else "egress-live-static",
+        containerName=container_name if on_demand else None,
+        status="ready",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(minutes=5),
+    )
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1" if on_demand else "codex-static@1",
+        provider_profile_id="egress-live",
+    )
+    workspace = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    workspace.mkdir()
+    skills.mkdir()
+    runtime = OmnigentOAuthHostRuntime(client=object(), workspace_root=tmp_path)
+    runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
+        return_value=skills
+    )
+    runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
+        return_value=workspace
+    )
+    runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
+    runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
+        return_value=None
+    )
+    runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
+        return_value={"id": "egress-live-host", "harnesses": ["codex-native"]}
+    )
+    runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value={"status": "not_required", "boundaries": []}
+    )
+    static_was_running = False
+    evidence: dict[str, object] | None = None
+    attachment_identity = ""
+    if not on_demand:
+        prior = _docker(
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "ps",
+            "-q",
+            "omnigent-host-codex",
+        )
+        if prior.returncode == 0 and prior.stdout.strip():
+            state = _docker(
+                "inspect", "--format", "{{.State.Running}}", prior.stdout.strip()
+            )
+            static_was_running = (
+                state.returncode == 0 and state.stdout.strip() == "true"
+            )
+
+    try:
+        preflight = await runtime.prepare_host(
+            binding=binding,
+            host_lease=lease,
+            workspace_key=f"egress-live:{host_mode}",
+            workspace_locator={"kind": "sandbox", "workspaceId": "egress-live"},
+            current_workflow_id="egress-live",
+            current_step_execution_id=f"egress-live:{host_mode}",
+            effective_launch=launch,
+        )
+        evidence = preflight["egressAttestation"]
+        assert evidence["validationResult"] == "passed"
+        assert evidence["profileRef"] == OMNIGENT_EGRESS_PROFILE.ref
+        assert evidence["networkRef"] == OMNIGENT_EGRESS_PROFILE.network_ref
+        assert evidence["backendRef"] == "omnigent-host-runtime"
+        assert evidence["networkIdentity"]
+        assert evidence["endpointIdentity"]
+        assert evidence["workloadImageDigest"].startswith("sha256:")
+        assert evidence["architecture"] in {"amd64", "arm64"}
+        identity = str(evidence["attachmentIdentity"])
+        attachment_identity = identity
+        inspected = _docker(
+            "inspect", "--format", "{{json .NetworkSettings.Networks}}", identity
+        )
+        assert inspected.returncode == 0, inspected.stderr[-1000:]
+        assert set(json.loads(inspected.stdout)) == {
+            OMNIGENT_EGRESS_PROFILE.network_ref
+        }
+        assert _docker(
+            "exec", identity, "sh", "-c", "test ! -S /var/run/docker.sock"
+        ).returncode == 0
+
+    finally:
+        if on_demand:
+            await runtime.stop_host(binding=binding, host_lease=lease)
+        elif not static_was_running:
+            await runtime.stop_host(binding=binding, host_lease=lease)
+
+    assert evidence is not None
+    cleanup_result = "retained_owned_static_host"
+    reconciliation_result = "not_required"
+    if on_demand:
+        assert _docker("inspect", attachment_identity).returncode != 0
+        cleanup_result = "succeeded"
+        reconciliation_result = "succeeded"
+    row_path = tmp_path / f"restricted-egress-{host_mode}.json"
+    row_path.write_bytes(
+        serialize_conformance_evidence(
+            {
+                "schemaVersion": 1,
+                "kind": "restricted-egress-omnigent-conformance",
+                "conformanceRow": host_mode,
+                **evidence,
+                "cleanupResult": cleanup_result,
+                "reconciliationResult": reconciliation_result,
+            },
+            location=f"omnigent-{host_mode}",
+        )
+    )
+    # Resolve from the independently named row artifact after cleanup, not from
+    # the live host or the in-memory preflight object.
+    resolved = parse_and_verify_conformance_evidence(
+        row_path.read_bytes(), location=f"omnigent-{host_mode}"
+    )
+    assert resolved["conformanceRow"] == host_mode
+    assert resolved["cleanupResult"] == cleanup_result
 
 
 @pytest.mark.asyncio
