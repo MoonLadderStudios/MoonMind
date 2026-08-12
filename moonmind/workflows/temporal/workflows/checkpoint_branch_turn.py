@@ -90,6 +90,22 @@ def _sha256(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _is_cancellation_failure(exc: BaseException) -> bool:
+    """Recognize cancellation wrapped by an Activity or child-workflow failure."""
+
+    current: BaseException | None = exc
+    for _ in range(20):
+        if current is None:
+            return False
+        if isinstance(current, (CancelledError, asyncio.CancelledError)):
+            return True
+        nested = getattr(current, "cause", None)
+        if not isinstance(nested, BaseException):
+            nested = current.__cause__
+        current = nested
+    return False
+
+
 def _normalized_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
@@ -1190,14 +1206,6 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 outcome="canceled",
             )
             return
-        current_task = asyncio.current_task()
-        if current_task is not None:
-            # Python retains the cancellation count after CancelledError is
-            # caught. Clear it so this workflow task can durably schedule the
-            # abandonment-protected terminal Activity before re-propagating
-            # the original Temporal cancellation.
-            while current_task.cancelling():
-                current_task.uncancel()
         terminal_task = asyncio.create_task(
             self._persist_terminal(
                 payload,
@@ -1209,8 +1217,11 @@ class MoonMindCheckpointBranchTurnWorkflow:
         try:
             self._result = await asyncio.shield(terminal_task)
         except (CancelledError, asyncio.CancelledError):
-            # Terminal state is authoritative evidence. A repeated cancel must
-            # not interrupt its abandonment-protected Activity.
+            # Match MoonMind's established terminal-state pattern: shielding
+            # prevents a repeated cancel from propagating into the Activity,
+            # while awaiting the original task preserves its durable result.
+            # Do not clear Python's cancellation count; the outer handler must
+            # still propagate the original Temporal cancellation truthfully.
             self._result = await terminal_task
 
     @workflow.run
@@ -1235,6 +1246,30 @@ class MoonMindCheckpointBranchTurnWorkflow:
         except (CancelledError, asyncio.CancelledError):
             await self._persist_cancellation_terminal(payload)
             raise
+        except Exception as exc:
+            if _is_cancellation_failure(exc):
+                await self._persist_cancellation_terminal(payload)
+                raise CancelledError(
+                    "Checkpoint Branch running-state handoff was canceled"
+                ) from exc
+            # Step Execution identities were already claimed before this
+            # workflow started. If the running-state handoff exhausts its
+            # Activity retries, terminalize that durable turn instead of
+            # leaving it indefinitely in ``preparing``.
+            self._phase = "failed"
+            self._result = await self._persist_terminal(
+                payload,
+                result=AgentRunResult(
+                    summary=(
+                        "Checkpoint Branch turn failed while recording the "
+                        "runtime handoff."
+                    ),
+                    failureClass="system_error",
+                    providerErrorCode=type(exc).__name__,
+                ),
+                outcome="failed",
+            )
+            return self._result
         terminal_handoff_started = False
         try:
             self._phase = "running"
@@ -1360,6 +1395,11 @@ class MoonMindCheckpointBranchTurnWorkflow:
             await self._persist_cancellation_terminal(payload)
             raise
         except Exception as exc:
+            if _is_cancellation_failure(exc):
+                await self._persist_cancellation_terminal(payload)
+                raise CancelledError(
+                    "Checkpoint Branch AgentRun lifecycle was canceled"
+                ) from exc
             # If even the sanitized fallback Activity cannot persist, retain the
             # original terminal Activity failure rather than authoring a second
             # payload under its immutable artifact keys.

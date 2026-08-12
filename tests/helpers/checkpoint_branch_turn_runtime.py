@@ -8,6 +8,7 @@ credential-free hermetic boundary required by MoonLadderStudios/MoonMind#3621.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -152,12 +153,20 @@ class CheckpointBranchRuntimeLedger:
         *,
         fail_stage: str | None = None,
         fail_position: str = "after",
+        fail_always: bool = False,
+        pause_stage: str | None = None,
+        pause_position: str = "after",
         artifact_writer: ArtifactWriter | None = None,
     ) -> None:
         self.fail_stage = fail_stage
         self.fail_position = fail_position
+        self.fail_always = fail_always
+        self.pause_stage = pause_stage
+        self.pause_position = pause_position
         self.failure_injected = False
         self.artifact_writer = artifact_writer
+        self.boundary_reached = asyncio.Event()
+        self._boundary_release = asyncio.Event()
         self.identities: dict[str, set[str]] = {
             name: set()
             for name in (
@@ -191,12 +200,25 @@ class CheckpointBranchRuntimeLedger:
 
     def inject(self, stage: str, position: str) -> None:
         if (
-            not self.failure_injected
+            (self.fail_always or not self.failure_injected)
             and self.fail_stage == stage
             and self.fail_position == position
         ):
             self.failure_injected = True
             raise InjectedBoundaryFailure(f"{position} {stage}")
+
+    async def boundary(self, stage: str, position: str) -> None:
+        """Cross one external boundary, optionally pausing for real cancellation."""
+
+        self.inject(stage, position)
+        if self.pause_stage == stage and self.pause_position == position:
+            self.boundary_reached.set()
+            await self._boundary_release.wait()
+
+    def release_boundary(self) -> None:
+        """Unblock a paused boundary during test teardown."""
+
+        self._boundary_release.set()
 
     async def artifact_ref(self, kind: str, key: str, body: bytes) -> str:
         if self.artifact_writer is not None:
@@ -256,7 +278,7 @@ async def execute_checkpoint_branch_request(
 
     class LeaseClient:
         async def acquire_execution_lease(self, **_kwargs):
-            ledger.inject("profile_lease", "before")
+            await ledger.boundary("profile_lease", "before")
             lease_id = ledger.own("provider_lease", f"provider-lease:{key}")
             lease = SimpleNamespace(
                 profile_id="profile-1",
@@ -265,13 +287,13 @@ async def execute_checkpoint_branch_request(
                 owner_id=f"owner:{key}",
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
             )
-            ledger.inject("profile_lease", "after")
+            await ledger.boundary("profile_lease", "after")
             return lease
 
         async def release_lease(self, _lease) -> None:
-            ledger.inject("capacity_release", "before")
+            await ledger.boundary("capacity_release", "before")
             ledger.own("capacity_release", f"capacity-release:{key}")
-            ledger.inject("capacity_release", "after")
+            await ledger.boundary("capacity_release", "after")
 
         async def record_cooldown(self, **_kwargs) -> None:
             return None
@@ -299,7 +321,7 @@ async def execute_checkpoint_branch_request(
             )
 
         async def create_or_get_host_lease(self, **_kwargs):
-            ledger.inject("host_lease", "before")
+            await ledger.boundary("host_lease", "before")
             lease_id = ledger.own("host_lease", f"host-lease:{key}")
             lease = ledger._host_leases.get(key)
             if lease is None:
@@ -316,7 +338,7 @@ async def execute_checkpoint_branch_request(
                     expiresAt=now + timedelta(hours=1),
                 )
                 ledger._host_leases[key] = lease
-            ledger.inject("host_lease", "after")
+            await ledger.boundary("host_lease", "after")
             return lease
 
         async def restart_host_lease(self, _lease_id):
@@ -353,10 +375,10 @@ async def execute_checkpoint_branch_request(
 
     class Runtime:
         async def prepare_host(self, **kwargs):
-            ledger.inject("host_start", "before")
+            await ledger.boundary("host_start", "before")
             host_id = ledger.own("host", f"host:{key}")
             ledger.workspace_locators.append(dict(kwargs["workspace_locator"]))
-            ledger.inject("host_start", "after")
+            await ledger.boundary("host_start", "after")
             return {
                 "hostId": host_id,
                 "workspacePath": f"/workspaces/{hashlib.sha256(key.encode()).hexdigest()[:16]}",
@@ -377,7 +399,7 @@ async def execute_checkpoint_branch_request(
             }
 
         async def publish_workspace(self, **kwargs):
-            ledger.inject("publication", "before")
+            await ledger.boundary("publication", "before")
             branch = ledger.own(
                 "branch", str(kwargs.get("publication_identity") or key)
             )
@@ -390,7 +412,7 @@ async def execute_checkpoint_branch_request(
                     + hashlib.sha256(key.encode()).hexdigest()[:8],
                 )
             ledger.own("publication", f"publication:{key}")
-            ledger.inject("publication", "after")
+            await ledger.boundary("publication", "after")
             return {
                 "push_status": "pushed",
                 "push_branch": branch,
@@ -406,9 +428,9 @@ async def execute_checkpoint_branch_request(
             }
 
         async def stop_host(self, **_kwargs):
-            ledger.inject("cleanup", "before")
+            await ledger.boundary("cleanup", "before")
             ledger.own("cleanup", f"cleanup:{key}")
-            ledger.inject("cleanup", "after")
+            await ledger.boundary("cleanup", "after")
 
     class Store:
         async def get_or_create(self, **_kwargs):
@@ -428,15 +450,15 @@ async def execute_checkpoint_branch_request(
 
     async def execute_provider(bound_request, **_kwargs):
         ledger.requests.append(bound_request)
-        ledger.inject("session_creation", "before")
+        await ledger.boundary("session_creation", "before")
         provider_session_id = ledger.own(
             "provider_session", f"provider-session:{key}"
         )
-        ledger.inject("session_creation", "after")
-        ledger.inject("first_message", "before")
+        await ledger.boundary("session_creation", "after")
+        await ledger.boundary("first_message", "before")
         first_message_id = ledger.own("first_message", f"first-message:{key}")
-        ledger.inject("first_message", "after")
-        ledger.inject("terminal_harvest", "before")
+        await ledger.boundary("first_message", "after")
+        await ledger.boundary("terminal_harvest", "before")
         output_ref = await ledger.artifact_ref(
             "output", key, f"completed:{key}".encode()
         )
@@ -447,7 +469,7 @@ async def execute_checkpoint_branch_request(
             "external-state", key, f"state:{key}".encode()
         )
         ledger.own("output", output_ref)
-        ledger.inject("terminal_harvest", "after")
+        await ledger.boundary("terminal_harvest", "after")
         validate_branch_identity(
             checkpoint,
             new_host_lease_ref=f"host-lease:{key}",

@@ -2113,6 +2113,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     release_ordering=release_ordering,
                     reasons=authority_reasons,
                 )
+                if authority_result is not None:
+                    # ``return result`` is evaluated before this ``finally``
+                    # block. Mutate that same canonical envelope so callers
+                    # receive the final cleanup/release authority, not the
+                    # runner's pre-cleanup snapshot. The durable lifecycle
+                    # event remains the reconciliation source of truth.
+                    authority_result.metadata["authorityChain"] = authority_chain
                 await emit(
                     "authority_chain",
                     "completed",

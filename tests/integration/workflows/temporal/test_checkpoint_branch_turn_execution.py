@@ -91,6 +91,27 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 CALLS: list[tuple[str, object]] = []
 TRANSIENT_FAILURES: dict[str, int] = {}
 EFFECT_IDENTITIES: dict[str, set[str]] = {}
+WORKFLOW_BOUNDARY: tuple[str, str] | None = None
+WORKFLOW_BOUNDARY_REACHED: asyncio.Event | None = None
+WORKFLOW_BOUNDARY_RELEASE: asyncio.Event | None = None
+WORKFLOW_FAILURE_BOUNDARY: tuple[str, str] | None = None
+DURABLE_CHECKPOINT_REF: str | None = None
+
+
+async def _pause_workflow_boundary(stage: str, position: str) -> None:
+    """Hold a real Activity call until Temporal cancellation reaches it."""
+
+    if WORKFLOW_BOUNDARY != (stage, position):
+        return
+    assert WORKFLOW_BOUNDARY_REACHED is not None
+    assert WORKFLOW_BOUNDARY_RELEASE is not None
+    WORKFLOW_BOUNDARY_REACHED.set()
+    await WORKFLOW_BOUNDARY_RELEASE.wait()
+
+
+def _inject_workflow_boundary_failure(stage: str, position: str) -> None:
+    if WORKFLOW_FAILURE_BOUNDARY == (stage, position):
+        raise RuntimeError(f"injected worker failure {position} {stage}")
 
 
 def _record_effect_and_inject(stage: str, identity: str) -> None:
@@ -165,6 +186,16 @@ async def _mark_running(payload: dict) -> None:
     _record_effect_and_inject("mark_running", payload["agentRunWorkflowId"])
 
 
+@activity.defn(name="checkpoint_branch.turn.mark_running")
+async def _durable_mark_running(payload: dict) -> None:
+    await _pause_workflow_boundary("step_execution_allocation", "before")
+    _inject_workflow_boundary_failure("step_execution_allocation", "before")
+    await mark_checkpoint_branch_turn_running(payload)
+    CALLS.append(("mark_running", payload["agentRunWorkflowId"]))
+    _inject_workflow_boundary_failure("step_execution_allocation", "after")
+    await _pause_workflow_boundary("step_execution_allocation", "after")
+
+
 @activity.defn(name="workspace.capture_checkpoint")
 async def _capture_workspace(payload: dict) -> dict:
     CALLS.append(("capture", payload["idempotencyKey"]))
@@ -181,6 +212,16 @@ async def _capture_workspace(payload: dict) -> dict:
     }
 
 
+@activity.defn(name="workspace.capture_checkpoint")
+async def _durable_capture_workspace(payload: dict) -> dict:
+    await _pause_workflow_boundary("checkpoint_capture", "before")
+    _inject_workflow_boundary_failure("checkpoint_capture", "before")
+    result = await _capture_workspace(payload)
+    _inject_workflow_boundary_failure("checkpoint_capture", "after")
+    await _pause_workflow_boundary("checkpoint_capture", "after")
+    return result
+
+
 @activity.defn(name="step_checkpoint.create_v2")
 async def _create_checkpoint(payload: dict) -> dict:
     CALLS.append(("checkpoint", payload["idempotencyKey"]))
@@ -189,6 +230,13 @@ async def _create_checkpoint(payload: dict) -> dict:
         "checkpointRef": "artifact://checkpoint/branch-turn-result",
         "idempotencyKey": payload["idempotencyKey"],
     }
+
+
+@activity.defn(name="step_checkpoint.create_v2")
+async def _durable_create_checkpoint(payload: dict) -> dict:
+    result = await _create_checkpoint(payload)
+    assert DURABLE_CHECKPOINT_REF is not None
+    return {**result, "checkpointRef": DURABLE_CHECKPOINT_REF}
 
 
 @activity.defn(name="checkpoint_branch.turn.persist_terminal")
@@ -235,7 +283,23 @@ async def _persist_terminal_rejection(payload: dict) -> dict:
     }
 
 
-def _request(correlation_id: str) -> AgentExecutionRequest:
+@activity.defn(name="checkpoint_branch.turn.persist_terminal")
+async def _durable_persist_terminal(payload: dict) -> dict:
+    result = await persist_checkpoint_branch_turn_terminal(payload)
+    CALLS.append(("terminal", payload["outcome"]))
+    return result
+
+
+@activity.defn(name="checkpoint_branch.turn.persist_terminal_rejection")
+async def _durable_persist_terminal_rejection(payload: dict) -> dict:
+    result = await persist_checkpoint_branch_turn_terminal_rejection(payload)
+    CALLS.append(("terminal_rejection", payload["terminalPayloadDigest"]))
+    return result
+
+
+def _request(
+    correlation_id: str, *, publish_mode: str = "none"
+) -> AgentExecutionRequest:
     policy = checkpoint_branch_policy_snapshot()
     return AgentExecutionRequest(
         agentKind="external",
@@ -338,13 +402,18 @@ def _request(correlation_id: str) -> AgentExecutionRequest:
             "repository": "MoonLadderStudios/MoonMind",
             "startingBranch": "main",
             "targetBranch": "mm/source/branch-1",
-            "publishMode": "none",
+            "publishMode": publish_mode,
         },
     )
 
 
-def _input(correlation_id: str) -> dict:
-    request = _request(correlation_id)
+def _input(
+    correlation_id: str,
+    *,
+    publish_mode: str = "none",
+    agent_run_workflow_id: str | None = None,
+) -> dict:
+    request = _request(correlation_id, publish_mode=publish_mode)
     return {
         "schemaVersion": "checkpoint-branch-turn-execution/v1",
         "workflowId": "source-workflow",
@@ -353,7 +422,10 @@ def _input(correlation_id: str) -> dict:
         "principal": "service:test",
         "sourceNamespace": "default",
         "sourceRunId": "source-run",
-        "agentRunWorkflowId": f"checkpoint-branch-agent:{correlation_id}",
+        "agentRunWorkflowId": (
+            agent_run_workflow_id
+            or f"checkpoint-branch-agent:{correlation_id}"
+        ),
         "agentRequest": request.model_dump(
             by_alias=True, mode="json", exclude_none=True
         ),
@@ -368,6 +440,9 @@ async def _run(
     correlation_id: str,
     *,
     cancel: bool = False,
+    cancel_ready: asyncio.Event | None = None,
+    durable_terminal: bool = False,
+    publish_mode: str = "none",
     real_agent_run: bool = False,
     transient_failures: dict[str, int] | None = None,
 ):
@@ -387,9 +462,21 @@ async def _run(
                             MoonMindAgentRun if real_agent_run else _FakeAgentRun,
                         ],
                         activities=[
-                            _mark_running,
-                            _persist_terminal,
-                            _persist_terminal_rejection,
+                            (
+                                _durable_mark_running
+                                if durable_terminal
+                                else _mark_running
+                            ),
+                            (
+                                _durable_persist_terminal
+                                if durable_terminal
+                                else _persist_terminal
+                            ),
+                            (
+                                _durable_persist_terminal_rejection
+                                if durable_terminal
+                                else _persist_terminal_rejection
+                            ),
                         ],
                         workflow_runner=UnsandboxedWorkflowRunner(),
                     )
@@ -416,28 +503,49 @@ async def _run(
                     Worker(
                         env.client,
                         task_queue=SANDBOX_TASK_QUEUE,
-                        activities=[_capture_workspace],
+                        activities=[
+                            (
+                                _durable_capture_workspace
+                                if durable_terminal
+                                else _capture_workspace
+                            )
+                        ],
                     )
                 )
                 await stack.enter_async_context(
                     Worker(
                         env.client,
                         task_queue=ARTIFACTS_TASK_QUEUE,
-                        activities=[_create_checkpoint],
+                        activities=[
+                            (
+                                _durable_create_checkpoint
+                                if durable_terminal
+                                else _create_checkpoint
+                            )
+                        ],
                     )
                 )
                 handle = await env.client.start_workflow(
                     MoonMindCheckpointBranchTurnWorkflow.run,
-                    _input(correlation_id),
+                    _input(
+                        correlation_id,
+                        publish_mode=publish_mode,
+                        agent_run_workflow_id=(
+                            "agent-run-turn-1" if durable_terminal else None
+                        ),
+                    ),
                     id=f"checkpoint-branch-owner-{correlation_id}-{uuid4()}",
                     task_queue=queue,
                 )
                 if cancel:
-                    for _attempt in range(100):
-                        if any(name == "mark_running" for name, _value in CALLS):
-                            break
-                        await asyncio.sleep(0.01)
-                    assert any(name == "mark_running" for name, _value in CALLS)
+                    if cancel_ready is not None:
+                        await asyncio.wait_for(cancel_ready.wait(), timeout=10)
+                    else:
+                        for _attempt in range(100):
+                            if any(name == "mark_running" for name, _value in CALLS):
+                                break
+                            await asyncio.sleep(0.01)
+                        assert any(name == "mark_running" for name, _value in CALLS)
                     await handle.cancel()
                     with pytest.raises(WorkflowFailureError):
                         await handle.result()
@@ -1596,6 +1704,250 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             "checkpoint": checkpoint_ref,
         }
     return engine, sessions, refs
+
+
+@pytest.mark.parametrize(
+    ("stage", "position"),
+    [
+        (stage, position)
+        for stage in (
+            "step_execution_allocation",
+            "profile_lease",
+            "host_start",
+            "session_creation",
+            "first_message",
+            "terminal_harvest",
+            "checkpoint_capture",
+            "publication",
+            "cleanup",
+            "capacity_release",
+        )
+        for position in ("before", "after")
+    ],
+)
+async def test_checkpoint_branch_turn_cancellation_matrix_persists_durable_terminal(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    position: str,
+) -> None:
+    """Cancel at every authority handoff through the real owner/coordinator path."""
+
+    global WORKFLOW_BOUNDARY
+    global WORKFLOW_BOUNDARY_REACHED
+    global WORKFLOW_BOUNDARY_RELEASE
+    global DURABLE_CHECKPOINT_REF
+
+    engine, sessions, refs = await _terminal_activity_database(
+        tmp_path, monkeypatch
+    )
+    DURABLE_CHECKPOINT_REF = refs["checkpoint"]
+    CALLS.clear()
+    outer_stage = stage in {
+        "step_execution_allocation",
+        "checkpoint_capture",
+    }
+    async def artifact_writer(kind: str, _key: str, _body: bytes) -> str:
+        return {
+            "output": refs["output"],
+            "diagnostics": refs["diagnostics"],
+            "external-state": refs["external"],
+        }[kind]
+
+    ledger = CheckpointBranchRuntimeLedger(
+        pause_stage=None if outer_stage else stage,
+        pause_position=position,
+        artifact_writer=artifact_writer,
+    )
+    if outer_stage:
+        WORKFLOW_BOUNDARY = (stage, position)
+        WORKFLOW_BOUNDARY_REACHED = asyncio.Event()
+        WORKFLOW_BOUNDARY_RELEASE = asyncio.Event()
+        cancel_ready = WORKFLOW_BOUNDARY_REACHED
+    else:
+        cancel_ready = ledger.boundary_reached
+
+    async def execute_profile_bound(
+        request: AgentExecutionRequest,
+    ) -> AgentRunResult:
+        return await execute_checkpoint_branch_request(request, ledger=ledger)
+
+    monkeypatch.setattr(
+        omnigent_activities,
+        "_omnigent_execute_activity",
+        execute_profile_bound,
+    )
+    correlation_id = f"cancel-{position}-{stage}"
+    try:
+        result, history = await _run(
+            correlation_id,
+            cancel=True,
+            cancel_ready=cancel_ready,
+            durable_terminal=True,
+            publish_mode="branch",
+            real_agent_run=True,
+        )
+    finally:
+        ledger.release_boundary()
+        if WORKFLOW_BOUNDARY_RELEASE is not None:
+            WORKFLOW_BOUNDARY_RELEASE.set()
+        WORKFLOW_BOUNDARY = None
+        WORKFLOW_BOUNDARY_REACHED = None
+        WORKFLOW_BOUNDARY_RELEASE = None
+        DURABLE_CHECKPOINT_REF = None
+
+    assert result is None
+    assert CALLS[-1] == ("terminal", "canceled")
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        assert turn is not None
+        assert turn.status == "canceled"
+        assert turn.created_step_execution_id == (
+            "branch-owner:run:implement:execution:1"
+        )
+        assert turn.completed_at is not None
+        assert turn.diagnostics["deliveryStage"] == "canceled"
+        assert turn.diagnostics["verificationPending"] is False
+        assert turn.diagnostics["terminalDisposition"] == "canceled"
+
+    for identity_kind, count in ledger.effect_counts.items():
+        assert count <= 1, identity_kind
+        assert len(ledger.identities[identity_kind]) == count, identity_kind
+    if ledger.effect_counts["capacity_release"]:
+        assert ledger.effect_counts["cleanup"] == 1
+    completed_cleanup = [
+        index
+        for index, event in enumerate(ledger.lifecycle)
+        if event == ("host_cleanup", "completed")
+    ]
+    completed_release = [
+        index
+        for index, event in enumerate(ledger.lifecycle)
+        if event == ("profile_lease_release", "completed")
+    ]
+    coordinator_terminal = [
+        index
+        for index, (event_type, _status) in enumerate(ledger.lifecycle)
+        if event_type == "terminal"
+    ]
+    if completed_release:
+        assert completed_cleanup
+        assert coordinator_terminal
+        assert completed_cleanup[-1] < completed_release[-1] < coordinator_terminal[-1]
+
+    if stage == "capacity_release" and position == "after":
+        await Replayer(
+            workflows=[MoonMindCheckpointBranchTurnWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+    await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("stage", "position"),
+    [
+        (stage, position)
+        for stage in (
+            "step_execution_allocation",
+            "profile_lease",
+            "host_start",
+            "session_creation",
+            "first_message",
+            "terminal_harvest",
+            "checkpoint_capture",
+            "publication",
+            "cleanup",
+            "capacity_release",
+        )
+        for position in ("before", "after")
+    ],
+)
+async def test_checkpoint_branch_turn_worker_failure_matrix_terminalizes_durably(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    position: str,
+) -> None:
+    """Exhaust worker retries at every handoff without losing turn authority."""
+
+    global WORKFLOW_FAILURE_BOUNDARY
+    global DURABLE_CHECKPOINT_REF
+
+    engine, sessions, refs = await _terminal_activity_database(
+        tmp_path, monkeypatch
+    )
+    DURABLE_CHECKPOINT_REF = refs["checkpoint"]
+    CALLS.clear()
+    outer_stage = stage in {
+        "step_execution_allocation",
+        "checkpoint_capture",
+    }
+    if outer_stage:
+        WORKFLOW_FAILURE_BOUNDARY = (stage, position)
+
+    async def artifact_writer(kind: str, _key: str, _body: bytes) -> str:
+        return {
+            "output": refs["output"],
+            "diagnostics": refs["diagnostics"],
+            "external-state": refs["external"],
+        }[kind]
+
+    ledger = CheckpointBranchRuntimeLedger(
+        fail_stage=None if outer_stage else stage,
+        fail_position=position,
+        fail_always=not outer_stage,
+        artifact_writer=artifact_writer,
+    )
+
+    async def execute_profile_bound(
+        request: AgentExecutionRequest,
+    ) -> AgentRunResult:
+        return await execute_checkpoint_branch_request(request, ledger=ledger)
+
+    monkeypatch.setattr(
+        omnigent_activities,
+        "_omnigent_execute_activity",
+        execute_profile_bound,
+    )
+    correlation_id = f"worker-failure-{position}-{stage}"
+    try:
+        result, history = await _run(
+            correlation_id,
+            durable_terminal=True,
+            publish_mode="branch",
+            real_agent_run=True,
+        )
+    finally:
+        WORKFLOW_FAILURE_BOUNDARY = None
+        DURABLE_CHECKPOINT_REF = None
+
+    assert result["status"] in {"failed", "blocked"}
+    assert result["verificationPending"] is False
+    async with sessions() as session:
+        turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
+        assert turn is not None
+        assert turn.status in {"failed", "blocked"}
+        assert turn.created_step_execution_id == (
+            "branch-owner:run:implement:execution:1"
+        )
+        assert turn.completed_at is not None
+        assert turn.diagnostics["deliveryStage"] in {"failed", "blocked"}
+        assert turn.diagnostics["verificationPending"] is False
+
+    for identity_kind, count in ledger.effect_counts.items():
+        assert count <= 1, identity_kind
+        assert len(ledger.identities[identity_kind]) == count, identity_kind
+    if not outer_stage:
+        assert ledger.failure_injected is True
+    if ledger.effect_counts["capacity_release"]:
+        assert ledger.effect_counts["cleanup"] == 1
+
+    if stage == "step_execution_allocation" and position == "before":
+        await Replayer(
+            workflows=[MoonMindCheckpointBranchTurnWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+    await engine.dispose()
 
 
 async def test_preclaim_artifact_retry_reuses_exact_owned_ref(
