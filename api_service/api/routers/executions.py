@@ -105,7 +105,7 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestStatusSnapshotModel,
 )
 from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -193,6 +193,7 @@ from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
+    TemporalArtifactStateError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -612,10 +613,114 @@ class RemediationNextActionBaselineModel(BaseModel):
     workspaceDigest: str
     headVersion: int
 
+
+class RemediationCheckpointBranchTurnLinkModel(BaseModel):
+    branchTurnId: str
+    parentTurnId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    status: str
+    createdStepExecutionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtimeAgentRunId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    providerSessionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructionRef: str
+    instructionDigest: str
+    sourceCheckpointRef: str
+    contextBundleRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stepExecutionManifestRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitWorkBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    startedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    completedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    createdAt: datetime | str
+    updatedAt: datetime | str
+    outputArtifacts: dict[str, str] = Field(default_factory=dict)
+    comparisonArtifacts: dict[str, str] = Field(default_factory=dict)
+
+
 class RemediationCheckpointBranchLinkModel(BaseModel):
     workflowId: str
     branchId: str
     branchTurnId: str | None = None
+    logicalStepId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    branchState: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    workspacePolicy: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtimeContextPolicy: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitBaseBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitWorkBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    currentHeadCommit: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    pullRequestUrl: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    publishStatus: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    promotionEvidence: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    archiveReason: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    promotedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    archivedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnState: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    runtimeAgentRunId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    providerSessionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructionRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnStartedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turnCompletedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    outputArtifacts: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    comparisonArtifacts: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    turns: list[RemediationCheckpointBranchTurnLinkModel] = Field(
+        default_factory=list
+    )
     operation: str | None = None
     idempotencyKey: str | None = None
     checkpointRef: str | None = None
@@ -680,6 +785,26 @@ class RemediationActionCapabilityModel(BaseModel):
     blockedReasons: list[str]
 
 
+class RemediationOperatorControlsModel(BaseModel):
+    canCancel: bool = False
+    canTakeOver: bool = False
+    canResume: bool = False
+    paused: bool = False
+    disabledReasons: dict[str, str] = Field(default_factory=dict)
+
+
+class RemediationLifecycleArtifactModel(BaseModel):
+    artifactRef: str
+    artifactType: str
+    status: str
+    label: str | None = None
+    createdAt: datetime | str | None = None
+    expiresAt: datetime | str | None = None
+    freshness: str
+    bounded: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -695,6 +820,7 @@ class RemediationLinkSummaryModel(BaseModel):
     # ``resolution`` is the terminal remediation lifecycle resolution. They are
     # distinct projections (issue #3622) and must never share a column.
     deliveryStatus: str | None = None
+    verificationOutcome: str | None = None
     resolution: str | None = None
     contextArtifactRef: str | None = None
     selectedSteps: list[str] | None = None
@@ -710,6 +836,39 @@ class RemediationLinkSummaryModel(BaseModel):
     approvalState: RemediationApprovalStateModel | None = None
     checkpointBranches: list[RemediationCheckpointBranchLinkModel] = Field(
         default_factory=list
+    )
+    authoredContract: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    selectedStepEvidence: list[dict[str, Any]] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextGeneratedAt: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextEvidenceAvailability: list[dict[str, Any]] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    contextBoundedness: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    diagnosisHints: list[str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    lifecycleArtifacts: list[RemediationLifecycleArtifactModel] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    latestActionRequest: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    latestActionResult: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    lifecycleSummary: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    operatorControls: RemediationOperatorControlsModel | None = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     createdAt: datetime
     updatedAt: datetime
@@ -8961,6 +9120,49 @@ def _validate_pr_base_branch_submission(
             )
 
 
+def _validate_remediation_branch_submission(
+    *, task_payload: Mapping[str, Any], git_payload: Mapping[str, Any]
+) -> None:
+    remediation = task_payload.get("remediation")
+    if not isinstance(remediation, Mapping):
+        return
+    for field_name, value in (
+        ("payload.workflow.git.branch", git_payload.get("branch")),
+        (
+            "payload.workflow.git.startingBranch",
+            git_payload.get("startingBranch"),
+        ),
+        ("payload.workflow.branch", task_payload.get("branch")),
+        ("payload.workflow.startingBranch", task_payload.get("startingBranch")),
+    ):
+        branch = str(value or "")
+        if not branch:
+            continue
+        try:
+            TemporalExecutionService._validate_remediation_git_branch(
+                branch, path=field_name, allow_protected=True
+            )
+        except TemporalExecutionValidationError as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
+
+    checkpoint_policy = remediation.get("checkpointBranchPolicy")
+    if not isinstance(checkpoint_policy, Mapping):
+        return
+    work_branch = str(checkpoint_policy.get("gitWorkBranch") or "")
+    if not work_branch:
+        return
+    try:
+        TemporalExecutionService._validate_remediation_git_branch(
+            work_branch,
+            path=(
+                "payload.workflow.remediation.checkpointBranchPolicy.gitWorkBranch"
+            ),
+            allow_protected=False,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
+
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
@@ -10636,6 +10838,10 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         git_payload=git_payload,
     )
+    _validate_remediation_branch_submission(
+        task_payload=task_payload,
+        git_payload=git_payload,
+    )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
         for git_key in ("startingBranch", "branch"):
@@ -10903,6 +11109,22 @@ async def _create_execution_from_workflow_request(
             consumer_id=reserved_workflow_id,
             user=user,
         )
+        authored_execution_target_ref = (
+            str(authored_omnigent.get("executionTargetRef") or "").strip()
+            if isinstance(authored_omnigent, Mapping)
+            else ""
+        )
+        resolved_execution_target_ref = str(
+            profile_snapshot.get("executionProfileRef") or ""
+        ).strip()
+        if (
+            authored_execution_target_ref
+            and authored_execution_target_ref != resolved_execution_target_ref
+        ):
+            raise _invalid_workflow_request(
+                "omnigent.executionTargetRef must match the selected "
+                "Agent Profile executionProfileRef."
+            )
         initial_parameters = compile_agent_profile_snapshot_parameters(
             initial_parameters,
             snapshot=profile_snapshot,
@@ -11744,12 +11966,40 @@ def _remediation_approval_state_from_link(
     *,
     authority_mode: str,
     status_value: str,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
 ) -> RemediationApprovalStateModel | None:
     raw_state = getattr(link, "approval_state", None)
     if isinstance(raw_state, dict):
         projected = dict(raw_state)
-        projected.setdefault("decision", projected.get("status", "pending"))
-        projected.setdefault("canDecide", projected.get("status") == "pending")
+        approval_status = str(projected.get("status") or "pending")
+        expires_at = projected.get("expiresAt")
+        if approval_status == "pending" and expires_at:
+            try:
+                parsed_expiration = datetime.fromisoformat(str(expires_at))
+                if parsed_expiration.tzinfo is None:
+                    parsed_expiration = parsed_expiration.replace(tzinfo=UTC)
+                if parsed_expiration <= datetime.now(UTC):
+                    approval_status = "expired"
+                    projected["status"] = "expired"
+            except ValueError:
+                approval_status = "stale"
+                projected["status"] = "stale"
+        projected.setdefault("decision", approval_status)
+        if projected.get("decision") == "pending" and approval_status != "pending":
+            projected["decision"] = approval_status
+        reviewer_eligible = not (
+            projected.get("reviewerRule") == "high_risk_reviewer"
+            and not actor_can_approve_high_risk
+        )
+        requesting_actor = str(projected.get("requestingActor") or "").strip()
+        if actor and requesting_actor and actor == requesting_actor:
+            reviewer_eligible = False
+        projected["canDecide"] = bool(
+            projected.get("canDecide", True)
+            and approval_status == "pending"
+            and reviewer_eligible
+        )
         return RemediationApprovalStateModel.model_validate(projected)
 
     approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
@@ -11767,13 +12017,20 @@ def _remediation_approval_state_from_link(
         canDecide=approval_pending,
     )
 
-def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
+def _serialize_remediation_link_summary(
+    link: Any,
+    *,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
+) -> RemediationLinkSummaryModel:
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
     approval_state = _remediation_approval_state_from_link(
         link,
         authority_mode=authority_mode,
         status_value=status_value,
+        actor=actor,
+        actor_can_approve_high_risk=actor_can_approve_high_risk,
     )
 
     policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
@@ -11824,6 +12081,7 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         activeLockHolder=getattr(link, "active_lock_holder", None),
         latestActionSummary=getattr(link, "latest_action_summary", None),
         deliveryStatus=getattr(link, "outcome", None),
+        verificationOutcome=getattr(link, "verification_outcome", None),
         resolution=getattr(link, "resolution", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
@@ -11846,13 +12104,278 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         checkpointBranches=_bounded_checkpoint_branch_links(
             getattr(link, "checkpoint_branch_links", None)
         ),
+        authoredContract=getattr(link, "authored_contract", None),
+        selectedStepEvidence=getattr(link, "selected_step_evidence", None),
+        contextGeneratedAt=getattr(link, "context_generated_at", None),
+        contextEvidenceAvailability=getattr(
+            link, "context_evidence_availability", None
+        ),
+        contextBoundedness=getattr(link, "context_boundedness", None),
+        diagnosisHints=_bounded_string_list(getattr(link, "diagnosis_hints", None)),
+        lifecycleArtifacts=getattr(link, "lifecycle_artifacts", None),
+        latestActionRequest=getattr(link, "latest_action_request", None),
+        latestActionResult=getattr(link, "latest_action_result", None),
+        lifecycleSummary=getattr(link, "lifecycle_summary", None),
+        operatorControls=getattr(link, "operator_controls", None),
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
     )
 
 
+_REMEDIATION_LIFECYCLE_ARTIFACT_TYPES = frozenset(
+    {
+        "remediation.context",
+        "remediation.plan",
+        "remediation.attempt",
+        "remediation.approval_request",
+        "remediation.approval_decision",
+        "remediation.action_request",
+        "remediation.action_result",
+        "remediation.verification",
+        "remediation.audit_event",
+        "remediation.target_annotation",
+        "remediation.decision_log",
+        "remediation.summary",
+    }
+)
+_REMEDIATION_ARTIFACT_METADATA_KEYS = frozenset(
+    {
+        "artifact_type",
+        "schemaVersion",
+        "name",
+        "targetWorkflowId",
+        "targetRunId",
+        "remediationWorkflowId",
+        "remediationRunId",
+        "actionId",
+        "actionKind",
+        "status",
+        "outcome",
+        "resolution",
+        "verificationOutcome",
+        "phase",
+        "riskTier",
+        "bounded",
+    }
+)
+
+
+def _bounded_remediation_projection(
+    value: Any, *, depth: int = 0, max_string_length: int = 8_000
+) -> Any:
+    """Return a redacted, compact browser projection of canonical JSON evidence."""
+
+    if depth > 6:
+        return "[bounded]"
+    redacted = redact_sensitive_payload(value)
+    if isinstance(redacted, Mapping):
+        return {
+            str(key)[:128]: _bounded_remediation_projection(
+                item, depth=depth + 1, max_string_length=max_string_length
+            )
+            for key, item in list(redacted.items())[:50]
+        }
+    if isinstance(redacted, list | tuple):
+        return [
+            _bounded_remediation_projection(
+                item, depth=depth + 1, max_string_length=max_string_length
+            )
+            for item in redacted[:50]
+        ]
+    if isinstance(redacted, str):
+        if len(redacted) <= max_string_length:
+            return redacted
+        return f"{redacted[:max_string_length]}… [bounded]"
+    if redacted is None or isinstance(redacted, bool | int | float):
+        return redacted
+    return str(redacted)[:max_string_length]
+
+
+def _authored_remediation_contract(
+    parameters: Mapping[str, Any], workflow: Mapping[str, Any]
+) -> dict[str, Any]:
+    remediation = workflow.get("remediation")
+    remediation = remediation if isinstance(remediation, Mapping) else {}
+    profile_snapshot = parameters.get("agentProfileSnapshot")
+    profile_snapshot = (
+        profile_snapshot if isinstance(profile_snapshot, Mapping) else {}
+    )
+    profile_fields = {
+        key: profile_snapshot[key]
+        for key in (
+            "profileId",
+            "version",
+            "digest",
+            "providerProfileRef",
+            "executionTargetRef",
+            "launchPolicyRef",
+            "model",
+            "effort",
+        )
+        if key in profile_snapshot
+    }
+    contract = {
+        "instructions": workflow.get("instructions"),
+        "repository": parameters.get("repository"),
+        "startingBranch": (
+            (workflow.get("git") or {}).get("startingBranch")
+            if isinstance(workflow.get("git"), Mapping)
+            else workflow.get("startingBranch") or workflow.get("branch")
+        ),
+        "runtime": workflow.get("runtime"),
+        "targetRuntime": parameters.get("targetRuntime"),
+        "agentProfileSnapshot": profile_fields or None,
+        "omnigent": parameters.get("omnigent"),
+        "retrieval": {
+            "rag": parameters.get("rag"),
+            "followUpRetrieval": parameters.get("followUpRetrieval"),
+        },
+        "publish": workflow.get("publish") or parameters.get("publish"),
+        "remediation": remediation,
+    }
+    return _bounded_remediation_projection(
+        {key: value for key, value in contract.items() if value is not None}
+    )
+
+
+def _selected_step_labels(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    labels: list[str] = []
+    for item in value[:25]:
+        if not isinstance(item, Mapping):
+            continue
+        label = str(
+            item.get("logicalStepId")
+            or item.get("checkpointRef")
+            or item.get("agentRunId")
+            or ""
+        ).strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _context_evidence_availability_projection(
+    value: Any, *, generated_at: str | None
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    projection: list[dict[str, Any]] = []
+    for entry in value[:50]:
+        if not isinstance(entry, Mapping):
+            continue
+        projected_entry = dict(entry)
+        projected_entry.setdefault("bounded", True)
+        projected_entry.setdefault(
+            "freshness", "source_reported" if generated_at else "unknown"
+        )
+        if generated_at:
+            projected_entry.setdefault("observedAt", generated_at)
+        entry_status = str(projected_entry.get("status") or "unknown")
+        if entry_status not in {"available", "active"}:
+            projected_entry.setdefault(
+                "degradedReason",
+                projected_entry.get("reason")
+                or projected_entry.get("fallback")
+                or f"evidence status is {entry_status}",
+            )
+        projection.append(projected_entry)
+    return projection
+
+
+async def _attach_remediation_artifact_projection(
+    link: Any, *, session: AsyncSession, principal: str
+) -> None:
+    result = await session.execute(
+        select(db_models.TemporalArtifactLink, db_models.TemporalArtifact)
+        .join(
+            db_models.TemporalArtifact,
+            db_models.TemporalArtifact.artifact_id
+            == db_models.TemporalArtifactLink.artifact_id,
+        )
+        .where(
+            db_models.TemporalArtifactLink.workflow_id
+            == str(getattr(link, "remediation_workflow_id", "")),
+            db_models.TemporalArtifactLink.run_id
+            == str(getattr(link, "remediation_run_id", "")),
+            db_models.TemporalArtifactLink.link_type.in_(
+                _REMEDIATION_LIFECYCLE_ARTIFACT_TYPES
+            ),
+        )
+        .order_by(db_models.TemporalArtifactLink.created_at.desc())
+        .limit(50)
+    )
+    rows = list(result.all())
+    now = datetime.now(UTC)
+    lifecycle_artifacts: list[dict[str, Any]] = []
+    latest_by_type: dict[str, Any] = {}
+    for artifact_link, artifact in rows:
+        artifact_type = str(artifact_link.link_type or "").strip()
+        latest_by_type.setdefault(artifact_type, artifact)
+        metadata = (
+            artifact.metadata_json
+            if isinstance(artifact.metadata_json, Mapping)
+            else {}
+        )
+        expires_at = getattr(artifact, "expires_at", None)
+        if expires_at is None:
+            freshness = "durable"
+        else:
+            comparable_expiration = expires_at
+            if comparable_expiration.tzinfo is None:
+                comparable_expiration = comparable_expiration.replace(tzinfo=UTC)
+            freshness = "expired" if comparable_expiration <= now else "current"
+        lifecycle_artifacts.append(
+            {
+                "artifactRef": artifact.artifact_id,
+                "artifactType": artifact_type,
+                "status": _enum_value(getattr(artifact, "status", None)),
+                "label": artifact_link.label,
+                "createdAt": artifact_link.created_at,
+                "expiresAt": expires_at,
+                "freshness": freshness,
+                "bounded": True,
+                "metadata": _bounded_remediation_projection(
+                    {
+                        key: metadata[key]
+                        for key in _REMEDIATION_ARTIFACT_METADATA_KEYS
+                        if key in metadata
+                    }
+                ),
+            }
+        )
+    link.lifecycle_artifacts = lifecycle_artifacts or None
+
+    artifact_service = get_temporal_artifact_service(session)
+    for artifact_type, attribute in (
+        ("remediation.action_request", "latest_action_request"),
+        ("remediation.action_result", "latest_action_result"),
+        ("remediation.summary", "lifecycle_summary"),
+    ):
+        artifact = latest_by_type.get(artifact_type)
+        if artifact is None:
+            continue
+        try:
+            _, body = await artifact_service.read(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+            )
+            decoded = json.loads((body or b"").decode("utf-8"))
+        except (
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+            TemporalArtifactStateError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            continue
+        if isinstance(decoded, Mapping):
+            setattr(link, attribute, _bounded_remediation_projection(decoded))
+
+
 async def _attach_remediation_capability_projection(
-    link: Any, *, session: AsyncSession
+    link: Any, *, session: AsyncSession, principal: str
 ) -> None:
     """Resolve exact-target inputs that are intentionally absent from the link row."""
 
@@ -11897,6 +12420,9 @@ async def _attach_remediation_capability_projection(
     remediation_workflow = (
         remediation_workflow if isinstance(remediation_workflow, Mapping) else {}
     )
+    link.authored_contract = _authored_remediation_contract(
+        remediation_parameters, remediation_workflow
+    )
     policy = remediation_workflow.get("remediation")
     policy = policy if isinstance(policy, Mapping) else {}
     link.allowed_actions = (
@@ -11926,6 +12452,115 @@ async def _attach_remediation_capability_projection(
     link.host_mode = str(launch.get("hostMode") or "").strip() or None
     link.evidence_degraded = False
     link.unavailable_evidence_classes = ()
+    actions = _build_action_capabilities(remediation)
+    link.operator_controls = {
+        "canCancel": bool(actions.can_cancel),
+        # Takeover is intentionally the durable workflow Pause signal. It does
+        # not transfer host credentials or grant a raw runtime/session handle.
+        "canTakeOver": bool(actions.can_pause),
+        "canResume": bool(actions.can_resume),
+        "paused": bool(getattr(remediation, "paused", False)),
+        "disabledReasons": dict(actions.disabled_reasons or {}),
+    }
+    lock_state = getattr(link, "mutation_guard_lock_state", None)
+    if isinstance(lock_state, Mapping):
+        link.lock_outcome = {
+            "state": lock_state.get("state") or lock_state.get("status"),
+            "holder": lock_state.get("holder") or link.active_lock_holder,
+            "releasedAt": lock_state.get("releasedAt"),
+        }
+
+    target_policy = policy.get("target")
+    target_policy = target_policy if isinstance(target_policy, Mapping) else {}
+    authored_selectors = target_policy.get("stepSelectors")
+    if isinstance(authored_selectors, list):
+        link.selected_step_evidence = _bounded_remediation_projection(
+            authored_selectors[:25]
+        )
+        link.selected_steps = _selected_step_labels(authored_selectors)
+
+    if link.context_artifact_ref:
+        try:
+            context = await _read_remediation_context_payload(
+                session=session,
+                context_artifact_ref=link.context_artifact_ref,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                principal=principal,
+            )
+        except (
+            HTTPException,
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactNotFoundError,
+        ):
+            link.evidence_degraded = True
+            link.unavailable_evidence_classes = ("remediation_context",)
+        else:
+            selected_steps = context.get("selectedSteps")
+            if isinstance(selected_steps, list):
+                link.selected_step_evidence = _bounded_remediation_projection(
+                    selected_steps[:25]
+                )
+                link.selected_steps = _selected_step_labels(selected_steps)
+            evidence = context.get("evidence")
+            evidence = evidence if isinstance(evidence, Mapping) else {}
+            availability = evidence.get("availability")
+            omnigent_index = evidence.get("omnigentIndex")
+            raw_availability = [
+                *(
+                    availability
+                    if isinstance(availability, list)
+                    else []
+                ),
+                *(
+                    omnigent_index
+                    if isinstance(omnigent_index, list)
+                    else []
+                ),
+            ]
+            link.context_generated_at = str(context.get("generatedAt") or "") or None
+            combined_availability = _context_evidence_availability_projection(
+                raw_availability,
+                generated_at=link.context_generated_at,
+            )
+            link.context_evidence_availability = _bounded_remediation_projection(
+                combined_availability
+            )
+            boundedness = context.get("boundedness")
+            if isinstance(boundedness, Mapping):
+                link.context_boundedness = _bounded_remediation_projection(
+                    boundedness
+                )
+            link.diagnosis_hints = _bounded_string_list(
+                evidence.get("diagnosisHints")
+            )
+            link.evidence_degraded = bool(evidence.get("evidenceDegraded"))
+            link.unavailable_evidence_classes = tuple(
+                _bounded_string_list(
+                    evidence.get("unavailableEvidenceClasses")
+                )
+                or ()
+            )
+            live_follow = context.get("liveFollow")
+            if isinstance(live_follow, Mapping):
+                resume_cursor = live_follow.get("resumeCursor")
+                link.live_observation = {
+                    "status": live_follow.get("status"),
+                    "label": live_follow.get("mode"),
+                    "sequenceCursor": (
+                        json.dumps(resume_cursor, sort_keys=True)
+                        if isinstance(resume_cursor, Mapping)
+                        else None
+                    ),
+                    "reconnectState": (
+                        "available" if live_follow.get("supported") else "unavailable"
+                    ),
+                    "fallbackReason": live_follow.get("reason"),
+                }
+
+    await _attach_remediation_artifact_projection(
+        link, session=session, principal=principal
+    )
 
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
@@ -12110,13 +12745,26 @@ async def list_execution_remediations(
 
     await asyncio.gather(
         *(
-            _attach_remediation_capability_projection(link, session=session)
+            _attach_remediation_capability_projection(
+                link,
+                session=session,
+                principal=_owner_id(user) or "system",
+            )
             for link in links
         )
     )
     return RemediationLinksResponseModel(
         direction=direction,
-        items=[_serialize_remediation_link_summary(link) for link in links],
+        items=[
+            _serialize_remediation_link_summary(
+                link,
+                actor=str(getattr(user, "email", "") or "").strip() or None,
+                actor_can_approve_high_risk=bool(
+                    getattr(user, "is_superuser", False)
+                ),
+            )
+            for link in links
+        ],
     )
 
 @router.post(

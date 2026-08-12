@@ -652,7 +652,16 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     state: "active",
     activeVersion: 1,
     defaultForRuntime: true,
-    versions: [{ version: 1, digest: `sha256:${"a".repeat(64)}`, validationResult: { ready: true } }],
+    versions: [{
+      version: 1,
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        execution: {
+          defaultExecutionProfileRef: "omnigent-codex-default",
+        },
+      },
+      validationResult: { ready: true },
+    }],
   }];
 
   it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
@@ -796,6 +805,263 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       },
     });
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
+  });
+
+  it("synchronizes the execution target when the Agent Profile changes", async () => {
+    const payload = omnigentPayload();
+    const initialData = payload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    initialData.dashboardConfig.system.omnigentExecutionCatalog = {
+      profiles: [
+        {
+          ref: "omnigent-codex-default",
+          displayName: "Codex default",
+          defaultPolicyRef: "on-demand-v1",
+          providerRuntime: "codex_cli",
+        },
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          defaultPolicyRef: "claude-on-demand-v1",
+          providerRuntime: "claude_code",
+        },
+      ],
+      policies: [
+        {
+          ref: "on-demand-v1",
+          displayName: "Codex on-demand",
+          hostMode: "on_demand_docker",
+        },
+        {
+          ref: "claude-on-demand-v1",
+          displayName: "Claude on-demand",
+          hostMode: "on_demand_docker",
+        },
+      ],
+    };
+    const catalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [
+        ...readyOmnigentCatalog.executionProfiles,
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          available: true,
+          launchPolicies: [{
+            ref: "claude-on-demand-v1",
+            displayName: "Claude on-demand",
+            hostMode: "on_demand_docker",
+            isDefault: true,
+          }],
+          gateReasons: [],
+        },
+      ],
+    };
+    const profiles = [
+      readyAgentProfiles[0],
+      {
+        profileId: "team-claude",
+        displayName: "Team Claude",
+        state: "active",
+        activeVersion: 1,
+        defaultForRuntime: false,
+        versions: [{
+          version: 1,
+          digest: `sha256:${"b".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-claude-default",
+            },
+          },
+          validationResult: { ready: true },
+        }],
+      },
+    ];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => catalog } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => profiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText("Agent profile") as HTMLSelectElement).value)
+        .toBe("team-codex");
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-codex-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Agent profile"), {
+      target: { value: "team-claude" },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-claude-default");
+    });
+  });
+
+  it("submits an imported remediation draft through the ordinary create boundary", async () => {
+    const draft = {
+      source: "remediation",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
+      target: {
+        workflowId: "mm:target-3623",
+        runId: "run-target-3623",
+        state: "failed",
+        stepSelectors: [{
+          logicalStepId: "run-tests",
+          checkpointRef: "artifact://checkpoint/run-tests",
+        }],
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "main",
+      startingBranch: "main",
+      workBranch: "remediation/mm-3623",
+      publishMode: "pr",
+      executionProfileRef: "omnigent-codex-default",
+      launchPolicyRef: "on-demand-v1",
+      contextRetrieval: {
+        initial: { collections: ["docs"], allowStale: false, required: true },
+        followUp: {
+          enabled: true,
+          required: false,
+          collections: ["docs"],
+          budgetPreset: "balanced",
+          topK: 8,
+          maxContextTokens: 8192,
+          maxQueries: 12,
+          latencyMs: 5000,
+          maxLifetimeSeconds: 900,
+          overlayPolicy: "include",
+          staleOverlayAllowed: false,
+          fallbackAllowed: false,
+        },
+      },
+      runtime: { mode: "omnigent" },
+      agentProfile: {
+        profileId: "team-codex",
+        version: 1,
+        providerProfileRef: "oauth-1",
+      },
+      instructions: "Repair the pinned test failure.",
+      remediation: {
+        target: {
+          workflowId: "mm:target-3623",
+          runId: "run-target-3623",
+          stepSelectors: [{
+            logicalStepId: "run-tests",
+            checkpointRef: "artifact://checkpoint/run-tests",
+          }],
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        evidencePolicy: { includeStepLedger: true },
+        approvalPolicy: { requiredForHighRisk: true },
+        lockPolicy: { targetMutationLock: true },
+        verificationPolicy: { verifyAppliedActions: true },
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+          workspacePolicy: "apply_previous_execution_diff_to_clean_baseline",
+          gitWorkBranch: "remediation/mm-3623",
+        },
+        trigger: { type: "manual" },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.issue-3623",
+      JSON.stringify(draft),
+    );
+    window.history.replaceState(
+      {},
+      "Create remediation",
+      "/workflows/new?intent=remediate&draftId=issue-3623",
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/executions/mm%3Atarget-3623?source=temporal") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ workflowId: "mm:target-3623", runId: "run-target-3623" }),
+        } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:remediation-3623" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    const start = screen.getByRole("button", { name: "Start Workflow" });
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(start);
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(
+      "/workflows/mm%3Aremediation-3623?source=temporal",
+    ));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" &&
+      (options as RequestInit | undefined)?.method === "POST"
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request).toMatchObject({
+      type: "task",
+      payload: {
+        targetRuntime: "omnigent",
+        repository: {
+          repository: { name: "MoonLadderStudios/MoonMind" },
+          branch: { name: "main" },
+        },
+        publishMode: "pr",
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "on-demand-v1",
+        },
+        agentProfile: {
+          profileId: "team-codex",
+          version: 1,
+          providerProfileRef: "oauth-1",
+          launchPolicyRef: "on-demand-v1",
+        },
+        rag: { collections: ["docs"], required: true },
+        followUpRetrieval: { enabled: true, collections: ["docs"] },
+        task: {
+          remediation: draft.remediation,
+        },
+      },
+    });
   });
 
   it("adopts the active default policy version without requiring a host-policy choice", async () => {
@@ -19423,7 +19689,8 @@ describe("Task Create runtime command previews", () => {
   it("warns when a remediation draft target run changed before submit", async () => {
     const draft = {
       source: "remediation",
-      createdAt: "2026-07-07T00:00:00.000Z",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
       target: {
         workflowId: "mm:remediation-target",
         runId: "run-original",
@@ -19453,6 +19720,7 @@ describe("Task Create runtime command previews", () => {
           actionKind: "checkpoint_branch.create_from_remediation_context",
           runtimeContextPolicy: "fresh_agent_run",
         },
+        trigger: { type: "manual" },
       },
     };
     window.sessionStorage.setItem(
@@ -19508,18 +19776,135 @@ describe("Task Create runtime command previews", () => {
     const actionPolicy = screen.getByLabelText("Action policy");
     fireEvent.change(remediationMode, { target: { value: "live_follow" } });
     fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
-    fireEvent.change(actionPolicy, { target: { value: "operator_review_only" } });
     fireEvent.click(screen.getByLabelText("Diagnostics"));
 
     expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
     expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
-    expect((actionPolicy as HTMLInputElement).value).toBe("operator_review_only");
+    expect((actionPolicy as HTMLSelectElement).value).toBe("admin_healer_default");
+    expect(within(actionPolicy).queryByRole("option", {
+      name: "operator_review_only",
+    })).toBeNull();
     expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(
         "Target workflow changed after this remediation draft was created. Open Remediate again before submitting.",
       ),
     ).toBeTruthy();
+  });
+
+  it("imports the complete remediation draft once and keeps pinned identity separate from editable intent", async () => {
+    const draft = {
+      source: "remediation",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+        state: "failed",
+        stepSelectors: [
+          {
+            logicalStepId: "test",
+            checkpointRef: "artifact://checkpoint/test",
+          },
+        ],
+      },
+      repository: "MoonLadderStudios/MoonMind",
+      branch: "main",
+      startingBranch: "main",
+      workBranch: "repair/mm-3623",
+      publishMode: "pr",
+      executionProfileRef: "execution-profile:codex",
+      launchPolicyRef: "launch-policy:remediation",
+      contextRetrieval: {
+        initial: { collections: ["docs"], allowStale: false, required: true },
+        followUp: {
+          enabled: false,
+          required: false,
+          collections: [],
+          budgetPreset: "balanced",
+          topK: 8,
+          maxContextTokens: 8192,
+          maxQueries: 12,
+          latencyMs: 5000,
+          maxLifetimeSeconds: 900,
+          overlayPolicy: "include",
+          staleOverlayAllowed: false,
+          fallbackAllowed: false,
+        },
+      },
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "omnigent" },
+      remediation: {
+        target: {
+          workflowId: "mm:remediation-target",
+          runId: "run-original",
+          stepSelectors: [
+            {
+              logicalStepId: "test",
+              checkpointRef: "artifact://checkpoint/test",
+            },
+          ],
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+          gitWorkBranch: "repair/mm-3623",
+        },
+        trigger: { type: "manual" },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.complete",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=complete",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    expect(screen.getByLabelText("Pinned target identity")).toBeTruthy();
+    expect(screen.getByLabelText("Editable repair intent")).toBeTruthy();
+    expect((screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByLabelText("Pinned run") as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
+    expect((screen.getByLabelText("Checkpoint work branch") as HTMLInputElement).value).toBe("repair/mm-3623");
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("pr");
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.remediation-create-draft.complete",
+      ),
+    ).toBeNull();
+  });
+
+  it("reports a copied cross-tab remediation URL without importing content", async () => {
+    window.localStorage.setItem(
+      "moonmind.remediation-create-draft-presence.other-tab",
+      JSON.stringify({ createdAt: new Date().toISOString() }),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=other-tab",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(
+      (await screen.findAllByText(/belongs to another browser tab/i)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Remediation Draft")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discard draft reference" }),
+    );
+    expect(window.location.search).toBe("");
   });
 
   it("previews unknown valid slash commands as opaque pass-through", async () => {

@@ -383,6 +383,38 @@ Branch behavior:
 - Allow manual branch entry as an advanced fallback.
 - Show generated publish branch names before submission when relevant.
 
+## Remediation Prefill
+
+When Workflow Detail opens `/workflows/new?intent=remediate&draftId=…`, the
+normal Create page imports a tab-scoped remediation draft. This remains ordinary,
+editable authoring: Create never submits a remediation implicitly.
+
+The visible **Remediation Draft** section separates:
+
+- **Pinned target identity (immutable):** target Workflow, exact run, original
+  outcome, and selected failed Step Execution/checkpoint evidence.
+- **Editable repair intent:** instructions, repository, starting and isolated
+  work branches, publish mode, Codex via Omnigent runtime, Agent Profile,
+  Provider Profile, execution target and launch policy, model, effort, retrieval
+  controls, remediation mode/authority, and the action, evidence, approval,
+  lock, verification, and Checkpoint Branch policies.
+
+The draft body stays in `sessionStorage`; a non-sensitive presence marker may be
+used only to explain that a copied URL belongs to another tab. Drafts carry
+schema version `1`, a `createdAt` timestamp, and a two-hour TTL. Import is
+single-use: storage is cleared after the complete draft has been validated and
+successfully copied into visible form state, or after explicit discard. Missing,
+malformed, expired, and cross-tab drafts produce distinct actionable errors and
+never partially prefill the form. Discard removes the storage marker and the
+`intent`/`draftId` query parameters.
+
+Submission uses ordinary `POST /api/executions` and persists canonical
+`task.remediation`. The server independently resolves target visibility and the
+exact current/pinned run, validates selected steps/checkpoints and Agent Runs,
+re-resolves profile and policy selections, validates branch/publish/authority
+values, and creates the durable bidirectional link. A target-run freshness
+warning directs the operator to open **Remediate** again when the pin changed.
+
 ## Jira Integration on Create
 
 Jira can appear in multiple places on the Create page:

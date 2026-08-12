@@ -1049,6 +1049,15 @@ class RemediationActionAuthorityService:
         parameter_digest = remediation_parameter_digest(
             safe_parameters if isinstance(safe_parameters, Mapping) else {}
         )
+        action_contract = _ACTION_CATALOG.get(result.action_kind, {})
+        action_preconditions = action_contract.get("preconditions")
+        preconditions = (
+            ", ".join(str(item) for item in action_preconditions)
+            if isinstance(action_preconditions, Sequence)
+            and not isinstance(action_preconditions, str | bytes)
+            else None
+        )
+        target_type = str(action_contract.get("target_type") or "resource")
         approval_state = (
             dict(existing)
             if existing is not None
@@ -1065,6 +1074,11 @@ class RemediationActionAuthorityService:
                 "riskTier": result.risk,
                 "redactedParameters": safe_parameters,
                 "expectedTargetState": target_state,
+                "preconditions": preconditions,
+                "blastRadius": (
+                    f"One {target_type} bound to pinned target run "
+                    f"{link.target_run_id}."
+                ),
                 "checkpointRef": _authority_parameter(parameters, "checkpointRef"),
                 "stepExecutionId": (
                     getattr(bridge, "step_execution_id", None)

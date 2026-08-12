@@ -371,17 +371,30 @@ The important rule is that **automatic remediation is policy-driven and bounded*
 
 ### 7.7 Create-page first remediation flow
 
-The dashboard `Remediate` action should open `/workflows/new` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page should prefill:
+The dashboard `Remediate` action opens `/workflows/new?intent=remediate&draftId=…` with an editable remediation draft instead of immediately submitting a hidden remediation run. The Create page prefills:
 
 - target `workflowId` and pinned `runId`;
 - selected step or checkpoint refs when available;
 - repository `MoonLadderStudios/MoonMind` for MoonMind platform or prevention work;
+- starting and isolated Checkpoint work branches;
+- Codex via Omnigent runtime, Provider Profile, Agent Profile, execution target,
+  launch policy, model, effort, and retrieval controls from the target run;
 - default mode `snapshot_then_follow`;
 - default authority `approval_gated`;
 - default action policy `admin_healer_default`;
+- evidence, approval, mutation-lock, verification, and Checkpoint Branch policy;
 - branch and publish controls through the normal Create page fields.
 
-The operator can then edit instructions, runtime, model, branch, and publish mode before submitting through the normal `POST /api/executions` path with `task.remediation`.
+The UI separates immutable pinned target/run/failed-evidence identity from the
+editable repair intent. The operator edits instructions, repository, runtime,
+profiles, policy, branches, retrieval, and publish choices before ordinary
+`POST /api/executions` submission with `task.remediation`.
+
+The tab-scoped draft is schema-versioned, timestamped, and expires after two
+hours. It is removed after a complete successful import into visible form state
+or explicit discard. Missing, malformed, expired, and cross-tab drafts surface
+distinct safe errors and never partially import. A local presence marker contains
+no target or repair content and exists only to explain cross-tab URLs.
 
 ---
 
@@ -451,6 +464,32 @@ GET /api/executions/{workflowId}/remediations?direction=outbound
 Where:
 - `inbound` means remediation Workflow Executions targeting this execution,
 - `outbound` means executions that this Workflow Execution is remediating.
+
+The link response also projects the immutable authored contract, detailed
+selected-step evidence, context generation/boundedness and per-class
+availability, diagnosis hints, lifecycle artifact index, latest bounded action
+request/result, final lifecycle summary, target-level verification outcome,
+Checkpoint Branch publication/promotion/archive state, and durable Workflow
+operator controls. These values come from canonical rows and artifacts, not
+rendered logs or chat.
+
+### 8.6 Approval and Workflow operator APIs
+
+Authorized approval decisions use:
+
+```http
+POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}
+```
+
+The body is `{ "decision": "approved" | "rejected", "comment"?: "…" }`.
+The optional comment is the bounded decision rationale persisted by the durable
+approval owner. Expired, stale, terminal, mismatched, or self-approved requests
+fail closed.
+
+Operator takeover never grants raw Omnigent/runtime authority. It pauses the
+remediation Workflow through `POST /api/executions/{workflowId}/signal` with
+`Pause`; resume uses `Resume`, and cancellation uses the ordinary durable
+`POST /api/executions/{workflowId}/cancel` endpoint.
 
 ---
 
@@ -1380,12 +1419,14 @@ The create UI should let the operator:
 ### 15.2 Target Workflow detail
 
 The target Workflow should show a **Remediation Workflows** panel with:
-- remediation Workflow links,
-- status,
-- authority mode,
-- last action,
-- resolution,
-- active lock badge.
+- remediation Workflow/run links and lifecycle phase/status,
+- pinned target run and selected Step Execution/checkpoint,
+- authority plus authored profile/policy identity,
+- active mutation lock and release state,
+- diagnosis, action delivery, approval, explicit repair verification,
+  resolution, prevention, resulting run/branch/PR, and cleanup evidence.
+
+This is an annotation region. It never overwrites the original target outcome.
 
 ### 15.3 Remediation Workflow detail
 
@@ -1395,7 +1436,16 @@ The remediation Workflow detail should show a **Remediation Target** panel with:
 - selected steps,
 - current target state,
 - evidence bundle link,
-- allowed actions,
+- immutable authored instructions/runtime/profile/policy/branch/retrieval/publish contract,
+- per-class evidence availability, freshness, boundedness, and degradation,
+- live-follow state and cursor,
+- action request/result authority chain, risk, expected state, policy decision,
+  idempotency, actor, approval, before/after refs, and delivery,
+- cumulative attempts and workspace head,
+- Checkpoint Branch source, isolated work branch, output, publication,
+  promotion, and archive state,
+- repair, prevention, cleanup, lease release, and unresolved operator work,
+- allowed actions with bounded disabled reasons,
 - approval state,
 - lock state.
 
@@ -1450,7 +1500,9 @@ request, and the `high_risk_reviewer` rule requires a privileged reviewer.
 - show the proposed action,
 - show preconditions,
 - show expected blast radius,
-- allow approve/reject,
+- allow authorized approve/deny with a recorded rationale,
+- show expired and stale decisions and why a new request is required,
+- expose durable Workflow cancellation/takeover without raw runtime authority,
 - keep the decision in the audit trail.
 
 ---

@@ -4323,6 +4323,21 @@ form {
   border: 0;
 }
 
+.queue-remediation-pinned-target,
+.queue-remediation-repair-intent {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.queue-remediation-pinned-target > legend,
+.queue-remediation-repair-intent > legend {
+  padding: 0;
+  font-weight: 700;
+  color: rgb(var(--mm-ink));
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -8816,6 +8831,32 @@ button.workflow-workspace-sidebar-row:active {
   display: grid;
   gap: 0.6rem;
   margin-top: 0.65rem;
+}
+
+.td-remediation-approval-controls,
+.td-remediation-operator-controls,
+.td-remediation-lifecycle {
+  margin-top: 0.65rem;
+  padding: 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.68);
+  border-radius: 0.7rem;
+  background: rgb(var(--mm-panel) / 0.38);
+}
+
+.td-remediation-approval-controls textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.td-remediation-canonical pre {
+  max-height: 24rem;
+  margin: 0.55rem 0 0;
+  padding: 0.65rem;
+  overflow: auto;
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.86);
+  color: rgb(var(--mm-ink));
+  white-space: pre-wrap;
 }
 
 .td-remediation-create-preview {
