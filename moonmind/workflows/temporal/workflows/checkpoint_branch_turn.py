@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
@@ -773,7 +773,6 @@ async def persist_checkpoint_branch_turn_terminal(
 
         capture = _mapping(result.metadata.get("omnigentCheckpointCapture"))
         safe_capture = _safe_capture_evidence(capture)
-        terminal_ref = safe_capture.get("terminalRef")
         provider_session_id = (
             str(capture.get("omnigentSessionId") or "").strip() or None
         )
@@ -1348,10 +1347,8 @@ class MoonMindCheckpointBranchTurnWorkflow:
                         "workspace": capture["workspace"],
                         "omnigentCheckpointCapture": omnigent_capture,
                         "createdAt": workflow.now().astimezone(UTC).isoformat(),
-                        "planDigest": _sha256(
-                            str(
-                                agent_request.step_execution.context_bundle_digest
-                            ).encode()
+                        "planDigest": (
+                            agent_request.step_execution.context_bundle_digest
                         ),
                         "preparedInputRefs": agent_request.input_refs,
                         "stepOutputs": {

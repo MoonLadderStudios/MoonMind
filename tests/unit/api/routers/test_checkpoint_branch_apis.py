@@ -729,6 +729,7 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
         "checkpointRef": "artifact://checkpoints/after-implement",
         "instructions": {"text": "Repair with corrected instructions."},
         "idempotencyKey": "MM-1119:remediation-branch",
+        "maxBudgetUsd": 2.0,
         "providerProfileRef": "provider-profile-remediation",
         "agentProfile": {"profileId": "agent-profile-remediation", "version": 2},
     }
@@ -783,13 +784,33 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
             )
         ).scalar_one()
         branch = await session.get(WorkflowCheckpointBranch, first.json()["branchId"])
+        turn = await session.get(
+            WorkflowCheckpointBranchTurn,
+            operation.branch_turn_id,
+        )
+        remediation_input = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch.branch_id,
+                    WorkflowCheckpointBranchArtifact.branch_turn_id
+                    == operation.branch_turn_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "input.branch_turn.remediation_context.json",
+                )
+            )
+        ).scalar_one()
 
     assert branch is not None
+    assert turn is not None
     assert branch.workflow_id == "mm:wf-branch"
     assert branch.diagnostics["repairActionKind"] == (
         "checkpoint_branch.create_from_remediation_context"
     )
     assert branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] == snapshot
+    assert branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 2.0
+    assert turn.diagnostics["remediationContextRef"] == "ctx-remediation-1"
+    assert turn.diagnostics["maxBudgetUsd"] == 2.0
+    assert remediation_input.artifact_ref == "ctx-remediation-1"
     assert operation.response_payload["runtimeSelection"]["agentProfileSnapshot"] == snapshot
     resolver.assert_awaited_once()
     assert operation.response_payload["remediation"] == {
@@ -1210,9 +1231,11 @@ async def test_checkpoint_branch_publish_does_not_promote_and_archive_hides_acti
 async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempotent(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
+    create_payload = _create_payload("mm-1091:create-branching")
+    create_payload["maxBudgetUsd"] = 5.0
     created = await checkpoint_branch_client.post(
         "/api/executions/mm:wf-branch/checkpoint-branches",
-        json=_create_payload("mm-1091:create-branching"),
+        json=create_payload,
     )
     branch_id = created.json()["branchId"]
     root_turns = await checkpoint_branch_client.get(
@@ -1226,6 +1249,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         "instructions": {"text": "Continue this branch."},
         "workspacePolicy": "continue_from_previous_execution",
         "runtimeContextPolicy": "fresh_agent_run",
+        "maxBudgetUsd": 4.0,
         "idempotencyKey": "mm-1091:continue",
     }
     first_continue = await checkpoint_branch_client.post(
@@ -1252,6 +1276,8 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert branch is not None
     assert continued_turn is not None
     assert continued_turn.parent_turn_id == root_turn_id
+    assert continued_turn.diagnostics["maxBudgetUsd"] == 4.0
+    assert branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 5.0
     assert branch.git_work_branch == created.json()["gitWorkBranch"]
     assert continued_turn.git_work_branch == created.json()["gitWorkBranch"]
     unsupported_continue = await checkpoint_branch_client.post(
@@ -1270,6 +1296,7 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
         "instructions": {"text": "Fork this branch."},
         "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
         "runtimeContextPolicy": "fresh_agent_run",
+        "maxBudgetUsd": 3.0,
         "idempotencyKey": "mm-1091:fork",
     }
     first_fork = await checkpoint_branch_client.post(
@@ -1283,6 +1310,12 @@ async def test_checkpoint_branch_continue_fork_and_compare_are_typed_and_idempot
     assert first_fork.status_code == 201
     assert second_fork.status_code == 201
     fork_id = first_fork.json()["branchId"]
+    async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
+        get_async_session
+    ]():
+        forked_branch = await session.get(WorkflowCheckpointBranch, fork_id)
+    assert forked_branch is not None
+    assert forked_branch.diagnostics["runtimeSelection"]["maxBudgetUsd"] == 3.0
     assert fork_id == second_fork.json()["branchId"]
     assert first_fork.json()["parentBranchId"] == branch_id
     assert first_fork.json()["parentTurnId"] == first_continue.json()["branchTurnId"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -36,6 +37,9 @@ from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
 )
+from api_service.services.omnigent_agent_profile_selection import (
+    compile_agent_profile_snapshot_parameters,
+)
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import validate_restore_material
@@ -57,6 +61,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 WORKFLOW_TYPE = "MoonMind.CheckpointBranchTurn"
+_STEP_EXECUTION_ID_MAX_LENGTH = 255
 
 
 def get_checkpoint_branch_artifact_service(
@@ -104,6 +109,28 @@ def build_branch_turn_execution_identity(
         f"{owner_workflow_id}:{semantic_run_id}:{logical_step_id}:"
         f"execution:{ordinal}"
     )
+    if len(step_execution_id) > _STEP_EXECUTION_ID_MAX_LENGTH:
+        # Preserve the readable identity while it fits. Oversized public
+        # logical-step values use stable digest tokens so the composed identity
+        # remains valid for the durable 255-character column.
+        turn_token = hashlib.sha256(branch_turn_id.encode()).hexdigest()[:16]
+        owner_workflow_id = f"checkpoint-branch-turn:{turn_token}"
+        semantic_run_id = f"branch-turn-{turn_token}"
+        fixed_length = len(
+            f"{owner_workflow_id}:{semantic_run_id}::execution:{ordinal}"
+        )
+        logical_limit = _STEP_EXECUTION_ID_MAX_LENGTH - fixed_length
+        if logical_limit < 18:
+            raise ValueError("branch turn identity cannot fit durable storage")
+        if len(logical_step_id) > logical_limit:
+            logical_digest = hashlib.sha256(logical_step_id.encode()).hexdigest()[:16]
+            logical_step_id = (
+                f"{logical_step_id[: logical_limit - 17]}-{logical_digest}"
+            )
+        step_execution_id = (
+            f"{owner_workflow_id}:{semantic_run_id}:{logical_step_id}:"
+            f"execution:{ordinal}"
+        )
     return BranchTurnExecutionIdentity(
         workflow_id=owner_workflow_id,
         semantic_run_id=semantic_run_id,
@@ -258,6 +285,33 @@ class CheckpointBranchTurnExecutionOwner:
             ) from exc
         return payload
 
+    async def _validated_remediation_context_ref(
+        self, turn: WorkflowCheckpointBranchTurn
+    ) -> str | None:
+        """Resolve the turn-owned remediation input before launch artifacts exist."""
+
+        ref = str((turn.diagnostics or {}).get("remediationContextRef") or "").strip()
+        if not ref:
+            return None
+        record = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == turn.branch_id,
+                    WorkflowCheckpointBranchArtifact.branch_turn_id
+                    == turn.branch_turn_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "input.branch_turn.remediation_context.json",
+                )
+            )
+        ).scalar_one_or_none()
+        if record is None or record.artifact_ref != ref:
+            raise CheckpointBranchTurnLaunchError(
+                "remediation_context_authority_changed",
+                "stored remediation context authority changed",
+            )
+        await self._read_ref(ref, field_name="remediationContextRef")
+        return ref
+
     async def _write_artifact(
         self, *, content_type: str, payload: bytes, kind: str, branch_turn_id: str
     ) -> str:
@@ -408,7 +462,8 @@ class CheckpointBranchTurnExecutionOwner:
     ]:
         """Reject changed authority before a lease, host, session, or message."""
 
-        if source.run_id != branch.source_run_id:
+        parent_turn_id = turn.parent_turn_id or branch.parent_turn_id
+        if parent_turn_id is None and source.run_id != branch.source_run_id:
             raise CheckpointBranchTurnLaunchError(
                 "source_run_stale", "pinned source run no longer matches"
             )
@@ -540,7 +595,6 @@ class CheckpointBranchTurnExecutionOwner:
                 "checkpoint_boundary_mismatch",
                 "source checkpoint boundary changed",
             )
-        parent_turn_id = turn.parent_turn_id or branch.parent_turn_id
         if parent_turn_id:
             parent_turn = await self._session.get(
                 WorkflowCheckpointBranchTurn, parent_turn_id
@@ -550,7 +604,13 @@ class CheckpointBranchTurnExecutionOwner:
                     "parent_turn_authority_missing",
                     "parent turn has no server-owned Step Execution authority",
                 )
-            expected_parent_branch_id = branch.parent_branch_id or branch.branch_id
+            expected_parent_branch_id = (
+                branch.parent_branch_id
+                if branch.parent_branch_id
+                and branch.parent_turn_id
+                and parent_turn_id == branch.parent_turn_id
+                else branch.branch_id
+            )
             if parent_turn.branch_id != expected_parent_branch_id:
                 raise CheckpointBranchTurnLaunchError(
                     "parent_turn_branch_mismatch",
@@ -918,6 +978,34 @@ class CheckpointBranchTurnExecutionOwner:
         runtime_selection = dict(
             (branch.diagnostics or {}).get("runtimeSelection") or {}
         )
+        agent_snapshot = runtime_selection.get("agentProfileSnapshot")
+        if agent_snapshot is not None:
+            try:
+                runtime_selection = compile_agent_profile_snapshot_parameters(
+                    runtime_selection,
+                    snapshot=agent_snapshot,
+                )
+            except (TypeError, ValueError) as exc:
+                raise CheckpointBranchTurnLaunchError(
+                    "agent_profile_snapshot_invalid",
+                    "stored Agent Profile snapshot cannot be compiled",
+                ) from exc
+        budget_value = (turn.diagnostics or {}).get(
+            "maxBudgetUsd",
+            runtime_selection.get("maxBudgetUsd"),
+        )
+        if budget_value is not None:
+            if (
+                isinstance(budget_value, bool)
+                or not isinstance(budget_value, (int, float))
+                or not math.isfinite(float(budget_value))
+                or float(budget_value) <= 0
+            ):
+                raise CheckpointBranchTurnLaunchError(
+                    "max_budget_invalid",
+                    "stored maximum budget must be a finite positive number",
+                )
+            runtime_selection["maxBudgetUsd"] = float(budget_value)
         follow_up_retrieval = _canonical_follow_up_retrieval(
             (turn.diagnostics or {}).get("followUpRetrieval")
         )
@@ -939,6 +1027,7 @@ class CheckpointBranchTurnExecutionOwner:
             "publishMode": publish_mode,
             "gitWorkBranch": binding.work_branch,
         }
+        remediation_context_ref = await self._validated_remediation_context_ref(turn)
         branch.diagnostics = {
             **(branch.diagnostics or {}),
             "runtimeSelection": runtime_selection,
@@ -958,6 +1047,11 @@ class CheckpointBranchTurnExecutionOwner:
             "instructionDigest": turn.instruction_digest,
             "repositoryBranch": repository_branch,
             "publishMode": publish_mode,
+            **(
+                {"maxBudgetUsd": runtime_selection["maxBudgetUsd"]}
+                if "maxBudgetUsd" in runtime_selection
+                else {}
+            ),
         }
         context = {
             "schemaVersion": "checkpoint-branch-context/v1",
@@ -969,6 +1063,11 @@ class CheckpointBranchTurnExecutionOwner:
             "instructionDigest": turn.instruction_digest,
             "runtimeSelection": runtime_selection,
             "followUpRetrieval": follow_up_retrieval,
+            **(
+                {"remediationContextRef": remediation_context_ref}
+                if remediation_context_ref is not None
+                else {}
+            ),
             "gitBinding": {
                 "repository": binding.repository,
                 "baseBranch": binding.base_branch,
@@ -996,7 +1095,19 @@ class CheckpointBranchTurnExecutionOwner:
             "runtimeContextPolicy": "fresh_agent_run",
             "contextBundleRef": context_ref,
             "contextBundleDigest": _sha256(context_bytes),
-            "preparedInputRefs": [turn.instruction_ref, turn.source_checkpoint_ref],
+            "preparedInputRefs": list(
+                dict.fromkeys(
+                    [
+                        turn.instruction_ref,
+                        turn.source_checkpoint_ref,
+                        *(
+                            [remediation_context_ref]
+                            if remediation_context_ref is not None
+                            else []
+                        ),
+                    ]
+                )
+            ),
             "runtimeSelection": runtime_selection,
             "runtimeSessionReset": {
                 "mode": "new_agent_run",
@@ -1030,7 +1141,16 @@ class CheckpointBranchTurnExecutionOwner:
             },
             inputRefs=list(
                 dict.fromkeys(
-                    [turn.instruction_ref, context_ref, turn.source_checkpoint_ref]
+                    [
+                        turn.instruction_ref,
+                        context_ref,
+                        turn.source_checkpoint_ref,
+                        *(
+                            [remediation_context_ref]
+                            if remediation_context_ref is not None
+                            else []
+                        ),
+                    ]
                 )
             ),
             workspaceSpec={
@@ -1045,6 +1165,7 @@ class CheckpointBranchTurnExecutionOwner:
                 "checkoutCommit": binding.base_commit,
             },
             parameters={
+                **runtime_selection,
                 "repository": binding.repository,
                 "startingBranch": binding.base_branch,
                 "targetBranch": binding.work_branch,
@@ -1052,6 +1173,11 @@ class CheckpointBranchTurnExecutionOwner:
                 "model": model,
                 "effort": effort,
                 "omnigent": {
+                    **(
+                        dict(runtime_selection.get("omnigent") or {})
+                        if isinstance(runtime_selection.get("omnigent"), Mapping)
+                        else {}
+                    ),
                     "target": {
                         "profileRef": policy_snapshot["boundaries"]["execution"][
                             "profileRef"

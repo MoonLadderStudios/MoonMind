@@ -286,6 +286,35 @@ async def test_canonical_coordinator_compiles_fresh_branch_restore_authority() -
 
 
 @pytest.mark.asyncio
+async def test_profile_bound_coordinator_rejects_unenforceable_usd_budget_before_mutation(
+) -> None:
+    run_store = SimpleNamespace(get_or_create=AsyncMock())
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=SimpleNamespace(),
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=run_store,
+        execution_runner=AsyncMock(),
+        artifact_gateway=SimpleNamespace(),
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="budgeted-turn",
+        idempotencyKey="budgeted-turn-1",
+        parameters={"maxBudgetUsd": 2.5},
+    )
+
+    result = await coordinator.execute(request)
+
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "OMNIGENT_MAX_BUDGET_ENFORCEMENT_UNAVAILABLE"
+    run_store.get_or_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_owner_allocates_and_claims_canonical_omnigent_request_before_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -298,11 +327,29 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
+    branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] = {
+        "profileId": "agent-profile-1",
+        "version": 3,
+        "digest": "sha256:agent-profile-v3",
+        "providerProfileRef": "profile-1",
+        "executionProfileRef": "profile-1",
+        "launchPolicyRef": "policy-1@1",
+        "agentId": "stock-codex",
+        "document": {
+            "model": {"model": "profile-model", "effort": "medium"},
+            "rag": {"collections": ["repo"]},
+        },
+    }
+    turn.diagnostics["remediationContextRef"] = "artifact://remediation/context"
+    turn.diagnostics["maxBudgetUsd"] = 2.5
     owner._load_graph_authority = AsyncMock(  # type: ignore[method-assign]
         return_value=(branch, turn, binding, source)
     )
     owner._validate_source_authority = AsyncMock(  # type: ignore[method-assign]
         return_value=(checkpoint, profile, policy)
+    )
+    owner._validated_remediation_context_ref = AsyncMock(  # type: ignore[method-assign]
+        return_value="artifact://remediation/context"
     )
     written: dict[str, bytes] = {}
 
@@ -361,6 +408,17 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
     }
     assert request["parameters"]["followUpRetrieval"]["collections"] == ["repo"]
     assert request["parameters"]["followUpRetrieval"]["maxContextTokens"] == 500
+    assert request["parameters"]["model"] == "profile-model"
+    assert request["parameters"]["effort"] == "medium"
+    assert request["parameters"]["maxBudgetUsd"] == 2.5
+    assert request["parameters"]["agentProfile"]["profileId"] == "agent-profile-1"
+    assert request["parameters"]["omnigent"]["executionTargetRef"] == "profile-1"
+    assert "artifact://remediation/context" in request["inputRefs"]
+    assert "artifact://remediation/context" in request["stepExecution"][
+        "preparedInputRefs"
+    ]
+    context = json.loads(written["runtime.branch_turn.context_bundle.json"])
+    assert context["remediationContextRef"] == "artifact://remediation/context"
     assert request["workspaceSpec"]["targetBranch"] == "mm/source/branch-1"
 
     await owner.launch(
@@ -371,6 +429,33 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
     )
     assert events == ["claim", "start", "start"]
     assert owner._validate_source_authority.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_validates_turn_owned_remediation_context_binding() -> None:
+    record = SimpleNamespace(artifact_ref="artifact://remediation/context")
+    result = SimpleNamespace(scalar_one_or_none=lambda: record)
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    owner = CheckpointBranchTurnExecutionOwner(
+        session,  # type: ignore[arg-type]
+        principal="service:test",
+        client=SimpleNamespace(),  # type: ignore[arg-type]
+        artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    owner._read_ref = AsyncMock(return_value=b"{}")  # type: ignore[method-assign]
+    turn = SimpleNamespace(
+        branch_id="branch-1",
+        branch_turn_id="turn-1",
+        diagnostics={"remediationContextRef": "artifact://remediation/context"},
+    )
+
+    ref = await owner._validated_remediation_context_ref(turn)
+
+    assert ref == "artifact://remediation/context"
+    owner._read_ref.assert_awaited_once_with(
+        "artifact://remediation/context",
+        field_name="remediationContextRef",
+    )
 
 
 @pytest.mark.asyncio
@@ -472,6 +557,27 @@ def test_branch_turn_execution_identity_is_replay_stable_and_turn_scoped() -> No
     assert replay == first
     assert next_turn.step_execution_id != first.step_execution_id
     assert next_turn.agent_run_workflow_id != first.agent_run_workflow_id
+
+
+def test_branch_turn_execution_identity_is_bounded_for_maximum_logical_step() -> None:
+    logical_step_id = "logical-step-" + "x" * 242
+
+    identity = build_branch_turn_execution_identity(
+        branch_id="branch-1",
+        branch_turn_id="cbt-01k2yxt6xrxe5e0mkmx1zwcm6n",
+        logical_step_id=logical_step_id,
+        ordinal=123,
+    )
+    replay = build_branch_turn_execution_identity(
+        branch_id="branch-1",
+        branch_turn_id="cbt-01k2yxt6xrxe5e0mkmx1zwcm6n",
+        logical_step_id=logical_step_id,
+        ordinal=123,
+    )
+
+    assert identity == replay
+    assert len(identity.step_execution_id) <= 255
+    assert identity.step_execution_id.endswith(":execution:123")
 
 
 @pytest.mark.asyncio

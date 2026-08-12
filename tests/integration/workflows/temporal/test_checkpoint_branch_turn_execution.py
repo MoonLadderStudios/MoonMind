@@ -96,6 +96,7 @@ WORKFLOW_BOUNDARY_REACHED: asyncio.Event | None = None
 WORKFLOW_BOUNDARY_RELEASE: asyncio.Event | None = None
 WORKFLOW_FAILURE_BOUNDARY: tuple[str, str] | None = None
 DURABLE_CHECKPOINT_REF: str | None = None
+CHECKPOINT_PAYLOADS: list[dict] = []
 
 
 async def _pause_workflow_boundary(stage: str, position: str) -> None:
@@ -224,6 +225,7 @@ async def _durable_capture_workspace(payload: dict) -> dict:
 
 @activity.defn(name="step_checkpoint.create_v2")
 async def _create_checkpoint(payload: dict) -> dict:
+    CHECKPOINT_PAYLOADS.append(copy.deepcopy(payload))
     CALLS.append(("checkpoint", payload["idempotencyKey"]))
     _record_effect_and_inject("checkpoint", payload["idempotencyKey"])
     return {
@@ -449,6 +451,7 @@ async def _run(
     TRANSIENT_FAILURES.clear()
     TRANSIENT_FAILURES.update(transient_failures or {})
     EFFECT_IDENTITIES.clear()
+    CHECKPOINT_PAYLOADS.clear()
     queue = f"checkpoint-branch-turn-{uuid4()}"
     try:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -1333,6 +1336,36 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                 assert replayed_fork.status_code == 201
                 assert replayed_fork.json()["branchId"] == fork_branch_id
 
+                # Once the fork has its own accepted checkpoint, that parent
+                # authority remains valid even if the canonical source workflow
+                # advances to a new run.
+                async with sessions() as rerun_session:
+                    source_row = await rerun_session.get(
+                        TemporalExecutionCanonicalRecord,
+                        "mm:wf-public-owner",
+                    )
+                    assert source_row is not None
+                    source_row.run_id = "run-public-owner-rerun"
+                    await rerun_session.commit()
+                fork_continue_payload = {
+                    "label": "Continue the independent fork",
+                    "instructions": {"text": "Continue from the fork head."},
+                    "workspacePolicy": "continue_from_previous_execution",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                    "idempotencyKey": "public-owner-fork-continue",
+                }
+                fork_continued = await client.post(
+                    f"/api/executions/mm:wf-public-owner/checkpoint-branches/"
+                    f"{fork_branch_id}/continue",
+                    json=fork_continue_payload,
+                )
+                assert fork_continued.status_code == 201, fork_continued.text
+                fork_continue_turn_id = fork_continued.json()["branchTurnId"]
+                fork_continue_result = await env.client.get_workflow_handle(
+                    f"checkpoint-branch-turn:{fork_continue_turn_id}"
+                ).result()
+                assert fork_continue_result["status"] == "checking"
+
     async with sessions() as session:
         source_after = await session.get(
             TemporalExecutionCanonicalRecord, "mm:wf-public-owner"
@@ -1365,14 +1398,15 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     assert source_after.parameters == source_parameters
     assert source_after.memo == source_memo
     assert str(getattr(source_after.state, "value", source_after.state)) == "executing"
-    assert len(turns) == 3
-    assert len({turn.created_step_execution_id for turn in turns}) == 3
-    assert len({turn.runtime_agent_run_id for turn in turns}) == 3
+    assert len(turns) == 4
+    assert len({turn.created_step_execution_id for turn in turns}) == 4
+    assert len({turn.runtime_agent_run_id for turn in turns}) == 4
     assert all(turn.status == "checking" for turn in turns)
     turns_by_id = {turn.branch_turn_id: turn for turn in turns}
     root_turn = turns_by_id[root_turn_id]
     continue_turn = turns_by_id[continue_turn_id]
     fork_turn = turns_by_id[fork_turn_id]
+    fork_continue_turn = turns_by_id[fork_continue_turn_id]
     assert root_turn.source_checkpoint_ref == source_checkpoint_ref
     assert continue_turn.source_checkpoint_ref == created_checkpoint_refs[
         root_turn.created_step_execution_id
@@ -1380,11 +1414,15 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     assert fork_turn.source_checkpoint_ref == created_checkpoint_refs[
         continue_turn.created_step_execution_id
     ]
+    assert fork_continue_turn.source_checkpoint_ref == created_checkpoint_refs[
+        fork_turn.created_step_execution_id
+    ]
     assert continue_turn.parent_turn_id == root_turn_id
     assert fork_turn.parent_turn_id == continue_turn_id
-    assert len(checkpoint_rows) == 3
-    assert len({row.artifact_ref for row in checkpoint_rows}) == 3
-    assert len(created_checkpoint_ids) == 3
+    assert fork_continue_turn.parent_turn_id == fork_turn_id
+    assert len(checkpoint_rows) == 4
+    assert len({row.artifact_ref for row in checkpoint_rows}) == 4
+    assert len(created_checkpoint_ids) == 4
     for identity_kind in (
         "provider_lease",
         "host_lease",
@@ -1399,8 +1437,8 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         "cleanup",
         "capacity_release",
     ):
-        assert len(ledger.identities[identity_kind]) == 3, identity_kind
-        assert ledger.effect_counts[identity_kind] == 3, identity_kind
+        assert len(ledger.identities[identity_kind]) == 4, identity_kind
+        assert ledger.effect_counts[identity_kind] == 4, identity_kind
     assert ledger.identities["pull_request"] == set()
     assert ledger.effect_counts["pull_request"] == 0
     assert "source-provider-lease" not in ledger.identities["provider_lease"]
@@ -1412,7 +1450,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     workspace_ids = {
         locator["workspaceId"] for locator in ledger.workspace_locators
     }
-    assert len(workspace_ids) == 3
+    assert len(workspace_ids) == 4
     assert "source-workspace" not in workspace_ids
     requests_by_turn = {
         request.correlation_id: request for request in ledger.requests
@@ -1421,6 +1459,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         root_turn_id,
         continue_turn_id,
         fork_turn_id,
+        fork_continue_turn_id,
     }
     assert requests_by_turn[root_turn_id].checkpoint_recovery[
         "omnigentCheckpoint"
@@ -1431,6 +1470,9 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     assert requests_by_turn[fork_turn_id].checkpoint_recovery[
         "omnigentCheckpoint"
     ]["stepExecutionId"] == continue_turn.created_step_execution_id
+    assert requests_by_turn[fork_continue_turn_id].checkpoint_recovery[
+        "omnigentCheckpoint"
+    ]["stepExecutionId"] == fork_turn.created_step_execution_id
     assert len(
         {request.workspace_spec["targetBranch"] for request in ledger.requests}
     ) == 2
@@ -1454,6 +1496,7 @@ async def test_checkpoint_branch_turn_runs_agent_captures_checkpoint_and_hands_o
         "terminal",
     ]
     assert CALLS[0][1] == "checkpoint-branch-agent:success"
+    assert CHECKPOINT_PAYLOADS[0]["planDigest"] == "sha256:" + "a" * 64
     await Replayer(
         workflows=[MoonMindCheckpointBranchTurnWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -1558,7 +1601,7 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             )
         )
         await session.commit()
-        graph = await CheckpointBranchService(session).create_branch_graph(
+        await CheckpointBranchService(session).create_branch_graph(
             {
                 "branchId": "branch-1",
                 "label": "Retry-safe terminal activity",

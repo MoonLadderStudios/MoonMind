@@ -258,11 +258,12 @@ terminal checkpoint publication = preserve authoritative work after controlled f
 14. **No silent fallback.** If checkpoint validation, workspace restoration, or provider continuation fails, MoonMind must fail closed or request a safer branch mode.
 15. **Controlled failures preserve work before disposal.** When eligible, terminal checkpoint publication is awaited before the authoritative workspace is cleaned up.
 16. **Saved work does not change the outcome.** A failed workflow remains failed even when its recovery branch is pushed successfully.
-17. **Primary failure wins.** Publication failure, scan rejection, or remote verification failure is secondary evidence and must not replace the original workflow failure.
-18. **Remote verification is required.** MoonMind may expose a Saved Work Branch only after independently verifying the remote ref and expected head SHA, or after adopting equivalent provider-native evidence.
-19. **No false claims after infrastructure loss.** A sudden infrastructure failure must not be reported as saved unless a remote branch or PR head was already verified.
-20. **Retries are idempotent.** Retrying terminal publication must not create duplicate commits, branches, or publication records.
-21. **Requested and produced branches are distinct.** `startingBranch` and `targetBranch` describe workflow input; `outputBranch` describes verified output.
+17. **Branch budgets are launch authority.** An authored `maxBudgetUsd` is carried with the immutable branch-turn request and the selected profile-bound runtime must enforce it prospectively. A runtime without a provider-native USD hard stop rejects the launch before capacity, host, session, or billing authority is acquired; terminal cost observation is not budget enforcement.
+18. **Primary failure wins.** Publication failure, scan rejection, or remote verification failure is secondary evidence and must not replace the original workflow failure.
+19. **Remote verification is required.** MoonMind may expose a Saved Work Branch only after independently verifying the remote ref and expected head SHA, or after adopting equivalent provider-native evidence.
+20. **No false claims after infrastructure loss.** A sudden infrastructure failure must not be reported as saved unless a remote branch or PR head was already verified.
+21. **Retries are idempotent.** Retrying terminal publication must not create duplicate commits, branches, or publication records.
+22. **Requested and produced branches are distinct.** `startingBranch` and `targetBranch` describe workflow input; `outputBranch` describes verified output.
 
 ---
 

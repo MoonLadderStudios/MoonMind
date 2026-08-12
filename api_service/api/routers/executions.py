@@ -104,7 +104,6 @@ from moonmind.workflows.temporal.remediation_actions import (
 )
 from moonmind.workflows.temporal.remediation_verification import (
     verification_backend_operational,
-    verification_contract_for,
 )
 from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.runtime_intent import (
@@ -13027,6 +13026,7 @@ async def create_remediation_checkpoint_branch(
         "repairActionKind": "checkpoint_branch.create_from_remediation_context",
         "runtimeSelection": {
             "providerProfileRef": payload.provider_profile_ref,
+            "maxBudgetUsd": payload.maxBudgetUsd,
             "runtimeContextPolicy": runtime_context_policy,
             "publishMode": "none",
             "gitWorkBranch": payload.gitWorkBranch,
@@ -13042,6 +13042,28 @@ async def create_remediation_checkpoint_branch(
             "agentProfileSnapshot": agent_profile_snapshot,
         },
     }
+    turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_turn_missing"},
+        )
+    turn.diagnostics = {
+        **(turn.diagnostics or {}),
+        "remediationContextRef": link.context_artifact_ref,
+        **(
+            {"maxBudgetUsd": payload.maxBudgetUsd}
+            if payload.maxBudgetUsd is not None
+            else {}
+        ),
+    }
+    await _record_checkpoint_branch_artifact_ref(
+        session=session,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        artifact_kind="input.branch_turn.remediation_context.json",
+        artifact_ref=link.context_artifact_ref,
+    )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=link.target_workflow_id,
@@ -14555,6 +14577,7 @@ async def create_checkpoint_branch(
             "executionProfileRef": payload.execution_profile_ref,
             "model": payload.model,
             "effort": payload.effort,
+            "maxBudgetUsd": payload.max_budget_usd,
             "runtimeContextPolicy": payload.runtime_context_policy,
             "publishMode": payload.publish_mode,
             "gitWorkBranch": payload.git_work_branch,
@@ -14907,6 +14930,11 @@ async def _record_branch_turn_operation(
     branch.label = payload.label or branch.label
     branch.workspace_policy = payload.workspace_policy
     branch.runtime_context_policy = payload.runtime_context_policy
+    if payload.max_budget_usd is not None:
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "maxBudgetUsd": payload.max_budget_usd,
+        }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -15192,6 +15220,8 @@ async def fork_checkpoint_branch(
     )
     inherited_selection["runtimeContextPolicy"] = payload.runtime_context_policy
     inherited_selection["gitWorkBranch"] = forked.git_work_branch
+    if payload.max_budget_usd is not None:
+        inherited_selection["maxBudgetUsd"] = payload.max_budget_usd
     forked.diagnostics = {
         **(forked.diagnostics or {}),
         "runtimeSelection": inherited_selection,
