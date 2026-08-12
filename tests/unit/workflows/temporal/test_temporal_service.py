@@ -1814,7 +1814,10 @@ async def test_create_execution_rejects_remediation_same_session_branch_policy(
                         "remediation": {
                             "target": {"workflowId": target.workflow_id},
                             "checkpointBranchPolicy": {
-                                "actionKind": "checkpoint_branch.create_from_remediation_context",
+                                "actionKind": (
+                                    "checkpoint_branch."
+                                    "create_from_remediation_context"
+                                ),
                                 "runtimeContextPolicy": "external_provider_continuation",
                             },
                         },
@@ -2314,6 +2317,239 @@ async def test_create_execution_accepts_owned_remediation_agent_run_ids(
         )
         assert link is not None
         assert link.target_workflow_id == target.workflow_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_accepts_target_owned_remediation_step_selector(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail at the test step."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "stepExecutionId": "run-tests:execution:2",
+                            "attempt": 2,
+                            "checkpointRef": "artifact://checkpoint/run-tests",
+                            "checkpointDigest": "sha256:target-checkpoint",
+                            "agentRunId": "target-agent-run",
+                        }
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Repair the selected failed step.",
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "runId": target.run_id,
+                            "stepSelectors": [
+                                {
+                                    "logicalStepId": "run-tests",
+                                    "stepExecutionId": "run-tests:execution:2",
+                                    "attempt": 2,
+                                    "checkpointRef": "artifact://checkpoint/run-tests",
+                                    "checkpointDigest": "sha256:target-checkpoint",
+                                    "agentRunId": "target-agent-run",
+                                }
+                            ],
+                        }
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_run_id == target.run_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selector", "error"),
+    [
+        (
+            {"logicalStepId": "tampered-step"},
+            "logicalStepId must belong to the target execution",
+        ),
+        (
+            {"checkpointRef": "artifact://checkpoint/tampered"},
+            "checkpointRef must belong to the target execution",
+        ),
+        (
+            {
+                "checkpointRef": "artifact://checkpoint/run-tests",
+                "checkpointDigest": "sha256:tampered",
+            },
+            "checkpointDigest must match the target checkpoint",
+        ),
+        (
+            {"logicalStepId": "run-tests", "attempt": 0},
+            "attempt must be a positive integer",
+        ),
+        (
+            {"logicalStepId": "run-tests", "attempt": 999},
+            "attempt must match the target Step Execution",
+        ),
+        (
+            {
+                "logicalStepId": "run-tests",
+                "stepExecutionId": "tampered-step-execution",
+            },
+            "stepExecutionId must belong to the target execution",
+        ),
+    ],
+)
+async def test_create_execution_rejects_tampered_remediation_step_selector(
+    tmp_path, mock_client_adapter, selector, error
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail at the test step."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "stepExecutionId": "run-tests:execution:2",
+                            "attempt": 2,
+                            "checkpointRef": "artifact://checkpoint/run-tests",
+                            "checkpointDigest": "sha256:target-checkpoint",
+                        }
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError, match=error):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "runId": target.run_id,
+                                "stepSelectors": [selector],
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_tampered_remediation_mode_and_work_branch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported workflow.remediation.mode",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation mode",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "mode": "unbounded_follow",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="gitWorkBranch is not an allowed git branch",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Tampered remediation branch",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "checkpointBranchPolicy": {
+                                "actionKind": "checkpoint_branch.create_from_remediation_context",
+                                "runtimeContextPolicy": "fresh_agent_run",
+                                "gitWorkBranch": "main",
+                            },
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
 
 @pytest.mark.asyncio
 async def test_create_execution_normalizes_depends_on_before_limit_and_persistence(

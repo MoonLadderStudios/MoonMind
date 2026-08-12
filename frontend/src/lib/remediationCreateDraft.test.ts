@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildRemediationCreateDraft,
   clearRemediationCreateDraft,
+  inspectRemediationCreateDraft,
+  REMEDIATION_CREATE_DRAFT_TTL_MS,
   remediationCreateDraftHref,
   readRemediationCreateDraft,
   storeRemediationCreateDraft,
@@ -11,6 +13,7 @@ import {
 describe('remediationCreateDraft', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.localStorage.clear();
     window.history.pushState({}, '', '/workflows');
   });
 
@@ -30,6 +33,7 @@ describe('remediationCreateDraft', () => {
 
     expect(draft).toMatchObject({
       source: 'remediation',
+      schemaVersion: 1,
       repository: 'MoonLadderStudios/MoonMind',
       target: {
         workflowId: 'mm:target',
@@ -70,6 +74,7 @@ describe('remediationCreateDraft', () => {
     expect(draft.target.stepSelectors?.[0]).toMatchObject({
       checkpointRef: 'artifact://checkpoint/failed-step',
     });
+    expect(Date.parse(draft.createdAt)).not.toBeNaN();
   });
 
   it('stores, reads, builds a href, and clears a short-lived draft', () => {
@@ -102,6 +107,100 @@ describe('remediationCreateDraft', () => {
       version: 2,
       providerProfileRef: 'oauth-team',
     });
+  });
+
+  it('prepopulates source/work branches, Omnigent launch identity, and retrieval controls', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      targetRuntime: 'omnigent',
+      inputParameters: {
+        repository: {
+          provider: 'git',
+          repository: { name: 'MoonLadderStudios/MoonMind' },
+          branch: { name: 'main' },
+        },
+        omnigent: {
+          executionTargetRef: 'execution-profile:codex-default',
+          launchPolicyRef: 'launch-policy:remediation-v3',
+        },
+        rag: { collections: ['docs'], required: true },
+        workflow: {
+          remediation: {
+            checkpointBranchPolicy: {
+              gitWorkBranch: 'repair/mm-3623',
+            },
+          },
+        },
+      },
+    });
+
+    expect(draft.branch).toBe('main');
+    expect(draft.startingBranch).toBe('main');
+    expect(draft.workBranch).toBe('repair/mm-3623');
+    expect(draft.executionProfileRef).toBe('execution-profile:codex-default');
+    expect(draft.launchPolicyRef).toBe('launch-policy:remediation-v3');
+    expect(draft.contextRetrieval).toMatchObject({
+      initial: { collections: ['docs'], required: true },
+    });
+    expect(draft.remediation.checkpointBranchPolicy).toMatchObject({
+      gitWorkBranch: 'repair/mm-3623',
+    });
+  });
+
+  it('distinguishes missing, malformed, expired, and cross-tab draft failures', () => {
+    expect(inspectRemediationCreateDraft('missing')).toEqual({
+      status: 'missing',
+      draft: null,
+    });
+
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.malformed',
+      JSON.stringify({ source: 'remediation', schemaVersion: 1 }),
+    );
+    expect(inspectRemediationCreateDraft('malformed').status).toBe('malformed');
+
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+    });
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.malformed-selectors',
+      JSON.stringify({
+        ...draft,
+        remediation: {
+          ...draft.remediation,
+          target: {
+            ...draft.remediation.target,
+            stepSelectors: 'tampered',
+          },
+        },
+      }),
+    );
+    expect(
+      inspectRemediationCreateDraft('malformed-selectors').status,
+    ).toBe('malformed');
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.expired',
+      JSON.stringify({
+        ...draft,
+        createdAt: new Date(
+          Date.now() - REMEDIATION_CREATE_DRAFT_TTL_MS - 1,
+        ).toISOString(),
+      }),
+    );
+    expect(inspectRemediationCreateDraft('expired').status).toBe('expired');
+    expect(
+      window.sessionStorage.getItem('moonmind.remediation-create-draft.expired'),
+    ).toBeNull();
+
+    const draftId = storeRemediationCreateDraft(draft);
+    window.sessionStorage.removeItem(
+      `moonmind.remediation-create-draft.${draftId}`,
+    );
+    expect(inspectRemediationCreateDraft(draftId).status).toBe('cross_tab');
+    clearRemediationCreateDraft(draftId);
+    expect(inspectRemediationCreateDraft(draftId).status).toBe('missing');
   });
 
   it('recovers the immutable selection from execution input parameters', () => {

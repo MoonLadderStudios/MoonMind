@@ -6516,8 +6516,61 @@ describe('Workflow Detail Entrypoint', () => {
                 activeLockScope: 'target_execution',
                 activeLockHolder: 'mm:remediation-1',
                 latestActionSummary: 'Proposed session interrupt',
+                deliveryStatus: 'applied',
+                verificationOutcome: 'verified_resolved',
                 resolution: null,
                 contextArtifactRef: 'art_context',
+                selectedSteps: ['run-tests'],
+                currentTargetState: 'awaiting_external',
+                authoredContract: {
+                  instructions: 'Repair the selected failed test step.',
+                  runtime: { mode: 'omnigent' },
+                  remediation: { authorityMode: 'approval_gated' },
+                },
+                selectedStepEvidence: [
+                  { logicalStepId: 'run-tests', checkpointRef: 'artifact://checkpoints/inbound' },
+                ],
+                contextGeneratedAt: '2026-04-22T00:00:02Z',
+                contextEvidenceAvailability: [
+                  { class: 'step_ledger', status: 'available', bounded: true, freshness: 'source_reported' },
+                ],
+                contextBoundedness: { rawLogBodiesIncluded: false, maxTailLines: 2000 },
+                diagnosisHints: ['Test runner state diverged after restart.'],
+                latestActionRequest: {
+                  actionKind: 'session.interrupt',
+                  riskTier: 'high',
+                  idempotencyKey: 'action-3623',
+                  expectedTargetState: 'awaiting_external',
+                },
+                latestActionResult: {
+                  actionKind: 'session.interrupt',
+                  status: 'applied',
+                  beforeStateRef: 'artifact://before',
+                  afterStateRef: 'artifact://after',
+                },
+                lifecycleSummary: {
+                  repair: { repairOutcome: 'repaired' },
+                  prevention: { status: 'reviewable_change_created', pullRequestUrl: 'https://github.com/example/pull/1' },
+                  lockRelease: 'released',
+                  unresolvedOperatorWork: 'Review prevention PR.',
+                },
+                lifecycleArtifacts: [
+                  {
+                    artifactRef: 'art_summary',
+                    artifactType: 'remediation.summary',
+                    status: 'complete',
+                    freshness: 'durable',
+                    bounded: true,
+                    metadata: {},
+                  },
+                ],
+                operatorControls: {
+                  canCancel: true,
+                  canTakeOver: true,
+                  canResume: false,
+                  paused: false,
+                  disabledReasons: {},
+                },
                 checkpointBranches: [
                   {
                     workflowId: 'test-123',
@@ -6532,6 +6585,16 @@ describe('Workflow Detail Entrypoint', () => {
                     headAttemptOrdinal: 2,
                     headVersion: 3,
                     headStatus: 'verified_incomplete',
+                    branchState: 'running',
+                    logicalStepId: 'run-tests',
+                    gitBaseBranch: 'main',
+                    gitWorkBranch: 'remediation/test-123',
+                    currentHeadCommit: 'abc123',
+                    pullRequestUrl: 'https://github.com/example/pull/1',
+                    publishStatus: 'published',
+                    instructionRef: 'art_branch_instructions',
+                    outputArtifacts: { result: 'art_branch_output' },
+                    comparisonArtifacts: { comparison: 'art_branch_comparison' },
                     latestVerificationVerdict: 'ADDITIONAL_WORK_NEEDED',
                     remainingWorkRef: 'artifact://verification/V2#remainingWork',
                     nextActionBaseline: {
@@ -6543,12 +6606,17 @@ describe('Workflow Detail Entrypoint', () => {
                 ],
                 approvalState: {
                   requestId: 'approval-1',
+                  actionKind: 'session.interrupt',
+                  riskTier: 'high',
+                  preconditions: 'Pinned target is current.',
+                  blastRadius: 'One managed session.',
                   decision: 'pending',
                   canDecide: true,
                   requestingActor: 'operator:requester-3620',
                   expectedTargetState: 'awaiting external session',
                   checkpointRef: 'artifact://checkpoint/approval-3620',
                   policyRef: 'omnigent-policy-3620@7',
+                  expiresAt: '2099-04-22T01:00:00Z',
                 },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
@@ -6623,6 +6691,9 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/executions/mm%3Aremediation-1/signal') && init?.method === 'POST') {
+        return Promise.resolve({ ok: true, json: async () => ({ accepted: true }) } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => mockExecution,
@@ -6648,12 +6719,27 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('awaiting external session')).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
     expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
+    expect(screen.getByText('Authored remediation contract')).toBeTruthy();
+    expect(screen.getByText('Latest action request and authority decision')).toBeTruthy();
+    expect(screen.getByText('Repair, prevention, cleanup, and unresolved work')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_summary' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_summary/download',
+    );
+    expect(screen.getByText('Test runner state diverged after restart.')).toBeTruthy();
+    expect(screen.getByText('remediation/test-123')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_branch_output' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_branch_output/download',
+    );
+    expect(screen.getByRole('button', { name: 'Take over and pause' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
       '/api/artifacts/art_context/download',
     );
 
+    fireEvent.change(screen.getByLabelText(/Decision rationale/), {
+      target: { value: 'Pinned evidence reviewed.' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
 
     await waitFor(() => {
@@ -6665,6 +6751,21 @@ describe('Workflow Detail Entrypoint', () => {
       expect(approvalCall).toBeTruthy();
       expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
         decision: 'approved',
+        comment: 'Pinned evidence reviewed.',
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Take over and pause' }));
+    await waitFor(() => {
+      const takeoverCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === '/api/executions/mm%3Aremediation-1/signal' &&
+          init?.method === 'POST',
+      );
+      expect(takeoverCall).toBeTruthy();
+      expect(JSON.parse(String(takeoverCall?.[1]?.body))).toMatchObject({
+        signalName: 'Pause',
+        payload: { reason: 'operator_takeover' },
       });
     });
 

@@ -1309,3 +1309,17 @@ The artifact system is still execution-linked and Temporal-compatible, but the p
 - future UI convenience surfaces
 
 This document should therefore move to `docs/Artifacts/ArtifactPresentationContract.md` and remain the generic presentation layer that more specific documents, especially `docs/Artifacts/ReportArtifacts.md`, build on.
+
+## 21. Remediation evidence presentation
+
+`remediation.context`, approval request/decision, action request/result,
+verification, audit, target annotation, decision log, and lifecycle summary
+artifacts retain durable links and remain the deep evidence authority. Workflow
+Detail may project only bounded, redacted JSON and metadata: artifact class,
+status, freshness/expiry, boundedness, and safe lifecycle fields. Per-class
+availability and degradation come from the canonical context artifact.
+
+Action delivery, repair verification, and prevention verification remain
+separate. The UI must never reconstruct them from rendered logs, chat text, or
+assistant prose. When a compact projection is unavailable, the durable artifact
+link remains visible and the UI reports degradation rather than inventing state.

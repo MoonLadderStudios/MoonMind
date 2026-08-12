@@ -31,8 +31,9 @@ import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowW
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
   clearRemediationCreateDraft,
-  readRemediationCreateDraft,
+  inspectRemediationCreateDraft,
   type RemediationCreateDraft,
+  type RemediationCreateDraftReadResult,
 } from "../lib/remediationCreateDraft";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
 import {
@@ -59,6 +60,19 @@ function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDa
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
+const REMEDIATION_DRAFT_LOAD_MESSAGES: Record<
+  Exclude<RemediationCreateDraftReadResult["status"], "valid">,
+  string
+> = {
+  missing:
+    "This remediation draft is missing or was already imported. Return to the target workflow and choose Remediate again.",
+  cross_tab:
+    "This remediation draft belongs to another browser tab. Return to the target workflow in this tab and choose Remediate again; draft contents are intentionally tab-scoped.",
+  malformed:
+    "This remediation draft is malformed or was altered, so it was not imported. Discard the draft URL or return to the target workflow and choose Remediate again.",
+  expired:
+    "This remediation draft expired before import. Return to the target workflow and choose Remediate again to pin current target evidence.",
+};
 export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
@@ -5784,6 +5798,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [remediationDraft, setRemediationDraft] = useState<RemediationCreateDraft | null>(null);
+  const [remediationDraftFailure, setRemediationDraftFailure] = useState<{
+    draftId: string;
+    status: Exclude<RemediationCreateDraftReadResult["status"], "valid">;
+  } | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
   const [contextRetrieval, setContextRetrieval] =
     useState<ContextRetrievalAuthoring>(defaultContextRetrievalAuthoring);
@@ -6464,25 +6482,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const params = new URLSearchParams(window.location.search);
     if (params.get("intent") !== "remediate") {
       setRemediationDraft(null);
+      setRemediationDraftFailure(null);
       remediationDraftAppliedRef.current = null;
       remediationDraftIdRef.current = null;
       return;
     }
     const draftId = String(params.get("draftId") || "").trim();
-    if (!draftId || remediationDraftAppliedRef.current === draftId) {
+    const draftLoadKey = draftId || "__missing__";
+    if (remediationDraftAppliedRef.current === draftLoadKey) {
       return;
     }
-    const draft = readRemediationCreateDraft(draftId);
-    if (!draft) {
+    const draftResult = inspectRemediationCreateDraft(draftId);
+    if (draftResult.status !== "valid") {
       setRemediationDraft(null);
-      remediationDraftAppliedRef.current = null;
+      remediationDraftAppliedRef.current = draftLoadKey;
       remediationDraftIdRef.current = null;
-      setSubmitMessage("The remediation draft is no longer available. Open Remediate from the target workflow again.");
+      setRemediationDraftFailure({ draftId, status: draftResult.status });
+      setSubmitMessage(REMEDIATION_DRAFT_LOAD_MESSAGES[draftResult.status]);
       return;
     }
+    const draft = draftResult.draft;
 
-    remediationDraftAppliedRef.current = draftId;
+    remediationDraftAppliedRef.current = draftLoadKey;
     remediationDraftIdRef.current = draftId;
+    setRemediationDraftFailure(null);
     setRemediationDraft(draft);
     setRepository(draft.repository || "MoonLadderStudios/MoonMind");
     setRepositoryTouched(true);
@@ -6492,6 +6515,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.publishMode) {
       setPublishMode(normalizePublishModeForSubmit(draft.publishMode));
+    }
+    if (draft.executionProfileRef) {
+      setOmnigentExecutionTargetRef(draft.executionProfileRef);
+    }
+    if (draft.launchPolicyRef) {
+      setOmnigentLaunchPolicyRef(draft.launchPolicyRef);
+      setOmnigentLaunchPolicyAuthored(true);
+    }
+    if (draft.contextRetrieval) {
+      setContextRetrieval(draft.contextRetrieval);
     }
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
@@ -6504,6 +6537,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.agentProfile?.profileId) {
       setAgentProfile(draft.agentProfile.profileId);
+      prevProviderProfileRef.current = draft.agentProfile.providerProfileRef;
+      setProviderProfile(draft.agentProfile.providerProfileRef);
     }
     if (draft.runtime?.model) {
       setModel(draft.runtime.model);
@@ -6528,6 +6563,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ]);
       setNextStepNumber(2);
     }
+    // The draft has now crossed its single-hop authority boundary into React
+    // state. Remove both storage markers so it cannot be imported again from a
+    // copied URL; the visible form remains editable until ordinary submission.
+    clearRemediationCreateDraft(draftId);
+    remediationDraftIdRef.current = null;
   }, [pageMode.mode, setSubmitMessage]);
 
   const remediationTargetFreshnessQuery = useQuery({
@@ -11520,11 +11560,47 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           disabled={isTemporalFormBlocked}
           aria-busy={isTemporalFormBlocked}
         >
+        {remediationDraftFailure ? (
+          <section
+            className="card queue-remediation-draft-summary stack"
+            aria-label="Remediation draft import error"
+          >
+            <h2>Remediation draft was not imported</h2>
+            <p className="notice error" role="alert">
+              {REMEDIATION_DRAFT_LOAD_MESSAGES[remediationDraftFailure.status]}
+            </p>
+            <div className="actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftFailure.draftId);
+                  setRemediationDraftFailure(null);
+                  remediationDraftAppliedRef.current = null;
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState(
+                    {},
+                    "",
+                    `${url.pathname}${url.search}${url.hash}`,
+                  );
+                  setSubmitMessage(
+                    "Remediation draft reference discarded. Create remains open as an ordinary workflow.",
+                  );
+                }}
+              >
+                Discard draft reference
+              </button>
+            </div>
+          </section>
+        ) : null}
         {remediationDraft ? (
           <section
             className="card queue-remediation-draft-summary stack"
             aria-label="Remediation draft"
             data-jira-issue="MM-1119"
+            data-github-issue="MoonLadderStudios/MoonMind#3623"
           >
             <div className="queue-section-heading">
               <div>
@@ -11533,8 +11609,41 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Discard remediation draft"
+                onClick={() => {
+                  clearRemediationCreateDraft(remediationDraftIdRef.current);
+                  remediationDraftAppliedRef.current = null;
+                  remediationDraftIdRef.current = null;
+                  setRemediationDraft(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete("intent");
+                  url.searchParams.delete("draftId");
+                  window.history.replaceState(
+                    {},
+                    "",
+                    `${url.pathname}${url.search}${url.hash}`,
+                  );
+                  setSubmitMessage(
+                    "Remediation draft discarded. Create remains open as an ordinary workflow.",
+                  );
+                }}
+              >
+                Discard draft
+              </button>
             </div>
-            <div className="grid-2">
+            <fieldset
+              className="queue-remediation-pinned-target stack"
+              aria-label="Pinned target identity"
+            >
+              <legend>Pinned target identity (immutable)</legend>
+              <p className="small">
+                These values identify the original outcome and exact run. Editing
+                the repair intent below never changes this pinned identity.
+              </p>
+              <div className="grid-2">
               <label>
                 Target workflow
                 <input value={remediationDraft.target.workflowId} readOnly />
@@ -11542,6 +11651,86 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               <label>
                 Pinned run
                 <input value={remediationDraft.target.runId} readOnly />
+              </label>
+              {remediationDraft.target.state ? (
+                <label>
+                  Original target outcome
+                  <input value={remediationDraft.target.state} readOnly />
+                </label>
+              ) : null}
+              <label>
+                Selected evidence
+                <input
+                  value={
+                    remediationDraft.remediation.target.stepSelectors
+                      ?.map((selector) =>
+                        String(
+                          selector.logicalStepId ||
+                            selector.checkpointRef ||
+                            selector.source ||
+                            "",
+                        ),
+                      )
+                      .filter(Boolean)
+                      .join(", ") || "No step/checkpoint selected"
+                  }
+                  readOnly
+                />
+              </label>
+              </div>
+            </fieldset>
+            <fieldset
+              className="queue-remediation-repair-intent stack"
+              aria-label="Editable repair intent"
+            >
+              <legend>Editable repair intent</legend>
+              <p className="small">
+                Instructions, runtime/profile selections, policies, branches,
+                retrieval, and publication controls remain editable until submit.
+              </p>
+            <div className="grid-2">
+              <label>
+                Starting branch
+                <input
+                  value={branch}
+                  onChange={(event) => {
+                    setBranchTouched(true);
+                    setBranch(event.target.value);
+                    setRemediationDraft((current) => current ? {
+                      ...current,
+                      branch: event.target.value,
+                      startingBranch: event.target.value,
+                    } : current);
+                  }}
+                />
+              </label>
+              <label>
+                Checkpoint work branch
+                <input
+                  value={remediationDraft.workBranch || ""}
+                  placeholder="Generated when left blank"
+                  onChange={(event) => {
+                    const workBranch = event.target.value;
+                    setRemediationDraft((current) => {
+                      if (!current) return current;
+                      const {
+                        gitWorkBranch: _previousWorkBranch,
+                        ...checkpointBranchPolicy
+                      } = current.remediation.checkpointBranchPolicy || {};
+                      return {
+                        ...current,
+                        workBranch,
+                        remediation: {
+                          ...current.remediation,
+                          checkpointBranchPolicy: {
+                            ...checkpointBranchPolicy,
+                            ...(workBranch ? { gitWorkBranch: workBranch } : {}),
+                          },
+                        },
+                      };
+                    });
+                  }}
+                />
               </label>
               <label>
                 Remediation mode
@@ -11733,6 +11922,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 Create branch for corrected inputs
               </label>
             </div>
+            </fieldset>
             {remediationTargetFreshnessWarning ? (
               <p className="notice small" role="alert">
                 {remediationTargetFreshnessWarning}

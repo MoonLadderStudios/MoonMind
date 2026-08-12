@@ -1037,11 +1037,24 @@ const RemediationApprovalStateSchema = z
     requestingActor: z.string().nullable().optional(),
     requestedAt: z.string().nullable().optional(),
     expiresAt: z.string().nullable().optional(),
+    rationale: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
     decidedAt: z.string().nullable().optional(),
     consumedAt: z.string().nullable().optional(),
+    consumedByActionId: z.string().nullable().optional(),
     expectedTargetState: z.string().nullable().optional(),
     checkpointRef: z.string().nullable().optional(),
+    stepExecutionId: z.string().nullable().optional(),
+    bridgeSessionId: z.string().nullable().optional(),
+    omnigentSessionId: z.string().nullable().optional(),
+    hostRef: z.string().nullable().optional(),
+    hostLeaseRef: z.string().nullable().optional(),
+    providerProfileLeaseRef: z.string().nullable().optional(),
+    credentialGeneration: z.number().int().nullable().optional(),
     policyRef: z.string().nullable().optional(),
+    policyDigest: z.string().nullable().optional(),
+    policySnapshotRef: z.string().nullable().optional(),
+    securityProfileRef: z.string().nullable().optional(),
     artifactRefs: z.record(z.string(), z.string()).nullable().optional(),
   })
   .passthrough();
@@ -1080,6 +1093,30 @@ const RemediationActionCapabilitySchema = z
   })
   .passthrough();
 
+const RemediationLifecycleArtifactSchema = z
+  .object({
+    artifactRef: z.string(),
+    artifactType: z.string(),
+    status: z.string(),
+    label: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    freshness: z.string(),
+    bounded: z.boolean().default(true),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  })
+  .passthrough();
+
+const RemediationOperatorControlsSchema = z
+  .object({
+    canCancel: z.boolean().default(false),
+    canTakeOver: z.boolean().default(false),
+    canResume: z.boolean().default(false),
+    paused: z.boolean().default(false),
+    disabledReasons: z.record(z.string(), z.string()).default({}),
+  })
+  .passthrough();
+
 const RemediationLinkSchema = z
   .object({
     remediationWorkflowId: z.string(),
@@ -1093,6 +1130,7 @@ const RemediationLinkSchema = z
     activeLockHolder: z.string().nullable().optional(),
     latestActionSummary: z.string().nullable().optional(),
     deliveryStatus: z.string().nullable().optional(),
+    verificationOutcome: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
     selectedSteps: z.array(z.string()).nullable().optional(),
@@ -1111,6 +1149,27 @@ const RemediationLinkSchema = z
             workflowId: z.string(),
             branchId: z.string(),
             branchTurnId: z.string().nullable().optional(),
+            logicalStepId: z.string().nullable().optional(),
+            branchState: z.string().nullable().optional(),
+            workspacePolicy: z.string().nullable().optional(),
+            runtimeContextPolicy: z.string().nullable().optional(),
+            gitBaseBranch: z.string().nullable().optional(),
+            gitWorkBranch: z.string().nullable().optional(),
+            currentHeadCommit: z.string().nullable().optional(),
+            pullRequestUrl: z.string().nullable().optional(),
+            publishStatus: z.string().nullable().optional(),
+            promotionEvidence: z.record(z.string(), z.unknown()).nullable().optional(),
+            archiveReason: z.string().nullable().optional(),
+            promotedAt: z.string().nullable().optional(),
+            archivedAt: z.string().nullable().optional(),
+            turnState: z.string().nullable().optional(),
+            runtimeAgentRunId: z.string().nullable().optional(),
+            providerSessionId: z.string().nullable().optional(),
+            instructionRef: z.string().nullable().optional(),
+            turnStartedAt: z.string().nullable().optional(),
+            turnCompletedAt: z.string().nullable().optional(),
+            outputArtifacts: z.record(z.string(), z.string()).nullable().optional(),
+            comparisonArtifacts: z.record(z.string(), z.string()).nullable().optional(),
             checkpointRef: z.string().nullable().optional(),
             contextArtifactRef: z.string().nullable().optional(),
             loopId: z.string().nullable().optional(),
@@ -1137,6 +1196,17 @@ const RemediationLinkSchema = z
           .passthrough(),
       )
       .default([]),
+    authoredContract: z.record(z.string(), z.unknown()).nullable().optional(),
+    selectedStepEvidence: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
+    contextGeneratedAt: z.string().nullable().optional(),
+    contextEvidenceAvailability: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
+    contextBoundedness: z.record(z.string(), z.unknown()).nullable().optional(),
+    diagnosisHints: z.array(z.string()).nullable().optional(),
+    lifecycleArtifacts: z.array(RemediationLifecycleArtifactSchema).nullable().optional(),
+    latestActionRequest: z.record(z.string(), z.unknown()).nullable().optional(),
+    latestActionResult: z.record(z.string(), z.unknown()).nullable().optional(),
+    lifecycleSummary: z.record(z.string(), z.unknown()).nullable().optional(),
+    operatorControls: RemediationOperatorControlsSchema.nullable().optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
   })
@@ -7622,10 +7692,37 @@ function remediationVerificationSummary(
   };
 }
 
+function RemediationArtifactRefs({
+  apiBase,
+  refs,
+}: {
+  apiBase: string;
+  refs: Record<string, string> | null | undefined;
+}) {
+  const entries = Object.entries(refs || {}).filter(([, ref]) => Boolean(ref));
+  if (entries.length === 0) return <>—</>;
+  return (
+    <span className="live-logs-artifact-links">
+      {entries.map(([kind, ref]) => {
+        const href = artifactRefHref(apiBase, ref);
+        return href ? (
+          <a key={`${kind}:${ref}`} href={href} target="_blank" rel="noreferrer">
+            <code className="text-xs break-all">{ref}</code>
+          </a>
+        ) : (
+          <code key={`${kind}:${ref}`} className="text-xs break-all">{ref}</code>
+        );
+      })}
+    </span>
+  );
+}
+
 function RemediationCheckpointBranches({
   branches,
+  apiBase,
 }: {
   branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+  apiBase: string;
 }) {
   if (!branches || branches.length === 0) return null;
   return (
@@ -7640,20 +7737,172 @@ function RemediationCheckpointBranches({
             <div className="grid-2">
               <Card label="Target Workflow"><code className="text-xs break-all">{branch.workflowId}</code></Card>
               <Card label="Turn">{branch.branchTurnId || '—'}</Card>
-              <Card label="Checkpoint">{branch.checkpointRef || '—'}</Card>
-              <Card label="Context">{branch.contextArtifactRef || '—'}</Card>
+              <Card label="Checkpoint"><RemediationArtifactRefs apiBase={apiBase} refs={branch.checkpointRef ? { checkpoint: branch.checkpointRef } : null} /></Card>
+              <Card label="Context"><RemediationArtifactRefs apiBase={apiBase} refs={branch.contextArtifactRef ? { context: branch.contextArtifactRef } : null} /></Card>
               <Card label="Head status">{branch.headStatus ? formatStatusLabel(branch.headStatus) : '—'}</Card>
               <Card label="Attempt / version">{branch.headAttemptOrdinal != null && branch.headVersion != null ? `${branch.headAttemptOrdinal} / ${branch.headVersion}` : '—'}</Card>
+              <Card label="Branch lifecycle">{branch.branchState ? formatStatusLabel(branch.branchState) : '—'}</Card>
+              <Card label="Selected step">{branch.logicalStepId || '—'}</Card>
+              <Card label="Workspace policy">{branch.workspacePolicy || '—'}</Card>
+              <Card label="Runtime context">{branch.runtimeContextPolicy || '—'}</Card>
+              <Card label="Base branch"><code className="text-xs break-all">{branch.gitBaseBranch || '—'}</code></Card>
+              <Card label="Isolated work branch"><code className="text-xs break-all">{branch.gitWorkBranch || '—'}</code></Card>
+              <Card label="Workspace head"><code className="text-xs break-all">{branch.currentHeadCommit || branch.headWorkspaceDigest || '—'}</code></Card>
+              <Card label="Publication">{branch.publishStatus || 'not published'}</Card>
+              <Card label="Resulting PR">{branch.pullRequestUrl ? <a href={branch.pullRequestUrl}>Open pull request</a> : '—'}</Card>
+              <Card label="Promotion">{branch.promotedAt ? `promoted ${formatWhen(branch.promotedAt)}` : 'not promoted'}</Card>
+              <Card label="Archive / cleanup">{branch.archivedAt ? `archived ${formatWhen(branch.archivedAt)}` : branch.archiveReason || 'active'}</Card>
+              <Card label="Turn execution">{branch.turnState ? formatStatusLabel(branch.turnState) : 'not started'}</Card>
+              <Card label="Resulting Agent Run"><code className="text-xs break-all">{branch.runtimeAgentRunId || '—'}</code></Card>
+              <Card label="Provider session"><code className="text-xs break-all">{branch.providerSessionId || '—'}</code></Card>
+              <Card label="Turn instructions"><RemediationArtifactRefs apiBase={apiBase} refs={branch.instructionRef ? { instructions: branch.instructionRef } : null} /></Card>
+              <Card label="Turn timing">{branch.turnStartedAt ? `${formatWhen(branch.turnStartedAt)}${branch.turnCompletedAt ? ` → ${formatWhen(branch.turnCompletedAt)}` : ' → running'}` : 'pending'}</Card>
+              <Card label="Output artifacts"><RemediationArtifactRefs apiBase={apiBase} refs={branch.outputArtifacts} /></Card>
+              <Card label="Comparison artifacts"><RemediationArtifactRefs apiBase={apiBase} refs={branch.comparisonArtifacts} /></Card>
               <Card label="Root candidate"><code className="text-xs break-all">{branch.rootCheckpointRef || '—'}</code></Card>
               <Card label="Current candidate"><code className="text-xs break-all">{branch.headCheckpointRef || '—'}</code></Card>
               <Card label="Candidate digest"><code className="text-xs break-all">{branch.headWorkspaceDigest || '—'}</code></Card>
-              <Card label="Latest verification">{branch.latestVerificationVerdict || '—'}</Card>
+              <Card label="Latest verification">
+                {branch.latestVerificationVerdict || '—'}{' '}
+                <RemediationArtifactRefs apiBase={apiBase} refs={branch.latestVerificationRef ? { verification: branch.latestVerificationRef } : null} />
+              </Card>
               <Card label="Next attempt baseline"><code className="text-xs break-all">{branch.nextActionBaseline ? `${branch.nextActionBaseline.checkpointRef} @ v${branch.nextActionBaseline.headVersion}` : '—'}</code></Card>
-              <Card label="Remaining work"><code className="text-xs break-all">{branch.remainingWorkRef || '—'}</code></Card>
+              <Card label="Remaining work"><RemediationArtifactRefs apiBase={apiBase} refs={branch.remainingWorkRef ? { remainingWork: branch.remainingWorkRef } : null} /></Card>
             </div>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function branchVerificationPhase(
+  branch: z.infer<typeof RemediationLinkSchema>['checkpointBranches'][number],
+): { phase: 'pending' | 'running' | 'terminal'; label: string } {
+  const verdict = String(branch.latestVerificationVerdict || '').trim();
+  if (verdict) return { phase: 'terminal', label: verdict };
+  if (branch.latestVerificationRef) {
+    return { phase: 'running', label: 'Verification running' };
+  }
+  return { phase: 'pending', label: 'Verification pending' };
+}
+
+function RemediationVerificationSummary({
+  branches,
+  outcome,
+}: {
+  branches: z.infer<typeof RemediationLinkSchema>['checkpointBranches'];
+  outcome?: string | null | undefined;
+}) {
+  if ((!branches || branches.length === 0) && !outcome) return null;
+  return (
+    <div className="td-remediation-live" aria-label="Repair verification">
+      <strong>Repair verification</strong>
+      {outcome ? <p className="small">Target-level outcome: {outcome}</p> : null}
+      <ul className="td-remediation-list">
+        {branches.map((branch) => {
+          const { phase, label } = branchVerificationPhase(branch);
+          return (
+            <li key={`verify:${branch.workflowId}:${branch.branchId}`} className="card">
+              <div className="grid-2">
+                <Card label="Branch"><code className="text-xs break-all">{`Verification for ${branch.branchId}`}</code></Card>
+                <Card label="Verification state">{formatStatusLabel(phase)}</Card>
+                <Card label="Verdict">{label}</Card>
+                <Card label="Evidence"><code className="text-xs break-all">{branch.latestVerificationRef || '—'}</code></Card>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function RemediationCanonicalProjection({
+  title,
+  value,
+}: {
+  title: string;
+  value: Record<string, unknown> | null | undefined;
+}) {
+  if (!value || Object.keys(value).length === 0) return null;
+  return (
+    <details className="td-remediation-canonical">
+      <summary>{title}</summary>
+      <pre className="text-xs break-all">{JSON.stringify(value, null, 2)}</pre>
+    </details>
+  );
+}
+
+function RemediationLifecycleProjection({
+  item,
+  apiBase,
+}: {
+  item: z.infer<typeof RemediationLinkSchema>;
+  apiBase: string;
+}) {
+  const availability = item.contextEvidenceAvailability || [];
+  const artifacts = item.lifecycleArtifacts || [];
+  return (
+    <div className="stack td-remediation-lifecycle" aria-label="Authoritative remediation lifecycle">
+      <RemediationCanonicalProjection title="Authored remediation contract" value={item.authoredContract} />
+      {item.selectedStepEvidence?.length ? (
+        <RemediationCanonicalProjection
+          title="Pinned step and checkpoint evidence"
+          value={{ selectedSteps: item.selectedStepEvidence }}
+        />
+      ) : null}
+      {item.diagnosisHints?.length ? (
+        <p className="small"><strong>Latest diagnosis:</strong> {item.diagnosisHints.join('; ')}</p>
+      ) : null}
+      {item.contextGeneratedAt ? (
+        <p className="small"><strong>Context snapshot:</strong> {formatWhen(item.contextGeneratedAt)}</p>
+      ) : null}
+      {availability.length > 0 ? (
+        <div>
+          <strong>Context evidence availability</strong>
+          <div className="grid-2">
+            {availability.map((entry, index) => (
+              <Card key={`${String(entry.class || 'evidence')}:${index}`} label={String(entry.class || 'evidence')}>
+                {String(entry.status || 'unknown')}
+                {entry.freshness ? ` · ${String(entry.freshness)}` : ''}
+                {entry.bounded === true ? ' · bounded' : entry.bounded === false ? ' · unbounded' : ''}
+                {entry.degradedReason ? ` · ${String(entry.degradedReason)}` : ''}
+              </Card>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {item.contextBoundedness ? (
+        <RemediationCanonicalProjection title="Context boundedness" value={item.contextBoundedness} />
+      ) : null}
+      <RemediationCanonicalProjection title="Latest action request and authority decision" value={item.latestActionRequest} />
+      <RemediationCanonicalProjection title="Latest action delivery result" value={item.latestActionResult} />
+      <RemediationCanonicalProjection title="Repair, prevention, cleanup, and unresolved work" value={item.lifecycleSummary} />
+      {artifacts.length > 0 ? (
+        <details>
+          <summary>Durable lifecycle artifacts ({artifacts.length})</summary>
+          <ul className="td-remediation-list">
+            {artifacts.map((artifact) => (
+              <li key={`${artifact.artifactType}:${artifact.artifactRef}`}>
+                <code>{artifact.artifactType}</code>{' '}
+                {artifactRefHref(apiBase, artifact.artifactRef) ? (
+                  <a
+                    href={artifactRefHref(apiBase, artifact.artifactRef) || undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <code className="text-xs break-all">{artifact.artifactRef}</code>
+                  </a>
+                ) : (
+                  <code className="text-xs break-all">{artifact.artifactRef}</code>
+                )}{' '}
+                — {artifact.status}, {artifact.freshness}, {artifact.bounded ? 'bounded' : 'unbounded'}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -7674,6 +7923,14 @@ function RemediationApprovalSummary({
   );
 
   if (!hasDetails) return null;
+  const expired = approval.status === 'expired' || approval.decision === 'expired' || (
+    approval.expiresAt ? Date.parse(approval.expiresAt) <= Date.now() : false
+  );
+  const decisionRecorded =
+    approval.decision === 'approved' || approval.decision === 'rejected' || approval.decision === 'denied';
+  const staleDecision = approval.status === 'stale' || approval.decision === 'stale' || Boolean(
+    decisionRecorded && approval.canDecide && approval.requestId,
+  );
 
   return (
     <div className="td-remediation-approval">
@@ -7688,34 +7945,162 @@ function RemediationApprovalSummary({
         <Card label="Expected target state">{approval.expectedTargetState || '—'}</Card>
         <Card label="Checkpoint"><code className="text-xs break-all">{approval.checkpointRef || '—'}</code></Card>
         <Card label="Policy"><code className="text-xs break-all">{approval.policyRef || '—'}</code></Card>
+        <Card label="Policy digest"><code className="text-xs break-all">{approval.policyDigest || '—'}</code></Card>
+        <Card label="Policy snapshot"><code className="text-xs break-all">{approval.policySnapshotRef || '—'}</code></Card>
+        <Card label="Security profile"><code className="text-xs break-all">{approval.securityProfileRef || '—'}</code></Card>
         <Card label="Preconditions">{approval.preconditions || '—'}</Card>
         <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+        <Card label="Decision rationale">{approval.rationale || '—'}</Card>
+        <Card label="Decision status">{approval.status || approval.decision || '—'}</Card>
+        <Card label="Decided by">{approval.decisionActor || '—'}</Card>
+        <Card label="Decided at">{approval.decidedAt || approval.decisionAt ? formatWhen(approval.decidedAt || approval.decisionAt) : '—'}</Card>
+        <Card label="Consumed by action">{approval.consumedByActionId || '—'}</Card>
       </div>
       {approval.artifactRefs ? (
         <div className="small">Evidence: {Object.entries(approval.artifactRefs).map(([kind, ref]) => `${kind}: ${ref}`).join(', ')}</div>
       ) : null}
-      {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
+      {expired ? (
+        <p className="notice warning" role="status">
+          This approval request expired. Refresh the target state and create a new request before acting.
+        </p>
+      ) : staleDecision ? (
+        <p className="notice warning" role="status">
+          This decision is stale because the action or pinned target evidence changed. A new approval request is required.
+        </p>
+      ) : approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
         <p className="notice subtle">Approval is read-only for this operator.</p>
       ) : null}
     </div>
   );
 }
 
+function RemediationApprovalControls({
+  remediationWorkflowId,
+  requestId,
+  busy,
+  onApprovalDecision,
+}: {
+  remediationWorkflowId: string;
+  requestId: string;
+  busy: boolean;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
+}) {
+  const [rationale, setRationale] = useState('');
+  return (
+    <div className="stack td-remediation-approval-controls">
+      <label>
+        Decision rationale (recorded in the approval audit trail)
+        <textarea
+          value={rationale}
+          onChange={(event) => setRationale(event.target.value)}
+          rows={2}
+          placeholder="Explain the bounded operator decision"
+        />
+      </label>
+      <div className="actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'approved', rationale)}
+        >
+          Approve remediation action
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'rejected', rationale)}
+        >
+          Deny remediation action
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RemediationOperatorControls({
+  item,
+  busy,
+  onOperatorControl,
+}: {
+  item: z.infer<typeof RemediationLinkSchema>;
+  busy: boolean;
+  onOperatorControl: (
+    workflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => void;
+}) {
+  const controls = item.operatorControls;
+  if (!controls) return null;
+  const hasControl = controls.canCancel || controls.canTakeOver || controls.canResume;
+  return (
+    <div className="stack td-remediation-operator-controls">
+      <strong>Operator controls</strong>
+      <p className="small">
+        Takeover pauses autonomous remediation through the durable Workflow signal; it does not expose runtime credentials or raw session authority.
+      </p>
+      {hasControl ? (
+        <div className="actions" role="group" aria-label="Remediation operator controls">
+          {controls.canTakeOver ? (
+            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'takeover')}>
+              Take over and pause
+            </button>
+          ) : null}
+          {controls.canResume ? (
+            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'resume')}>
+              Resume remediation
+            </button>
+          ) : null}
+          {controls.canCancel ? (
+            <button type="button" className="queue-action-danger" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'cancel')}>
+              Cancel remediation
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="notice subtle">
+          Operator controls are unavailable: {Object.values(controls.disabledReasons).join(', ') || 'workflow state is terminal'}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RemediationRelationshipsPanel({
+  apiBase,
   inbound,
   outbound,
   inboundError,
   outboundError,
   onApprovalDecision,
   approvalBusy,
+  onOperatorControl,
+  operatorBusy,
   showEmpty,
 }: {
+  apiBase: string;
   inbound: z.infer<typeof RemediationLinksSchema> | undefined;
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
   inboundError: Error | null;
   outboundError: Error | null;
-  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  onApprovalDecision: (
+    workflowId: string,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    comment?: string,
+  ) => void;
   approvalBusy: boolean;
+  onOperatorControl: (
+    workflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => void;
+  operatorBusy: boolean;
   showEmpty: boolean;
 }) {
   const inboundItems = inbound?.items ?? [];
@@ -7728,7 +8113,9 @@ function RemediationRelationshipsPanel({
     <section className="stack td-remediation-region td-evidence-region">
       <div>
         <h3>Remediation</h3>
-        <p className="small">Target and remediator relationships are shown from bounded remediation link metadata.</p>
+        <p className="small">
+          Target and remediator relationships are shown from canonical links and bounded artifacts. The original target outcome shown above is unchanged; later repair, verification, and prevention records are annotations in this separate lifecycle.
+        </p>
       </div>
       {inboundError || outboundError ? (
         <div className="notice error">
@@ -7745,39 +8132,39 @@ function RemediationRelationshipsPanel({
                   <code className="text-xs break-all">{item.remediationWorkflowId}</code>
                 </a>
                 <div className="grid-2">
+                  <Card label="Remediation Run"><code className="text-xs break-all">{item.remediationRunId || '—'}</code></Card>
+                  <Card label="Pinned Target Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
+                  <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
+                  <Card label="Current Target">{item.currentTargetState || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (
                     <Card label="Lock Holder">{item.activeLockHolder}</Card>
                   ) : null}
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
-                <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationLifecycleProjection item={item} apiBase={apiBase} />
+                <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
+                <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
+                <RemediationOperatorControls item={item} busy={operatorBusy} onOperatorControl={onOperatorControl} />
               </li>
             ))}
           </ul>
@@ -7799,7 +8186,19 @@ function RemediationRelationshipsPanel({
                   <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
-                  <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
+                  <Card label="Action delivery">{item.deliveryStatus || '—'}</Card>
+                  <Card label="Repair verification">{item.verificationOutcome || 'pending'}</Card>
+                  <Card label="Evidence Bundle">
+                    {item.contextArtifactRef && artifactRefHref(apiBase, item.contextArtifactRef) ? (
+                      <a
+                        href={artifactRefHref(apiBase, item.contextArtifactRef) || undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <code className="text-xs break-all">{item.contextArtifactRef}</code>
+                      </a>
+                    ) : item.contextArtifactRef || 'Missing'}
+                  </Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
@@ -7807,7 +8206,17 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
+                  {item.lockOutcome?.releasedAt ? (
+                    <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
+                  ) : null}
                 </div>
+                {(!item.allowedActions || item.allowedActions.length === 0) ? (
+                  <p className="notice subtle">
+                    {item.authorityMode === 'observe_only'
+                      ? 'Observe-only authority: no mutating actions are offered for this target.'
+                      : 'No actions are currently offered; policy or backend readiness has bounded the action surface.'}
+                  </p>
+                ) : null}
                 <RemediationCapabilityMatrix rows={item.actionCapabilities} />
                 {item.evidenceDegraded ? (
                   <p className="notice subtle">
@@ -7831,7 +8240,9 @@ function RemediationRelationshipsPanel({
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}
-                <RemediationCheckpointBranches branches={item.checkpointBranches} />
+                <RemediationLifecycleProjection item={item} apiBase={apiBase} />
+                <RemediationVerificationSummary branches={item.checkpointBranches} outcome={item.verificationOutcome} />
+                <RemediationCheckpointBranches branches={item.checkpointBranches} apiBase={apiBase} />
                 {item.mode?.includes('follow') && !item.contextArtifactRef ? (
                   <p className="notice subtle">
                     Live follow is unavailable; durable remediation artifacts remain authoritative.
@@ -7839,25 +8250,14 @@ function RemediationRelationshipsPanel({
                 ) : null}
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
-                    >
-                      Approve remediation action
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={approvalBusy}
-                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
-                    >
-                      Reject remediation action
-                    </button>
-                  </div>
+                  <RemediationApprovalControls
+                    remediationWorkflowId={item.remediationWorkflowId}
+                    requestId={item.approvalState.requestId}
+                    busy={approvalBusy}
+                    onApprovalDecision={onApprovalDecision}
+                  />
                 ) : null}
+                <RemediationOperatorControls item={item} busy={operatorBusy} onOperatorControl={onOperatorControl} />
               </li>
             ))}
           </ul>
@@ -9124,17 +9524,20 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       remediationWorkflowId,
       requestId,
       decision,
+      comment,
     }: {
       remediationWorkflowId: string;
       requestId: string;
       decision: 'approved' | 'rejected';
+      comment?: string;
     }) => {
+      const trimmedComment = (comment || '').trim();
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify(trimmedComment ? { decision, comment: trimmedComment } : { decision }),
         },
       );
       if (!response.ok) {
@@ -9145,6 +9548,54 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Remediation approval decision recorded.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const remediationOperatorMutation = useMutation({
+    mutationFn: async ({
+      remediationWorkflowId,
+      action,
+    }: {
+      remediationWorkflowId: string;
+      action: 'cancel' | 'takeover' | 'resume';
+    }) => {
+      const encodedWorkflowId = encodeURIComponent(remediationWorkflowId);
+      const isCancel = action === 'cancel';
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodedWorkflowId}/${isCancel ? 'cancel' : 'signal'}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(
+            isCancel
+              ? { action: 'cancel', graceful: true, reason: 'operator_remediation_control' }
+              : {
+                  signalName: action === 'takeover' ? 'Pause' : 'Resume',
+                  payload: {
+                    reason: action === 'takeover'
+                      ? 'operator_takeover'
+                      : 'operator_resume_after_takeover',
+                  },
+                },
+          ),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return { action, body: await response.json() };
+    },
+    onSuccess: ({ action }) => {
+      setActionNotice(
+        action === 'cancel'
+          ? 'Remediation cancellation requested.'
+          : action === 'takeover'
+            ? 'Operator takeover requested; autonomous remediation is pausing.'
+            : 'Remediation resume requested.',
+      );
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -10489,15 +10940,26 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {artifactsTabActive ? (
             <RemediationRelationshipsPanel
+              apiBase={payload.apiBase}
               inbound={inboundRemediationsQuery.data}
               outbound={outboundRemediationsQuery.data}
               inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
               outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
               approvalBusy={remediationApprovalMutation.isPending}
+              operatorBusy={remediationOperatorMutation.isPending}
               showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              onApprovalDecision={(remediationWorkflowId, requestId, decision, comment) => {
                 setActionError(null);
-                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+                remediationApprovalMutation.mutate({
+                  remediationWorkflowId,
+                  requestId,
+                  decision,
+                  ...(comment ? { comment } : {}),
+                });
+              }}
+              onOperatorControl={(remediationWorkflowId, action) => {
+                setActionError(null);
+                remediationOperatorMutation.mutate({ remediationWorkflowId, action });
               }}
             />
           ) : null}

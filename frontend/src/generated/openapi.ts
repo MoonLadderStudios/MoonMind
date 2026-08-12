@@ -11700,6 +11700,54 @@ export interface components {
             branchId: string;
             /** Branchturnid */
             branchTurnId?: string | null;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Branchstate */
+            branchState?: string | null;
+            /** Workspacepolicy */
+            workspacePolicy?: string | null;
+            /** Runtimecontextpolicy */
+            runtimeContextPolicy?: string | null;
+            /** Gitbasebranch */
+            gitBaseBranch?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /** Currentheadcommit */
+            currentHeadCommit?: string | null;
+            /** Pullrequesturl */
+            pullRequestUrl?: string | null;
+            /** Publishstatus */
+            publishStatus?: string | null;
+            /** Promotionevidence */
+            promotionEvidence?: {
+                [key: string]: unknown;
+            } | null;
+            /** Archivereason */
+            archiveReason?: string | null;
+            /** Promotedat */
+            promotedAt?: string | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Turnstate */
+            turnState?: string | null;
+            /** Runtimeagentrunid */
+            runtimeAgentRunId?: string | null;
+            /** Providersessionid */
+            providerSessionId?: string | null;
+            /** Instructionref */
+            instructionRef?: string | null;
+            /** Turnstartedat */
+            turnStartedAt?: string | null;
+            /** Turncompletedat */
+            turnCompletedAt?: string | null;
+            /** Outputartifacts */
+            outputArtifacts?: {
+                [key: string]: string;
+            } | null;
+            /** Comparisonartifacts */
+            comparisonArtifacts?: {
+                [key: string]: string;
+            } | null;
             /** Operation */
             operation?: string | null;
             /** Idempotencykey */
@@ -11813,6 +11861,32 @@ export interface components {
             /** Items */
             items: components["schemas"]["RemediationCollectionItemModel"][];
         };
+        /** RemediationLifecycleArtifactModel */
+        RemediationLifecycleArtifactModel: {
+            /** Artifactref */
+            artifactRef: string;
+            /** Artifacttype */
+            artifactType: string;
+            /** Status */
+            status: string;
+            /** Label */
+            label?: string | null;
+            /** Createdat */
+            createdAt?: string | null;
+            /** Expiresat */
+            expiresAt?: string | null;
+            /** Freshness */
+            freshness: string;
+            /**
+             * Bounded
+             * @default true
+             */
+            bounded: boolean;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** RemediationLinkSummaryModel */
         RemediationLinkSummaryModel: {
             /** Remediationworkflowid */
@@ -11837,6 +11911,8 @@ export interface components {
             latestActionSummary?: string | null;
             /** Deliverystatus */
             deliveryStatus?: string | null;
+            /** Verificationoutcome */
+            verificationOutcome?: string | null;
             /** Resolution */
             resolution?: string | null;
             /** Contextartifactref */
@@ -11858,6 +11934,41 @@ export interface components {
             approvalState?: components["schemas"]["RemediationApprovalStateModel"] | null;
             /** Checkpointbranches */
             checkpointBranches?: components["schemas"]["RemediationCheckpointBranchLinkModel"][];
+            /** Authoredcontract */
+            authoredContract?: {
+                [key: string]: unknown;
+            } | null;
+            /** Selectedstepevidence */
+            selectedStepEvidence?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Contextgeneratedat */
+            contextGeneratedAt?: string | null;
+            /** Contextevidenceavailability */
+            contextEvidenceAvailability?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Contextboundedness */
+            contextBoundedness?: {
+                [key: string]: unknown;
+            } | null;
+            /** Diagnosishints */
+            diagnosisHints?: string[] | null;
+            /** Lifecycleartifacts */
+            lifecycleArtifacts?: components["schemas"]["RemediationLifecycleArtifactModel"][] | null;
+            /** Latestactionrequest */
+            latestActionRequest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Latestactionresult */
+            latestActionResult?: {
+                [key: string]: unknown;
+            } | null;
+            /** Lifecyclesummary */
+            lifecycleSummary?: {
+                [key: string]: unknown;
+            } | null;
+            operatorControls?: components["schemas"]["RemediationOperatorControlsModel"] | null;
             /**
              * Createdat
              * Format: date-time
@@ -11908,6 +12019,33 @@ export interface components {
             workspaceDigest: string;
             /** Headversion */
             headVersion: number;
+        };
+        /** RemediationOperatorControlsModel */
+        RemediationOperatorControlsModel: {
+            /**
+             * Cancancel
+             * @default false
+             */
+            canCancel: boolean;
+            /**
+             * Cantakeover
+             * @default false
+             */
+            canTakeOver: boolean;
+            /**
+             * Canresume
+             * @default false
+             */
+            canResume: boolean;
+            /**
+             * Paused
+             * @default false
+             */
+            paused: boolean;
+            /** Disabledreasons */
+            disabledReasons?: {
+                [key: string]: string;
+            };
         };
         /** RemediationPolicy */
         RemediationPolicy: {

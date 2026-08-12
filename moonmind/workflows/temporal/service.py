@@ -39,7 +39,9 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
+    WorkflowCheckpointBranchTurn,
 )
 from moonmind.config.settings import settings
 from moonmind.security import scan_outbound_text
@@ -83,6 +85,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
     repository_name_from_value,
 )
 from moonmind.workflows.temporal.hard_switch_cutover import (
@@ -252,6 +255,10 @@ def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+ALLOWED_REMEDIATION_MODES = frozenset(
+    {"snapshot", "live_follow", "snapshot_then_follow"}
+)
+MAX_REMEDIATION_STEP_SELECTORS = 25
 
 
 def _first_nonempty_text(*values: Any) -> str | None:
@@ -651,6 +658,7 @@ class TemporalExecutionService:
         new_run_id: str,
         owner_id: str | None,
         owner_type: TemporalExecutionOwnerType,
+        submission_parameters: Mapping[str, Any],
     ) -> TemporalExecutionRemediationLink:
         target = remediation.get("target")
         if not isinstance(target, Mapping):
@@ -688,6 +696,40 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "Unsupported workflow.remediation.authorityMode "
                 f"'{authority_mode}'. Supported values: {supported}."
+            )
+
+        remediation_mode = str(
+            remediation.get("mode") or "snapshot_then_follow"
+        ).strip() or "snapshot_then_follow"
+        if remediation_mode not in ALLOWED_REMEDIATION_MODES:
+            supported = ", ".join(sorted(ALLOWED_REMEDIATION_MODES))
+            raise TemporalExecutionValidationError(
+                "Unsupported workflow.remediation.mode "
+                f"'{remediation_mode}'. Supported values: {supported}."
+            )
+
+        authored_branch = repository_branch_from_value(
+            submission_parameters.get("repository")
+        )
+        if authored_branch:
+            self._validate_remediation_git_branch(
+                authored_branch,
+                path="repository.branch.name",
+                allow_protected=True,
+            )
+        task_payload = _workflow_payload(submission_parameters)
+        publish_payload = task_payload.get("publish")
+        publish_payload = (
+            publish_payload if isinstance(publish_payload, Mapping) else {}
+        )
+        publish_mode = str(
+            publish_payload.get("mode")
+            or submission_parameters.get("publishMode")
+            or ""
+        ).strip()
+        if publish_mode and publish_mode not in {"auto", "none", "branch", "pr"}:
+            raise TemporalExecutionValidationError(
+                "workflow.publish.mode is unsupported for remediation."
             )
 
         target_record = await self._session.get(
@@ -747,13 +789,17 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.target.agentRunIds must be a list of strings."
                 )
+            if len(agent_run_ids) > MAX_REMEDIATION_STEP_SELECTORS:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.agentRunIds must contain at most "
+                    f"{MAX_REMEDIATION_STEP_SELECTORS} items."
+                )
             allowed_agent_run_ids = self._target_agent_run_ids(target_record)
-            if allowed_agent_run_ids:
-                requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
-                if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
-                    raise TemporalExecutionValidationError(
-                        "workflow.remediation.target.agentRunIds must belong to the target execution."
-                    )
+            requested_agent_run_ids = {str(item).strip() for item in agent_run_ids}
+            if not requested_agent_run_ids.issubset(allowed_agent_run_ids):
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.agentRunIds must belong to the target execution."
+                )
         step_selectors = (
             target.get("stepSelectors")
             if "stepSelectors" in target
@@ -766,13 +812,101 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.target.stepSelectors must be a list of objects."
                 )
+            if len(step_selectors) > MAX_REMEDIATION_STEP_SELECTORS:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.target.stepSelectors must contain at most "
+                    f"{MAX_REMEDIATION_STEP_SELECTORS} items."
+                )
+            selector_identity = self._target_step_selector_identity(target_record)
             for item in step_selectors:
+                logical_step_id = str(
+                    item.get("logicalStepId")
+                    or item.get("logical_step_id")
+                    or item.get("stepId")
+                    or item.get("step_id")
+                    or ""
+                ).strip()
                 checkpoint_ref = str(
                     item.get("checkpointRef") or item.get("checkpoint_ref") or ""
                 ).strip()
+                agent_run_id = str(
+                    item.get("agentRunId") or item.get("agent_run_id") or ""
+                ).strip()
+                step_execution_id = str(
+                    item.get("stepExecutionId")
+                    or item.get("step_execution_id")
+                    or ""
+                ).strip()
+                if (
+                    not logical_step_id
+                    and not checkpoint_ref
+                    and not agent_run_id
+                    and not step_execution_id
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors entries must identify a step, Step Execution, checkpoint, or Agent Run."
+                    )
                 if checkpoint_ref and not checkpoint_ref.startswith("artifact://"):
                     raise TemporalExecutionValidationError(
                         "workflow.remediation.target.stepSelectors checkpointRef must be an artifact ref."
+                    )
+                if (
+                    logical_step_id
+                    and logical_step_id not in selector_identity["logical_step_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors logicalStepId must belong to the target execution."
+                    )
+                if (
+                    checkpoint_ref
+                    and checkpoint_ref not in selector_identity["checkpoint_refs"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors checkpointRef must belong to the target execution."
+                    )
+                if (
+                    agent_run_id
+                    and agent_run_id not in selector_identity["agent_run_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors agentRunId must belong to the target execution."
+                    )
+                if (
+                    step_execution_id
+                    and step_execution_id
+                    not in selector_identity["step_execution_ids"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors stepExecutionId must belong to the target execution."
+                    )
+                attempt = item.get("attempt")
+                if attempt is not None and (
+                    isinstance(attempt, bool)
+                    or not isinstance(attempt, int)
+                    or attempt < 1
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors attempt must be a positive integer."
+                    )
+                if attempt is not None:
+                    known_attempts = selector_identity[
+                        "attempts_by_logical_step"
+                    ].get(logical_step_id, set())
+                    if not logical_step_id or attempt not in known_attempts:
+                        raise TemporalExecutionValidationError(
+                            "workflow.remediation.target.stepSelectors attempt must match the target Step Execution."
+                        )
+                checkpoint_digest = str(
+                    item.get("checkpointDigest")
+                    or item.get("checkpoint_digest")
+                    or ""
+                ).strip()
+                known_digests = selector_identity["checkpoint_digests"].get(
+                    checkpoint_ref, set()
+                )
+                if checkpoint_digest and checkpoint_digest not in known_digests:
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors checkpointDigest must match the target checkpoint."
                     )
 
         evidence_policy = remediation.get("evidencePolicy")
@@ -814,11 +948,37 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "workflow.remediation.checkpointBranchPolicy.runtimeContextPolicy must be fresh_agent_run."
                 )
+            workspace_policy = str(
+                checkpoint_branch_policy.get("workspacePolicy") or ""
+            ).strip()
+            if workspace_policy and workspace_policy not in {
+                "continue_from_previous_execution",
+                "restore_pre_execution",
+                "apply_previous_execution_diff_to_clean_baseline",
+                "start_from_last_passed_commit",
+                "fresh_branch_from_source",
+            }:
+                raise TemporalExecutionValidationError(
+                    "workflow.remediation.checkpointBranchPolicy.workspacePolicy is unsupported."
+                )
+            work_branch = str(
+                checkpoint_branch_policy.get("gitWorkBranch") or ""
+            ).strip()
+            if work_branch:
+                self._validate_remediation_git_branch(
+                    work_branch,
+                    path="workflow.remediation.checkpointBranchPolicy.gitWorkBranch",
+                    allow_protected=False,
+                )
 
         trigger = remediation.get("trigger")
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
+        elif trigger is not None:
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.trigger must be an object."
+            )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
         if (
             action_policy_ref
@@ -835,8 +995,7 @@ class TemporalExecutionService:
             remediation_run_id=new_run_id,
             target_workflow_id=target_record.workflow_id,
             target_run_id=target_record.run_id,
-            mode=str(remediation.get("mode") or "snapshot_then_follow").strip()
-            or "snapshot_then_follow",
+            mode=remediation_mode,
             authority_mode=authority_mode,
             status="created",
             trigger_type=trigger_type,
@@ -854,6 +1013,138 @@ class TemporalExecutionService:
         ):
             cls._collect_agent_run_ids(payload, output)
         return output
+
+    @staticmethod
+    def _validate_remediation_git_branch(
+        value: str, *, path: str, allow_protected: bool
+    ) -> None:
+        parts = value.split("/")
+        invalid = (
+            len(value) > 255
+            or value != value.strip()
+            or value.startswith(("/", "-", "refs/"))
+            or value.endswith(("/", ".", ".lock"))
+            or "//" in value
+            or ".." in value
+            or "@{" in value
+            or any(character in value for character in " ~^:?*[\\")
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or any(part.startswith(".") or part.endswith(".lock") for part in parts)
+        )
+        protected = value.lower() in {"main", "master", "head"}
+        if invalid or (protected and not allow_protected):
+            raise TemporalExecutionValidationError(
+                f"{path} is not an allowed git branch."
+            )
+
+    @classmethod
+    def _target_step_selector_identity(
+        cls, record: TemporalExecutionCanonicalRecord
+    ) -> dict[str, Any]:
+        """Collect target-owned selector identity from canonical persisted state.
+
+        Remediation authoring may copy selectors from several bounded target
+        projections, but create admission must never trust those posted values.
+        The canonical record remains the source of truth for exact membership.
+        """
+
+        output: dict[str, Any] = {
+            "logical_step_ids": set(),
+            "step_execution_ids": set(),
+            "attempts_by_logical_step": {},
+            "checkpoint_refs": set(),
+            "checkpoint_digests": {},
+            "agent_run_ids": set(),
+        }
+        for payload in (
+            getattr(record, "parameters", None),
+            getattr(record, "memo", None),
+            getattr(record, "search_attributes", None),
+            getattr(record, "finish_summary_json", None),
+            getattr(record, "integration_state", None),
+        ):
+            cls._collect_target_step_selector_identity(payload, output)
+        cls._collect_agent_run_ids(
+            {
+                "artifactRefs": getattr(record, "artifact_refs", None),
+            },
+            output["agent_run_ids"],
+        )
+        return output
+
+    @classmethod
+    def _collect_target_step_selector_identity(
+        cls, value: Any, output: dict[str, Any]
+    ) -> None:
+        if isinstance(value, Mapping):
+            logical_step_id = str(
+                value.get("logicalStepId")
+                or value.get("logical_step_id")
+                or value.get("stepId")
+                or value.get("step_id")
+                or ""
+            ).strip()
+            if logical_step_id:
+                output["logical_step_ids"].add(logical_step_id)
+
+            step_execution_id = str(
+                value.get("stepExecutionId")
+                or value.get("step_execution_id")
+                or ""
+            ).strip()
+            if step_execution_id:
+                output["step_execution_ids"].add(step_execution_id)
+
+            attempt = value.get("attempt")
+            if (
+                logical_step_id
+                and isinstance(attempt, int)
+                and not isinstance(attempt, bool)
+                and attempt > 0
+            ):
+                output["attempts_by_logical_step"].setdefault(
+                    logical_step_id, set()
+                ).add(attempt)
+
+            checkpoint_digest = str(
+                value.get("checkpointDigest")
+                or value.get("checkpoint_digest")
+                or ""
+            ).strip()
+            for key in (
+                "checkpointRef",
+                "checkpoint_ref",
+                "stateCheckpointRef",
+                "stepCheckpointRef",
+                "checkpointBeforeRef",
+                "checkpointAfterRef",
+            ):
+                checkpoint_ref = str(value.get(key) or "").strip()
+                if not checkpoint_ref:
+                    continue
+                output["checkpoint_refs"].add(checkpoint_ref)
+                if checkpoint_digest:
+                    output["checkpoint_digests"].setdefault(
+                        checkpoint_ref, set()
+                    ).add(checkpoint_digest)
+            refs_by_boundary = value.get("checkpointRefsByBoundary")
+            if isinstance(refs_by_boundary, Mapping):
+                for item in refs_by_boundary.values():
+                    checkpoint_ref = str(item or "").strip()
+                    if checkpoint_ref:
+                        output["checkpoint_refs"].add(checkpoint_ref)
+
+            agent_run_id = str(
+                value.get("agentRunId") or value.get("agent_run_id") or ""
+            ).strip()
+            if agent_run_id:
+                output["agent_run_ids"].add(agent_run_id)
+            for item in value.values():
+                cls._collect_target_step_selector_identity(item, output)
+            return
+        if isinstance(value, list | tuple):
+            for item in value:
+                cls._collect_target_step_selector_identity(item, output)
 
     @classmethod
     def _collect_agent_run_ids(cls, value: Any, output: set[str]) -> None:
@@ -959,6 +1250,37 @@ class TemporalExecutionService:
         branches_by_id = {
             branch.branch_id: branch for branch in branch_result.scalars()
         }
+        branch_ids = set(branches_by_id)
+        turns_by_id: dict[str, WorkflowCheckpointBranchTurn] = {}
+        artifacts_by_branch: dict[str, dict[str, dict[str, str]]] = {}
+        if branch_ids:
+            turn_result = await self._session.execute(
+                select(WorkflowCheckpointBranchTurn).where(
+                    WorkflowCheckpointBranchTurn.branch_id.in_(branch_ids)
+                )
+            )
+            turns_by_id = {
+                turn.branch_turn_id: turn for turn in turn_result.scalars()
+            }
+            artifact_result = await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact)
+                .where(WorkflowCheckpointBranchArtifact.branch_id.in_(branch_ids))
+                .order_by(WorkflowCheckpointBranchArtifact.created_at.desc())
+                .limit(250)
+            )
+            for artifact in artifact_result.scalars():
+                artifact_kind = str(artifact.artifact_kind or "").strip()
+                artifact_ref = str(artifact.artifact_ref or "").strip()
+                if not artifact_kind or not artifact_ref:
+                    continue
+                category = (
+                    "comparisonArtifacts"
+                    if "comparison" in artifact_kind
+                    else "outputArtifacts"
+                )
+                artifacts_by_branch.setdefault(artifact.branch_id, {}).setdefault(
+                    category, {}
+                )[artifact_kind] = artifact_ref
         branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
             remediation_id: [] for remediation_id in remediation_ids
         }
@@ -988,6 +1310,51 @@ class TemporalExecutionService:
                 "contextArtifactRef": remediation.get("contextArtifactRef"),
             }
             branch = branches_by_id.get(operation.branch_id)
+            turn = turns_by_id.get(str(operation.branch_turn_id or ""))
+            if branch is not None:
+                branch_link.update(
+                    {
+                        "logicalStepId": branch.logical_step_id,
+                        "branchState": branch.state,
+                        "workspacePolicy": branch.workspace_policy,
+                        "runtimeContextPolicy": branch.runtime_context_policy,
+                        "gitBaseBranch": branch.git_base_branch,
+                        "gitWorkBranch": branch.git_work_branch,
+                        "currentHeadCommit": branch.current_head_commit,
+                        "pullRequestUrl": branch.pull_request_url,
+                        "publishStatus": branch.publish_status,
+                        "promotionEvidence": branch.promotion_evidence,
+                        "archiveReason": branch.archive_reason,
+                        "promotedAt": (
+                            branch.promoted_at.isoformat()
+                            if branch.promoted_at
+                            else None
+                        ),
+                        "archivedAt": (
+                            branch.archived_at.isoformat()
+                            if branch.archived_at
+                            else None
+                        ),
+                    }
+                )
+                branch_link.update(artifacts_by_branch.get(branch.branch_id, {}))
+            if turn is not None:
+                branch_link.update(
+                    {
+                        "turnState": turn.status,
+                        "runtimeAgentRunId": turn.runtime_agent_run_id,
+                        "providerSessionId": turn.provider_session_id,
+                        "instructionRef": turn.instruction_ref,
+                        "turnStartedAt": (
+                            turn.started_at.isoformat() if turn.started_at else None
+                        ),
+                        "turnCompletedAt": (
+                            turn.completed_at.isoformat()
+                            if turn.completed_at
+                            else None
+                        ),
+                    }
+                )
             if branch is not None and branch.remediation_loop_id:
                 remaining_work_ref = (branch.artifact_refs or {}).get(
                     "remediationRemainingWork"
@@ -1438,6 +1805,7 @@ class TemporalExecutionService:
                     new_run_id=run_id,
                     owner_id=owner,
                     owner_type=owner_type_enum,
+                    submission_parameters=initial_parameters or {},
                 )
 
         if (
