@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from temporalio import activity
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
 from moonmind.workflows.temporal.activity_catalog import (
@@ -25,6 +26,9 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.activity_runtime import (
     _ACTIVITY_HANDLER_ATTRS,
     validate_activity_catalog_runtime_bindings,
+)
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
 )
 
 
@@ -136,9 +140,22 @@ def test_default_catalog_matches_runtime_binding_inventory() -> None:
     catalog_activity_types = {
         definition.activity_type for definition in catalog.activities
     }
+    workflow_local_activity_types = {
+        activity._Definition.must_from_callable(handler).name
+        for handler in workflow_fleet_activity_handlers()
+    }
+    catalog_workflow_local_activity_types = (
+        catalog_activity_types & workflow_local_activity_types
+    )
 
     validate_activity_catalog_runtime_bindings(catalog)
-    assert catalog_activity_types - {"integration.resolve_adapter_metadata"} == (
+    assert catalog_workflow_local_activity_types == {
+        "integration.resolve_adapter_metadata",
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+        "checkpoint_branch.turn.persist_terminal_rejection",
+    }
+    assert catalog_activity_types - catalog_workflow_local_activity_types == (
         set(_ACTIVITY_HANDLER_ATTRS) - {"mm.tool.execute"}
     )
 

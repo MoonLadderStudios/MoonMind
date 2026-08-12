@@ -165,7 +165,7 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     assert 'Binary::apt::APT::Keep-Downloaded-Packages "true";' in dockerfile
     assert (
         dockerfile.count('Binary::apt::APT::Keep-Downloaded-Packages "true";')
-        == 3
+        == 4
     )
 
 
