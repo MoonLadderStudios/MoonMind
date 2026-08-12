@@ -178,24 +178,39 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
             branch_id="cbr-integration",
             branch_turn_id=turn_id,
         )
-        launch_args = {
+        claim_args = {
             "workflow_id": "mm:wf-branch",
             "branch_id": "cbr-integration",
             "branch_turn_id": turn_id,
             "context_bundle_ref": "artifact://context/integration",
             "step_execution_manifest_ref": "artifact://manifest/integration",
-            "checkpoint_ref": "artifact://checkpoint/integration",
             "diagnostics_ref": "artifact://diagnostics/integration",
             "agent_request_ref": "artifact://agent-request/integration",
-            "agent_result_ref": "artifact://agent-result/integration",
             "created_step_execution_id": (
                 "mm:wf-branch:run-branch:implement:execution:3"
             ),
-            "idempotency_key": launch_key,
+            "runtime_agent_run_id": "mm:wf-branch:agent:branch-turn",
+            "execution_workflow_id": "checkpoint-branch-turn:integration",
+            "launch_idempotency_key": launch_key,
         }
 
-        await service.launch_turn(**launch_args)
-        await service.launch_turn(**launch_args)
+        await service.claim_turn_execution(**claim_args)
+        await service.claim_turn_execution(**claim_args)
+        finalize_args = {
+            "workflow_id": "mm:wf-branch",
+            "branch_id": "cbr-integration",
+            "branch_turn_id": turn_id,
+            "outcome": "succeeded",
+            "agent_result_ref": "artifact://agent-result/integration",
+            "diagnostics_ref": "artifact://terminal-diagnostics/integration",
+            "checkpoint_ref": "artifact://checkpoint/integration",
+            "checkpoint_digest": "sha256:terminal-checkpoint",
+            "provider_session_id": "omnigent-session-integration",
+            "output_refs": ["artifact://output/integration"],
+            "terminal_disposition": "verification_pending",
+        }
+        await service.finalize_turn_execution(**finalize_args)
+        await service.finalize_turn_execution(**finalize_args)
         await session.commit()
 
         artifacts = (
@@ -212,6 +227,7 @@ async def test_checkpoint_branch_launch_persists_minimum_artifact_refs_without_d
         "input.branch_turn.instructions.md",
         "output.branch_turn.checkpoint.json",
         "output.branch_turn.diagnostics.json",
+        "output.branch_turn.launch_diagnostics.json",
         "output.branch_turn.step_execution_manifest.json",
         "runtime.branch_turn.agent_request.json",
         "runtime.branch_turn.agent_result.json",

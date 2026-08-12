@@ -377,6 +377,15 @@ Recovery chooses between:
 
 A branch always obtains independent host/session authority and does not concurrently reuse the original OAuth lease.
 
+Checkpoint Branch turns enter this adapter only through the durable branch-turn
+execution owner. That owner validates checkpoint, instruction, lineage, git,
+profile, policy, and credential authority before compiling the same canonical
+`AgentExecutionRequest` used by ordinary profile-bound work, with
+`checkpointRecovery.mode = branch_from_checkpoint`. The coordinator then owns
+fresh binding, lease, host, session, first-message, harvest, cleanup, and
+release-last evidence. Public APIs and remediation actions do not reconstruct
+or bypass this lifecycle.
+
 Cold restore checks out the pinned baseline in a clean authorized workspace,
 applies the validated checkpoint/diff/head artifact, restores immutable
 instruction/context refs, and passes `externalStateRef` to a fresh Omnigent

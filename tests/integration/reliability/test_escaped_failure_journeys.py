@@ -100,6 +100,9 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
+    checkpoint_branch_turn_terminal_disposition,
+)
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
@@ -4217,3 +4220,63 @@ async def test_omnigent_tool_bundle_uses_deployment_owned_named_volume(
         f"{expected['toolVolume']}:/opt/moonmind-tools:ro"
         in command
     )
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "authority_chain", "expected"),
+    [
+        (
+            "omnigent_embedded_control_delivery_unknown",
+            {},
+            "delivery_unknown",
+        ),
+        ("checkpoint_resume_unavailable", {}, "resume_unavailable"),
+        (
+            None,
+            {
+                "terminal": {
+                    "cleanupCompleted": False,
+                    "leaseReleased": False,
+                    "janitorRequired": True,
+                }
+            },
+            "cleanup_failure",
+        ),
+    ],
+)
+async def test_checkpoint_branch_turn_preserves_escaped_terminal_disposition(
+    provider_code: str | None,
+    authority_chain: dict,
+    expected: str,
+) -> None:
+    result = AgentRunResult(
+        summary="bounded terminal evidence",
+        providerErrorCode=provider_code,
+        failureClass="system_error" if provider_code else None,
+    )
+
+    assert checkpoint_branch_turn_terminal_disposition(
+        result=result,
+        checkpoint_ref="artifact://checkpoint/branch-turn",
+        authority_chain=authority_chain,
+    ) == expected
+
+
+async def test_checkpoint_branch_turn_success_remains_verification_pending() -> None:
+    result = AgentRunResult(
+        outputRefs=["artifact://output/branch-turn"],
+        metadata={"omnigentCheckpointCapture": {"bridgeSessionId": "bridge-1"}},
+    )
+    authority_chain = {
+        "terminal": {
+            "cleanupCompleted": True,
+            "leaseReleased": True,
+            "janitorRequired": False,
+        }
+    }
+
+    assert checkpoint_branch_turn_terminal_disposition(
+        result=result,
+        checkpoint_ref="artifact://checkpoint/branch-turn",
+        authority_chain=authority_chain,
+    ) == "verification_pending"

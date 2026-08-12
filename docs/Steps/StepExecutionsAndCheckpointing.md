@@ -196,6 +196,12 @@ Broad Temporal workflow retries are not a substitute for Step Executions when wo
 15. Resume must not silently degrade to full rerun if checkpoint validation or restoration fails.
 16. Runtime adapters may execute work, but MoonMind owns Step Execution identity, checkpoint policy, durable evidence refs, and final advancement decisions.
 17. New Step Execution and checkpoint contracts that affect Temporal payloads must preserve in-flight compatibility or use an explicit versioned cutover plan.
+18. Every Checkpoint Branch turn is a new server-owned Step Execution. The
+    caller supplies branch intent only; MoonMind allocates execution and runtime
+    identities before the corresponding side effects.
+19. A continued or forked Checkpoint Branch turn pins the exact accepted output
+    checkpoint and Step Execution of its recorded parent turn. Replays reuse the
+    persisted identities and never create another semantic execution.
 
 ### 5.1 Conformance gate for MM-822+ changes
 
@@ -704,6 +710,14 @@ credential generation to match. Provider URLs, raw local paths, container ids,
 OAuth volume contents, and provider-native ids are never artifact authority.
 Live session reattach, workspace cold restore, and branch creation are evaluated
 independently and return bounded machine-readable denial reasons.
+
+Checkpoint Branch launch applies this validation before acquiring a Provider
+Profile lease, mutating a host or repository, creating a session, or posting a
+message. It also validates the branch and turn lineage, expected branch-head
+version, immutable instruction ref and digest, isolated git binding, stored
+workspace/runtime policies, profile and launch snapshots, and current policy
+and credential-generation compatibility. The source workflow input and outcome
+remain immutable throughout branch execution.
 
 Validation failures must be typed, not prose. Canonical failure codes (`StepCheckpointValidationFailureCode`):
 

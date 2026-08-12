@@ -94,6 +94,10 @@ Every branch turn that executes agent/tool work must:
 6. declare runtime/session policy before launch;
 7. write or update Step Execution manifest evidence.
 
+The branch-turn execution owner allocates the Step Execution, Agent Run, bridge,
+host, lease, and provider-session identities. API callers select immutable
+intent only; they cannot submit runtime identities or claim runtime results.
+
 ### 2.4 Branches are candidates until promoted
 
 Creating, continuing, or publishing a branch does not automatically make it the canonical continuation of the workflow. A branch becomes canonical only through an explicit promotion operation.
@@ -595,6 +599,11 @@ Representative request:
 }
 ```
 
+Create, continue, and fork requests persist branch intent and immediately route
+the initial turn through the same server-owned execution owner. They never
+prepopulate Step Execution, Agent Run, bridge, host, lease, session, checkpoint,
+result, publication, diagnostics, capture, cleanup, or terminal evidence.
+
 ### 8.3 Continue branch
 
 ```http
@@ -610,7 +619,7 @@ Representative request:
     "text": "Continue this branch. Add tests for the API contract fix. Do not broaden the public interface."
   },
   "workspacePolicy": "continue_from_previous_execution",
-  "runtimeContextPolicy": "reuse_session_new_epoch",
+  "runtimeContextPolicy": "fresh_agent_run",
   "idempotencyKey": "mm:wf:cbr_01J:turn:add-tests"
 }
 ```
@@ -635,7 +644,47 @@ Representative request:
 }
 ```
 
-### 8.5 Compare branches
+Continue and fork each allocate a new semantic Step Execution. Their source is
+the exact accepted output checkpoint of the recorded parent turn, including its
+artifact digest and parent Step Execution identity; the branch-root checkpoint
+is not silently reused after the branch has advanced.
+
+### 8.5 Launch branch turn
+
+```http
+POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/turns/{branchTurnId}/launch
+```
+
+The launch body is intent-only: a stable `idempotencyKey` and, when required by
+the caller's concurrency model, `expectedBranchHeadVersion`. Unknown fields are
+rejected with the typed API validation response. In particular, callers cannot
+provide Step Execution, Agent Run, bridge, host, lease, provider-session,
+workspace, request, result, checkpoint, publication, diagnostics, capture,
+cleanup, or terminal authority.
+
+One durable owner performs the full lifecycle:
+
+1. validate the pinned source, lineage, checkpoint ref and digest, immutable
+   instructions, git binding, stored policies and profiles, current credential
+   generation, and expected branch head before external mutation;
+2. claim the turn and stable launch identity, allocate server-owned Step
+   Execution and Agent Run identities, and persist them before dispatch;
+3. compile the canonical profile-bound `external/omnigent` execution request
+   with `checkpointRecovery.mode = branch_from_checkpoint` and dispatch the
+   ordinary `MoonMind.AgentRun` path;
+4. harvest terminal, workspace, checkpoint, output, publication, diagnostics,
+   capture, and cleanup evidence; then release host and Provider Profile
+   authority in the normal release-last order; and
+5. persist the terminal turn state and the separate remediation-verification
+   handoff.
+
+The idempotency key deterministically names the execution boundary. A retry or
+workflow replay reuses the persisted Step Execution, Agent Run, bridge, and
+workflow identities and cannot post a second first message. A branch always
+uses fresh host/session authority and never reuses the source session or its
+mutable OAuth lease.
+
+### 8.6 Compare branches
 
 ```http
 GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}
@@ -643,7 +692,7 @@ GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against=
 
 Comparison produces an artifact-backed branch comparison record, including git range diff refs, gate verdict summaries, diagnostics refs, and a bounded natural-language summary.
 
-### 8.6 Promote branch
+### 8.7 Promote branch
 
 ```http
 POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/promote
@@ -660,7 +709,7 @@ Representative request:
 }
 ```
 
-### 8.7 Archive branch
+### 8.8 Archive branch
 
 ```http
 POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/archive
@@ -668,7 +717,7 @@ POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/archive
 
 Archive is non-destructive. It hides the branch from active work but keeps records, artifacts, git refs, and provider diagnostics inspectable.
 
-### 8.8 Execution detail output branch
+### 8.9 Execution detail output branch
 
 The execution detail contract should expose a first-class optional `outputBranch` field. It is derived from the verified checkpoint git binding when available, with the canonical finish summary as a compatibility fallback.
 

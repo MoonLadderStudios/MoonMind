@@ -1138,7 +1138,11 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
 # side-effecting activity implementations.
 _CAPABILITY_ROUTED_ACTIVITY_ALIASES = frozenset({"mm.tool.execute"})
 _EXTERNALLY_BOUND_CATALOG_ACTIVITIES = frozenset(
-    {"integration.resolve_adapter_metadata"}
+    {
+        "integration.resolve_adapter_metadata",
+        "checkpoint_branch.turn.mark_running",
+        "checkpoint_branch.turn.persist_terminal",
+    }
 )
 
 

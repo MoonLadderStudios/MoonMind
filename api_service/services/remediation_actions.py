@@ -9,6 +9,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+)
 from moonmind.omnigent.policies import (
     bind_approval_request,
     policy_authority_evidence,
@@ -41,10 +44,12 @@ class TemporalRemediationControlPlane:
         client: TemporalClientAdapter | None = None,
         execution_service: TemporalExecutionService | None = None,
         checkpoint_branch_service: CheckpointBranchService | None = None,
+        checkpoint_branch_turn_owner: CheckpointBranchTurnExecutionOwner | None = None,
     ) -> None:
         self._client = client or TemporalClientAdapter()
         self._execution_service = execution_service
         self._checkpoint_branch_service = checkpoint_branch_service
+        self._checkpoint_branch_turn_owner = checkpoint_branch_turn_owner
 
     @staticmethod
     def _parts(
@@ -180,6 +185,8 @@ class TemporalRemediationControlPlane:
             raise ValueError("instructionDigest must be a sha256 digest")
         if self._checkpoint_branch_service is None:
             raise RuntimeError("checkpoint branch service is unavailable")
+        if self._checkpoint_branch_turn_owner is None:
+            raise RuntimeError("checkpoint branch turn execution owner is unavailable")
         branch_id = f"remediation-{action_id}"
         turn_id = f"{branch_id}-turn-1"
         graph = await self._checkpoint_branch_service.create_branch_graph(
@@ -190,6 +197,8 @@ class TemporalRemediationControlPlane:
                     "workflowId": target.workflow_id,
                     "rootWorkflowId": target.workflow_id,
                     "runId": target.current_run_id,
+                    "logicalStepId": params.get("logicalStepId"),
+                    "sourceExecutionOrdinal": params.get("executionOrdinal"),
                     "checkpointBoundary": str(
                         params.get("checkpointBoundary") or "after_execution"
                     ),
@@ -208,21 +217,44 @@ class TemporalRemediationControlPlane:
                 "createdBy": f"remediation:{remediation_workflow_id}",
                 "instructionRef": instruction_ref,
                 "instructionDigest": instruction_digest,
-                "contextBundleRef": context_ref,
                 "idempotencyKey": action_id,
             }
         )
-        # Persisting the branch graph is *delivery*, not a verified repair. The
-        # trusted verification phase re-reads the target objective from fresh
-        # evidence and classifies the actual repair outcome (issue #3622); this
-        # adapter no longer claims "verified" immediately after persistence.
+        repository = self._required(params, "repository")
+        base_branch = self._required(params, "baseBranch")
+        base_commit = self._required(params, "baseCommit")
+        work_branch = str(
+            params.get("gitWorkBranch") or f"remediation/{action_id}"
+        ).strip()
+        await self._checkpoint_branch_service.configure_server_launch_authority(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+            repository=repository,
+            base_branch=base_branch,
+            base_commit=base_commit,
+            work_branch=work_branch,
+            provider_profile_ref=(
+                str(params.get("providerProfileRef") or "").strip() or None
+            ),
+            remediation_context_ref=context_ref,
+        )
+        launched = await self._checkpoint_branch_turn_owner.launch(
+            workflow_id=target.workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=turn_id,
+            intent={"idempotencyKey": action_id},
+        )
+        # Delivery and target repair remain distinct.  The existing verifier
+        # decides repair success from the exact terminal branch head.
         return {
             "status": "accepted",
-            "message": "Checkpoint Branch was persisted by its durable owner.",
+            "message": "Checkpoint Branch turn was dispatched by its durable owner.",
             "beforeEvidenceRefs": before,
             "afterEvidenceRefs": [
                 f"checkpoint-branch:{graph.branch.branch_id}",
                 f"checkpoint-branch-turn:{turn_id}",
+                f"step-execution:{launched.created_step_execution_id}",
                 context_ref,
             ],
             "verificationRequired": True,
@@ -230,8 +262,8 @@ class TemporalRemediationControlPlane:
                 "Re-verify the target objective from fresh evidence; a persisted "
                 "branch is a remediation candidate, not a confirmed repair."
             ),
-            "deliveryStage": "branch_graph_created",
-            "branchTurnLaunched": False,
+            "deliveryStage": "branch_turn_dispatched",
+            "branchTurnLaunched": True,
             "terminalBranchResultAvailable": False,
         }
 
@@ -569,8 +601,19 @@ def build_remediation_action_executor(
         checkpoint_branch_service=(
             CheckpointBranchService(session) if session is not None else None
         ),
+        checkpoint_branch_turn_owner=(
+            CheckpointBranchTurnExecutionOwner(
+                session,
+                principal="service:checkpoint-branch-remediation",
+                client=client,
+            )
+            if session is not None
+            else None
+        ),
     )
     ready = set(remediation_action_kinds())
+    if session is None:
+        ready.discard("checkpoint_branch.create_from_remediation_context")
     return MoonMindControlPlaneRemediationActionExecutor(
         {
             action_kind: handler
