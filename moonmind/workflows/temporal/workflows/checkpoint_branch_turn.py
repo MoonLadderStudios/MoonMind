@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -12,7 +13,10 @@ from urllib.parse import urlsplit
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import CancelledError
-from temporalio.workflow import ChildWorkflowCancellationType
+from temporalio.workflow import (
+    ActivityCancellationType,
+    ChildWorkflowCancellationType,
+)
 
 with workflow.unsafe.imports_passed_through():
     from sqlalchemy import select
@@ -39,6 +43,9 @@ with workflow.unsafe.imports_passed_through():
 
 WORKFLOW_NAME = "MoonMind.CheckpointBranchTurn"
 SCHEMA_VERSION = "checkpoint-branch-turn-execution/v1"
+CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH = (
+    "checkpoint-branch-cancellation-terminal-v1"
+)
 
 _RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
@@ -706,15 +713,6 @@ async def persist_checkpoint_branch_turn_terminal(
             branch_turn_id=branch_turn_id,
         )
         _validate_secret_and_path_safety(raw_result, path="agentResult")
-        scan = scan_outbound_text(
-            json.dumps(raw_result, sort_keys=True),
-            location="checkpointBranch.agentResult",
-            high_security_mode=True,
-        )
-        if not scan.allowed:
-            raise CheckpointBranchRetainedEvidenceError(
-                "agent result contains credential-like retained evidence"
-            )
 
         checkpoint = _mapping(payload.get("checkpoint"))
         submitted_checkpoint_ref = (
@@ -899,6 +897,18 @@ async def persist_checkpoint_branch_turn_terminal(
         result_payload = {
             key: value for key, value in result_payload.items() if value is not None
         }
+        # The coordinator result contains live runtime authority (including a
+        # credential *reference*) needed to construct the next checkpoint. Scan
+        # the credential-free retained projection, not that transient envelope.
+        scan = scan_outbound_text(
+            json.dumps(result_payload, sort_keys=True),
+            location="checkpointBranch.agentResult",
+            high_security_mode=True,
+        )
+        if not scan.allowed:
+            raise CheckpointBranchRetainedEvidenceError(
+                "agent result contains credential-like retained evidence"
+            )
         agent_result_ref = await _write_result_artifact(
             principal=principal,
             payload=result_payload,
@@ -1014,7 +1024,10 @@ async def persist_checkpoint_branch_turn_terminal_rejection(
                 "verificationPending": bool(existing.get("verificationPending")),
                 "agentResultRef": existing.get("agentResultRef"),
                 "diagnosticsRef": existing.get("diagnosticsRef"),
-                "checkpointRef": _branch.current_head_checkpoint_ref,
+                # Rejected evidence never advances the branch head. The branch
+                # can still point at its source checkpoint, which is not a
+                # terminal checkpoint for this turn.
+                "checkpointRef": None,
                 "terminalRef": existing.get("terminalRef"),
             }
 
@@ -1102,7 +1115,11 @@ class MoonMindCheckpointBranchTurnWorkflow:
         result: AgentRunResult,
         outcome: str,
         checkpoint: Mapping[str, Any] | None = None,
+        cancellation_type: ActivityCancellationType | None = None,
     ) -> dict[str, Any]:
+        activity_options: dict[str, Any] = {}
+        if cancellation_type is not None:
+            activity_options["cancellation_type"] = cancellation_type
         terminal_payload = {
             "workflowId": payload["workflowId"],
             "branchId": payload["branchId"],
@@ -1124,6 +1141,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
                     start_to_close_timeout=timedelta(minutes=2),
                     schedule_to_close_timeout=timedelta(minutes=5),
                     retry_policy=_RETRY,
+                    **activity_options,
                 )
             )
         except Exception:
@@ -1151,8 +1169,49 @@ class MoonMindCheckpointBranchTurnWorkflow:
                     start_to_close_timeout=timedelta(minutes=2),
                     schedule_to_close_timeout=timedelta(minutes=5),
                     retry_policy=_RETRY,
+                    **activity_options,
                 )
             )
+
+    async def _persist_cancellation_terminal(
+        self, payload: Mapping[str, Any]
+    ) -> None:
+        """Persist cancellation even when it arrives at the first Activity."""
+
+        self._phase = "canceled"
+        canceled_result = AgentRunResult(
+            summary="Checkpoint Branch turn was canceled.",
+            failureClass="canceled",
+        )
+        if not workflow.patched(CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH):
+            self._result = await self._persist_terminal(
+                payload,
+                result=canceled_result,
+                outcome="canceled",
+            )
+            return
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            # Python retains the cancellation count after CancelledError is
+            # caught. Clear it so this workflow task can durably schedule the
+            # abandonment-protected terminal Activity before re-propagating
+            # the original Temporal cancellation.
+            while current_task.cancelling():
+                current_task.uncancel()
+        terminal_task = asyncio.create_task(
+            self._persist_terminal(
+                payload,
+                result=canceled_result,
+                outcome="canceled",
+                cancellation_type=ActivityCancellationType.ABANDON,
+            )
+        )
+        try:
+            self._result = await asyncio.shield(terminal_task)
+        except (CancelledError, asyncio.CancelledError):
+            # Terminal state is authoritative evidence. A repeated cancel must
+            # not interrupt its abandonment-protected Activity.
+            self._result = await terminal_task
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1160,18 +1219,22 @@ class MoonMindCheckpointBranchTurnWorkflow:
             raise ValueError("unsupported Checkpoint Branch turn schema")
         agent_request = AgentExecutionRequest.model_validate(payload["agentRequest"])
         self._phase = "dispatching"
-        await workflow.execute_activity(
-            "checkpoint_branch.turn.mark_running",
-            {
-                "workflowId": payload["workflowId"],
-                "branchId": payload["branchId"],
-                "branchTurnId": payload["branchTurnId"],
-                "agentRunWorkflowId": payload["agentRunWorkflowId"],
-            },
-            start_to_close_timeout=timedelta(minutes=1),
-            schedule_to_close_timeout=timedelta(minutes=3),
-            retry_policy=_RETRY,
-        )
+        try:
+            await workflow.execute_activity(
+                "checkpoint_branch.turn.mark_running",
+                {
+                    "workflowId": payload["workflowId"],
+                    "branchId": payload["branchId"],
+                    "branchTurnId": payload["branchTurnId"],
+                    "agentRunWorkflowId": payload["agentRunWorkflowId"],
+                },
+                start_to_close_timeout=timedelta(minutes=1),
+                schedule_to_close_timeout=timedelta(minutes=3),
+                retry_policy=_RETRY,
+            )
+        except (CancelledError, asyncio.CancelledError):
+            await self._persist_cancellation_terminal(payload)
+            raise
         terminal_handoff_started = False
         try:
             self._phase = "running"
@@ -1293,16 +1356,8 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 else str(self._result.get("status") or "failed")
             )
             return self._result
-        except CancelledError:
-            self._phase = "canceled"
-            self._result = await self._persist_terminal(
-                payload,
-                result=AgentRunResult(
-                    summary="Checkpoint Branch turn was canceled.",
-                    failureClass="canceled",
-                ),
-                outcome="canceled",
-            )
+        except (CancelledError, asyncio.CancelledError):
+            await self._persist_cancellation_terminal(payload)
             raise
         except Exception as exc:
             # If even the sanitized fallback Activity cannot persist, retain the
@@ -1326,6 +1381,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
 
 
 __all__ = [
+    "CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH",
     "MoonMindCheckpointBranchTurnWorkflow",
     "WORKFLOW_NAME",
     "mark_checkpoint_branch_turn_running",

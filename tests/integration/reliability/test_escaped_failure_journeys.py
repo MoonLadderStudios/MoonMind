@@ -129,6 +129,12 @@ from tests.integration.reliability.helpers import (
     load_replay,
 )
 from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
+from tests.helpers.checkpoint_branch_turn_runtime import (
+    CheckpointBranchRuntimeLedger,
+    InjectedBoundaryFailure,
+    checkpoint_branch_policy_snapshot,
+    execute_checkpoint_branch_request,
+)
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
     _pr_resolver_request,
@@ -153,6 +159,117 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _checkpoint_branch_turn_profile_request() -> AgentExecutionRequest:
+    policy = checkpoint_branch_policy_snapshot()
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId="checkpoint-branch-turn-retry-matrix",
+        idempotencyKey="checkpoint-branch-turn:retry-matrix",
+        instructionRef="artifact://branch/instruction",
+        inputRefs=["artifact://branch/instruction"],
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": "checkpoint-branch-turn:turn-retry",
+            "runId": "branch-turn-turn-retry",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": (
+                "checkpoint-branch-turn:turn-retry:branch-turn-turn-retry:"
+                "implement:execution:1"
+            ),
+            "reason": "checkpoint_branch",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "contextBundleRef": "artifact://branch/context",
+            "contextBundleDigest": "sha256:" + "a" * 64,
+            "preparedInputRefs": ["artifact://branch/instruction"],
+        },
+        checkpointRecovery={
+            "recoveryAction": "branch_required",
+            "omnigentCheckpoint": {
+                "schemaVersion": "v2",
+                "workflowId": "source-workflow",
+                "runId": "source-run",
+                "logicalStepId": "implement",
+                "stepExecutionId": "source-step-execution",
+                "attemptOrdinal": 1,
+                "boundary": "after_execution",
+                "providerProfileId": "profile-1",
+                "credentialRef": "credential://profile-1",
+                "credentialGeneration": 1,
+                "providerLeaseRef": "source-provider-lease",
+                "hostBindingRef": "source-host-binding",
+                "hostLeaseRef": "source-host-lease",
+                "endpointRef": "default",
+                "omnigentHostId": "source-host",
+                "omnigentSessionId": "source-session",
+                "bridgeSessionId": "source-bridge",
+                "externalStateRef": "artifact://source/external-state",
+                "externalStateDigest": "sha256:" + "b" * 64,
+                "idempotencyKey": "source-first-message",
+                "executionProfileRef": "profile-1",
+                "launchPolicyRef": "codex-on-demand@1",
+                "policyId": policy["policyId"],
+                "policyVersion": policy["policyVersion"],
+                "policyRef": policy["policyRef"],
+                "policyDigest": policy["policyDigest"],
+                "policySnapshotRef": policy["snapshotRef"],
+                "policyValidation": policy["validation"],
+                "lastBridgeEventCursor": "9",
+                "firstMessageId": "source-message",
+                "firstMessageDigest": "sha256:" + "c" * 64,
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "source-workspace",
+                    "relativePath": "repo",
+                },
+                "baselineCommit": "abc123",
+                "headCommit": "def456",
+                "headRef": "artifact://source/head",
+                "headDigest": "sha256:" + "d" * 64,
+                "workspaceCheckpointRef": "artifact://source/workspace",
+                "workspaceCheckpointDigest": "sha256:" + "e" * 64,
+                "sourceBranch": "main",
+                "publicationState": "none",
+                "capturedAt": "2026-08-12T00:00:00Z",
+                "producerVersion": "moonmind-test",
+                "validation": {
+                    "valid": True,
+                    "liveReattachAvailable": True,
+                    "workspaceColdRestoreAvailable": True,
+                    "branchCreationAvailable": True,
+                },
+            },
+            "immutableSource": {"instructionDigest": "sha256:" + "f" * 64},
+            "immutableRequested": {"instructionDigest": "sha256:" + "0" * 64},
+        },
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "branch-workspace-retry",
+                "relativePath": "repo",
+            },
+            "repository": "https://example.com/repo.git",
+            "startingBranch": "main",
+            "targetBranch": "checkpoint-branch/retry",
+            "checkoutCommit": "abc123",
+        },
+        parameters={
+            "repository": "https://example.com/repo.git",
+            "startingBranch": "main",
+            "targetBranch": "checkpoint-branch/retry",
+            "publishMode": "pr",
+            "omnigent": {
+                "target": {
+                    "profileRef": "omnigent-codex@1",
+                    "launchPolicyRef": "codex-on-demand@1",
+                }
+            },
+        },
+    )
 
 
 async def test_omnigent_pr_step_reuses_candidate_against_original_base(
@@ -4375,3 +4492,115 @@ async def test_checkpoint_branch_turn_terminal_retry_preserves_original_payload(
     ).hexdigest()
     assert rejection_payloads[0]["terminalPayloadDigest"] == expected_digest
     assert "agentResult" not in rejection_payloads[0]
+
+
+@pytest.mark.parametrize(
+    ("stage", "position"),
+    [
+        (stage, position)
+        for stage in (
+            "profile_lease",
+            "host_lease",
+            "host_start",
+            "session_creation",
+            "first_message",
+            "terminal_harvest",
+            "publication",
+            "cleanup",
+            "capacity_release",
+        )
+        for position in ("before", "after")
+    ],
+)
+async def test_checkpoint_branch_turn_restart_matrix_preserves_exact_once_authority(
+    stage: str,
+    position: str,
+) -> None:
+    """Restart and duplicate delivery reuse all coordinator-owned identities."""
+
+    request = _checkpoint_branch_turn_profile_request()
+    ledger = CheckpointBranchRuntimeLedger(
+        fail_stage=stage,
+        fail_position=position,
+    )
+    result: AgentRunResult | None = None
+
+    # A real Activity retry constructs a fresh coordinator against the same
+    # durable owners.  Cleanup/release/publication failures can return a bounded
+    # failed result rather than raising, so the harness also re-enters those
+    # completed calls once after the injected failure is observed.
+    for _attempt in range(3):
+        try:
+            result = await execute_checkpoint_branch_request(
+                request,
+                ledger=ledger,
+            )
+        except InjectedBoundaryFailure:
+            continue
+        if ledger.failure_injected and result.failure_class:
+            continue
+        if ledger.failure_injected:
+            break
+
+    assert ledger.failure_injected is True
+    assert result is not None
+    if result.failure_class:
+        result = await execute_checkpoint_branch_request(request, ledger=ledger)
+    assert result.failure_class is None
+
+    # Duplicate delivery after terminal completion must reattach to the exact
+    # same authority rather than create a second external effect.
+    replayed = await execute_checkpoint_branch_request(request, ledger=ledger)
+    assert replayed.failure_class is None
+
+    for identity_kind in (
+        "provider_lease",
+        "host_lease",
+        "host",
+        "bridge_session",
+        "provider_session",
+        "first_message",
+        "output",
+        "branch",
+        "commit",
+        "pull_request",
+        "publication",
+        "cleanup",
+        "capacity_release",
+    ):
+        assert ledger.effect_counts[identity_kind] == 1, identity_kind
+        assert len(ledger.identities[identity_kind]) == 1, identity_kind
+
+    assert "source-provider-lease" not in ledger.identities["provider_lease"]
+    assert "source-host-lease" not in ledger.identities["host_lease"]
+    assert "source-host" not in ledger.identities["host"]
+    assert "source-bridge" not in ledger.identities["bridge_session"]
+    assert "source-session" not in ledger.identities["provider_session"]
+    assert "source-message" not in ledger.identities["first_message"]
+    assert len({request.step_execution.step_execution_id}) == 1
+    assert {
+        item.step_execution.step_execution_id for item in ledger.requests
+    } == {request.step_execution.step_execution_id}
+    assert {
+        item.workspace_spec["workspaceLocator"]["workspaceId"]
+        for item in ledger.requests
+    } == {"branch-workspace-retry"}
+
+    # Every successful retry cycle releases host authority before Provider
+    # Profile capacity and records terminal evidence last.
+    last_host_cleanup = max(
+        index
+        for index, event in enumerate(ledger.lifecycle)
+        if event == ("host_cleanup", "completed")
+    )
+    last_profile_release = max(
+        index
+        for index, event in enumerate(ledger.lifecycle)
+        if event == ("profile_lease_release", "completed")
+    )
+    last_terminal = max(
+        index
+        for index, (event_type, _status) in enumerate(ledger.lifecycle)
+        if event_type == "terminal"
+    )
+    assert last_host_cleanup < last_profile_release < last_terminal

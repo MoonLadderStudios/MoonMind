@@ -284,6 +284,7 @@ async def _persist_prepared_checkpoint_branch(
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
             parent_turn_id=parent_turn_id,
+            runtime_context_policy=runtime_context_policy,
             follow_up_retrieval=follow_up_retrieval,
         )
 
@@ -317,6 +318,7 @@ async def _persist_branch_turn(
     instruction_ref: str,
     instruction_digest: str,
     parent_turn_id: str | None,
+    runtime_context_policy: str | None,
     follow_up_retrieval: Mapping[str, Any] | None,
 ) -> None:
     binding = prepared.binding
@@ -336,6 +338,7 @@ async def _persist_branch_turn(
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
             workspace_policy=str(binding.workspace_policy),
+            runtime_context_policy=runtime_context_policy,
             git_work_branch=binding.work_branch,
             workspace_restore_ref=workspace_restore_ref,
             git_binding_ref=git_binding_ref,
@@ -354,6 +357,7 @@ async def _persist_branch_turn(
         "instruction_digest": instruction_digest,
         "idempotency_key": binding.idempotency_key,
         "workspace_policy": str(binding.workspace_policy),
+        "runtime_context_policy": runtime_context_policy,
         "git_work_branch": binding.work_branch,
     }
     for field_name, expected_value in expected.items():
