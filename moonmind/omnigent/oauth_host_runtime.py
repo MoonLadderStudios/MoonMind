@@ -11,6 +11,7 @@ import shutil
 import tarfile
 import tempfile
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +37,7 @@ from moonmind.repositories.lore_adapter import (
     LoreWorkspaceError,
 )
 from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
     OmnigentHostLease,
     OmnigentOAuthHostBinding,
 )
@@ -58,6 +60,10 @@ from moonmind.security.egress import (
     attest_docker_egress,
     attest_docker_workload_egress,
     omnigent_proxy_env,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+    serialize_conformance_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.github_service import GitHubService
@@ -253,6 +259,7 @@ class OmnigentOAuthHostRuntime:
         current_step_execution_id: str,
         resolved_skillset_ref: str | None = None,
         artifact_gateway: Any | None = None,
+        evidence_request: AgentExecutionRequest | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
         github_token: str | None = None,
@@ -448,6 +455,24 @@ class OmnigentOAuthHostRuntime:
         validated["mountedTools"] = mounted_tool_evidence
         validated["egressAttestation"] = result["egressAttestation"]
         validated["workspaceResolution"] = dict(self._last_workspace_evidence)
+        if evidence_request is not None and artifact_gateway is not None:
+            launch_evidence = self._host_egress_evidence_payload(
+                binding=binding,
+                host_lease=host_lease,
+                launch=launch,
+                egress_evidence=egress_evidence,
+                evidence_request=evidence_request,
+                state="launched",
+                cleanup_result="pending",
+                reconciliation_result="not_required",
+            )
+            launch_ref = await self._publish_host_egress_evidence(
+                artifact_gateway=artifact_gateway,
+                evidence_request=evidence_request,
+                name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
+                payload=launch_evidence,
+            )
+            validated["egressEvidenceRef"] = launch_ref
         return validated
 
     @staticmethod
@@ -747,11 +772,187 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
             ) from exc
 
+    @staticmethod
+    def _authority_version(ref: object) -> str:
+        text = str(ref or "").strip()
+        return text.rsplit("@", 1)[1] if "@" in text else text
+
+    @staticmethod
+    def _attestation_from_workload_evidence(
+        evidence: Mapping[str, Any],
+    ) -> EgressAttestation:
+        """Recover only the immutable gateway-attestation fields."""
+
+        aliases = (
+            "profileRef",
+            "profileDigest",
+            "enforcerImplementation",
+            "backendRef",
+            "networkRef",
+            "gatewayRef",
+            "appliedRuleDigest",
+            "configDigest",
+            "gatewayImageDigest",
+            "healthResult",
+            "validatedAt",
+            "validationResult",
+            "deniedConnectionCount",
+            "diagnostics",
+        )
+        return EgressAttestation.model_validate(
+            {alias: evidence[alias] for alias in aliases if alias in evidence}
+        )
+
+    @staticmethod
+    def _evidence_time(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+    @classmethod
+    def _host_egress_evidence_payload(
+        cls,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        launch: Mapping[str, Any],
+        egress_evidence: Mapping[str, Any],
+        evidence_request: AgentExecutionRequest,
+        state: str,
+        cleanup_result: str,
+        reconciliation_result: str,
+        launch_evidence_ref: str | None = None,
+    ) -> dict[str, Any]:
+        host_mode = str(launch.get("hostMode") or "")
+        remediation = evidence_request.remediation_workspace is not None
+        conformance_row = (
+            f"remediation_{host_mode}" if remediation else host_mode
+        )
+        policy_authority = launch.get("policyAuthority")
+        payload = {
+            "schemaVersion": 1,
+            "kind": "restricted-egress-omnigent-conformance",
+            "conformanceRow": conformance_row,
+            "state": state,
+            "workflowCorrelationId": evidence_request.correlation_id,
+            "idempotencyKey": evidence_request.idempotency_key,
+            "providerProfileId": binding.provider_profile_id,
+            "providerLeaseRef": host_lease.provider_lease_id,
+            "hostBindingRef": binding.binding_ref,
+            "hostLeaseRef": host_lease.lease_id,
+            "credentialGeneration": host_lease.credential_generation,
+            "agentProfileRef": launch.get("executionProfileRef"),
+            "agentProfileVersion": cls._authority_version(
+                launch.get("executionProfileRef")
+            ),
+            "launchPolicyRef": launch.get("launchPolicyRef"),
+            "launchPolicyVersion": cls._authority_version(
+                launch.get("launchPolicyRef")
+            ),
+            "policyAuthority": (
+                dict(policy_authority)
+                if isinstance(policy_authority, Mapping)
+                else policy_authority
+            ),
+            "egressProfileVersion": OMNIGENT_EGRESS_PROFILE.version,
+            "securityPolicyRef": OMNIGENT_EGRESS_PROFILE.security_review_ref,
+            "securityPolicyVersion": OMNIGENT_EGRESS_PROFILE.version,
+            "hostMode": host_mode,
+            "runtimeProvenance": "omnigent",
+            "cleanupResult": cleanup_result,
+            "reconciliationResult": reconciliation_result,
+            "launchEvidenceRef": launch_evidence_ref,
+            **dict(egress_evidence),
+        }
+        return payload
+
+    @staticmethod
+    async def _publish_host_egress_evidence(
+        *,
+        artifact_gateway: Any,
+        evidence_request: AgentExecutionRequest,
+        name: str,
+        payload: Mapping[str, Any],
+    ) -> str:
+        """Publish and immediately re-resolve one protected host evidence row."""
+
+        data = serialize_conformance_evidence(
+            payload,
+            location=f"omnigent-host-egress:{name}",
+        )
+        ref: str | None = None
+        resolved: bytes | str | Mapping[str, Any] | None = None
+        write_bytes = getattr(artifact_gateway, "write_bytes", None)
+        if callable(write_bytes):
+            ref = await write_bytes(
+                request=evidence_request,
+                name=name,
+                payload=data,
+                link_type="security.egress.omnigent",
+                content_type="application/json",
+            )
+            read_bytes = getattr(artifact_gateway, "read_bytes", None)
+            if not callable(read_bytes):
+                raise OmnigentOAuthHostError(
+                    "Omnigent egress evidence cannot be independently resolved",
+                    code="OMNIGENT_EGRESS_EVIDENCE_UNRESOLVABLE",
+                )
+            resolved = await read_bytes(ref)
+        else:
+            create = getattr(artifact_gateway, "create", None)
+            write_complete = getattr(artifact_gateway, "write_complete", None)
+            read = getattr(artifact_gateway, "read", None)
+            if not (callable(create) and callable(write_complete) and callable(read)):
+                raise OmnigentOAuthHostError(
+                    "Omnigent egress evidence publisher is unavailable",
+                    code="OMNIGENT_EGRESS_EVIDENCE_UNAVAILABLE",
+                )
+            principal = "system"
+            artifact, _upload = await create(
+                principal=principal,
+                content_type="application/json",
+                size_bytes=len(data),
+                metadata_json={
+                    "artifact_type": "security.egress.omnigent",
+                    "name": name,
+                    "workflow_id": evidence_request.correlation_id,
+                    "idempotency_key": evidence_request.idempotency_key,
+                },
+            )
+            ref = str(artifact.artifact_id)
+            await write_complete(
+                artifact_id=ref,
+                principal=principal,
+                payload=data,
+                content_type="application/json",
+            )
+            _artifact, resolved = await read(
+                artifact_id=ref,
+                principal=principal,
+            )
+        parse_and_verify_conformance_evidence(
+            resolved,
+            location=f"omnigent-host-egress-resolved:{name}",
+        )
+        if not ref:
+            raise OmnigentOAuthHostError(
+                "Omnigent egress evidence publisher returned no reference",
+                code="OMNIGENT_EGRESS_EVIDENCE_UNAVAILABLE",
+            )
+        return ref
+
     async def _attest_launched_workload_egress(
         self,
         *,
         attestation: EgressAttestation,
         attachment_identity: str,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
     ) -> dict[str, object]:
         async def runner(args):
             code, stdout, stderr = await self._run("docker", *args, check=False)
@@ -763,6 +964,8 @@ class OmnigentOAuthHostRuntime:
                 profile=OMNIGENT_EGRESS_PROFILE,
                 attestation=attestation,
                 attachment_identity=attachment_identity,
+                started_at=started_at,
+                finished_at=finished_at,
             )
         except RuntimeError as exc:
             raise OmnigentOAuthHostError(
@@ -1157,27 +1360,158 @@ class OmnigentOAuthHostRuntime:
         return Path(mountpoint).resolve()
 
     async def stop_host(
-        self, *, binding: OmnigentOAuthHostBinding, host_lease: OmnigentHostLease
-    ) -> None:
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        effective_launch: Mapping[str, Any] | None = None,
+        egress_evidence: Mapping[str, Any] | None = None,
+        launch_evidence_ref: str | None = None,
+        evidence_request: AgentExecutionRequest | None = None,
+        artifact_gateway: Any | None = None,
+    ) -> dict[str, Any]:
+        attachment_identity = str(
+            (egress_evidence or {}).get("attachmentIdentity") or ""
+        ).strip()
+        terminal_egress_evidence = dict(egress_evidence or {})
+        terminal_validation_error: Exception | None = None
+        if egress_evidence is not None and attachment_identity:
+            if await self.container_exists(attachment_identity):
+                try:
+                    observed = await self._attest_launched_workload_egress(
+                        attestation=self._attestation_from_workload_evidence(
+                            egress_evidence
+                        ),
+                        attachment_identity=attachment_identity,
+                        started_at=self._evidence_time(
+                            egress_evidence.get("validatedAt")
+                        ),
+                        finished_at=datetime.now(UTC),
+                    )
+                    terminal_egress_evidence.update(observed)
+                    terminal_egress_evidence["terminalValidationResult"] = "passed"
+                except Exception as exc:  # cleanup and publish failure evidence
+                    terminal_validation_error = exc
+                    terminal_egress_evidence.update(
+                        {
+                            "terminalValidationResult": "failed",
+                            "terminalValidationErrorCode": type(exc).__name__,
+                        }
+                    )
+            else:
+                terminal_egress_evidence["terminalValidationResult"] = (
+                    "attachment_absent_before_cleanup"
+                )
         if not binding.host_launch_profile_ref:
             await self.stop_static_host(binding=binding)
-            return
-        container_name = host_lease.container_name or deterministic_host_container_name(
-            host_lease.lease_id
-        )
-        if await self.container_exists(container_name):
-            await self._assert_container_owned(container_name, host_lease.lease_id)
-        await self._run("docker", "stop", "--time", "20", container_name, check=False)
-        await self._run("docker", "rm", "-f", container_name, check=False)
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-state", check=False
-        )
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-artifacts", check=False
-        )
-        await self._run(
-            "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
-        )
+            cleanup_result = "drained_owned_static_host"
+            cleanup_ok = not attachment_identity or not await self.container_exists(
+                attachment_identity
+            )
+            resource_cleanup = {
+                "containerRunning": not cleanup_ok,
+                "mode": "static_drain",
+            }
+        else:
+            container_name = (
+                host_lease.container_name
+                or deterministic_host_container_name(host_lease.lease_id)
+            )
+            attachment_identity = attachment_identity or container_name
+            if await self.container_exists(container_name):
+                await self._assert_container_owned(container_name, host_lease.lease_id)
+            await self._run(
+                "docker", "stop", "--time", "20", container_name, check=False
+            )
+            await self._run("docker", "rm", "-f", container_name, check=False)
+            await self._run(
+                "docker",
+                "volume",
+                "rm",
+                "-f",
+                f"{container_name}-state",
+                check=False,
+            )
+            await self._run(
+                "docker",
+                "volume",
+                "rm",
+                "-f",
+                f"{container_name}-artifacts",
+                check=False,
+            )
+            await self._run(
+                "docker",
+                "volume",
+                "rm",
+                "-f",
+                f"{container_name}-cache",
+                check=False,
+            )
+            volume_names = (
+                f"{container_name}-state",
+                f"{container_name}-artifacts",
+                f"{container_name}-cache",
+            )
+            container_present = await self._container_present(container_name)
+            remaining_volumes = [
+                name for name in volume_names if await self._volume_present(name)
+            ]
+            cleanup_ok = not container_present and not remaining_volumes
+            cleanup_result = "succeeded" if cleanup_ok else "failed"
+            resource_cleanup = {
+                "containerPresent": container_present,
+                "remainingOwnedVolumes": remaining_volumes,
+                "mode": "on_demand_remove",
+            }
+
+        result: dict[str, Any] = {
+            "cleanupResult": cleanup_result if cleanup_ok else "failed",
+            "reconciliationResult": "succeeded" if cleanup_ok else "required",
+            "cleanupValidatedAt": datetime.now(UTC).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "attachmentIdentity": attachment_identity,
+            "launchEvidenceRef": launch_evidence_ref,
+            "resourceCleanup": resource_cleanup,
+        }
+        if (
+            effective_launch is not None
+            and egress_evidence is not None
+            and evidence_request is not None
+            and artifact_gateway is not None
+        ):
+            terminal_payload = self._host_egress_evidence_payload(
+                binding=binding,
+                host_lease=host_lease,
+                launch=effective_launch,
+                egress_evidence=terminal_egress_evidence,
+                evidence_request=evidence_request,
+                state="terminal",
+                cleanup_result=str(result["cleanupResult"]),
+                reconciliation_result=str(result["reconciliationResult"]),
+                launch_evidence_ref=launch_evidence_ref,
+            )
+            terminal_payload["cleanupValidatedAt"] = result["cleanupValidatedAt"]
+            terminal_payload["resourceCleanup"] = resource_cleanup
+            terminal_ref = await self._publish_host_egress_evidence(
+                artifact_gateway=artifact_gateway,
+                evidence_request=evidence_request,
+                name=f"omnigent-{host_lease.lease_id}-egress-terminal.json",
+                payload=terminal_payload,
+            )
+            result["evidenceRef"] = terminal_ref
+        if not cleanup_ok:
+            raise OmnigentOAuthHostError(
+                "Omnigent host cleanup could not be reconciled",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+            )
+        if terminal_validation_error is not None:
+            raise OmnigentOAuthHostError(
+                "Omnigent host terminal egress evidence could not be validated",
+                code="OMNIGENT_TERMINAL_EGRESS_UNATTESTED",
+            ) from terminal_validation_error
+        return result
 
     async def stop_static_host(
         self, *, binding: OmnigentOAuthHostBinding | None = None
@@ -1211,6 +1545,29 @@ class OmnigentOAuthHostRuntime:
             check=False,
         )
         return result[0] == 0 and result[1].strip() == "true"
+
+    async def _container_present(self, container_name: str) -> bool:
+        result = await self._run(
+            "docker",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            container_name,
+            check=False,
+        )
+        return result[0] == 0 and bool(result[1].strip())
+
+    async def _volume_present(self, volume_name: str) -> bool:
+        result = await self._run(
+            "docker",
+            "volume",
+            "inspect",
+            "--format",
+            "{{.Name}}",
+            volume_name,
+            check=False,
+        )
+        return result[0] == 0 and bool(result[1].strip())
 
     async def list_managed_containers(self) -> list[str]:
         result = await self._run(

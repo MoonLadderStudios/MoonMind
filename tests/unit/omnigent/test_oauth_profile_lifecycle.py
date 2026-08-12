@@ -4,6 +4,7 @@ import json
 import os
 import runpy
 import subprocess
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
@@ -98,6 +100,9 @@ from moonmind.security.egress import (
     ENFORCER_IMPLEMENTATION,
     EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -1886,6 +1891,74 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-artifacts") in commands
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-cache") in commands
+
+
+@pytest.mark.asyncio
+async def test_stop_host_publishes_resolvable_terminal_egress_and_cleanup_authority(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime.container_exists = AsyncMock(return_value=True)
+    runtime._assert_container_owned = AsyncMock()
+    runtime._container_present = AsyncMock(return_value=False)
+    runtime._volume_present = AsyncMock(return_value=False)
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    launch_evidence = {
+        **_egress_attestation().model_dump(by_alias=True, mode="json"),
+        "attachmentIdentity": "mm-host-lease-1",
+        "networkIdentity": "network-id",
+        "endpointIdentity": "endpoint-id",
+        "attachmentAddressDigest": "sha256:" + "c" * 64,
+        "workloadImageDigest": "sha256:" + "d" * 64,
+        "architecture": "amd64",
+        "deniedConnectionCount": 0,
+        "denialDiagnostics": [],
+    }
+    runtime._attest_launched_workload_egress = AsyncMock(
+        return_value={
+            **launch_evidence,
+            "deniedConnectionCount": 3,
+            "denialDiagnostics": ["denied example.com:443 TCP_DENIED/403"],
+        }
+    )
+    request = _execution_request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "evidence")
+
+    result = await runtime.stop_host(
+        binding=binding,
+        host_lease=lease,
+        effective_launch=launch,
+        egress_evidence=launch_evidence,
+        launch_evidence_ref="artifact://omnigent/launch.json",
+        evidence_request=request,
+        artifact_gateway=gateway,
+    )
+
+    terminal = parse_and_verify_conformance_evidence(
+        await gateway.read_bytes(result["evidenceRef"]),
+        location="omnigent-terminal-egress-test",
+    )
+    assert terminal["conformanceRow"] == "on_demand_docker"
+    assert terminal["state"] == "terminal"
+    assert terminal["terminalValidationResult"] == "passed"
+    assert terminal["deniedConnectionCount"] == 3
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["reconciliationResult"] == "succeeded"
+    assert terminal["resourceCleanup"] == {
+        "containerPresent": False,
+        "mode": "on_demand_remove",
+        "remainingOwnedVolumes": [],
+    }
+    assert terminal["launchEvidenceRef"] == "artifact://omnigent/launch.json"
 
 
 @pytest.mark.asyncio
@@ -4404,6 +4477,9 @@ async def _run_coordinator_failure_case(
             await owners.fail(owner)
         return AgentRunResult(summary="done")
 
+    artifact_directory = tempfile.TemporaryDirectory(
+        prefix="moonmind-coordinator-egress-evidence-"
+    )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=LeaseClient(),
@@ -4411,7 +4487,9 @@ async def _run_coordinator_failure_case(
         host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
-        artifact_gateway=object(),
+        artifact_gateway=LocalOmnigentArtifactGateway(
+            root=artifact_directory.name
+        ),
     )
 
     async def resolve_policy_snapshot(policy_ref: str) -> dict:
@@ -4482,6 +4560,7 @@ async def _run_coordinator_failure_case(
             await coordinator.execute(request)
         if isinstance(error, OmnigentOAuthHostError):
             assert captured.value.code == code
+    artifact_directory.cleanup()
     return events, actions, owners.calls
 
 

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.security.egress import (
@@ -28,9 +29,9 @@ from moonmind.security.egress import (
 )
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
-    serialize_conformance_evidence,
 )
 from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
     AuthVolumeRef,
     CredentialMountRef,
     OmnigentHostLease,
@@ -69,9 +70,13 @@ def require_live_conformance() -> None:
 def rebound_allowed_name() -> None:
     """Shadow an approved name with prohibited internal DNS answers."""
 
-    names = [f"moonmind-test-egress-dns-{uuid.uuid4().hex[:10]}" for _ in range(2)]
+    attachments = [
+        (f"moonmind-test-egress-dns-{uuid.uuid4().hex[:10]}", network)
+        for network in (EGRESS_NETWORK_REF, OMNIGENT_EGRESS_PROFILE.network_ref)
+        for _ in range(2)
+    ]
     try:
-        for name in names:
+        for name, network in attachments:
             result = _docker(
                 "run",
                 "-d",
@@ -80,7 +85,7 @@ def rebound_allowed_name() -> None:
                 "--label",
                 "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
                 "--network",
-                EGRESS_NETWORK_REF,
+                network,
                 "--network-alias",
                 "api.github.com",
                 "alpine:3.21",
@@ -90,7 +95,7 @@ def rebound_allowed_name() -> None:
             assert result.returncode == 0, result.stderr[-1000:]
         yield
     finally:
-        for name in names:
+        for name, _network in attachments:
             _docker("rm", "--force", name)
 
 
@@ -145,6 +150,117 @@ def _probe(
     return _docker(*args)
 
 
+def _exec_sh(container_name: str, script: str) -> subprocess.CompletedProcess[str]:
+    return _docker("exec", container_name, "sh", "-c", script)
+
+
+def _assert_running_container_policy(container_name: str, *, network_ref: str) -> None:
+    """Probe the exact production-created attachment, not a surrogate container."""
+
+    inspected = _docker(
+        "inspect",
+        "--format",
+        '{{json .NetworkSettings.Networks}}\n{{json .HostConfig}}',
+        container_name,
+    )
+    assert inspected.returncode == 0, inspected.stderr[-1000:]
+    networks_raw, host_config_raw = inspected.stdout.splitlines()[:2]
+    assert set(json.loads(networks_raw)) == {network_ref}
+    host_config = json.loads(host_config_raw)
+    assert host_config["NetworkMode"] == network_ref
+    assert host_config["Privileged"] is False
+    assert not host_config.get("CapAdd")
+    assert not host_config.get("Devices")
+    assert not host_config.get("Dns")
+    assert not host_config.get("ExtraHosts")
+
+    client = (
+        "command -v curl >/dev/null 2>&1 || exit 90; "
+        "curl -sS --max-time 12 --output /dev/null"
+    )
+    for url in (
+        "https://api.github.com/",
+        "https://github.com/",
+        "https://api.openai.com/",
+        "https://storage.googleapis.com/",
+    ):
+        result = _exec_sh(container_name, f"{client} {url}")
+        assert result.returncode == 0, result.stderr[-1000:]
+
+    rebound_names = [
+        f"moonmind-test-owned-rebind-{uuid.uuid4().hex[:10]}" for _ in range(2)
+    ]
+    try:
+        for name in rebound_names:
+            result = _docker(
+                "run",
+                "-d",
+                "--name",
+                name,
+                "--label",
+                "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
+                "--network",
+                network_ref,
+                "--network-alias",
+                "rebind.openai.com",
+                "alpine:3.21",
+                "sleep",
+                "120",
+            )
+            assert result.returncode == 0, result.stderr[-1000:]
+        rebound = _exec_sh(
+            container_name,
+            f"{client} --fail https://rebind.openai.com/",
+        )
+        assert rebound.returncode != 0
+    finally:
+        for name in rebound_names:
+            _docker("rm", "--force", name)
+
+    for url in (
+        "https://example.com/",
+        "https://1.1.1.1/",
+        "https://10.0.0.1/",
+        "https://169.254.169.254/",
+        "https://172.17.0.1/",
+        "https://127.0.0.1/",
+        "https://[::1]/",
+        "https://[::ffff:127.0.0.1]/",
+        "https://temporal-internal/",
+    ):
+        result = _exec_sh(container_name, f"{client} --fail {url}")
+        assert result.returncode != 0
+
+    no_proxy = _exec_sh(
+        container_name,
+        "env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy "
+        "-u NO_PROXY -u no_proxy curl -sS --max-time 8 --output /dev/null "
+        "https://github.com/",
+    )
+    assert no_proxy.returncode != 0
+    bypass = _exec_sh(
+        container_name,
+        "NO_PROXY='*' no_proxy='*' curl -sS --max-time 8 --output /dev/null "
+        "https://github.com/",
+    )
+    assert bypass.returncode != 0
+    redirected = _exec_sh(
+        container_name,
+        "curl -sS --max-time 12 --fail --location --output /dev/null "
+        "'https://www.google.com/url?q=https%3A%2F%2Fexample.com%2F'",
+    )
+    assert redirected.returncode != 0
+    hardening = _exec_sh(
+        container_name,
+        "test \"$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)\" = "
+        "\"0000000000000000\"; test ! -e /dev/net/tun; "
+        "test ! -S /var/run/docker.sock; ! command -v docker >/dev/null 2>&1; "
+        "if command -v ip >/dev/null 2>&1; then "
+        "! ip route add 198.51.100.0/24 via 127.0.0.1 >/dev/null 2>&1; fi",
+    )
+    assert hardening.returncode == 0, hardening.stderr[-1000:]
+
+
 async def _live_runner(args):
     result = _docker(*args)
     return result.returncode, result.stdout.encode(), result.stderr.encode()
@@ -160,18 +276,30 @@ def _live_backend_request(workspace: Path, *, command: list[str]):
                 "idempotencyKey": f"egress-live:{uuid.uuid4().hex}",
                 "source": {"source": "workflow", "workflowId": "egress-live"},
                 "spec": {
-                    "image": "alpine:3.21",
+                    "image": "curlimages/curl:8.12.1",
                     "workspaceRef": {"kind": "external_state", "artifactRef": "probe"},
-                    "command": command,
+                    "entrypoint": ["sh", "-c"],
+                    "command": [" ".join(command)],
                     "networkMode": "bridge",
                     "resources": {"cpuMillis": 100, "memoryMiB": 128, "pids": 32},
                     "timeoutSeconds": 30,
                 },
             },
             "resolvedWorkspaceRef": str(workspace),
-            "resolvedImageRef": "alpine:3.21",
         }
     )
+
+
+async def _acquire_live_backend_image(
+    backend: DockerContainerJobBackend,
+    request: ContainerJobActivityRequest,
+) -> None:
+    acquired = await backend.acquire_image(request)
+    assert acquired.resolved_image_ref
+    assert acquired.image_observation is not None
+    assert acquired.image_observation.resolved_digest
+    request.resolved_image_ref = acquired.resolved_image_ref
+    request.image_observation = acquired.image_observation
 
 
 @pytest.mark.parametrize(
@@ -434,6 +562,7 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
         evidence_publisher=publish,
     )
     request = _live_backend_request(tmp_path, command=["sleep", "120"])
+    await _acquire_live_backend_image(backend, request)
     created = await backend.create_container(request)
     request.container_ref = created.container_ref
     request.egress_attestation_ref = created.diagnostics_ref
@@ -441,14 +570,11 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
         state="succeeded", diagnosticsRef="artifact:runtime-diagnostics"
     )
     try:
-        inspected = _docker(
-            "inspect",
-            "--format",
-            "{{json .NetworkSettings.Networks}}",
-            created.container_ref,
+        started = await backend.start_container(request)
+        request.egress_attestation_ref = started.diagnostics_ref
+        _assert_running_container_policy(
+            created.container_ref, network_ref=EGRESS_NETWORK_REF
         )
-        assert inspected.returncode == 0, inspected.stderr[-1000:]
-        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
         evidence = parse_and_verify_conformance_evidence(
             published[f"{request.job_id}-egress-attestation.json"],
             location="egress-attestation",
@@ -456,6 +582,13 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
         assert evidence["attestation"]["validationResult"] == "passed"
         assert evidence["attestation"]["healthResult"] == "healthy"
         assert evidence["attachmentIdentity"] == created.container_ref
+        assert evidence["evidenceStage"] == "running"
+        assert evidence["networkIdentity"]
+        assert evidence["endpointIdentity"]
+        assert evidence["resolvedImageRef"] == request.resolved_image_ref
+        assert evidence["workloadImageDigest"] == request.resolved_image_ref
+        assert evidence["imageObservation"]["resolvedDigest"]
+        assert evidence["architecture"] in {"amd64", "arm64"}
     finally:
         await backend.remove_container(request)
         await backend.cleanup(request)
@@ -472,6 +605,7 @@ async def test_generic_container_job_crosses_its_live_trusted_launch_adapter(
     )
     assert attestation["attestation"]["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
     assert lifecycle["cleanupResult"] == "succeeded"
+    assert lifecycle["launchAttestationRef"] == request.egress_attestation_ref
 
 
 @pytest.mark.asyncio
@@ -489,7 +623,7 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
     profile = {
         "id": "egress-live-helper",
         "kind": "bounded_service",
-        "image": "alpine:3.21",
+        "image": "curlimages/curl:8.12.1",
         "entrypoint": ["sh", "-c"],
         "commandWrapper": [],
         "workdirTemplate": str(workspace_root),
@@ -506,7 +640,7 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
         "maxHelperTtlSeconds": 120,
         "readinessProbe": {
             "type": "exec",
-            "command": ["sh", "-c", "test -f /etc/alpine-release"],
+            "command": ["sh", "-c", "command -v curl >/dev/null"],
             "intervalSeconds": 1,
             "timeoutSeconds": 5,
             "retries": 3,
@@ -539,14 +673,15 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
         started = await launcher.start_helper(request)
         assert started.status == "ready"
         helper_name = request.container_name
-        inspected = _docker(
-            "inspect", "--format", "{{json .NetworkSettings.Networks}}", helper_name
+        _assert_running_container_policy(
+            helper_name, network_ref=EGRESS_NETWORK_REF
         )
-        assert inspected.returncode == 0, inspected.stderr[-1000:]
-        assert set(json.loads(inspected.stdout)) == {EGRESS_NETWORK_REF}
-        assert _docker(
-            "exec", helper_name, "sh", "-c", "test ! -S /var/run/docker.sock"
-        ).returncode == 0
+        attached_authority = parse_and_verify_conformance_evidence(
+            Path(started.output_refs["security.egress.authority"]).read_bytes(),
+            location="managed-helper-attached-authority",
+        )
+        assert attached_authority["state"] == "attached"
+        assert attached_authority["leaseAuthority"]["state"] == "held"
 
         stopped = await launcher.stop_helper(request)
         assert stopped.status == "stopped"
@@ -559,15 +694,29 @@ async def test_managed_helper_crosses_start_helper_and_survives_cleanup(
         assert resolved["profileRef"] == DEFAULT_EGRESS_PROFILE.ref
         assert resolved["cleanupResult"] == "succeeded"
         assert resolved["reconciliationResult"] == "succeeded"
+        terminal_authority = parse_and_verify_conformance_evidence(
+            Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
+            location="managed-helper-terminal-authority",
+        )
+        assert terminal_authority["state"] == "stopped"
+        assert terminal_authority["leaseAuthority"]["state"] == "released"
     finally:
         _docker("rm", "--force", request.container_name)
         _docker("volume", "rm", "--force", volume_name)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host_mode", ["static_compose", "on_demand_docker"])
+@pytest.mark.parametrize(
+    ("host_mode", "remediation"),
+    [
+        ("static_compose", False),
+        ("on_demand_docker", False),
+        ("on_demand_docker", True),
+    ],
+)
 async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     host_mode: str,
+    remediation: bool,
     tmp_path: Path,
 ) -> None:
     """Cross ``prepare_host`` while leaving launch and attachment owners real."""
@@ -638,8 +787,28 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
     runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
         return_value={"status": "not_required", "boundaries": []}
     )
+    evidence_request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="omnigent-codex@1",
+        correlationId=f"egress-live:{host_mode}:{'remediation' if remediation else 'normal'}",
+        idempotencyKey=f"egress-live:{uuid.uuid4().hex}",
+        remediationWorkspace=(
+            {
+                "kind": "issue_remediation",
+                "workspaceRef": f"egress-live:{uuid.uuid4().hex}",
+            }
+            if remediation
+            else None
+        ),
+    )
+    artifact_gateway = LocalOmnigentArtifactGateway(
+        root=tmp_path / "protected-egress-evidence"
+    )
     static_was_running = False
     evidence: dict[str, object] | None = None
+    launch_evidence_ref: str | None = None
+    terminal_evidence_ref: str | None = None
     attachment_identity = ""
     if not on_demand:
         prior = _docker(
@@ -669,8 +838,11 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
             current_workflow_id="egress-live",
             current_step_execution_id=f"egress-live:{host_mode}",
             effective_launch=launch,
+            artifact_gateway=artifact_gateway,
+            evidence_request=evidence_request,
         )
         evidence = preflight["egressAttestation"]
+        launch_evidence_ref = preflight["egressEvidenceRef"]
         assert evidence["validationResult"] == "passed"
         assert evidence["profileRef"] == OMNIGENT_EGRESS_PROFILE.ref
         assert evidence["networkRef"] == OMNIGENT_EGRESS_PROFILE.network_ref
@@ -681,51 +853,60 @@ async def test_omnigent_modes_cross_the_real_host_runtime_attestation_boundary(
         assert evidence["architecture"] in {"amd64", "arm64"}
         identity = str(evidence["attachmentIdentity"])
         attachment_identity = identity
-        inspected = _docker(
-            "inspect", "--format", "{{json .NetworkSettings.Networks}}", identity
+        _assert_running_container_policy(
+            identity, network_ref=OMNIGENT_EGRESS_PROFILE.network_ref
         )
-        assert inspected.returncode == 0, inspected.stderr[-1000:]
-        assert set(json.loads(inspected.stdout)) == {
-            OMNIGENT_EGRESS_PROFILE.network_ref
-        }
-        assert _docker(
-            "exec", identity, "sh", "-c", "test ! -S /var/run/docker.sock"
-        ).returncode == 0
 
     finally:
         if on_demand:
-            await runtime.stop_host(binding=binding, host_lease=lease)
+            cleanup = await runtime.stop_host(
+                binding=binding,
+                host_lease=lease,
+                effective_launch=launch,
+                egress_evidence=evidence,
+                launch_evidence_ref=launch_evidence_ref,
+                evidence_request=evidence_request,
+                artifact_gateway=artifact_gateway,
+            )
+            terminal_evidence_ref = cleanup.get("evidenceRef")
         elif not static_was_running:
-            await runtime.stop_host(binding=binding, host_lease=lease)
+            cleanup = await runtime.stop_host(
+                binding=binding,
+                host_lease=lease,
+                effective_launch=launch,
+                egress_evidence=evidence,
+                launch_evidence_ref=launch_evidence_ref,
+                evidence_request=evidence_request,
+                artifact_gateway=artifact_gateway,
+            )
+            terminal_evidence_ref = cleanup.get("evidenceRef")
 
     assert evidence is not None
-    cleanup_result = "retained_owned_static_host"
-    reconciliation_result = "not_required"
+    assert launch_evidence_ref is not None
+    launched = parse_and_verify_conformance_evidence(
+        await artifact_gateway.read_bytes(launch_evidence_ref),
+        location=f"omnigent-{host_mode}-launch",
+    )
+    expected_row = f"remediation_{host_mode}" if remediation else host_mode
+    assert launched["conformanceRow"] == expected_row
+    assert launched["state"] == "launched"
+    assert launched["cleanupResult"] == "pending"
+    assert launched["attachmentIdentity"] == attachment_identity
     if on_demand:
         assert _docker("inspect", attachment_identity).returncode != 0
-        cleanup_result = "succeeded"
-        reconciliation_result = "succeeded"
-    row_path = tmp_path / f"restricted-egress-{host_mode}.json"
-    row_path.write_bytes(
-        serialize_conformance_evidence(
-            {
-                "schemaVersion": 1,
-                "kind": "restricted-egress-omnigent-conformance",
-                "conformanceRow": host_mode,
-                **evidence,
-                "cleanupResult": cleanup_result,
-                "reconciliationResult": reconciliation_result,
-            },
-            location=f"omnigent-{host_mode}",
+    if terminal_evidence_ref is not None:
+        terminal = parse_and_verify_conformance_evidence(
+            await artifact_gateway.read_bytes(terminal_evidence_ref),
+            location=f"omnigent-{host_mode}-terminal",
         )
-    )
-    # Resolve from the independently named row artifact after cleanup, not from
-    # the live host or the in-memory preflight object.
-    resolved = parse_and_verify_conformance_evidence(
-        row_path.read_bytes(), location=f"omnigent-{host_mode}"
-    )
-    assert resolved["conformanceRow"] == host_mode
-    assert resolved["cleanupResult"] == cleanup_result
+        assert terminal["conformanceRow"] == expected_row
+        assert terminal["state"] == "terminal"
+        assert terminal["launchEvidenceRef"] == launch_evidence_ref
+        assert terminal["cleanupResult"] in {
+            "succeeded",
+            "drained_owned_static_host",
+        }
+        assert terminal["reconciliationResult"] == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -769,11 +950,13 @@ async def test_interrupted_container_job_removes_owned_attachment_and_publishes_
         evidence_publisher=publish,
     )
     request = _live_backend_request(tmp_path, command=["sleep", "120"])
+    await _acquire_live_backend_image(backend, request)
     created = await backend.create_container(request)
     request.container_ref = created.container_ref
     request.egress_attestation_ref = created.diagnostics_ref
     try:
-        await backend.start_container(request)
+        started = await backend.start_container(request)
+        request.egress_attestation_ref = started.diagnostics_ref
         action = {
             "cancellation": ("stop", "--time", "1"),
             "timeout": ("stop", "--time", "0"),
@@ -790,7 +973,7 @@ async def test_interrupted_container_job_removes_owned_attachment_and_publishes_
         evidence = published[f"{request.job_id}-egress-lifecycle.json"]
         assert evidence["cleanupResult"] == "succeeded"
         assert evidence["reconciliationResult"] == "succeeded"
-        assert evidence["launchAttestationRef"] == created.diagnostics_ref
+        assert evidence["launchAttestationRef"] == started.diagnostics_ref
         assert evidence["workloadAttachmentIdentity"] == request.container_ref
         assert _docker("inspect", request.container_ref).returncode != 0
     finally:
@@ -813,6 +996,7 @@ async def test_partial_setup_and_failed_cleanup_are_owned_and_reconcilable(
         evidence_publisher=publish,
     )
     request = _live_backend_request(tmp_path, command=["sleep", "120"])
+    await _acquire_live_backend_image(backend, request)
 
     # No attachment exists after a partial setup failure, and cleanup records
     # that exact absence without claiming authority over deployment resources.

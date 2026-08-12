@@ -1215,6 +1215,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ),
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
+                evidence_request=request,
                 target_repository=str(
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
@@ -1721,6 +1722,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
                 "egressAttestation": dict(preflight.get("egressAttestation") or {}),
+                "egressEvidenceRef": preflight.get("egressEvidenceRef"),
                 # Stamp the immutable policy-authority evidence resolved for this
                 # launch so the Step Execution checkpoint can prove which compiled
                 # policy snapshot governed the run at cold-restore time. Only the
@@ -1913,8 +1915,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 expected_status="assigned",
                                 new_status="draining",
                             )
-                        await self._runtime.stop_host(
-                            binding=binding, host_lease=host_lease
+                        cleanup_evidence = await self._runtime.stop_host(
+                            binding=binding,
+                            host_lease=host_lease,
+                            effective_launch=effective_launch,
+                            egress_evidence=(
+                                preflight.get("egressAttestation")
+                                if isinstance(preflight, Mapping)
+                                else None
+                            ),
+                            launch_evidence_ref=(
+                                str(preflight.get("egressEvidenceRef") or "") or None
+                                if isinstance(preflight, Mapping)
+                                else None
+                            ),
+                            evidence_request=request,
+                            artifact_gateway=self._artifact_service,
                         )
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
                         safe_to_release_provider = True
@@ -1927,6 +1943,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 "hostCleanupMode": cleanup_mode,
                                 "stateResourcesCleaned": True,
                                 "hostLeaseReleased": True,
+                                "egressEvidenceRef": (
+                                    cleanup_evidence.get("evidenceRef")
+                                    if isinstance(cleanup_evidence, Mapping)
+                                    else None
+                                ),
+                                "egressLaunchEvidenceRef": (
+                                    cleanup_evidence.get("launchEvidenceRef")
+                                    if isinstance(cleanup_evidence, Mapping)
+                                    else None
+                                ),
                             },
                             ignore_errors=True,
                         )
@@ -2074,6 +2100,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if authority_bridge_session_id:
                     authorization_evidence["bridgeSessionId"] = (
                         authority_bridge_session_id
+                    )
+                if isinstance(preflight, Mapping) and preflight.get(
+                    "egressEvidenceRef"
+                ):
+                    authorization_evidence["egressLaunchEvidenceRef"] = str(
+                        preflight["egressEvidenceRef"]
                     )
                 authority_chain = build_omnigent_authority_chain_evidence(
                     effective_launch=effective_launch,
