@@ -4614,6 +4614,62 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     assert "agent" not in initial_parameters["omnigent"]
 
 
+def test_create_execution_rejects_agent_profile_execution_target_mismatch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    with patch(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "providerProfileRef": "codex-openai-oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "tampered-execution-profile",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "omnigent.executionTargetRef must match the selected Agent Profile "
+        "executionProfileRef."
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -5841,6 +5897,26 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                         "workspaceDigest": "sha256:head",
                         "headVersion": 3,
                     },
+                    "turns": [
+                        {
+                            "branchTurnId": "cbt-rich",
+                            "status": "running",
+                            "runtimeAgentRunId": "agent-run-rich",
+                            "providerSessionId": "provider-session-rich",
+                            "instructionRef": "artifact://instructions/rich",
+                            "instructionDigest": "sha256:instructions-rich",
+                            "sourceCheckpointRef": "artifact://workspace/C0",
+                            "startedAt": "2026-08-12T00:00:01Z",
+                            "createdAt": "2026-08-12T00:00:00Z",
+                            "updatedAt": "2026-08-12T00:00:01Z",
+                            "outputArtifacts": {
+                                "output.branch_turn.result.json": "artifact://output/rich"
+                            },
+                            "comparisonArtifacts": {
+                                "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                            },
+                        }
+                    ],
                 }
             ],
             authored_contract={
@@ -5966,6 +6042,26 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                 "workspaceDigest": "sha256:head",
                 "headVersion": 3,
             },
+            "turns": [
+                {
+                    "branchTurnId": "cbt-rich",
+                    "status": "running",
+                    "runtimeAgentRunId": "agent-run-rich",
+                    "providerSessionId": "provider-session-rich",
+                    "instructionRef": "artifact://instructions/rich",
+                    "instructionDigest": "sha256:instructions-rich",
+                    "sourceCheckpointRef": "artifact://workspace/C0",
+                    "startedAt": "2026-08-12T00:00:01Z",
+                    "createdAt": "2026-08-12T00:00:00Z",
+                    "updatedAt": "2026-08-12T00:00:01Z",
+                    "outputArtifacts": {
+                        "output.branch_turn.result.json": "artifact://output/rich"
+                    },
+                    "comparisonArtifacts": {
+                        "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                    },
+                }
+            ],
             "createdAt": None,
         }
     ]

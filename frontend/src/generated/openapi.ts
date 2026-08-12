@@ -11748,6 +11748,8 @@ export interface components {
             comparisonArtifacts?: {
                 [key: string]: string;
             } | null;
+            /** Turns */
+            turns?: components["schemas"]["RemediationCheckpointBranchTurnLinkModel"][];
             /** Operation */
             operation?: string | null;
             /** Idempotencykey */
@@ -11817,6 +11819,49 @@ export interface components {
             agentProfile?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** RemediationCheckpointBranchTurnLinkModel */
+        RemediationCheckpointBranchTurnLinkModel: {
+            /** Branchturnid */
+            branchTurnId: string;
+            /** Parentturnid */
+            parentTurnId?: string | null;
+            /** Status */
+            status: string;
+            /** Createdstepexecutionid */
+            createdStepExecutionId?: string | null;
+            /** Runtimeagentrunid */
+            runtimeAgentRunId?: string | null;
+            /** Providersessionid */
+            providerSessionId?: string | null;
+            /** Instructionref */
+            instructionRef: string;
+            /** Instructiondigest */
+            instructionDigest: string;
+            /** Sourcecheckpointref */
+            sourceCheckpointRef: string;
+            /** Contextbundleref */
+            contextBundleRef?: string | null;
+            /** Stepexecutionmanifestref */
+            stepExecutionManifestRef?: string | null;
+            /** Gitworkbranch */
+            gitWorkBranch?: string | null;
+            /** Startedat */
+            startedAt?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
+            /** Createdat */
+            createdAt: string;
+            /** Updatedat */
+            updatedAt: string;
+            /** Outputartifacts */
+            outputArtifacts?: {
+                [key: string]: string;
+            };
+            /** Comparisonartifacts */
+            comparisonArtifacts?: {
+                [key: string]: string;
+            };
         };
         /** RemediationCollectionItemModel */
         RemediationCollectionItemModel: {

@@ -1170,6 +1170,26 @@ const RemediationLinkSchema = z
             turnCompletedAt: z.string().nullable().optional(),
             outputArtifacts: z.record(z.string(), z.string()).nullable().optional(),
             comparisonArtifacts: z.record(z.string(), z.string()).nullable().optional(),
+            turns: z.array(z.object({
+              branchTurnId: z.string(),
+              parentTurnId: z.string().nullable().optional(),
+              status: z.string(),
+              createdStepExecutionId: z.string().nullable().optional(),
+              runtimeAgentRunId: z.string().nullable().optional(),
+              providerSessionId: z.string().nullable().optional(),
+              instructionRef: z.string(),
+              instructionDigest: z.string(),
+              sourceCheckpointRef: z.string(),
+              contextBundleRef: z.string().nullable().optional(),
+              stepExecutionManifestRef: z.string().nullable().optional(),
+              gitWorkBranch: z.string().nullable().optional(),
+              startedAt: z.string().nullable().optional(),
+              completedAt: z.string().nullable().optional(),
+              createdAt: z.string(),
+              updatedAt: z.string(),
+              outputArtifacts: z.record(z.string(), z.string()).default({}),
+              comparisonArtifacts: z.record(z.string(), z.string()).default({}),
+            }).passthrough()).default([]),
             checkpointRef: z.string().nullable().optional(),
             contextArtifactRef: z.string().nullable().optional(),
             loopId: z.string().nullable().optional(),
@@ -7769,6 +7789,40 @@ function RemediationCheckpointBranches({
               <Card label="Next attempt baseline"><code className="text-xs break-all">{branch.nextActionBaseline ? `${branch.nextActionBaseline.checkpointRef} @ v${branch.nextActionBaseline.headVersion}` : '—'}</code></Card>
               <Card label="Remaining work"><RemediationArtifactRefs apiBase={apiBase} refs={branch.remainingWorkRef ? { remainingWork: branch.remainingWorkRef } : null} /></Card>
             </div>
+            {branch.turns.length > 0 ? (
+              <div className="td-remediation-live">
+                <strong>{`Checkpoint Branch turns (${branch.turns.length})`}</strong>
+                <ol
+                  className="td-remediation-list"
+                  aria-label={`Checkpoint Branch turns for ${branch.branchId}`}
+                >
+                  {branch.turns.map((turn) => (
+                    <li key={turn.branchTurnId} className="card">
+                      <div className="grid-2">
+                        <Card label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Card>
+                        <Card label="Parent turn"><code className="text-xs break-all">{turn.parentTurnId || 'root'}</code></Card>
+                        <Card label="Turn state">{formatStatusLabel(turn.status)}</Card>
+                        <Card label="Step Execution"><code className="text-xs break-all">{turn.createdStepExecutionId || '—'}</code></Card>
+                        <Card label="Agent Run"><code className="text-xs break-all">{turn.runtimeAgentRunId || '—'}</code></Card>
+                        <Card label="Provider session"><code className="text-xs break-all">{turn.providerSessionId || '—'}</code></Card>
+                        <Card label="Instructions"><RemediationArtifactRefs apiBase={apiBase} refs={{ instructions: turn.instructionRef }} /></Card>
+                        <Card label="Source checkpoint"><RemediationArtifactRefs apiBase={apiBase} refs={{ checkpoint: turn.sourceCheckpointRef }} /></Card>
+                        <Card label="Context bundle"><RemediationArtifactRefs apiBase={apiBase} refs={turn.contextBundleRef ? { context: turn.contextBundleRef } : null} /></Card>
+                        <Card label="Step manifest"><RemediationArtifactRefs apiBase={apiBase} refs={turn.stepExecutionManifestRef ? { manifest: turn.stepExecutionManifestRef } : null} /></Card>
+                        <Card label="Work branch"><code className="text-xs break-all">{turn.gitWorkBranch || branch.gitWorkBranch || '—'}</code></Card>
+                        <Card label="Timing">
+                          {turn.startedAt
+                            ? `${formatWhen(turn.startedAt)}${turn.completedAt ? ` → ${formatWhen(turn.completedAt)}` : ' → running'}`
+                            : `created ${formatWhen(turn.createdAt)}`}
+                        </Card>
+                        <Card label="Output"><RemediationArtifactRefs apiBase={apiBase} refs={turn.outputArtifacts} /></Card>
+                        <Card label="Comparison"><RemediationArtifactRefs apiBase={apiBase} refs={turn.comparisonArtifacts} /></Card>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

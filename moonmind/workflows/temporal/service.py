@@ -1252,21 +1252,28 @@ class TemporalExecutionService:
         }
         branch_ids = set(branches_by_id)
         turns_by_id: dict[str, WorkflowCheckpointBranchTurn] = {}
+        turns_by_branch: dict[str, list[WorkflowCheckpointBranchTurn]] = {}
         artifacts_by_branch: dict[str, dict[str, dict[str, str]]] = {}
+        artifacts_by_turn: dict[str, dict[str, dict[str, str]]] = {}
         if branch_ids:
             turn_result = await self._session.execute(
-                select(WorkflowCheckpointBranchTurn).where(
-                    WorkflowCheckpointBranchTurn.branch_id.in_(branch_ids)
+                select(WorkflowCheckpointBranchTurn)
+                .where(WorkflowCheckpointBranchTurn.branch_id.in_(branch_ids))
+                .order_by(
+                    WorkflowCheckpointBranchTurn.created_at.asc(),
+                    WorkflowCheckpointBranchTurn.branch_turn_id.asc(),
                 )
             )
-            turns_by_id = {
-                turn.branch_turn_id: turn for turn in turn_result.scalars()
-            }
+            for turn in turn_result.scalars():
+                turns_by_id[turn.branch_turn_id] = turn
+                turns_by_branch.setdefault(turn.branch_id, []).append(turn)
             artifact_result = await self._session.execute(
                 select(WorkflowCheckpointBranchArtifact)
                 .where(WorkflowCheckpointBranchArtifact.branch_id.in_(branch_ids))
-                .order_by(WorkflowCheckpointBranchArtifact.created_at.desc())
-                .limit(250)
+                .order_by(
+                    WorkflowCheckpointBranchArtifact.created_at.asc(),
+                    WorkflowCheckpointBranchArtifact.artifact_kind.asc(),
+                )
             )
             for artifact in artifact_result.scalars():
                 artifact_kind = str(artifact.artifact_kind or "").strip()
@@ -1281,6 +1288,10 @@ class TemporalExecutionService:
                 artifacts_by_branch.setdefault(artifact.branch_id, {}).setdefault(
                     category, {}
                 )[artifact_kind] = artifact_ref
+                if artifact.branch_turn_id:
+                    artifacts_by_turn.setdefault(
+                        artifact.branch_turn_id, {}
+                    ).setdefault(category, {})[artifact_kind] = artifact_ref
         branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
             remediation_id: [] for remediation_id in remediation_ids
         }
@@ -1338,6 +1349,38 @@ class TemporalExecutionService:
                     }
                 )
                 branch_link.update(artifacts_by_branch.get(branch.branch_id, {}))
+                branch_link["turns"] = [
+                    {
+                        "branchTurnId": branch_turn.branch_turn_id,
+                        "parentTurnId": branch_turn.parent_turn_id,
+                        "status": branch_turn.status,
+                        "createdStepExecutionId": branch_turn.created_step_execution_id,
+                        "runtimeAgentRunId": branch_turn.runtime_agent_run_id,
+                        "providerSessionId": branch_turn.provider_session_id,
+                        "instructionRef": branch_turn.instruction_ref,
+                        "instructionDigest": branch_turn.instruction_digest,
+                        "sourceCheckpointRef": branch_turn.source_checkpoint_ref,
+                        "contextBundleRef": branch_turn.context_bundle_ref,
+                        "stepExecutionManifestRef": (
+                            branch_turn.step_execution_manifest_ref
+                        ),
+                        "gitWorkBranch": branch_turn.git_work_branch,
+                        "startedAt": (
+                            branch_turn.started_at.isoformat()
+                            if branch_turn.started_at
+                            else None
+                        ),
+                        "completedAt": (
+                            branch_turn.completed_at.isoformat()
+                            if branch_turn.completed_at
+                            else None
+                        ),
+                        "createdAt": branch_turn.created_at.isoformat(),
+                        "updatedAt": branch_turn.updated_at.isoformat(),
+                        **artifacts_by_turn.get(branch_turn.branch_turn_id, {}),
+                    }
+                    for branch_turn in turns_by_branch.get(branch.branch_id, [])
+                ]
             if turn is not None:
                 branch_link.update(
                     {

@@ -612,6 +612,46 @@ class RemediationNextActionBaselineModel(BaseModel):
     workspaceDigest: str
     headVersion: int
 
+
+class RemediationCheckpointBranchTurnLinkModel(BaseModel):
+    branchTurnId: str
+    parentTurnId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    status: str
+    createdStepExecutionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    runtimeAgentRunId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    providerSessionId: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructionRef: str
+    instructionDigest: str
+    sourceCheckpointRef: str
+    contextBundleRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stepExecutionManifestRef: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    gitWorkBranch: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    startedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    completedAt: datetime | str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    createdAt: datetime | str
+    updatedAt: datetime | str
+    outputArtifacts: dict[str, str] = Field(default_factory=dict)
+    comparisonArtifacts: dict[str, str] = Field(default_factory=dict)
+
+
 class RemediationCheckpointBranchLinkModel(BaseModel):
     workflowId: str
     branchId: str
@@ -676,6 +716,9 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
     )
     comparisonArtifacts: dict[str, str] | None = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    turns: list[RemediationCheckpointBranchTurnLinkModel] = Field(
+        default_factory=list
     )
     operation: str | None = None
     idempotencyKey: str | None = None
@@ -11065,6 +11108,22 @@ async def _create_execution_from_workflow_request(
             consumer_id=reserved_workflow_id,
             user=user,
         )
+        authored_execution_target_ref = (
+            str(authored_omnigent.get("executionTargetRef") or "").strip()
+            if isinstance(authored_omnigent, Mapping)
+            else ""
+        )
+        resolved_execution_target_ref = str(
+            profile_snapshot.get("executionProfileRef") or ""
+        ).strip()
+        if (
+            authored_execution_target_ref
+            and authored_execution_target_ref != resolved_execution_target_ref
+        ):
+            raise _invalid_workflow_request(
+                "omnigent.executionTargetRef must match the selected "
+                "Agent Profile executionProfileRef."
+            )
         initial_parameters = compile_agent_profile_snapshot_parameters(
             initial_parameters,
             snapshot=profile_snapshot,

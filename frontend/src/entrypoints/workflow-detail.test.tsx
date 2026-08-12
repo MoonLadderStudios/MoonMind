@@ -6595,6 +6595,42 @@ describe('Workflow Detail Entrypoint', () => {
                     instructionRef: 'art_branch_instructions',
                     outputArtifacts: { result: 'art_branch_output' },
                     comparisonArtifacts: { comparison: 'art_branch_comparison' },
+                    turns: [
+                      {
+                        branchTurnId: 'cbt-remediation-inbound-1',
+                        status: 'completed',
+                        createdStepExecutionId: 'repair:execution:1',
+                        runtimeAgentRunId: 'agent-run-inbound-1',
+                        providerSessionId: 'provider-session-inbound-1',
+                        instructionRef: 'artifact://instructions/inbound-1',
+                        instructionDigest: 'sha256:instructions-inbound-1',
+                        sourceCheckpointRef: 'artifact://workspace/C0',
+                        contextBundleRef: 'artifact://context/inbound-1',
+                        stepExecutionManifestRef: 'artifact://manifest/inbound-1',
+                        startedAt: '2026-04-22T00:00:02Z',
+                        completedAt: '2026-04-22T00:00:03Z',
+                        createdAt: '2026-04-22T00:00:01Z',
+                        updatedAt: '2026-04-22T00:00:03Z',
+                        outputArtifacts: { result: 'art_turn_inbound_1_output' },
+                        comparisonArtifacts: {},
+                      },
+                      {
+                        branchTurnId: 'cbt-remediation-inbound-2',
+                        parentTurnId: 'cbt-remediation-inbound-1',
+                        status: 'running',
+                        createdStepExecutionId: 'repair:execution:2',
+                        runtimeAgentRunId: 'agent-run-inbound-2',
+                        providerSessionId: 'provider-session-inbound-2',
+                        instructionRef: 'artifact://instructions/inbound-2',
+                        instructionDigest: 'sha256:instructions-inbound-2',
+                        sourceCheckpointRef: 'artifact://workspace/C1',
+                        startedAt: '2026-04-22T00:00:04Z',
+                        createdAt: '2026-04-22T00:00:04Z',
+                        updatedAt: '2026-04-22T00:00:04Z',
+                        outputArtifacts: {},
+                        comparisonArtifacts: { comparison: 'art_turn_inbound_2_comparison' },
+                      },
+                    ],
                     latestVerificationVerdict: 'ADDITIONAL_WORK_NEEDED',
                     remainingWorkRef: 'artifact://verification/V2#remainingWork',
                     nextActionBaseline: {
@@ -6646,6 +6682,19 @@ describe('Workflow Detail Entrypoint', () => {
                     branchId: 'cbr-remediation-outbound',
                     branchTurnId: 'cbt-remediation-outbound',
                     checkpointRef: 'artifact://checkpoints/outbound',
+                    turns: [
+                      {
+                        branchTurnId: 'cbt-remediation-outbound-1',
+                        status: 'created',
+                        instructionRef: 'artifact://instructions/outbound-1',
+                        instructionDigest: 'sha256:instructions-outbound-1',
+                        sourceCheckpointRef: 'artifact://checkpoints/outbound',
+                        createdAt: '2026-04-22T00:00:05Z',
+                        updatedAt: '2026-04-22T00:00:05Z',
+                        outputArtifacts: { result: 'art_turn_outbound_1_output' },
+                        comparisonArtifacts: {},
+                      },
+                    ],
                   },
                 ],
                 approvalState: null,
@@ -6726,7 +6775,23 @@ describe('Workflow Detail Entrypoint', () => {
       '/api/artifacts/art_summary/download',
     );
     expect(screen.getByText('Test runner state diverged after restart.')).toBeTruthy();
-    expect(screen.getByText('remediation/test-123')).toBeTruthy();
+    expect(screen.getAllByText('remediation/test-123').length).toBeGreaterThan(0);
+    const inboundTurns = screen.getByRole('list', {
+      name: 'Checkpoint Branch turns for cbr-remediation-inbound',
+    });
+    expect(within(inboundTurns).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(inboundTurns).getAllByText('cbt-remediation-inbound-1').length).toBeGreaterThan(0);
+    expect(within(inboundTurns).getByText('cbt-remediation-inbound-2')).toBeTruthy();
+    expect(screen.getByText('agent-run-inbound-2')).toBeTruthy();
+    expect(screen.getByText('provider-session-inbound-2')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'art_turn_inbound_2_comparison' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_turn_inbound_2_comparison/download',
+    );
+    const outboundTurns = screen.getByRole('list', {
+      name: 'Checkpoint Branch turns for cbr-remediation-outbound',
+    });
+    expect(within(outboundTurns).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(outboundTurns).getByText('cbt-remediation-outbound-1')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'art_branch_output' }).getAttribute('href')).toBe(
       '/api/artifacts/art_branch_output/download',
     );
