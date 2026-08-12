@@ -193,6 +193,7 @@ from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
+    TemporalArtifactStateError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
@@ -11965,6 +11966,8 @@ def _remediation_approval_state_from_link(
     *,
     authority_mode: str,
     status_value: str,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
 ) -> RemediationApprovalStateModel | None:
     raw_state = getattr(link, "approval_state", None)
     if isinstance(raw_state, dict):
@@ -11985,8 +11988,17 @@ def _remediation_approval_state_from_link(
         projected.setdefault("decision", approval_status)
         if projected.get("decision") == "pending" and approval_status != "pending":
             projected["decision"] = approval_status
-        projected["canDecide"] = (
-            bool(projected.get("canDecide", True)) and approval_status == "pending"
+        reviewer_eligible = not (
+            projected.get("reviewerRule") == "high_risk_reviewer"
+            and not actor_can_approve_high_risk
+        )
+        requesting_actor = str(projected.get("requestingActor") or "").strip()
+        if actor and requesting_actor and actor == requesting_actor:
+            reviewer_eligible = False
+        projected["canDecide"] = bool(
+            projected.get("canDecide", True)
+            and approval_status == "pending"
+            and reviewer_eligible
         )
         return RemediationApprovalStateModel.model_validate(projected)
 
@@ -12005,13 +12017,20 @@ def _remediation_approval_state_from_link(
         canDecide=approval_pending,
     )
 
-def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
+def _serialize_remediation_link_summary(
+    link: Any,
+    *,
+    actor: str | None = None,
+    actor_can_approve_high_risk: bool = False,
+) -> RemediationLinkSummaryModel:
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
     approval_state = _remediation_approval_state_from_link(
         link,
         authority_mode=authority_mode,
         status_value=status_value,
+        actor=actor,
+        actor_can_approve_high_risk=actor_can_approve_high_risk,
     )
 
     policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
@@ -12346,6 +12365,7 @@ async def _attach_remediation_artifact_projection(
         except (
             TemporalArtifactAuthorizationError,
             TemporalArtifactNotFoundError,
+            TemporalArtifactStateError,
             UnicodeDecodeError,
             json.JSONDecodeError,
         ):
@@ -12735,7 +12755,16 @@ async def list_execution_remediations(
     )
     return RemediationLinksResponseModel(
         direction=direction,
-        items=[_serialize_remediation_link_summary(link) for link in links],
+        items=[
+            _serialize_remediation_link_summary(
+                link,
+                actor=str(getattr(user, "email", "") or "").strip() or None,
+                actor_can_approve_high_risk=bool(
+                    getattr(user, "is_superuser", False)
+                ),
+            )
+            for link in links
+        ],
     )
 
 @router.post(

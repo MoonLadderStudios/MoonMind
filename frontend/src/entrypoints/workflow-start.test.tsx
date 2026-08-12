@@ -652,7 +652,16 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     state: "active",
     activeVersion: 1,
     defaultForRuntime: true,
-    versions: [{ version: 1, digest: `sha256:${"a".repeat(64)}`, validationResult: { ready: true } }],
+    versions: [{
+      version: 1,
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        execution: {
+          defaultExecutionProfileRef: "omnigent-codex-default",
+        },
+      },
+      validationResult: { ready: true },
+    }],
   }];
 
   it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
@@ -796,6 +805,115 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       },
     });
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
+  });
+
+  it("synchronizes the execution target when the Agent Profile changes", async () => {
+    const payload = omnigentPayload();
+    const initialData = payload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    initialData.dashboardConfig.system.omnigentExecutionCatalog = {
+      profiles: [
+        {
+          ref: "omnigent-codex-default",
+          displayName: "Codex default",
+          defaultPolicyRef: "on-demand-v1",
+          providerRuntime: "codex_cli",
+        },
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          defaultPolicyRef: "claude-on-demand-v1",
+          providerRuntime: "claude_code",
+        },
+      ],
+      policies: [
+        {
+          ref: "on-demand-v1",
+          displayName: "Codex on-demand",
+          hostMode: "on_demand_docker",
+        },
+        {
+          ref: "claude-on-demand-v1",
+          displayName: "Claude on-demand",
+          hostMode: "on_demand_docker",
+        },
+      ],
+    };
+    const catalog = {
+      ...readyOmnigentCatalog,
+      executionProfiles: [
+        ...readyOmnigentCatalog.executionProfiles,
+        {
+          ref: "omnigent-claude-default",
+          displayName: "Claude default",
+          available: true,
+          launchPolicies: [{
+            ref: "claude-on-demand-v1",
+            displayName: "Claude on-demand",
+            hostMode: "on_demand_docker",
+            isDefault: true,
+          }],
+          gateReasons: [],
+        },
+      ],
+    };
+    const profiles = [
+      readyAgentProfiles[0],
+      {
+        profileId: "team-claude",
+        displayName: "Team Claude",
+        state: "active",
+        activeVersion: 1,
+        defaultForRuntime: false,
+        versions: [{
+          version: 1,
+          digest: `sha256:${"b".repeat(64)}`,
+          document: {
+            execution: {
+              defaultExecutionProfileRef: "omnigent-claude-default",
+            },
+          },
+          validationResult: { ready: true },
+        }],
+      },
+    ];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => catalog } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => profiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText("Agent profile") as HTMLSelectElement).value)
+        .toBe("team-codex");
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-codex-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Agent profile"), {
+      target: { value: "team-claude" },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Execution target") as HTMLSelectElement).value)
+        .toBe("omnigent-claude-default");
+    });
   });
 
   it("submits an imported remediation draft through the ordinary create boundary", async () => {
@@ -19658,12 +19776,14 @@ describe("Task Create runtime command previews", () => {
     const actionPolicy = screen.getByLabelText("Action policy");
     fireEvent.change(remediationMode, { target: { value: "live_follow" } });
     fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
-    fireEvent.change(actionPolicy, { target: { value: "operator_review_only" } });
     fireEvent.click(screen.getByLabelText("Diagnostics"));
 
     expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
     expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
-    expect((actionPolicy as HTMLInputElement).value).toBe("operator_review_only");
+    expect((actionPolicy as HTMLSelectElement).value).toBe("admin_healer_default");
+    expect(within(actionPolicy).queryByRole("option", {
+      name: "operator_review_only",
+    })).toBeNull();
     expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(

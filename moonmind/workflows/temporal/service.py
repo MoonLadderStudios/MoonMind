@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -259,6 +259,9 @@ ALLOWED_REMEDIATION_MODES = frozenset(
     {"snapshot", "live_follow", "snapshot_then_follow"}
 )
 MAX_REMEDIATION_STEP_SELECTORS = 25
+MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS = 10
+MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS = 25
+MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS = 500
 
 
 def _first_nonempty_text(*values: Any) -> str | None:
@@ -908,6 +911,28 @@ class TemporalExecutionService:
                     raise TemporalExecutionValidationError(
                         "workflow.remediation.target.stepSelectors checkpointDigest must match the target checkpoint."
                     )
+                supplied_identity = {
+                    key: value
+                    for key, value in {
+                        "logical_step_id": logical_step_id,
+                        "step_execution_id": step_execution_id,
+                        "checkpoint_ref": checkpoint_ref,
+                        "checkpoint_digest": checkpoint_digest,
+                        "agent_run_id": agent_run_id,
+                        "attempt": attempt,
+                    }.items()
+                    if value not in {None, ""}
+                }
+                if not any(
+                    all(
+                        candidate.get(key) == value
+                        for key, value in supplied_identity.items()
+                    )
+                    for candidate in selector_identity["canonical_tuples"]
+                ):
+                    raise TemporalExecutionValidationError(
+                        "workflow.remediation.target.stepSelectors fields must identify one target Step Execution/checkpoint."
+                    )
 
         evidence_policy = remediation.get("evidencePolicy")
         self._validate_remediation_evidence_policy(evidence_policy)
@@ -1055,6 +1080,7 @@ class TemporalExecutionService:
             "checkpoint_refs": set(),
             "checkpoint_digests": {},
             "agent_run_ids": set(),
+            "canonical_tuples": [],
         }
         for payload in (
             getattr(record, "parameters", None),
@@ -1074,9 +1100,13 @@ class TemporalExecutionService:
 
     @classmethod
     def _collect_target_step_selector_identity(
-        cls, value: Any, output: dict[str, Any]
+        cls,
+        value: Any,
+        output: dict[str, Any],
+        inherited: Mapping[str, Any] | None = None,
     ) -> None:
         if isinstance(value, Mapping):
+            canonical = dict(inherited or {})
             logical_step_id = str(
                 value.get("logicalStepId")
                 or value.get("logical_step_id")
@@ -1086,6 +1116,7 @@ class TemporalExecutionService:
             ).strip()
             if logical_step_id:
                 output["logical_step_ids"].add(logical_step_id)
+                canonical["logical_step_id"] = logical_step_id
 
             step_execution_id = str(
                 value.get("stepExecutionId")
@@ -1094,6 +1125,7 @@ class TemporalExecutionService:
             ).strip()
             if step_execution_id:
                 output["step_execution_ids"].add(step_execution_id)
+                canonical["step_execution_id"] = step_execution_id
 
             attempt = value.get("attempt")
             if (
@@ -1105,12 +1137,14 @@ class TemporalExecutionService:
                 output["attempts_by_logical_step"].setdefault(
                     logical_step_id, set()
                 ).add(attempt)
+                canonical["attempt"] = attempt
 
             checkpoint_digest = str(
                 value.get("checkpointDigest")
                 or value.get("checkpoint_digest")
                 or ""
             ).strip()
+            checkpoint_refs: list[str] = []
             for key in (
                 "checkpointRef",
                 "checkpoint_ref",
@@ -1123,6 +1157,7 @@ class TemporalExecutionService:
                 if not checkpoint_ref:
                     continue
                 output["checkpoint_refs"].add(checkpoint_ref)
+                checkpoint_refs.append(checkpoint_ref)
                 if checkpoint_digest:
                     output["checkpoint_digests"].setdefault(
                         checkpoint_ref, set()
@@ -1133,18 +1168,36 @@ class TemporalExecutionService:
                     checkpoint_ref = str(item or "").strip()
                     if checkpoint_ref:
                         output["checkpoint_refs"].add(checkpoint_ref)
+                        checkpoint_refs.append(checkpoint_ref)
 
             agent_run_id = str(
                 value.get("agentRunId") or value.get("agent_run_id") or ""
             ).strip()
             if agent_run_id:
                 output["agent_run_ids"].add(agent_run_id)
+                canonical["agent_run_id"] = agent_run_id
+            if checkpoint_digest:
+                canonical["checkpoint_digest"] = checkpoint_digest
+            for checkpoint_ref in dict.fromkeys(checkpoint_refs):
+                output["canonical_tuples"].append(
+                    {**canonical, "checkpoint_ref": checkpoint_ref}
+                )
+            if canonical and not checkpoint_refs:
+                output["canonical_tuples"].append(dict(canonical))
+
+            child_identity = {
+                key: item
+                for key, item in canonical.items()
+                if key != "checkpoint_digest"
+            }
             for item in value.values():
-                cls._collect_target_step_selector_identity(item, output)
+                cls._collect_target_step_selector_identity(
+                    item, output, child_identity
+                )
             return
         if isinstance(value, list | tuple):
             for item in value:
-                cls._collect_target_step_selector_identity(item, output)
+                cls._collect_target_step_selector_identity(item, output, inherited)
 
     @classmethod
     def _collect_agent_run_ids(cls, value: Any, output: set[str]) -> None:
@@ -1198,9 +1251,7 @@ class TemporalExecutionService:
             TemporalExecutionRemediationLink.updated_at.desc(),
             TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
         )
-        links = await self._scalars_all(stmt)
-        await self._attach_remediation_checkpoint_branch_links(links)
-        return links
+        return await self._scalars_all(stmt)
 
     async def list_remediations_for_target(
         self, target_workflow_id: str
@@ -1236,66 +1287,104 @@ class TemporalExecutionService:
         }
         if not remediation_ids or not target_ids:
             return
-        result = await self._session.execute(
-            select(WorkflowCheckpointBranchOperation).where(
+        operation_result = await self._session.execute(
+            select(WorkflowCheckpointBranchOperation)
+            .where(
                 WorkflowCheckpointBranchOperation.workflow_id.in_(target_ids),
                 WorkflowCheckpointBranchOperation.operation == "checkpoint_branch.create",
+                or_(
+                    WorkflowCheckpointBranchOperation.response_payload[
+                        "remediation"
+                    ]["workflowId"].as_string().in_(remediation_ids),
+                    WorkflowCheckpointBranchOperation.response_payload[
+                        "remediation"
+                    ]["remediationWorkflowId"].as_string().in_(remediation_ids),
+                ),
             )
+            .order_by(WorkflowCheckpointBranchOperation.created_at.desc())
+            .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS)
         )
+        operations = list(operation_result.scalars())
+        branch_ids = {
+            str(operation.branch_id)
+            for operation in operations
+            if operation.branch_id
+        }
+        if not branch_ids:
+            return
         branch_result = await self._session.execute(
             select(WorkflowCheckpointBranch).where(
-                WorkflowCheckpointBranch.workflow_id.in_(target_ids)
+                WorkflowCheckpointBranch.branch_id.in_(branch_ids)
             )
         )
         branches_by_id = {
             branch.branch_id: branch for branch in branch_result.scalars()
         }
-        branch_ids = set(branches_by_id)
         turns_by_id: dict[str, WorkflowCheckpointBranchTurn] = {}
         turns_by_branch: dict[str, list[WorkflowCheckpointBranchTurn]] = {}
         artifacts_by_branch: dict[str, dict[str, dict[str, str]]] = {}
         artifacts_by_turn: dict[str, dict[str, dict[str, str]]] = {}
         if branch_ids:
-            turn_result = await self._session.execute(
-                select(WorkflowCheckpointBranchTurn)
-                .where(WorkflowCheckpointBranchTurn.branch_id.in_(branch_ids))
-                .order_by(
-                    WorkflowCheckpointBranchTurn.created_at.asc(),
-                    WorkflowCheckpointBranchTurn.branch_turn_id.asc(),
+            for branch_id in sorted(branch_ids):
+                turn_result = await self._session.execute(
+                    select(WorkflowCheckpointBranchTurn)
+                    .where(WorkflowCheckpointBranchTurn.branch_id == branch_id)
+                    .order_by(
+                        WorkflowCheckpointBranchTurn.created_at.desc(),
+                        WorkflowCheckpointBranchTurn.branch_turn_id.desc(),
+                    )
+                    .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS)
                 )
-            )
-            for turn in turn_result.scalars():
-                turns_by_id[turn.branch_turn_id] = turn
-                turns_by_branch.setdefault(turn.branch_id, []).append(turn)
+                branch_turns = list(turn_result.scalars())
+                branch_turns.reverse()
+                for turn in branch_turns:
+                    turns_by_id[turn.branch_turn_id] = turn
+                    turns_by_branch.setdefault(turn.branch_id, []).append(turn)
+            selected_turn_ids = set(turns_by_id)
             artifact_result = await self._session.execute(
                 select(WorkflowCheckpointBranchArtifact)
-                .where(WorkflowCheckpointBranchArtifact.branch_id.in_(branch_ids))
-                .order_by(
-                    WorkflowCheckpointBranchArtifact.created_at.asc(),
-                    WorkflowCheckpointBranchArtifact.artifact_kind.asc(),
+                .where(
+                    WorkflowCheckpointBranchArtifact.branch_id.in_(branch_ids),
+                    or_(
+                        WorkflowCheckpointBranchArtifact.branch_turn_id.is_(None),
+                        WorkflowCheckpointBranchArtifact.branch_turn_id.in_(
+                            selected_turn_ids
+                        ),
+                    ),
                 )
+                .order_by(
+                    WorkflowCheckpointBranchArtifact.created_at.desc(),
+                    WorkflowCheckpointBranchArtifact.artifact_kind.desc(),
+                )
+                .limit(MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS)
             )
-            for artifact in artifact_result.scalars():
+            artifacts = list(artifact_result.scalars())
+            artifacts.reverse()
+            for artifact in artifacts:
                 artifact_kind = str(artifact.artifact_kind or "").strip()
                 artifact_ref = str(artifact.artifact_ref or "").strip()
                 if not artifact_kind or not artifact_ref:
                     continue
-                category = (
-                    "comparisonArtifacts"
-                    if "comparison" in artifact_kind
-                    else "outputArtifacts"
-                )
-                artifacts_by_branch.setdefault(artifact.branch_id, {}).setdefault(
-                    category, {}
-                )[artifact_kind] = artifact_ref
+                if artifact_kind.startswith(
+                    ("comparison.", "output.branch_comparison.")
+                ):
+                    category = "comparisonArtifacts"
+                elif artifact_kind.startswith("output."):
+                    category = "outputArtifacts"
+                else:
+                    continue
                 if artifact.branch_turn_id:
                     artifacts_by_turn.setdefault(
                         artifact.branch_turn_id, {}
                     ).setdefault(category, {})[artifact_kind] = artifact_ref
+                else:
+                    artifacts_by_branch.setdefault(
+                        artifact.branch_id, {}
+                    ).setdefault(category, {})[artifact_kind] = artifact_ref
         branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
             remediation_id: [] for remediation_id in remediation_ids
         }
-        for operation in result.scalars():
+        for operation in reversed(operations):
             payload = operation.response_payload
             if not isinstance(payload, Mapping):
                 continue

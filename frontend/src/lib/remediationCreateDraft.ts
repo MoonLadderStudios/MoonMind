@@ -12,6 +12,7 @@ import {
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DRAFT_PRESENCE_PREFIX = 'moonmind.remediation-create-draft-presence.';
 const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
+const MAX_REMEDIATION_STEP_SELECTORS = 25;
 export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 
 export type RemediationCreateDraftReadResult =
@@ -195,12 +196,14 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
   if (directCheckpoint) selectors.push({ source: 'execution', checkpointRef: directCheckpoint });
 
   const seen = new Set<string>();
-  return selectors.filter((selector) => {
-    const key = cleanText(selector.checkpointRef);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return selectors
+    .filter((selector) => {
+      const key = cleanText(selector.checkpointRef);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_REMEDIATION_STEP_SELECTORS);
 }
 
 export function buildRemediationCreateDraft(
@@ -398,7 +401,7 @@ function optionalTextIsValid(value: unknown): boolean {
 
 function stepSelectorsAreValid(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!Array.isArray(value) || value.length > 25) return false;
+  if (!Array.isArray(value) || value.length > MAX_REMEDIATION_STEP_SELECTORS) return false;
   return value.every((item) => {
     if (!isRecordValue(item)) return false;
     const logicalStepId = cleanText(item.logicalStepId || item.stepId);
@@ -448,6 +451,10 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     optionalTextIsValid(draft.publishMode) &&
     optionalTextIsValid(draft.executionProfileRef) &&
     optionalTextIsValid(draft.launchPolicyRef) &&
+    (
+      remediation.actionPolicyRef === undefined ||
+      remediation.actionPolicyRef === DEFAULT_REMEDIATION_ACTION_POLICY
+    ) &&
     optionalRecordIsValid(draft.runtime) &&
     optionalRecordIsValid(draft.agentProfile) &&
     (

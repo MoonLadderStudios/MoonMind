@@ -91,7 +91,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactStateError,
+)
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -185,6 +188,46 @@ def test_remediation_approval_projection_disables_expired_request() -> None:
     assert projection.status == "expired"
     assert projection.decision == "expired"
     assert projection.canDecide is False
+
+
+def test_remediation_approval_projection_enforces_reviewer_eligibility() -> None:
+    link = SimpleNamespace(
+        approval_state={
+            "requestId": "approval-high-risk",
+            "status": "pending",
+            "reviewerRule": "high_risk_reviewer",
+            "requestingActor": "requester@example.com",
+        }
+    )
+
+    ordinary_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="owner@example.com",
+        actor_can_approve_high_risk=False,
+    )
+    privileged_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="reviewer@example.com",
+        actor_can_approve_high_risk=True,
+    )
+    requester_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="requester@example.com",
+        actor_can_approve_high_risk=True,
+    )
+
+    assert ordinary_projection is not None
+    assert ordinary_projection.canDecide is False
+    assert privileged_projection is not None
+    assert privileged_projection.canDecide is True
+    assert requester_projection is not None
+    assert requester_projection.canDecide is False
 
 
 def test_authored_remediation_contract_preserves_follow_up_retrieval() -> None:
@@ -315,6 +358,59 @@ async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable(
         artifact_id="art_action_request",
         principal="operator-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_projection_keeps_metadata_when_body_is_unreadable() -> None:
+    created_at = datetime.now(UTC)
+    artifact_link = SimpleNamespace(
+        link_type="remediation.summary",
+        label="lifecycle summary",
+        created_at=created_at,
+    )
+    artifact = SimpleNamespace(
+        artifact_id="art_pending_summary",
+        status=TemporalArtifactStatus.PENDING_UPLOAD,
+        metadata_json={"phase": "verification"},
+        expires_at=None,
+    )
+    session = AsyncMock()
+    session.execute.return_value = SimpleNamespace(
+        all=lambda: [(artifact_link, artifact)]
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactStateError("artifact is not readable"))
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-artifact",
+        remediation_run_id="run-remediation-artifact",
+    )
+
+    with patch.object(
+        executions_module,
+        "get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        await executions_module._attach_remediation_artifact_projection(
+            link,
+            session=session,
+            principal="operator-1",
+        )
+
+    assert link.lifecycle_artifacts == [
+        {
+            "artifactRef": "art_pending_summary",
+            "artifactType": "remediation.summary",
+            "status": "pending_upload",
+            "label": "lifecycle summary",
+            "createdAt": created_at,
+            "expiresAt": None,
+            "freshness": "durable",
+            "bounded": True,
+            "metadata": {"phase": "verification"},
+        }
+    ]
+    assert not hasattr(link, "lifecycle_summary")
 
 
 def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:

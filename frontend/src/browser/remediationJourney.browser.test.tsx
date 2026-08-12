@@ -429,7 +429,8 @@ describe('routed remediation operator journey', () => {
         screen.getByLabelText('Instructions'),
         'Repair the routed browser failure with bounded evidence.',
       );
-      await userEvent.fill(screen.getByLabelText('Action policy'), 'operator_review_only');
+      expect((screen.getByLabelText('Action policy') as HTMLSelectElement).value)
+        .toBe('admin_healer_default');
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });
@@ -456,7 +457,7 @@ describe('routed remediation operator journey', () => {
                 runId: 'source-run',
               },
               authorityMode: 'approval_gated',
-              actionPolicyRef: 'operator_review_only',
+              actionPolicyRef: 'admin_healer_default',
               checkpointBranchPolicy: {
                 gitWorkBranch: 'remediation/routed-browser-edited',
               },

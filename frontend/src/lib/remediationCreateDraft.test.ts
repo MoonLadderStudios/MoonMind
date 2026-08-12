@@ -109,6 +109,27 @@ describe('remediationCreateDraft', () => {
     });
   });
 
+  it('bounds generated checkpoint selectors to the create contract limit', () => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      checkpoints: Array.from({ length: 30 }, (_, index) => ({
+        logicalStepId: `step-${index + 1}`,
+        checkpointRef: `artifact://checkpoint/${index + 1}`,
+      })),
+    });
+
+    expect(draft.target.stepSelectors).toHaveLength(25);
+    expect(draft.remediation.target.stepSelectors).toHaveLength(25);
+    expect(draft.target.stepSelectors?.[24]).toMatchObject({
+      logicalStepId: 'step-25',
+      checkpointRef: 'artifact://checkpoint/25',
+    });
+
+    const draftId = storeRemediationCreateDraft(draft);
+    expect(inspectRemediationCreateDraft(draftId).status).toBe('valid');
+  });
+
   it('prepopulates source/work branches, Omnigent launch identity, and retrieval controls', () => {
     const draft = buildRemediationCreateDraft({
       workflowId: 'mm:target',
@@ -179,6 +200,19 @@ describe('remediationCreateDraft', () => {
     );
     expect(
       inspectRemediationCreateDraft('malformed-selectors').status,
+    ).toBe('malformed');
+    window.sessionStorage.setItem(
+      'moonmind.remediation-create-draft.unsupported-action-policy',
+      JSON.stringify({
+        ...draft,
+        remediation: {
+          ...draft.remediation,
+          actionPolicyRef: 'operator_review_only',
+        },
+      }),
+    );
+    expect(
+      inspectRemediationCreateDraft('unsupported-action-policy').status,
     ).toBe('malformed');
     window.sessionStorage.setItem(
       'moonmind.remediation-create-draft.expired',

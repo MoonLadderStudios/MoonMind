@@ -35,6 +35,7 @@ import {
   type RemediationCreateDraft,
   type RemediationCreateDraftReadResult,
 } from "../lib/remediationCreateDraft";
+import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
 import { ContextRetrievalControls } from "../components/ContextRetrievalControls";
 import {
   type ContextRetrievalAuthoring,
@@ -6188,6 +6189,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           selectedOmnigentAgentProfile.activeVersion),
     );
   useEffect(() => {
+    if (runtime !== "omnigent") return;
+    const profileExecutionTargetRef = String(
+      selectedOmnigentAgentProfileVersion?.document?.execution
+        ?.defaultExecutionProfileRef || "",
+    ).trim();
+    if (
+      profileExecutionTargetRef &&
+      profileExecutionTargetRef !== omnigentExecutionTargetRef
+    ) {
+      setOmnigentExecutionTargetRef(profileExecutionTargetRef);
+    }
+  }, [
+    omnigentExecutionTargetRef,
+    runtime,
+    selectedOmnigentAgentProfileVersion,
+  ]);
+  useEffect(() => {
     if (runtime !== "omnigent" || agentProfile) return;
     const preferred = readyAgentProfiles.find((profile) => profile.defaultForRuntime) || readyAgentProfiles[0];
     if (preferred) setAgentProfile(preferred.profileId);
@@ -11768,7 +11786,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </label>
               <label>
                 Action policy
-                <input
+                <select
                   value={remediationDraft.remediation.actionPolicyRef || ""}
                   onChange={(event) => {
                     const actionPolicyRef = event.target.value;
@@ -11777,7 +11795,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                       remediation: { ...current.remediation, actionPolicyRef },
                     } : current);
                   }}
-                />
+                >
+                  <option value={DEFAULT_REMEDIATION_ACTION_POLICY}>
+                    Administrator healer default
+                  </option>
+                </select>
               </label>
               <label>
                 Checkpoint

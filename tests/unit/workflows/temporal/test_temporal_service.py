@@ -1244,6 +1244,17 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             remediation.workflow_id
         ]
 
+        with patch.object(
+            service,
+            "_attach_remediation_checkpoint_branch_links",
+            new=AsyncMock(),
+        ) as attach_branch_links:
+            inventory = await service.list_remediation_links()
+        assert [item.remediation_workflow_id for item in inventory] == [
+            remediation.workflow_id
+        ]
+        attach_branch_links.assert_not_awaited()
+
         prerequisites = await service.list_prerequisites(remediation.workflow_id)
         assert prerequisites == []
 
@@ -1417,9 +1428,19 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
         assert projected_branch["turns"][1]["instructionRef"] == (
             "artifact://instructions/turn-2"
         )
-        assert projected_branch["turns"][1]["outputArtifacts"][
-            "runtime.branch_turn.agent_result.json"
-        ] == "artifact://result/turn-2"
+        assert projected_branch["turns"][1]["outputArtifacts"] == {
+            "output.branch_turn.step_execution_manifest.json": (
+                "artifact://manifest/turn-2"
+            ),
+            "output.branch_turn.checkpoint.json": "artifact://checkpoint/turn-2",
+            "output.branch_turn.diagnostics.json": "artifact://diagnostics/turn-2",
+        }
+        assert "input.branch_turn.instructions.md" not in projected_branch[
+            "turns"
+        ][1]["outputArtifacts"]
+        assert "runtime.branch_turn.agent_result.json" not in projected_branch[
+            "turns"
+        ][1]["outputArtifacts"]
         assert projected_branch["turns"][1]["comparisonArtifacts"] == {
             "comparison.branch_turn.diff.json": "artifact://comparison/turn-2"
         }
@@ -2571,6 +2592,78 @@ async def test_create_execution_accepts_target_owned_remediation_step_selector(
         )
         assert link is not None
         assert link.target_run_id == target.run_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_mixed_target_step_selector_tuple(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"instructions": "Fail two independent steps."},
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "step-a",
+                            "stepExecutionId": "step-a:execution:1",
+                            "attempt": 1,
+                            "checkpointRef": "artifact://checkpoint/step-a",
+                            "agentRunId": "agent-run-a",
+                        },
+                        {
+                            "logicalStepId": "step-b",
+                            "stepExecutionId": "step-b:execution:1",
+                            "attempt": 1,
+                            "checkpointRef": "artifact://checkpoint/step-b",
+                            "agentRunId": "agent-run-b",
+                        },
+                    ]
+                },
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="fields must identify one target Step Execution/checkpoint",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Mixed selector remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "stepSelectors": [
+                                    {
+                                        "logicalStepId": "step-a",
+                                        "stepExecutionId": "step-a:execution:1",
+                                        "checkpointRef": "artifact://checkpoint/step-b",
+                                        "agentRunId": "agent-run-b",
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
 
 
 @pytest.mark.asyncio
