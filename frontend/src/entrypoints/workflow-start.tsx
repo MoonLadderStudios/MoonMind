@@ -8401,6 +8401,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const nextStep: StepState = {
           ...step,
           stepType: nextType,
+          repositoryOperation: "",
         };
 
         // MM-936: explicitRequiredCapabilities is a step-level field that is
@@ -10555,7 +10556,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
-            ...(sourceStep.repositoryOperation
+            ...(sourceStep.repositoryOperation && !sourceInstructionsChanged
               ? { repositoryOperation: sourceStep.repositoryOperation }
               : {}),
             ...(hasSubmittedStepShape && shouldSubmitStepType

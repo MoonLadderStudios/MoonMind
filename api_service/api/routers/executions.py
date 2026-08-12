@@ -281,6 +281,7 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
     compile_repository_target,
+    github_repository_name_from_value,
     repository_branch_from_value,
     repository_name_from_value,
 )
@@ -10186,9 +10187,29 @@ def _selected_github_issue_repositories(
     task_payload: Mapping[str, Any],
 ) -> set[str]:
     input_payloads: list[Mapping[str, Any]] = []
+
+    def collect_binding_inputs(binding: object) -> None:
+        if not isinstance(binding, Mapping):
+            return
+        inputs = binding.get("inputs")
+        if not isinstance(inputs, Mapping):
+            inputs = binding.get("args")
+        if isinstance(inputs, Mapping):
+            input_payloads.append(inputs)
+
     task_inputs = task_payload.get("inputs")
     if isinstance(task_inputs, Mapping):
         input_payloads.append(task_inputs)
+    collect_binding_inputs(task_payload.get("tool"))
+    collect_binding_inputs(task_payload.get("skill"))
+
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            collect_binding_inputs(step.get("tool"))
+            collect_binding_inputs(step.get("skill"))
 
     applied_templates = task_payload.get("appliedStepTemplates")
     if isinstance(applied_templates, list):
@@ -10217,7 +10238,7 @@ def _validate_github_issue_repository_authority(
 ) -> None:
     submitted_repository = repository_name_from_value(repository_payload)
     issue_repositories = _selected_github_issue_repositories(task_payload)
-    if not submitted_repository or not issue_repositories:
+    if not issue_repositories:
         return
     if len(issue_repositories) > 1:
         raise _invalid_workflow_request(
@@ -10226,7 +10247,19 @@ def _validate_github_issue_repository_authority(
             + ". Submit one repository authority per workflow."
         )
     issue_repository = next(iter(issue_repositories))
-    if issue_repository.casefold() == submitted_repository.casefold():
+    if not submitted_repository:
+        raise _invalid_workflow_request(
+            "payload.repository is required when GitHub issue inputs select "
+            f"repository '{issue_repository}'."
+        )
+    submitted_identity = (
+        github_repository_name_from_value(submitted_repository)
+        or submitted_repository
+    ).casefold()
+    issue_identity = (
+        github_repository_name_from_value(issue_repository) or issue_repository
+    ).casefold()
+    if issue_identity == submitted_identity:
         return
     raise _invalid_workflow_request(
         f"payload.repository '{submitted_repository}' does not match the GitHub "

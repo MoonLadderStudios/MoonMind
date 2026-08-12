@@ -16406,12 +16406,47 @@ describe("Task Create MM-578 Preset expansion", () => {
       throw new Error("Expected submitted first step");
     }
     expect(submittedStep.instructions).toBe("Edited generated MM-578 step.");
+    expect(submittedStep.repositoryOperation).toBeUndefined();
     expect(submittedStep.source).toMatchObject({
       kind: "detached",
       presetId: "mm-578-preset",
       includePath: ["root", "fetch"],
       originalStepId: "fetch-jira-issue",
     });
+  });
+
+  it("clears generated repository authority when the step type changes", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
+
+    const generatedStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(generatedStep, "Skill");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(latestCreateTaskSteps()[0]?.repositoryOperation).toBeUndefined();
   });
 
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
