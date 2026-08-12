@@ -50,8 +50,13 @@ from moonmind.omnigent.profile_bound_execution import (
     _bind_exact_host,
 )
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
-from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
-from moonmind.security.egress import omnigent_proxy_env
+from moonmind.security.egress import (
+    EGRESS_CONFIG_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    EgressAttestation,
+    OMNIGENT_EGRESS_PROFILE,
+    omnigent_proxy_env,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     SendCodexManagedSessionTurnRequest,
@@ -101,6 +106,25 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as checkpoint_branch_turn_module,
 )
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="replay-test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        validationResult="passed",
+    )
+
+
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
@@ -1960,6 +1984,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         effective_launch=effective_launch,
+        egress_attestation=_egress_attestation(),
     )
 
     command = runtime._run.await_args_list[-1].args
@@ -2595,6 +2620,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
             policy_ref="codex-on-demand@1",
             provider_profile_id="codex",
         ),
+        egress_attestation=_egress_attestation(),
     )
 
     launch_command = runtime._run.await_args_list[-1].args

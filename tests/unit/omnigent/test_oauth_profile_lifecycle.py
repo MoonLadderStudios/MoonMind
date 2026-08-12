@@ -93,12 +93,34 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
-from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+from moonmind.security.egress import (
+    EGRESS_CONFIG_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    EgressAttestation,
+    OMNIGENT_EGRESS_PROFILE,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
 from tests.unit.omnigent.test_policy_authority import policy_document
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=UTC),
+        validationResult="passed",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1181,12 +1203,13 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         return_value=tmp_path / "runtime-scripts"
     )
     runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(
-            model_dump=lambda **_kwargs: {"profile": "test"}
-        )
+        return_value=_egress_attestation()
     )
-    runtime._attest_workload_attachment = AsyncMock(  # type: ignore[method-assign]
+    runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="mm-host-lease-1"
+    )
+    runtime._attest_launched_workload_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=_egress_attestation().model_dump(by_alias=True, mode="json")
     )
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
@@ -1428,6 +1451,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
             "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
         },
         effective_launch=effective_launch,
+        egress_attestation=_egress_attestation(),
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -1604,6 +1628,7 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         effective_launch=effective_launch,
+        egress_attestation=_egress_attestation(),
     )
 
     init_command, launch_command = [
@@ -1788,6 +1813,7 @@ async def test_on_demand_retry_rejects_stopped_container_from_another_lease(
             runtime_scripts=tmp_path,
             current_step_execution_id="workflow:run:node-1:execution:1",
             effective_launch=effective_launch,
+            egress_attestation=_egress_attestation(),
         )
 
     assert raised.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
@@ -2077,6 +2103,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         workspace_source=workspace,
         skill_projection=skills,
         effective_launch=launch,
+        egress_attestation=_egress_attestation(),
     )
     await runtime.stop_static_host()
 
@@ -4300,9 +4327,12 @@ async def _run_coordinator_failure_case(
     # Egress attestation is an orthogonal trusted-backend gate; this matrix
     # exercises coordinator failure/cleanup evidence, so treat enforcement as
     # already attested and let the intended failure stages surface.
-    runtime._attest_egress = AsyncMock(return_value=MagicMock())  # type: ignore[method-assign]
-    runtime._attest_workload_attachment = AsyncMock(  # type: ignore[method-assign]
+    runtime._attest_egress = AsyncMock(return_value=_egress_attestation())  # type: ignore[method-assign]
+    runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="container-1"
+    )
+    runtime._attest_launched_workload_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=_egress_attestation().model_dump(by_alias=True, mode="json")
     )
     runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
     runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
@@ -5560,7 +5590,7 @@ async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_attest_workload_attachment_records_actual_on_demand_container(
+async def test_resolve_workload_attachment_records_actual_on_demand_container(
     tmp_path,
 ) -> None:
     runtime = OmnigentOAuthHostRuntime(
@@ -5568,45 +5598,37 @@ async def test_attest_workload_attachment_records_actual_on_demand_container(
         scripts_dir=tmp_path,
         workspace_root=tmp_path / "workspaces",
     )
-    networks = {OMNIGENT_EGRESS_PROFILE.network_ref: {"IPAddress": "172.31.5.5"}}
-    runtime._run = AsyncMock(return_value=(0, json.dumps(networks), ""))
+    runtime._run = AsyncMock()
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
 
-    identity = await runtime._attest_workload_attachment(
+    identity = await runtime._resolve_workload_attachment_identity(
         binding=binding,
         host_lease=_host_lease(),
         container_name="mm-host-lease-1",
     )
 
-    # The attachment records the real Docker container, verified against the
-    # attested egress network, not the logical registered host id.
+    # On-demand authority is the deterministic real Docker container selected
+    # by the production host-launch owner, never the logical registered host id.
     assert identity == "mm-host-lease-1"
-    inspect = runtime._run.await_args_list[-1].args
-    assert inspect[:3] == ("docker", "inspect", "--format")
-    assert inspect[-1] == "mm-host-lease-1"
+    runtime._run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_attest_workload_attachment_fails_when_network_absent(tmp_path) -> None:
+async def test_static_attachment_identity_fails_when_container_is_absent(tmp_path) -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
         workspace_root=tmp_path / "workspaces",
     )
-    # The container is attached to some other network, not the attested one.
-    runtime._run = AsyncMock(
-        return_value=(0, json.dumps({"local-network": {"IPAddress": "10.0.0.2"}}), "")
-    )
-    binding = _binding().model_copy(
-        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
-    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    binding = _binding()
 
     with pytest.raises(OmnigentOAuthHostError) as excinfo:
-        await runtime._attest_workload_attachment(
+        await runtime._resolve_workload_attachment_identity(
             binding=binding,
             host_lease=_host_lease(),
-            container_name="mm-host-lease-1",
+            container_name=None,
         )
     assert excinfo.value.code == "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
