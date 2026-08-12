@@ -91,7 +91,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactStateError,
+)
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -131,6 +134,283 @@ class _ExecuteResult:
 
     def scalar_one_or_none(self) -> object | None:
         return self._rows[0] if self._rows else None
+
+
+def test_remediation_submission_branch_validation_rejects_tampered_refs() -> None:
+    with pytest.raises(HTTPException, match="not an allowed git branch"):
+        executions_module._validate_remediation_branch_submission(
+            task_payload={
+                "remediation": {"target": {"workflowId": "mm:target"}}
+            },
+            git_payload={"startingBranch": "main..tampered"},
+        )
+
+    with pytest.raises(HTTPException, match="not an allowed git branch"):
+        executions_module._validate_remediation_branch_submission(
+            task_payload={
+                "remediation": {
+                    "target": {"workflowId": "mm:target"},
+                    "checkpointBranchPolicy": {"gitWorkBranch": "main"},
+                }
+            },
+            git_payload={"startingBranch": "main"},
+        )
+
+
+def test_remediation_submission_branch_validation_accepts_editable_safe_refs() -> None:
+    executions_module._validate_remediation_branch_submission(
+        task_payload={
+            "remediation": {
+                "target": {"workflowId": "mm:target"},
+                "checkpointBranchPolicy": {
+                    "gitWorkBranch": "remediation/mm-3623-fix"
+                },
+            }
+        },
+        git_payload={"startingBranch": "release/2026-Q3"},
+    )
+
+
+def test_remediation_approval_projection_disables_expired_request() -> None:
+    projection = executions_module._remediation_approval_state_from_link(
+        SimpleNamespace(
+            approval_state={
+                "requestId": "approval-expired",
+                "status": "pending",
+                "expiresAt": "2020-01-01T00:00:00+00:00",
+            }
+        ),
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+    )
+
+    assert projection is not None
+    assert projection.status == "expired"
+    assert projection.decision == "expired"
+    assert projection.canDecide is False
+
+
+def test_remediation_approval_projection_enforces_reviewer_eligibility() -> None:
+    link = SimpleNamespace(
+        approval_state={
+            "requestId": "approval-high-risk",
+            "status": "pending",
+            "reviewerRule": "high_risk_reviewer",
+            "requestingActor": "requester@example.com",
+        }
+    )
+
+    ordinary_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="owner@example.com",
+        actor_can_approve_high_risk=False,
+    )
+    privileged_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="reviewer@example.com",
+        actor_can_approve_high_risk=True,
+    )
+    requester_projection = executions_module._remediation_approval_state_from_link(
+        link,
+        authority_mode="approval_gated",
+        status_value="awaiting_approval",
+        actor="requester@example.com",
+        actor_can_approve_high_risk=True,
+    )
+
+    assert ordinary_projection is not None
+    assert ordinary_projection.canDecide is False
+    assert privileged_projection is not None
+    assert privileged_projection.canDecide is True
+    assert requester_projection is not None
+    assert requester_projection.canDecide is False
+
+
+def test_authored_remediation_contract_preserves_follow_up_retrieval() -> None:
+    contract = executions_module._authored_remediation_contract(
+        {
+            "followUpRetrieval": {
+                "enabled": True,
+                "budgetPreset": "balanced",
+            }
+        },
+        {"remediation": {"authorityMode": "approval_gated"}},
+    )
+
+    assert contract["retrieval"] == {
+        "rag": None,
+        "followUpRetrieval": {
+            "enabled": True,
+            "budgetPreset": "balanced",
+        },
+    }
+
+
+def test_context_evidence_projection_adds_per_class_freshness_and_degradation() -> None:
+    projection = executions_module._context_evidence_availability_projection(
+        [
+            {"class": "stdout", "status": "available"},
+            {
+                "class": "diagnostics",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "omnigent_capture",
+                "status": "available",
+                "bounded": False,
+                "freshness": "provider_reported",
+            },
+        ],
+        generated_at="2026-08-12T10:00:00Z",
+    )
+
+    assert projection[0] == {
+        "class": "stdout",
+        "status": "available",
+        "bounded": True,
+        "freshness": "source_reported",
+        "observedAt": "2026-08-12T10:00:00Z",
+    }
+    assert projection[1]["degradedReason"] == "merged_logs"
+    assert projection[2]["bounded"] is False
+    assert projection[2]["freshness"] == "provider_reported"
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable() -> None:
+    created_at = datetime.now(UTC)
+    artifact_link = SimpleNamespace(
+        link_type="remediation.action_request",
+        label="latest action request",
+        created_at=created_at,
+    )
+    artifact = SimpleNamespace(
+        artifact_id="art_action_request",
+        status=TemporalArtifactStatus.COMPLETE,
+        metadata_json={
+            "actionKind": "execution.pause",
+            "riskTier": "medium",
+            "untrustedExtra": "excluded",
+        },
+        # SQLite commonly returns a naive timestamp. Projection comparison must
+        # remain safe while the API emits the original persisted value.
+        expires_at=(created_at + timedelta(hours=1)).replace(tzinfo=None),
+    )
+    session = AsyncMock()
+    session.execute.return_value = SimpleNamespace(
+        all=lambda: [(artifact_link, artifact)]
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                artifact,
+                json.dumps(
+                    {
+                        "actionKind": "execution.pause",
+                        "password": "must-not-reach-the-browser",
+                        "expectedState": "paused",
+                    }
+                ).encode("utf-8"),
+            )
+        )
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-artifact",
+        remediation_run_id="run-remediation-artifact",
+    )
+
+    with patch.object(
+        executions_module,
+        "get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        await executions_module._attach_remediation_artifact_projection(
+            link,
+            session=session,
+            principal="operator-1",
+        )
+
+    assert link.lifecycle_artifacts == [
+        {
+            "artifactRef": "art_action_request",
+            "artifactType": "remediation.action_request",
+            "status": "complete",
+            "label": "latest action request",
+            "createdAt": created_at,
+            "expiresAt": artifact.expires_at,
+            "freshness": "current",
+            "bounded": True,
+            "metadata": {
+                "actionKind": "execution.pause",
+                "riskTier": "medium",
+            },
+        }
+    ]
+    assert link.latest_action_request["actionKind"] == "execution.pause"
+    assert link.latest_action_request["expectedState"] == "paused"
+    assert "must-not-reach-the-browser" not in json.dumps(link.latest_action_request)
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art_action_request",
+        principal="operator-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_projection_keeps_metadata_when_body_is_unreadable() -> None:
+    created_at = datetime.now(UTC)
+    artifact_link = SimpleNamespace(
+        link_type="remediation.summary",
+        label="lifecycle summary",
+        created_at=created_at,
+    )
+    artifact = SimpleNamespace(
+        artifact_id="art_pending_summary",
+        status=TemporalArtifactStatus.PENDING_UPLOAD,
+        metadata_json={"phase": "verification"},
+        expires_at=None,
+    )
+    session = AsyncMock()
+    session.execute.return_value = SimpleNamespace(
+        all=lambda: [(artifact_link, artifact)]
+    )
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactStateError("artifact is not readable"))
+    )
+    link = SimpleNamespace(
+        remediation_workflow_id="mm:remediation-artifact",
+        remediation_run_id="run-remediation-artifact",
+    )
+
+    with patch.object(
+        executions_module,
+        "get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        await executions_module._attach_remediation_artifact_projection(
+            link,
+            session=session,
+            principal="operator-1",
+        )
+
+    assert link.lifecycle_artifacts == [
+        {
+            "artifactRef": "art_pending_summary",
+            "artifactType": "remediation.summary",
+            "status": "pending_upload",
+            "label": "lifecycle summary",
+            "createdAt": created_at,
+            "expiresAt": None,
+            "freshness": "durable",
+            "bounded": True,
+            "metadata": {"phase": "verification"},
+        }
+    ]
+    assert not hasattr(link, "lifecycle_summary")
 
 
 def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
@@ -4430,6 +4710,62 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     assert "agent" not in initial_parameters["omnigent"]
 
 
+def test_create_execution_rejects_agent_profile_execution_target_mismatch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+
+    with patch(
+        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "providerProfileRef": "codex-openai-oauth",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "tampered-execution-profile",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "omnigent.executionTargetRef must match the selected Agent Profile "
+        "executionProfileRef."
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -5430,6 +5766,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
             active_lock_holder="mm:remediation-1",
             latest_action_summary="Proposed session interrupt",
             outcome=None,
+            verification_outcome=None,
             context_artifact_ref="art_context",
             created_at=now,
             updated_at=now,
@@ -5469,6 +5806,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "activeLockHolder": "mm:remediation-1",
                 "latestActionSummary": "Proposed session interrupt",
                 "deliveryStatus": None,
+                "verificationOutcome": None,
                 "resolution": None,
                 "contextArtifactRef": "art_context",
                 "selectedSteps": None,
@@ -5521,6 +5859,7 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
             active_lock_holder=None,
             latest_action_summary=None,
             outcome="applied",
+            verification_outcome="verified_resolved",
             resolution="resolved",
             context_artifact_ref=None,
             created_at=now,
@@ -5559,6 +5898,7 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "activeLockHolder": None,
         "latestActionSummary": None,
         "deliveryStatus": "applied",
+        "verificationOutcome": "verified_resolved",
         "resolution": "resolved",
         "contextArtifactRef": None,
         "selectedSteps": None,
@@ -5598,6 +5938,7 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             active_lock_holder="mm:remediation-rich",
             latest_action_summary="Proposed session interrupt",
             outcome="precondition_failed",
+            verification_outcome="still_failed",
             context_artifact_ref="art_context_rich",
             selected_steps=["collect-context", "repair-runtime"],
             current_target_state="awaiting_external",
@@ -5652,8 +5993,56 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                         "workspaceDigest": "sha256:head",
                         "headVersion": 3,
                     },
+                    "turns": [
+                        {
+                            "branchTurnId": "cbt-rich",
+                            "status": "running",
+                            "runtimeAgentRunId": "agent-run-rich",
+                            "providerSessionId": "provider-session-rich",
+                            "instructionRef": "artifact://instructions/rich",
+                            "instructionDigest": "sha256:instructions-rich",
+                            "sourceCheckpointRef": "artifact://workspace/C0",
+                            "startedAt": "2026-08-12T00:00:01Z",
+                            "createdAt": "2026-08-12T00:00:00Z",
+                            "updatedAt": "2026-08-12T00:00:01Z",
+                            "outputArtifacts": {
+                                "output.branch_turn.result.json": "artifact://output/rich"
+                            },
+                            "comparisonArtifacts": {
+                                "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                            },
+                        }
+                    ],
                 }
             ],
+            authored_contract={
+                "instructions": "Repair the pinned target.",
+                "runtime": {"mode": "omnigent"},
+            },
+            selected_step_evidence=[{"logicalStepId": "collect-context"}],
+            context_generated_at="2026-08-12T00:00:00Z",
+            context_evidence_availability=[
+                {"class": "step_ledger", "status": "available", "bounded": True}
+            ],
+            context_boundedness={"rawLogBodiesIncluded": False},
+            diagnosis_hints=["Target session stopped responding."],
+            lifecycle_artifacts=[
+                {
+                    "artifactRef": "art_summary",
+                    "artifactType": "remediation.summary",
+                    "status": "complete",
+                    "freshness": "durable",
+                }
+            ],
+            latest_action_request={"actionKind": "session.interrupt"},
+            latest_action_result={"status": "precondition_failed"},
+            lifecycle_summary={"resolution": "operator_required"},
+            operator_controls={
+                "canCancel": True,
+                "canTakeOver": True,
+                "canResume": False,
+                "paused": False,
+            },
             created_at=now,
             updated_at=now,
         )
@@ -5679,6 +6068,16 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["selectedSteps"] == ["collect-context", "repair-runtime"]
+    assert item["verificationOutcome"] == "still_failed"
+    assert item["authoredContract"]["runtime"] == {"mode": "omnigent"}
+    assert item["selectedStepEvidence"] == [{"logicalStepId": "collect-context"}]
+    assert item["contextEvidenceAvailability"][0]["bounded"] is True
+    assert item["diagnosisHints"] == ["Target session stopped responding."]
+    assert item["lifecycleArtifacts"][0]["artifactType"] == "remediation.summary"
+    assert item["latestActionRequest"] == {"actionKind": "session.interrupt"}
+    assert item["latestActionResult"] == {"status": "precondition_failed"}
+    assert item["lifecycleSummary"] == {"resolution": "operator_required"}
+    assert item["operatorControls"]["canTakeOver"] is True
     assert item["currentTargetState"] == "awaiting_external"
     assert item["allowedActions"] == []
     assert item["actionCapabilities"] == []
@@ -5739,6 +6138,26 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                 "workspaceDigest": "sha256:head",
                 "headVersion": 3,
             },
+            "turns": [
+                {
+                    "branchTurnId": "cbt-rich",
+                    "status": "running",
+                    "runtimeAgentRunId": "agent-run-rich",
+                    "providerSessionId": "provider-session-rich",
+                    "instructionRef": "artifact://instructions/rich",
+                    "instructionDigest": "sha256:instructions-rich",
+                    "sourceCheckpointRef": "artifact://workspace/C0",
+                    "startedAt": "2026-08-12T00:00:01Z",
+                    "createdAt": "2026-08-12T00:00:00Z",
+                    "updatedAt": "2026-08-12T00:00:01Z",
+                    "outputArtifacts": {
+                        "output.branch_turn.result.json": "artifact://output/rich"
+                    },
+                    "comparisonArtifacts": {
+                        "comparison.branch_turn.diff.json": "artifact://comparison/rich"
+                    },
+                }
+            ],
             "createdAt": None,
         }
     ]

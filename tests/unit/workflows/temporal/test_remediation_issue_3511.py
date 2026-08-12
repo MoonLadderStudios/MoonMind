@@ -127,6 +127,12 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     assert link.approval_state["requestDigest"]
     assert link.approval_state["expectedTargetState"] == "failed"
     assert link.approval_state["parameterDigest"]
+    assert link.approval_state["preconditions"] == (
+        "target_visible, force_termination_approved"
+    )
+    assert link.approval_state["blastRadius"] == (
+        "One execution bound to pinned target run target-run-1."
+    )
     assert link.approval_state["artifactRefs"] == {
         "approvalRequest": "artifact-approval-request"
     }

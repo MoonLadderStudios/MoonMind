@@ -54,6 +54,24 @@ This document does **not** define:
 - `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
 - This contract should remain stable even if backing reads move closer to Temporal Visibility.
+- Remediation authoring uses the same `POST /api/executions` endpoint and
+  persists canonical `task.remediation`; there is no privileged one-click UI
+  submission path.
+- `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound`
+  returns bidirectional link identity plus bounded canonical projections of the
+  authored contract, selected evidence, context availability/boundedness,
+  approval/lock/operator controls, action request/result, target-level repair
+  verification, lifecycle artifacts/summary, and Checkpoint Branch state.
+- Approval decisions use
+  `POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}`
+  with `decision` and optional rationale `comment`. Takeover/pause, resume, and
+  cancellation remain ordinary Workflow signal/cancel operations.
+
+Create admission independently revalidates target visibility and exact run,
+selected Step Executions/checkpoints/Agent Runs, Agent and Provider Profile
+snapshots, launch-policy identity, remediation mode/authority/action policy,
+repository and work-branch syntax, and publish mode. Posted UI state never
+confers target or runtime authority.
 
 ### 2.4 Current implementation note
 

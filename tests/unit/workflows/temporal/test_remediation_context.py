@@ -428,7 +428,23 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "attempt": 1,
+                            "agentRunId": "tr_selected",
+                            "checkpointRef": "artifact://checkpoints/run-tests",
+                            "checkpointDigest": "sha256:runtests",
+                        }
+                    ]
+                },
+                "agentRuns": [
+                    {"agentRunId": f"tr_{index:02d}"} for index in range(25)
+                ],
+            },
             idempotency_key=None,
             summary="Target summary",
         )
@@ -462,7 +478,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                             "stepSelectors": [
                                 {
                                     "logicalStepId": "run-tests",
-                                    "attempt": "1",
+                                    "attempt": 1,
                                     "agentRunId": "tr_selected",
                                     "checkpointRef": "artifact://checkpoints/run-tests",
                                     "checkpointDigest": "sha256:runtests",
@@ -694,7 +710,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
                             "stepSelectors": [
                                 {
                                     "logicalStepId": "run-tests",
-                                    "attempt": "2",
+                                    "attempt": 2,
                                     "agentRunId": "tr_live",
                                 }
                             ],
@@ -1983,7 +1999,10 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_allowed"}],
+            },
             idempotency_key=None,
         )
         target_artifact, _upload = await artifact_service.create(
@@ -2120,7 +2139,10 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_live"}],
+            },
             idempotency_key=None,
         )
         remediation = await execution_service.create_execution(
@@ -2243,7 +2265,10 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
+            initial_parameters={
+                **_valid_user_workflow_parameters(),
+                "agentRuns": [{"agentRunId": "tr_action"}],
+            },
             idempotency_key=None,
             summary="Initial target summary",
         )
