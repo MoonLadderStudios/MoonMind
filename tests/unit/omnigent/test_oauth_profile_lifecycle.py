@@ -4629,6 +4629,8 @@ async def _run_coordinator_failure_case(
 
         async def bind_egress_cleanup_authority(self, **_kwargs):
             actions.append("egress_cleanup_authority_bound")
+            if fail_at == "cleanup_authority_bind":
+                raise error
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             events.append((event_type, kwargs))
@@ -4646,6 +4648,16 @@ async def _run_coordinator_failure_case(
     artifact_directory = tempfile.TemporaryDirectory(
         prefix="moonmind-coordinator-egress-evidence-"
     )
+
+    class LaunchEvidenceFailureGateway(LocalOmnigentArtifactGateway):
+        writes = 0
+
+        async def write_bytes(self, **kwargs):
+            self.writes += 1
+            if fail_at == "launch_evidence_publication" and self.writes == 1:
+                raise error
+            return await super().write_bytes(**kwargs)
+
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=LeaseClient(),
@@ -4653,7 +4665,7 @@ async def _run_coordinator_failure_case(
         host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
-        artifact_gateway=LocalOmnigentArtifactGateway(
+        artifact_gateway=LaunchEvidenceFailureGateway(
             root=artifact_directory.name
         ),
     )
@@ -4800,6 +4812,49 @@ async def test_ambiguous_terminal_attempt_preserves_exact_host_for_temporal_retr
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fail_at", "code", "expected_launch_ref"),
+    [
+        (
+            "launch_evidence_publication",
+            "OMNIGENT_EGRESS_EVIDENCE_UNAVAILABLE",
+            None,
+        ),
+        (
+            "cleanup_authority_bind",
+            "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_UNBOUND",
+            "artifact://",
+        ),
+    ],
+)
+async def test_post_attachment_evidence_failure_publishes_terminal_cleanup_before_release(
+    fail_at: str,
+    code: str,
+    expected_launch_ref: str | None,
+) -> None:
+    events, actions, _owner_calls = await _run_coordinator_failure_case(
+        fail_at=fail_at,
+        code=code,
+    )
+
+    cleanup = next(
+        payload
+        for event_type, payload in events
+        if event_type == "host_cleanup" and payload["status"] == "completed"
+    )
+    terminal = events[-1][1]["metadata"]
+    assert cleanup["metadata"]["egressEvidenceRef"].startswith("artifact://")
+    assert terminal["egressEvidenceRef"].startswith("artifact://")
+    if expected_launch_ref is None:
+        assert terminal["egressLaunchEvidenceRef"] is None
+    else:
+        assert terminal["egressLaunchEvidenceRef"].startswith(expected_launch_ref)
+    assert actions.index("host_stopped") < actions.index("provider_released")
+    assert terminal["cleanupCompleted"] is True
+    assert terminal["leaseReleased"] is True
 
 
 @pytest.mark.asyncio

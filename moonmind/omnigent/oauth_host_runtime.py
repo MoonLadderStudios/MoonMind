@@ -516,46 +516,70 @@ class OmnigentOAuthHostRuntime:
         validated["egressAttestation"] = result["egressAttestation"]
         validated["workspaceResolution"] = dict(self._last_workspace_evidence)
         if evidence_request is not None and artifact_gateway is not None:
-            existing_authority = None
-            if cleanup_authority_store is not None and hasattr(
-                cleanup_authority_store, "get_egress_cleanup_authority"
-            ):
-                existing_authority = (
-                    await cleanup_authority_store.get_egress_cleanup_authority(
-                        host_lease_ref=host_lease.lease_id
+            launch_ref: str | None = None
+            try:
+                existing_authority = None
+                if cleanup_authority_store is not None and hasattr(
+                    cleanup_authority_store, "get_egress_cleanup_authority"
+                ):
+                    existing_authority = (
+                        await cleanup_authority_store.get_egress_cleanup_authority(
+                            host_lease_ref=host_lease.lease_id
+                        )
                     )
-                )
-            if isinstance(existing_authority, Mapping):
-                launch_ref = self._validate_reused_cleanup_authority(
-                    authority=existing_authority,
-                    launch=launch,
-                    egress_evidence=egress_evidence,
-                )
-            else:
-                launch_evidence = self._host_egress_evidence_payload(
-                    binding=binding,
-                    host_lease=host_lease,
-                    launch=launch,
-                    egress_evidence=egress_evidence,
-                    evidence_request=evidence_request,
-                    state="launched",
-                    cleanup_result="pending",
-                    reconciliation_result="not_required",
-                )
-                launch_ref = await self._publish_host_egress_evidence(
-                    artifact_gateway=artifact_gateway,
-                    evidence_request=evidence_request,
-                    name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
-                    payload=launch_evidence,
-                )
-                if cleanup_authority_store is not None:
-                    await cleanup_authority_store.bind_egress_cleanup_authority(
-                        request=evidence_request,
-                        host_lease_ref=host_lease.lease_id,
+                if isinstance(existing_authority, Mapping):
+                    launch_ref = self._validate_reused_cleanup_authority(
+                        authority=existing_authority,
+                        launch=launch,
                         egress_evidence=egress_evidence,
-                        launch_evidence_ref=launch_ref,
                     )
-            validated["egressEvidenceRef"] = launch_ref
+                else:
+                    launch_evidence = self._host_egress_evidence_payload(
+                        binding=binding,
+                        host_lease=host_lease,
+                        launch=launch,
+                        egress_evidence=egress_evidence,
+                        evidence_request=evidence_request,
+                        state="launched",
+                        cleanup_result="pending",
+                        reconciliation_result="not_required",
+                    )
+                    launch_ref = await self._publish_host_egress_evidence(
+                        artifact_gateway=artifact_gateway,
+                        evidence_request=evidence_request,
+                        name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
+                        payload=launch_evidence,
+                    )
+                    if cleanup_authority_store is not None:
+                        await cleanup_authority_store.bind_egress_cleanup_authority(
+                            request=evidence_request,
+                            host_lease_ref=host_lease.lease_id,
+                            egress_evidence=egress_evidence,
+                            launch_evidence_ref=launch_ref,
+                        )
+                validated["egressEvidenceRef"] = launch_ref
+            except (Exception, asyncio.CancelledError) as exc:
+                # Attachment and immutable egress evidence already exist. Do not
+                # collapse this into an empty preflight failure: the coordinator
+                # needs the exact runtime-observed values to publish terminal
+                # cleanup evidence or retain the leases for its janitor.
+                prepared_host_evidence = {
+                    **dict(validated),
+                    "egressAttestation": dict(egress_evidence),
+                    "egressEvidenceRef": launch_ref,
+                }
+                if isinstance(exc, asyncio.CancelledError):
+                    exc.prepared_host_evidence = prepared_host_evidence  # type: ignore[attr-defined]
+                    raise
+                if isinstance(exc, OmnigentOAuthHostError):
+                    exc.prepared_host_evidence = prepared_host_evidence
+                    raise
+                raise OmnigentOAuthHostError(
+                    "Omnigent host launch evidence could not be durably bound",
+                    code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_UNBOUND",
+                    egress_evidence_ref=launch_ref,
+                    prepared_host_evidence=prepared_host_evidence,
+                ) from exc
         return validated
 
     @staticmethod

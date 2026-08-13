@@ -1810,7 +1810,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             return result
         except (Exception, asyncio.CancelledError) as exc:
-            if isinstance(exc, asyncio.CancelledError):
+            prepared_host_evidence = getattr(
+                exc, "prepared_host_evidence", None
+            )
+            if isinstance(prepared_host_evidence, Mapping):
+                preflight = dict(prepared_host_evidence)
+                launch_evidence_ref = str(
+                    preflight.get("egressEvidenceRef") or ""
+                ).strip()
+                if launch_evidence_ref:
+                    authority_cleanup_evidence["launchEvidenceRef"] = (
+                        launch_evidence_ref
+                    )
+            if isinstance(exc, asyncio.CancelledError) and not isinstance(
+                prepared_host_evidence, Mapping
+            ):
                 attempt_cleanup_deferred_code = "activity_cancelled"
             elif isinstance(exc, OmnigentSessionStillRunningError):
                 attempt_cleanup_deferred_code = "ambiguous_terminal_state"

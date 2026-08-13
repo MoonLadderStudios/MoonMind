@@ -627,35 +627,39 @@ class OmnigentBridgeSessionStore:
                 select(OmnigentBridgeSession)
                 .where(OmnigentBridgeSession.host_lease_ref == host_lease_ref)
                 .order_by(OmnigentBridgeSession.updated_at.desc())
-                .limit(1)
             )
-            row = result.scalars().first()
-            if row is None:
+            rows = list(result.scalars().all())
+            if not rows:
                 return None
             safe_summary = redact_sensitive_text(str(summary or ""))[:512]
             safe_code = str(code or "")[:96] or None
-            refs = dict(row.terminal_refs or {})
-            refs.update(
-                {
-                    "cleanupState": "completed" if completed else "failed",
-                    "leaseReleaseState": (
-                        "released"
-                        if lease_released is True
-                        else "held"
-                        if lease_released is False
-                        else "unknown"
-                    ),
-                }
-            )
-            if safe_code:
-                refs["cleanupFailureCode"] = safe_code
-            else:
-                refs.pop("cleanupFailureCode", None)
-            if egress_evidence_ref:
-                refs["egressEvidenceRef"] = str(egress_evidence_ref)
-            if launch_evidence_ref:
-                refs["egressLaunchEvidenceRef"] = str(launch_evidence_ref)
-            row.terminal_refs = refs
+            for row in rows:
+                refs = dict(row.terminal_refs or {})
+                refs.update(
+                    {
+                        "cleanupState": "completed" if completed else "failed",
+                        "leaseReleaseState": (
+                            "released"
+                            if lease_released is True
+                            else "held"
+                            if lease_released is False
+                            else "unknown"
+                        ),
+                    }
+                )
+                if safe_code:
+                    refs["cleanupFailureCode"] = safe_code
+                else:
+                    refs.pop("cleanupFailureCode", None)
+                if egress_evidence_ref:
+                    refs["egressEvidenceRef"] = str(egress_evidence_ref)
+                if launch_evidence_ref:
+                    refs["egressLaunchEvidenceRef"] = str(launch_evidence_ref)
+                row.terminal_refs = refs
+            # Cleanup is host-lease scoped, so every continuation row must
+            # resolve the same terminal refs. Emit the lifecycle projection on
+            # the newest bridge identity while persisting the refs on all rows.
+            row = rows[0]
             idempotency_key = row.idempotency_key
             await session.commit()
             await session.refresh(row)
@@ -1093,30 +1097,52 @@ class OmnigentBridgeSessionStore:
                 select(OmnigentBridgeSession)
                 .where(OmnigentBridgeSession.host_lease_ref == host_lease_ref)
                 .order_by(OmnigentBridgeSession.updated_at.desc())
-                .limit(1)
             )
-            row = result.scalars().first()
-            if row is None:
-                return None
-            authority = (row.metadata_ or {}).get(EGRESS_CLEANUP_AUTHORITY_KEY)
-            if not isinstance(authority, dict):
-                return None
-            if (
-                authority.get("schemaVersion")
-                != EGRESS_CLEANUP_AUTHORITY_VERSION
-                or authority.get("hostLeaseRef") != host_lease_ref
-            ):
-                raise OmnigentIdempotencyError(
-                    "durable egress cleanup authority identity is invalid"
+            selected: dict[str, Any] | None = None
+            selected_effective_launch: dict[str, Any] | None = None
+            for row in result.scalars().all():
+                authority = (row.metadata_ or {}).get(
+                    EGRESS_CLEANUP_AUTHORITY_KEY
                 )
-            effective_launch = dict(row.effective_launch_snapshot_json or {})
-            if authority.get("effectiveLaunchRef") != effective_launch.get(
-                "snapshotRef"
-            ):
-                raise OmnigentIdempotencyError(
-                    "durable egress cleanup authority launch snapshot is stale"
-                )
-            return {**dict(authority), "effectiveLaunch": effective_launch}
+                # Repository continuations intentionally create a newer bridge
+                # row under the same host lease. Rows without post-launch
+                # authority are not evidence that the original authority ceased
+                # to exist and therefore cannot mask it from the janitor.
+                if authority is None:
+                    continue
+                if not isinstance(authority, dict) or (
+                    authority.get("schemaVersion")
+                    != EGRESS_CLEANUP_AUTHORITY_VERSION
+                    or authority.get("hostLeaseRef") != host_lease_ref
+                ):
+                    raise OmnigentIdempotencyError(
+                        "durable egress cleanup authority identity is invalid"
+                    )
+                effective_launch = dict(row.effective_launch_snapshot_json or {})
+                if authority.get("effectiveLaunchRef") != effective_launch.get(
+                    "snapshotRef"
+                ):
+                    raise OmnigentIdempotencyError(
+                        "durable egress cleanup authority launch snapshot is stale"
+                    )
+                candidate = dict(authority)
+                if selected is None:
+                    selected = candidate
+                    selected_effective_launch = effective_launch
+                    continue
+                if (
+                    candidate != selected
+                    or effective_launch != selected_effective_launch
+                ):
+                    raise OmnigentIdempotencyError(
+                        "host lease has conflicting egress cleanup authority"
+                    )
+            if selected is None or selected_effective_launch is None:
+                return None
+            return {
+                **selected,
+                "effectiveLaunch": selected_effective_launch,
+            }
 
     async def bind_embedded_runner(
         self, idempotency_key: str, *, host_id: str, runner_id: str
