@@ -290,12 +290,13 @@ def resolve_container_backend_settings(
         RegistryImageSource(
             source_ref=TACTICS_UNREAL_IMAGE_SOURCE_REF,
             image=tactics_unreal_image,
-            # Unreal images are commonly private and operator-provisioned.
-            # Reuse the deployment daemon's copy without silently attempting
-            # an anonymous pull when the host cache is missing.
+            # First use is cold-start provisioning, not an operator-only
+            # prewarm requirement. Private registries still fail through the
+            # normal credential-aware pull contract when authorization is
+            # unavailable; deployments may explicitly select ``never``.
             pull_policy=_registry_pull_policy(
                 source.get("MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"),
-                default="never",
+                default="if-missing",
             ),
         )
     )

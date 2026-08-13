@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -354,6 +355,64 @@ class TemporalArtifactStore:
     ) -> str:
         raise NotImplementedError
 
+    def build_content_addressed_storage_key(
+        self,
+        *,
+        namespace: str,
+        scope: str,
+        sha256: str,
+    ) -> str:
+        """Return one immutable blob key shared by equivalent logical artifacts."""
+
+        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "default"
+        if ".." in safe_namespace.split("/"):
+            raise TemporalArtifactValidationError(
+                "namespace must not contain traversal"
+            )
+        safe_scope = scope.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", safe_scope):
+            raise TemporalArtifactValidationError(
+                "content-addressed scope must be a lowercase storage segment"
+            )
+        digest = _validate_sha256(sha256)
+        if digest is None:
+            raise TemporalArtifactValidationError(
+                "content-addressed storage requires sha256"
+            )
+        return (
+            f"{safe_namespace}/blobs/{safe_scope}/sha256/"
+            f"{digest[:2]}/{digest}"
+        )
+
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether stored bytes exactly match the immutable identity."""
+
+        expected_sha256 = _validate_sha256(sha256)
+        if expected_sha256 is None or size_bytes < 0:
+            raise TemporalArtifactValidationError(
+                "stored-object validation requires sha256 and non-negative size_bytes"
+            )
+        # Artifact digests are content identities, not password hashes.
+        digest = hashlib.sha256(usedforsecurity=False)
+        observed_size = 0
+        try:
+            for chunk in self.read_chunks(storage_key):
+                observed_size += len(chunk)
+                if observed_size > size_bytes:
+                    return False
+                digest.update(chunk)
+        except Exception as exc:
+            if not _is_retryable_single_put_read_error(exc):
+                raise
+            return False
+        return observed_size == size_bytes and digest.hexdigest() == expected_sha256
+
     def write_bytes(
         self, storage_key: str, payload: bytes, *, content_type: str | None
     ) -> None:
@@ -479,7 +538,15 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         _ = content_type
         destination = self.resolve_storage_key(storage_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(payload)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
@@ -642,6 +709,28 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
         return response["Body"].read()
 
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
+        try:
+            response = self._client.head_object(Bucket=self._bucket, Key=storage_key)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES:
+                return False
+            raise
+        if int(response.get("ContentLength", -1)) != size_bytes:
+            return False
+        return super().object_matches(
+            storage_key,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+
     def read_chunks(
         self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
     ) -> Iterable[bytes]:
@@ -793,6 +882,9 @@ class TemporalArtifactRepository:
     async def commit(self) -> None:
         await self._session.commit()
 
+    async def flush(self) -> None:
+        await self._session.flush()
+
     async def create_artifact(
         self,
         *,
@@ -839,6 +931,42 @@ class TemporalArtifactRepository:
         if artifact is None:
             raise TemporalArtifactNotFoundError(artifact_id)
         return artifact
+
+    async def lock_storage_references(
+        self,
+        *,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        storage_key: str,
+    ) -> None:
+        """Serialize final-blob deletion across logical references."""
+
+        stmt = (
+            select(db_models.TemporalArtifact.artifact_id)
+            .where(
+                db_models.TemporalArtifact.storage_backend == storage_backend,
+                db_models.TemporalArtifact.storage_key == storage_key,
+            )
+            .with_for_update()
+        )
+        await self._session.execute(stmt)
+
+    async def has_live_storage_reference(
+        self,
+        *,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        storage_key: str,
+    ) -> bool:
+        stmt = (
+            select(db_models.TemporalArtifact.artifact_id)
+            .where(
+                db_models.TemporalArtifact.storage_backend == storage_backend,
+                db_models.TemporalArtifact.storage_key == storage_key,
+                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar() is not None
 
     async def add_link(
         self,
@@ -1389,6 +1517,7 @@ class TemporalArtifactService:
         metadata_json: dict[str, Any] | None = None,
         encryption: db_models.TemporalArtifactEncryption = db_models.TemporalArtifactEncryption.NONE,
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
+        content_addressed_scope: str | None = None,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
         try:
@@ -1424,11 +1553,23 @@ class TemporalArtifactService:
         namespace = (
             execution_ref.namespace if execution_ref else self._default_namespace
         )
-        storage_key = self._store.build_storage_key(
-            namespace=namespace,
-            artifact_id=artifact_id,
-            now=now,
-        )
+        declared_sha256 = _validate_sha256(sha256)
+        if content_addressed_scope is not None:
+            if declared_size is None or declared_sha256 is None:
+                raise TemporalArtifactValidationError(
+                    "content-addressed artifacts require declared size_bytes and sha256"
+                )
+            storage_key = self._store.build_content_addressed_storage_key(
+                namespace=namespace,
+                scope=content_addressed_scope,
+                sha256=declared_sha256,
+            )
+        else:
+            storage_key = self._store.build_storage_key(
+                namespace=namespace,
+                artifact_id=artifact_id,
+                now=now,
+            )
         upload_expires_at = now + timedelta(seconds=self._presign_ttl_seconds)
 
         mode = db_models.TemporalArtifactUploadMode.SINGLE_PUT
@@ -1458,7 +1599,7 @@ class TemporalArtifactService:
             created_by_principal=principal,
             content_type=(content_type or None),
             size_bytes=declared_size,
-            sha256=_validate_sha256(sha256),
+            sha256=declared_sha256,
             storage_backend=self._store.backend,
             storage_key=storage_key,
             encryption=encryption,
@@ -1493,6 +1634,98 @@ class TemporalArtifactService:
         )
         await self._repository.commit()
         return artifact, upload_descriptor
+
+    async def put_content_addressed_payload_complete(
+        self,
+        *,
+        principal: str,
+        payload: bytes,
+        content_type: str,
+        scope: str,
+        retention_class: db_models.TemporalArtifactRetentionClass | None = None,
+        link: dict[str, Any] | ExecutionRef | None = None,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> tuple[db_models.TemporalArtifact, bool]:
+        """Create a logical artifact backed by one digest-addressed blob.
+
+        Logical rows remain distinct so authorization, linkage, pinning, and
+        expiry do not collapse across executions. Equivalent immutable payloads
+        share only their storage object. The returned boolean reports whether
+        the object already existed.
+        """
+
+        digest, size_bytes = self._compute_digest_and_size(payload)
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=digest,
+            retention_class=retention_class,
+            link=link,
+            metadata_json=metadata_json,
+            content_addressed_scope=scope,
+        )
+        # The logical row is committed before this lock. Concurrent publishers
+        # therefore converge on one visible storage-key group, and only the
+        # lock owner that still observes a cold blob performs the upload.
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+        )
+        object_matches = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._store.object_matches(
+                artifact.storage_key,
+                sha256=digest,
+                size_bytes=size_bytes,
+            ),
+        )
+        if not object_matches:
+            completed = await self.write_payload_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type=content_type,
+            )
+            return completed, False
+
+        if artifact.upload_id:
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.abort_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=artifact.upload_id or "",
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - cleanup is best effort
+                logger.warning(
+                    "Failed to abort redundant content-addressed upload "
+                    "artifact_id=%s: %s",
+                    artifact.artifact_id,
+                    exc,
+                )
+        artifact.sha256 = digest
+        artifact.size_bytes = size_bytes
+        artifact.content_type = content_type
+        artifact.status = db_models.TemporalArtifactStatus.COMPLETE
+        artifact.upload_id = None
+        artifact.upload_expires_at = None
+        await self._repository.commit()
+        await self._create_preview_if_required(
+            artifact=artifact,
+            principal=principal,
+            payload=payload,
+            policy="auto-generated",
+        )
+        logger.info(
+            "Temporal artifact reused content-addressed blob principal=%s "
+            "artifact_id=%s scope=%s",
+            principal,
+            artifact.artifact_id,
+            scope,
+        )
+        return artifact, True
 
     async def write_complete(
         self,
@@ -2206,12 +2439,21 @@ class TemporalArtifactService:
                 "artifact must be soft-deleted before hard delete"
             )
 
-        await asyncio.get_running_loop().run_in_executor(
-            None, self._store.delete, artifact.storage_key
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
         )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
         artifact.tombstoned_at = now
+        await self._repository.flush()
+        if not await self._repository.has_live_storage_reference(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+        ):
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._store.delete, artifact.storage_key
+            )
         await self._repository.commit()
         logger.info(
             "Temporal artifact hard_delete principal=%s artifact_id=%s",
@@ -2245,12 +2487,21 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._store.delete, artifact.storage_key
+            await self._repository.lock_storage_references(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
             )
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
             artifact.last_lifecycle_run_id = lifecycle_run_id
+            await self._repository.flush()
+            if not await self._repository.has_live_storage_reference(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+            ):
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.delete, artifact.storage_key
+                )
             hard_deleted += 1
 
         await self._repository.commit()

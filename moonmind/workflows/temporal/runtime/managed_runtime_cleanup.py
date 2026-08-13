@@ -63,7 +63,7 @@ class ManagedRuntimeCleanupConfig:
             enabled=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True),
             dry_run=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False),
             workspace_retention=timedelta(
-                days=_int_env("MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 30)
+                days=_int_env("MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 10)
             ),
             artifact_retention=timedelta(
                 days=_int_env("MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS", 90)

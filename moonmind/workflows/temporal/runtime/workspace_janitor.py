@@ -90,7 +90,7 @@ class ManagedRuntimeJanitorConfig:
     dry_run: bool = False
     runtime_root: Path = Path(_DEFAULT_RUNTIME_ROOT)
     artifact_root: Path = Path(_DEFAULT_RUNTIME_ROOT) / "artifacts"
-    workspace_retention: timedelta = timedelta(days=30)
+    workspace_retention: timedelta = timedelta(days=10)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(seconds=3600)
@@ -113,7 +113,7 @@ class ManagedRuntimeJanitorConfig:
             artifact_root=managed_runtime_artifact_root(),
             workspace_retention=timedelta(
                 days=_positive_int_env(
-                    "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 30
+                    "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 10
                 )
             ),
             artifact_retention=timedelta(
