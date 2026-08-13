@@ -13,6 +13,7 @@ from moonmind.schemas.container_job_models import (
     RegistryAuthorization,
     ensure_temporal_safe,
     failure_class_from_exception,
+    failure_message_from_exception,
     normalize_image_reference,
 )
 
@@ -139,3 +140,22 @@ def test_failure_class_survives_marker_and_wrapping() -> None:
         ContainerJobFailureClass.REGISTRY_AUTH_FAILED
     )
     assert failure_class_from_exception(RuntimeError("unrelated")) is None
+
+
+def test_failure_message_prefers_nested_application_cause() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    cause = ApplicationError("requested image is absent", type="image_not_found")
+    wrapped = RuntimeError("Activity task failed")
+    wrapped.__cause__ = cause
+
+    assert failure_message_from_exception(wrapped) == "requested image is absent"
+    assert (
+        failure_message_from_exception(
+            ContainerJobBackendError(
+                ContainerJobFailureClass.REGISTRY_AUTH_FAILED,
+                "denied by registry",
+            )
+        )
+        == "denied by registry"
+    )

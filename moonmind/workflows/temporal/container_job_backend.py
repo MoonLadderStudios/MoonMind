@@ -1390,8 +1390,17 @@ class DockerContainerJobBackend:
             )
 
         if policy == "never":
+            if image_source_ref is not None:
+                detail = (
+                    f"deployment image source {image_source_ref!r} is absent on "
+                    "the selected backend and pullPolicy=never; provision its "
+                    "configured image on that backend or change the "
+                    "deployment-owned pull policy"
+                )
+            else:
+                detail = "requested image is absent and pullPolicy=never"
             raise ImageAcquisitionError(
-                "requested image is absent and pullPolicy=never",
+                detail,
                 failure_class=ContainerJobFailureClass.IMAGE_NOT_FOUND,
             )
 
@@ -2108,26 +2117,39 @@ class DockerContainerJobBackend:
         return data
 
     async def publish_evidence(self, request: ContainerJobActivityRequest):
-        ref = request.container_ref or self._name(request)
-        code, stdout, stderr = await self._runner(("logs", ref))
-        # Redact container-emitted secrets before anything is persisted. For a
-        # non-TTY container ``docker logs`` writes container stdout/stderr to the
-        # matching streams, so each is captured as a deterministic artifact.
         limit = self._settings.max_output_bytes
-        stdout_raw = redact_sensitive_text(
-            stdout.decode("utf-8", errors="replace")
-        ).encode("utf-8")
-        stderr_raw = redact_sensitive_text(
-            stderr.decode("utf-8", errors="replace")
-        ).encode("utf-8")
-        combined_raw = stdout_raw + (
-            b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
-        )
+        if request.resolved_image_ref is None and request.container_ref is None:
+            # Before image acquisition succeeds no create Activity can have run,
+            # so a deterministic container name is not evidence that a container
+            # exists. Persist the authoritative terminal cause without replacing
+            # it with Docker's derived "No such container" response.
+            message = redact_sensitive_text(
+                request.message
+                or "container job failed before image acquisition completed"
+            )
+            stdout_raw = b""
+            stderr_raw = b""
+            combined_raw = f"[system]\n{message}\n".encode()
+        else:
+            ref = request.container_ref or self._name(request)
+            code, stdout, stderr = await self._runner(("logs", ref))
+            # Redact container-emitted secrets before anything is persisted. For
+            # a non-TTY container ``docker logs`` writes container stdout/stderr
+            # to the matching streams, so each is captured deterministically.
+            stdout_raw = redact_sensitive_text(
+                stdout.decode("utf-8", errors="replace")
+            ).encode("utf-8")
+            stderr_raw = redact_sensitive_text(
+                stderr.decode("utf-8", errors="replace")
+            ).encode("utf-8")
+            combined_raw = stdout_raw + (
+                b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
+            )
+            if code and not (stdout_raw or stderr_raw):
+                raise RuntimeError("container evidence is unavailable")
         combined = self._bound_tail(combined_raw, limit)
         stdout_bytes = self._bound_tail(stdout_raw, limit)
         stderr_bytes = self._bound_tail(stderr_raw, limit)
-        if code and not (stdout_raw or stderr_raw):
-            raise RuntimeError("container evidence is unavailable")
 
         if self._publish is None:
             return ContainerJobActivityResult()
@@ -2439,7 +2461,13 @@ class DockerContainerJobBackend:
     ) -> dict | None:
         """Observe bounded denial and attachment evidence before cleanup."""
 
-        if request.request.spec.network_mode != "bridge":
+        if (
+            request.request.spec.network_mode != "bridge"
+            or (
+                request.resolved_image_ref is None
+                and request.container_ref is None
+            )
+        ):
             return None
         ref = request.container_ref or self._name(request)
         # Inspect the complete network map, not just the approved network. If

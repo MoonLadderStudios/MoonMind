@@ -18,6 +18,7 @@ from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.utils.logging import redact_sensitive_text
 
 app = typer.Typer(help="MoonMind developer utilities.")
 rag_app = typer.Typer(help="Retrieval helpers for Codex workers.")
@@ -39,9 +40,19 @@ def _print_container_job_result(result: ContainerJobResult) -> None:
             fg=typer.colors.YELLOW,
             err=True,
         )
+    failure_detail = ""
+    if result.failure_class:
+        failure_detail += f", failureClass={result.failure_class}"
+    if result.message:
+        message = (
+            redact_sensitive_text(result.message)
+            .replace("\r", " ")
+            .replace("\n", " ")
+        )
+        failure_detail += f", message={message}"
     typer.echo(
         f"container job {result.job_id}: {result.state} "
-        f"(exitCode={result.exit_code}, logsRef={result.logs_ref}, "
+        f"(exitCode={result.exit_code}{failure_detail}, logsRef={result.logs_ref}, "
         f"artifactsRef={result.artifacts_ref})"
     )
     if result.state != "succeeded" or result.exit_code not in {None, 0}:

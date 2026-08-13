@@ -395,6 +395,20 @@ class ContainerJobBackendError(RuntimeError):
         )
 
 
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return one bounded exception chain, including Temporal wrappers."""
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        nested = current.__cause__ or current.__context__ or getattr(current, "cause", None)
+        current = nested if isinstance(nested, BaseException) else None
+    return chain
+
+
 def failure_class_from_exception(
     exc: BaseException,
 ) -> ContainerJobFailureClass | None:
@@ -406,10 +420,7 @@ def failure_class_from_exception(
     Temporal wraps activity failures before returning them to workflows.
     """
 
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
+    for current in _exception_chain(exc):
         direct = getattr(current, "failure_class", None)
         if isinstance(direct, ContainerJobFailureClass):
             return direct
@@ -428,12 +439,30 @@ def failure_class_from_exception(
                 return ContainerJobFailureClass(token)
             except ValueError:
                 pass
-        current = (
-            current.__cause__
-            or current.__context__
-            or getattr(current, "cause", None)
-        )
     return None
+
+
+def failure_message_from_exception(exc: BaseException) -> str | None:
+    """Recover the deepest trusted failure message from activity wrappers.
+
+    Temporal's outer ``ActivityError`` message is intentionally generic. The
+    nested ``ApplicationError.message`` or backend marker carries the actionable
+    cause that belongs in the durable terminal outcome.
+    """
+
+    candidate: str | None = None
+    for current in _exception_chain(exc):
+        direct = getattr(current, "message", None)
+        text = str(direct if isinstance(direct, str) and direct else current).strip()
+        if not text:
+            continue
+        marker_index = text.find(CONTAINER_JOB_FAILURE_MARKER)
+        if marker_index != -1:
+            encoded = text[marker_index + len(CONTAINER_JOB_FAILURE_MARKER) :]
+            _separator, _colon, detail = encoded.partition(":")
+            text = detail.strip() or encoded.strip()
+        candidate = text
+    return candidate
 
 
 class ImageObservation(ContractModel):

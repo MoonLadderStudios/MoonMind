@@ -132,6 +132,40 @@ async def test_publish_evidence_runtime_diagnostics_carry_exit_metadata(
     assert diagnostics["stdoutRef"] == f"artifact:{JOB_ID}-stdout.txt"
 
 
+@pytest.mark.asyncio
+async def test_pre_image_failure_publishes_cause_without_container_lookup(
+    tmp_path,
+) -> None:
+    publisher = _Publisher()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        commands.append(tuple(args))
+        return 1, b"", b"No such container"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publisher,
+    )
+    request = _request(tmp_path)
+    request.resolved_image_ref = None
+    request.container_ref = None
+    request.terminal_state = "failed"
+    request.failure_class = "image_not_found"
+    request.message = "deployment image source 'tactics-unreal' is absent"
+
+    result = await backend.publish_evidence(request)
+
+    assert commands == []
+    assert result.logs_ref == f"artifact:{JOB_ID}-logs.txt"
+    combined = publisher.artifacts[f"{JOB_ID}-logs.txt"]
+    assert b"deployment image source 'tactics-unreal' is absent" in combined
+    assert b"No such container" not in combined
+    assert publisher.artifacts[f"{JOB_ID}-stdout.txt"] == b""
+    assert publisher.artifacts[f"{JOB_ID}-stderr.txt"] == b""
+
+
 # --------------------------------------------------------------- output manifest
 
 
