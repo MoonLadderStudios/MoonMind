@@ -917,6 +917,10 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
     stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    labels:
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
     entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
     environment:
       HTTP_PROXY: http://omnigent-egress-proxy:3129
@@ -978,6 +982,17 @@ services:
     profiles: ["omnigent-host-claude"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
@@ -997,12 +1012,25 @@ services:
     profiles: ["omnigent-host-codex"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
       CODEX_HOME: /home/app/.codex
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
     depends_on:
@@ -1033,6 +1061,9 @@ services:
       moonmind.capture_retention_days: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
       moonmind.cleanup_mode: drain
       moonmind.control_capabilities: ${OMNIGENT_CONTROL_CAPABILITIES:-interrupt,terminate,clear_context}
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
     entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:

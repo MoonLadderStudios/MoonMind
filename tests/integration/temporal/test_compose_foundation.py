@@ -688,6 +688,22 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
     assert _network_names(host_service) == {"omnigent-egress-network"}
+    init_service = compose["services"]["omnigent-host-claude-init"]
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert host_service["labels"] == {
+        "moonmind.egress.profile": "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}",
+        "moonmind.egress.profile_digest": (
+            "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+        ),
+        "moonmind.egress.applied_rule_digest": (
+            "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+        ),
+    }
     assert host_service["cap_drop"] == ["ALL"]
     assert host_service["security_opt"] == ["no-new-privileges:true"]
     assert host_service["restart"] == "unless-stopped"
@@ -790,6 +806,14 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     }
     init_service = compose["services"]["omnigent-host-codex-init"]
     assert init_service["user"] == "0:0"
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert "omnigent-host-artifacts:/artifacts" in init_service["volumes"]
+    assert "omnigent-host-cache:/home/app/.cache" in init_service["volumes"]
     assert init_service["depends_on"] == {
         "codex-auth-init": {"condition": "service_completed_successfully"}
     }
@@ -800,6 +824,15 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     # network (MoonLadderStudios/MoonMind#3516), never the routable
     # local-network.
     assert _network_names(host_service) == {"omnigent-egress-network"}
+    assert host_service["labels"]["moonmind.egress.profile"] == (
+        "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.profile_digest"] == (
+        "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.applied_rule_digest"] == (
+        "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+    )
 
 
 def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():

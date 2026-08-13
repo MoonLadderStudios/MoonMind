@@ -270,6 +270,12 @@ def build_omnigent_authority_chain_evidence(
                 egress.get("validationState") or egress.get("validationResult")
             ),
             "validatedAt": _text(egress.get("validatedAt")),
+            "launchEvidenceRef": _text(
+                authorization.get("egressLaunchEvidenceRef")
+            ),
+            "terminalEvidenceRef": _text(
+                authorization.get("egressTerminalEvidenceRef")
+            ),
         },
     }
 

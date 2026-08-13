@@ -66,6 +66,8 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
             "omnigentHostId": "host-1",
             "credentialGeneration": 3,
             "bridgeSessionId": "bridge-1",
+            "egressLaunchEvidenceRef": "artifact://egress-launch",
+            "egressTerminalEvidenceRef": "artifact://egress-terminal",
         },
         egress_attestation={
             "profileRef": "omnigent-egress@1",
@@ -128,6 +130,8 @@ def test_authority_chain_assembles_complete_bounded_projection() -> None:
         "attachmentRef": "container:host-1",
         "validationState": "attested",
         "validatedAt": "2026-08-03T00:00:00Z",
+        "launchEvidenceRef": "artifact://egress-launch",
+        "terminalEvidenceRef": "artifact://egress-terminal",
     }
     # Publication policy + declared outputs + downstream evidence refs.
     pub = evidence["publication"]

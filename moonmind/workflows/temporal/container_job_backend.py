@@ -81,10 +81,14 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
+    attest_docker_workload_egress,
     bounded_denial_diagnostics,
     denied_connection_count,
     attest_docker_egress,
     restricted_proxy_env,
+)
+from moonmind.security.egress_conformance_evidence import (
+    serialize_conformance_evidence,
 )
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
@@ -1661,15 +1665,24 @@ class DockerContainerJobBackend:
         # publish launchAttestationRef=null. Re-attest the live restricted-egress
         # state and republish the attestation evidence so the recovery path can
         # correlate the running workload with its enforced launch policy.
-        diagnostics_ref = await self._recover_launch_attestation(request, name)
+        running = stdout.strip() == b"true"
+        diagnostics_ref = await self._recover_launch_attestation(
+            request,
+            name,
+            running=running,
+        )
         return ContainerJobActivityResult(
             containerRef=name,
-            running=stdout.strip() == b"true",
+            running=running,
             diagnosticsRef=diagnostics_ref,
         )
 
     async def _recover_launch_attestation(
-        self, request: ContainerJobActivityRequest, name: str
+        self,
+        request: ContainerJobActivityRequest,
+        name: str,
+        *,
+        running: bool,
     ) -> str | None:
         """Re-attest and republish launch evidence for a reconciled bridge job."""
 
@@ -1680,20 +1693,90 @@ class DockerContainerJobBackend:
             profile=DEFAULT_EGRESS_PROFILE,
             backend_ref=self._backend_ref,
         )
+        workload_evidence = None
+        if running:
+            workload_evidence = await attest_docker_workload_egress(
+                runner=self._runner,
+                profile=DEFAULT_EGRESS_PROFILE,
+                attestation=egress_attestation,
+                attachment_identity=name,
+                expected_image_ref=str(request.resolved_image_ref or ""),
+                started_at=request.started_at,
+                finished_at=request.finished_at,
+            )
+        return await self._publish_container_job_egress_launch(
+            request,
+            attestation=egress_attestation,
+            attachment_identity=name,
+            workload_evidence=workload_evidence,
+            reconciliation_result="recovered",
+        )
+
+    async def _publish_container_job_egress_launch(
+        self,
+        request: ContainerJobActivityRequest,
+        *,
+        attestation,
+        attachment_identity: str,
+        workload_evidence: dict[str, object] | None,
+        reconciliation_result: str,
+    ) -> str | None:
+        """Publish one immutable launch-authority row through the real adapter."""
+
+        if self._publish is None:
+            return None
+        if workload_evidence is not None:
+            expected_image = str(request.resolved_image_ref or "").strip()
+            observed_image = str(
+                workload_evidence.get("workloadImageDigest") or ""
+            ).strip()
+            # The production image-acquisition owner returns an exact daemon
+            # image id. Preserve in-flight compatibility for older tag-shaped
+            # payloads, but never accept a different id for a current launch.
+            if (
+                expected_image.startswith("sha256:")
+                and observed_image != expected_image
+            ):
+                raise RuntimeError(
+                    "restricted-egress workload image does not match resolved authority"
+                )
         evidence = {
             "schemaVersion": 1,
             "kind": "restricted-egress-launch-attestation",
-            "attachmentIdentity": name,
-            "attestation": egress_attestation.model_dump(by_alias=True, mode="json"),
+            "conformanceRow": "generic_container_job",
+            "evidenceStage": "running" if workload_evidence else "created_unstarted",
+            "containerJobContractVersion": request.contract_version,
+            "agentProfileRef": "container_job",
+            "agentProfileVersion": request.request.contract_version,
+            "securityPolicyRef": DEFAULT_EGRESS_PROFILE.security_review_ref,
+            "securityPolicyVersion": DEFAULT_EGRESS_PROFILE.version,
+            "egressProfileVersion": DEFAULT_EGRESS_PROFILE.version,
+            "backendRef": self._backend_ref,
+            "runtimeProvenance": "container_job/docker-engine",
+            "requestedImageRef": request.request.spec.image,
+            "resolvedImageRef": request.resolved_image_ref,
+            "imageObservation": (
+                request.image_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+                if request.image_observation is not None
+                else None
+            ),
+            "attachmentIdentity": attachment_identity,
+            "attestation": attestation.model_dump(by_alias=True, mode="json"),
             "deniedConnectionCount": 0,
             "denialDiagnostics": [],
             "cleanupResult": "pending",
-            "reconciliationResult": "recovered",
+            "reconciliationResult": reconciliation_result,
         }
+        if workload_evidence is not None:
+            evidence.update(workload_evidence)
         return await self._publish(
             request,
             f"{request.job_id}-egress-attestation.json",
-            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
+            serialize_conformance_evidence(
+                evidence, location="egress-attestation"
+            ),
         )
 
     async def _materialized_env(
@@ -1876,25 +1959,13 @@ class DockerContainerJobBackend:
             raise RuntimeError("docker create failed for the resolved workspace")
         egress_evidence_ref = None
         if egress_attestation is not None and self._publish is not None:
-            evidence = {
-                "schemaVersion": 1,
-                "kind": "restricted-egress-launch-attestation",
-                "attachmentIdentity": name,
-                "attestation": egress_attestation.model_dump(
-                    by_alias=True, mode="json"
-                ),
-                "deniedConnectionCount": 0,
-                "denialDiagnostics": [],
-                "cleanupResult": "pending",
-                "reconciliationResult": "not-required",
-            }
             try:
-                egress_evidence_ref = await self._publish(
+                egress_evidence_ref = await self._publish_container_job_egress_launch(
                     request,
-                    f"{request.job_id}-egress-attestation.json",
-                    json.dumps(
-                        evidence, sort_keys=True, separators=(",", ":")
-                    ).encode(),
+                    attestation=egress_attestation,
+                    attachment_identity=name,
+                    workload_evidence=None,
+                    reconciliation_result="not_required",
                 )
             except Exception as exc:
                 # Evidence is part of readiness at this authority boundary. A
@@ -1911,6 +1982,7 @@ class DockerContainerJobBackend:
 
     async def start_container(self, request: ContainerJobActivityRequest):
         container_name = request.container_ref or self._name(request)
+        started_at = datetime.now(timezone.utc)
         capacity_lease = await self._acquire_capacity_lock()
         try:
             await self._enforce_active_memory_budget(
@@ -1926,8 +1998,45 @@ class DockerContainerJobBackend:
                     "will release the OS-held lock",
                     exc_info=True,
                 )
+        diagnostics_ref = request.egress_attestation_ref
+        if request.request.spec.network_mode == "bridge":
+            try:
+                attestation = await attest_docker_egress(
+                    runner=self._runner,
+                    profile=DEFAULT_EGRESS_PROFILE,
+                    backend_ref=self._backend_ref,
+                )
+                workload_evidence = await attest_docker_workload_egress(
+                    runner=self._runner,
+                    profile=DEFAULT_EGRESS_PROFILE,
+                    attestation=attestation,
+                    attachment_identity=container_name,
+                    expected_image_ref=str(request.resolved_image_ref or ""),
+                    started_at=started_at,
+                )
+                diagnostics_ref = await self._publish_container_job_egress_launch(
+                    request,
+                    attestation=attestation,
+                    attachment_identity=container_name,
+                    workload_evidence=workload_evidence,
+                    reconciliation_result="not_required",
+                )
+                if not diagnostics_ref:
+                    raise RuntimeError(
+                        "restricted-egress evidence publisher is unavailable"
+                    )
+            except Exception as exc:
+                # A running restricted workload without its immutable evidence
+                # chain is not ready. Remove only this owned container and fail
+                # before caller execution can proceed.
+                await self._runner(("rm", "--force", container_name))
+                raise RuntimeError(
+                    "restricted-egress running launch evidence could not be persisted"
+                ) from exc
         return ContainerJobActivityResult(
-            containerRef=container_name, running=True
+            containerRef=container_name,
+            running=True,
+            diagnosticsRef=diagnostics_ref,
         )
 
     async def observe_container(self, request: ContainerJobActivityRequest):
@@ -2479,9 +2588,7 @@ class DockerContainerJobBackend:
             (
                 "exec",
                 DEFAULT_EGRESS_PROFILE.gateway_ref,
-                "tail",
-                "-n",
-                "500",
+                "cat",
                 "/var/log/squid/access.log",
             )
         )
@@ -2489,7 +2596,9 @@ class DockerContainerJobBackend:
             raise RuntimeError("restricted-egress denial evidence is unavailable")
         # Scope denials to this launch by client address and, when known, the
         # container start/finish interval so a reused bridge IP cannot attribute
-        # a prior holder's denials from the gateway's line tail to this job.
+        # a prior holder's denials from the gateway log to this job. The complete
+        # log is scanned so older in-lifetime denials cannot fall outside a tail;
+        # only the bounded normalized sample below enters durable evidence.
         denial_diagnostics = bounded_denial_diagnostics(
             access_log,
             client_address=client_address,
@@ -2625,9 +2734,9 @@ class DockerContainerJobBackend:
             diagnostics_ref = await self._publish(
                 request,
                 f"{request.job_id}-egress-lifecycle.json",
-                json.dumps(
-                    lifecycle, sort_keys=True, separators=(",", ":")
-                ).encode(),
+                serialize_conformance_evidence(
+                    lifecycle, location="egress-lifecycle"
+                ),
             )
         return ContainerJobActivityResult(
             diagnosticsRef=diagnostics_ref,
