@@ -578,6 +578,287 @@ def test_every_mode_has_dedicated_scenario_evidence_channel():
     assert len(set(module.SCENARIO_EVIDENCE_ENV.values())) == len(module.LIVE_CASES)
 
 
+def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    events = []
+    images = {
+        "server": "ghcr.io/omnigent/server@sha256:" + "1" * 64,
+        "host": "ghcr.io/omnigent/host@sha256:" + "2" * 64,
+    }
+
+    def action(scenario, row_name, **state):
+        events.append(("action", row_name, dict(state)))
+        records = []
+        for record_type in module.REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]:
+            path = tmp_path / f"{row_name}-{record_type}.json"
+            path.write_text("{}", encoding="utf-8")
+            records.append(
+                {
+                    "type": record_type,
+                    "ref": path.as_uri(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "_resolved": {},
+                }
+            )
+        return {"row": row_name, "_sourceRecords": records}
+
+    def validate_sources(sources, *, row_name, expected_correlation, **kwargs):
+        assert set(sources) == set(
+            module.REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]
+        )
+        if expected_correlation is not None:
+            assert expected_correlation["workflowId"] == "workflow-1"
+        return (
+            {name: True for name in module.REQUIRED_WORKFLOW_CHAT_ROWS[row_name]},
+            {
+                "workflowId": "workflow-1",
+                "chatBindingId": "binding-1",
+                "bridgeSessionId": "bridge-1",
+                "providerSessionId": "provider-session-1",
+                "browserTraceId": f"trace-{row_name}",
+            },
+        )
+
+    scans = {
+        channel: {"status": "passed", "evidenceRef": f"scan-{channel}.json"}
+        for channel in module.EVIDENCE_ENV
+    }
+    monkeypatch.setattr(runner, "run", lambda name, command: events.append(("run", name)))
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scan", lambda: scans)
+    monkeypatch.setattr(module, "validate_workflow_chat_source_records", validate_sources)
+    monkeypatch.setattr(
+        module,
+        "build_workflow_chat_acceptance_manifest",
+        lambda matrix, evidence_root: {"schemaVersion": "acceptance", "rows": matrix["rows"]},
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_workflow_chat_acceptance_manifest",
+        lambda manifest, **kwargs: events.append(("validate", tuple(manifest["rows"]))),
+    )
+    monkeypatch.setattr(
+        runner,
+        "scenario",
+        lambda mode, phase=None: events.append(("provider", mode)),
+    )
+
+    runner.workflow_chat(images, "commit-1")
+
+    assert [event[1] for event in events if event[0] == "action"] == list(
+        module.WORKFLOW_CHAT_ACTIONS
+    )
+    assert events[-2][0] == "validate"
+    assert events[-1] == ("provider", "workflow_chat")
+    assert (tmp_path / "workflow-chat-matrix.json").is_file()
+    assert (tmp_path / "workflow-chat-report.json").is_file()
+    assert (tmp_path / "workflow-chat-acceptance.json").is_file()
+    assert not (tmp_path / "publication-secret-scan.json").exists()
+    assert runner.env["MOONMIND_OMNIGENT_SOURCE_COMMIT"] == "commit-1"
+    assert runner.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE_DIR"] == str(
+        tmp_path
+    )
+    assert runner.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE"].endswith(
+        "workflow-chat-acceptance.json"
+    )
+
+
+def test_all_mode_reports_workflow_chat_and_scans_after_cleanup_and_report(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    images = {
+        "server": "server@sha256:" + "1" * 64,
+        "host": "host@sha256:" + "2" * 64,
+    }
+
+    for mode in module.LIVE_CASES:
+        method_name = mode
+        if mode in {"stock", "remediation"}:
+            monkeypatch.setattr(
+                module.LiveRunner,
+                method_name,
+                lambda self, selected_images: None,
+            )
+        elif mode == "workflow_chat":
+            monkeypatch.setattr(
+                module.LiveRunner,
+                method_name,
+                lambda self, selected_images, source_commit: None,
+            )
+        else:
+            monkeypatch.setattr(module.LiveRunner, method_name, lambda self: None)
+
+    def cleanup(self, mode):
+        (self.output_dir / f"{mode}-cleanup.log").write_text(
+            "safe cleanup evidence", encoding="utf-8"
+        )
+
+    scans = {
+        channel: {"status": "passed", "evidenceRef": f"scan-{channel}.json"}
+        for channel in module.EVIDENCE_ENV
+    }
+    monkeypatch.setattr(module.LiveRunner, "cleanup", cleanup)
+    monkeypatch.setattr(module.LiveRunner, "scan", lambda self: scans)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            str(module.__file__),
+            "--mode",
+            "all",
+            "--server-image",
+            images["server"],
+            "--host-image",
+            images["host"],
+            "--source-commit",
+            "commit-1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 0
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    workflow_chat = next(
+        item
+        for item in report["cases"]
+        if item["caseId"] == "workflow-chat.native-release-matrix"
+    )
+    assert workflow_chat["status"] == "passed"
+    publication_scan = json.loads(
+        (tmp_path / "publication-secret-scan.json").read_text(encoding="utf-8")
+    )
+    scanned_refs = {item["ref"] for item in publication_scan["files"]}
+    assert "report.json" in scanned_refs
+    assert "workflow_chat-cleanup.log" in scanned_refs
+
+
+def test_workflow_chat_controller_fails_before_provider_gate_when_scan_missing(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    provider_called = False
+    monkeypatch.setattr(runner, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "action",
+        lambda scenario, row_name, **state: {
+            "row": row_name,
+            "_sourceRecords": [
+                {"type": name, "ref": "https://evidence.invalid/record", "sha256": "0" * 64, "_resolved": {}}
+                for name in module.REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_workflow_chat_source_records",
+        lambda sources, *, row_name, **kwargs: (
+            {name: True for name in module.REQUIRED_WORKFLOW_CHAT_ROWS[row_name]},
+            {
+                "workflowId": "workflow-1",
+                "chatBindingId": "binding-1",
+                "bridgeSessionId": "bridge-1",
+                "providerSessionId": "provider-session-1",
+                "browserTraceId": f"trace-{row_name}",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "scan",
+        lambda: (_ for _ in ()).throw(
+            module.ConformanceContractError("screenshots evidence was not collected")
+        ),
+    )
+
+    def provider(*args, **kwargs):
+        nonlocal provider_called
+        provider_called = True
+
+    monkeypatch.setattr(runner, "scenario", provider)
+
+    try:
+        runner.workflow_chat(
+            {
+                "server": "server@sha256:" + "1" * 64,
+                "host": "host@sha256:" + "2" * 64,
+            },
+            "commit-1",
+        )
+    except module.ConformanceContractError as exc:
+        assert "screenshots evidence was not collected" in str(exc)
+    else:
+        raise AssertionError("missing Workflow Chat evidence channel was accepted")
+    assert provider_called is False
+    assert not (tmp_path / "workflow-chat-acceptance.json").exists()
+
+
+def test_workflow_chat_action_rejects_missing_typed_source_records(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    ref = _action_evidence(
+        tmp_path,
+        "workflow_chat",
+        "native-live-conversation",
+        source_records=[],
+    )
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"},
+    )
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "ok": True,
+                "row": "native-live-conversation",
+                "evidenceRefs": [ref],
+            }
+        )
+        stderr = ""
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("workflow_chat", "native-live-conversation")
+    except module.ConformanceContractError as exc:
+        assert "independently resolved source records" in str(exc)
+    else:
+        raise AssertionError("missing Workflow Chat source records were accepted")
+
+
+def test_workflow_chat_mode_requires_source_commit_before_live_actions(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            str(module.__file__),
+            "--mode",
+            "workflow_chat",
+            "--server-image",
+            "server@sha256:" + "1" * 64,
+            "--host-image",
+            "host@sha256:" + "2" * 64,
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 2
+
+
 def test_scan_requires_each_evidence_channel(tmp_path):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
@@ -587,6 +868,36 @@ def test_scan_requires_each_evidence_channel(tmp_path):
         assert "evidence was not collected" in str(exc)
     else:
         raise AssertionError("missing evidence channels were accepted")
+
+
+def test_scan_owns_portable_digests_for_every_raw_evidence_channel(tmp_path):
+    module = _module()
+    output_dir = tmp_path / "run-output"
+    output_dir.mkdir()
+    raw_dir = tmp_path / "external-evidence"
+    raw_dir.mkdir()
+    env = {}
+    for channel, env_name in module.EVIDENCE_ENV.items():
+        path = raw_dir / f"{channel}.txt"
+        path.write_text(f"safe {channel} evidence", encoding="utf-8")
+        env[env_name] = str(path)
+    runner = module.LiveRunner(output_dir=output_dir, env=env)
+
+    scans = runner.scan()
+
+    assert set(scans) == set(module.EVIDENCE_ENV)
+    for channel, scan in scans.items():
+        scan_path = output_dir / scan["evidenceRef"]
+        payload = json.loads(scan_path.read_text(encoding="utf-8"))
+        assert payload["status"] == "passed"
+        assert payload["channel"] == channel
+        assert payload["files"]
+        for item in payload["files"]:
+            evidence_path = output_dir / item["ref"]
+            assert evidence_path.is_file()
+            assert item["sha256"] == hashlib.sha256(
+                evidence_path.read_bytes()
+            ).hexdigest()
 
 
 def test_action_rejects_boolean_attestation_without_evidence(tmp_path, monkeypatch):

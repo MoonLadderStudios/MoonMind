@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-07-23
-**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance and MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract
+**Updated:** 2026-08-13
+**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, and MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -44,7 +44,10 @@ python tools/run_omnigent_conformance.py \
 The aggregate report command defaults to the complete live gate: a failed case
 or a skipped critical case returns nonzero. `--allow-partial` is reserved for
 the deterministic runner, where all skipped provider cases remain explicit in
-the report.
+the report. The canonical profile includes
+`workflow-chat.native-release-matrix`, so the documented/default `--mode all`
+report always carries the protected Workflow Chat result instead of leaving it
+only in the dedicated mode report.
 
 ## Live-run boundaries
 
@@ -78,7 +81,8 @@ requires immutable image references and an already-enrolled OAuth profile:
 MOONMIND_OMNIGENT_ACTION_COMMAND=/path/to/live-action-adapter \
 python tools/run_omnigent_live_conformance.py --mode all \
   --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
-  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest> \
+  --source-commit "$(git rev-parse HEAD)"
 ```
 
 The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
@@ -109,9 +113,22 @@ and cleanup-reconciliation rows. Every row resolves the full profile, policy,
 runtime, host, session, workspace, artifact, cleanup, janitor, and lease
 authority chain and fails on any direct-Codex or alternate-authority fallback.
 
-`--mode static` covers restart and replay; `stock`,
-`product`, `cumulative`, `ondemand`, and `failures` can be gated independently in provider
-environments.
+`--mode workflow_chat` is the #3642 protected controller. It runs the four
+native-conversation, scoped-transport/resource, authority/security-denial, and
+terminal/evidence/continuation actions in order against the digest-pinned stock
+host. It resolves the typed source records returned by the live action adapter,
+derives assertions from those records, scans the logs, Temporal history,
+screenshots, and archives, builds and validates the commit-bound
+`moonmind.omnigent.workflow-chat-acceptance/v1` artifact, and then invokes the
+dedicated provider gate. A missing row, source record, raw evidence channel,
+digest correlation, or provider-test result fails the mode before its evidence
+can enter the publication job. The final publication-tree scan runs after
+per-mode cleanup and final report generation, and therefore covers the cleanup
+logs and the exact report tree uploaded by the workflow.
+
+`--mode static` covers restart and replay; `stock`, `product`, `cumulative`,
+`ondemand`, `failures`, and `workflow_chat` can be gated independently in
+provider environments.
 
 The cumulative mode is the controlling gate for #3480. It begins at the same
 normal create boundary as the product mode and records authored state,

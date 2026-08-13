@@ -7,7 +7,8 @@
       "MoonLadderStudios/MoonMind#3480",
       "MoonLadderStudios/MoonMind#3471",
       "MoonLadderStudios/MoonMind#3456",
-      "MoonLadderStudios/MoonMind#3626"
+      "MoonLadderStudios/MoonMind#3626",
+      "MoonLadderStudios/MoonMind#3642"
     ]
   },
   "cases": [
@@ -18,6 +19,7 @@
     {"id": "session.first-message-crash-matrix", "layer": "fake", "critical": true},
     {"id": "events.durable-replay-sse", "layer": "api", "critical": true},
     {"id": "projection.workflow-detail-chat", "layer": "frontend", "critical": true},
+    {"id": "workflow-chat.native-release-matrix", "layer": "product-provider", "critical": true},
     {"id": "resources.authorization-and-evidence", "layer": "api", "critical": true},
     {"id": "failures.lifecycle-and-redaction", "layer": "fake-and-live", "critical": true},
     {"id": "failures.transport-status-timeout", "layer": "fake-and-stock", "critical": true},

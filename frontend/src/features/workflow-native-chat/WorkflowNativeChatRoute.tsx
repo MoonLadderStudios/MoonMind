@@ -24,6 +24,7 @@ import {
 import { NativeChatFrame, type NativeChatFrameSignal } from './NativeChatFrame';
 import { NativeChatUnavailableState } from './NativeChatUnavailableState';
 import { WorkflowChatContextBar } from './WorkflowChatContextBar';
+import { WorkflowTerminalChatActions } from './WorkflowTerminalChatActions';
 import { useWorkflowChatBinding } from './useWorkflowChatBinding';
 
 interface WorkflowNativeChatRouteProps {
@@ -98,12 +99,6 @@ export function WorkflowNativeChatRoute({
   const overviewHref = workflowDetailSubrouteHref(routeWorkflowId, 'overview', search);
   const evidenceHref = workflowDetailSubrouteHref(routeWorkflowId, 'evidence', search);
   const debugHref = workflowDetailSubrouteHref(routeWorkflowId, 'debug', search);
-  // "Continue in a new workflow" is intentionally omitted until the
-  // workflow-creation/continuation handoff (which must carry the authorized
-  // source identity and evidence and create a linked execution) exists. Pointing
-  // it at the source workflow's Overview would create no linked continuation and
-  // only mislead the operator, so the affordance is withheld rather than faked.
-  const continueHref = null;
 
   const navigate = (href: string) => {
     let pathname: string;
@@ -131,9 +126,11 @@ export function WorkflowNativeChatRoute({
         overviewHref={overviewHref}
         evidenceHref={evidenceHref}
         fullPageHref={fullHref}
-        continueHref={continueHref}
         onNavigate={navigate}
       />
+      {workflowTerminal ? (
+        <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
+      ) : null}
       <div className="wf-native-chat__surface">
         {mountFrame && iframeSrc ? (
           <NativeChatFrame
