@@ -54,6 +54,7 @@ from moonmind.omnigent.conformance import (
 )
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.omnigent.cutover import effective_phase
+from moonmind.omnigent.remediation_matrix import load_remediation_release_status
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -153,6 +154,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     support_gate_reasons: list[GateReason] = Field(alias="supportGateReasons")
     compatibility_diagnostics: dict[str, Any] = Field(alias="compatibilityDiagnostics")
     cutover: dict[str, Any]
+    remediation_release: dict[str, Any] = Field(alias="remediationRelease")
 
 
 _REASONS: dict[str, tuple[str, str]] = {
@@ -668,6 +670,7 @@ async def get_omnigent_codex_catalog_readiness(
         )
     })
     cutover_status = effective_phase()
+    remediation_release = load_remediation_release_status()
     return OmnigentCodexCatalogReadiness(
         available=available,
         defaultExecutionProfileRef=next(iter(PROFILES)),
@@ -679,4 +682,5 @@ async def get_omnigent_codex_catalog_readiness(
         supportGateReasons=support_reasons,
         compatibilityDiagnostics=diagnostics,
         cutover=cutover_status.as_dict(),
+        remediationRelease=remediation_release.as_dict(),
     )

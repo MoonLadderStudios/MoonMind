@@ -273,6 +273,90 @@ def test_relay_keeps_server_to_browser_socket_alive_without_browser_input(
     assert browser.closed[-1] == 1000
 
 
+def test_websocket_relay_injects_only_server_owned_upstream_credentials(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_api_token",
+        lambda: "upstream-only",
+    )
+    observed: dict[str, Any] = {}
+
+    class _Browser:
+        headers = {
+            "authorization": "Bearer moonmind-browser",
+            "cookie": "moonmind=session",
+            "x-csrf-token": "browser-csrf",
+        }
+
+        async def accept(self, **_kwargs):
+            return None
+
+        async def receive(self):
+            return {"type": "websocket.disconnect"}
+
+        async def close(self, **_kwargs):
+            return None
+
+    class _Upstream:
+        closed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def close(self):
+            self.closed = True
+
+        def __aiter__(self):
+            async def messages():
+                await asyncio.Event().wait()
+                yield None
+
+            return messages()
+
+    upstream = _Upstream()
+
+    class _Client:
+        def __init__(self, *, headers=None, **_kwargs):
+            observed["headers"] = dict(headers or {})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def ws_connect(self, url: str, **kwargs):
+            observed["url"] = url
+            observed["connect"] = kwargs
+            return upstream
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", _Client
+    )
+
+    async def authorized() -> bool:
+        return True
+
+    asyncio.run(
+        _relay_native_websocket(
+            browser=_Browser(),
+            upstream_url="wss://stock-omnigent.invalid/v1/sessions/provider-1",
+            subprotocol="omnigent.workflow-chat.v1",
+            still_authorized=authorized,
+        )
+    )
+
+    assert observed["headers"] == {"Authorization": "Bearer upstream-only"}
+    serialized = json.dumps(observed).lower()
+    assert "moonmind-browser" not in serialized
+    assert "cookie" not in serialized
+    assert "csrf" not in serialized
+
+
 def test_global_updates_frames_are_identity_scoped_and_virtualized() -> None:
     assert json.loads(
         _filter_session_updates_watch_frame(

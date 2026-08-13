@@ -42,6 +42,7 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
         "static",
         "ondemand",
         "failures",
+        "workflow_chat",
     ]
     run_step = next(
         step
@@ -50,6 +51,7 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     )
     assert "tools/run_omnigent_live_conformance.py" in run_step["run"]
     assert '--mode "${{ matrix.mode }}"' in run_step["run"]
+    assert '--source-commit "${{ github.sha }}"' in run_step["run"]
     assert run_step["env"]["MOONMIND_OMNIGENT_ACTION_COMMAND"] == (
         "${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}"
     )
@@ -69,7 +71,9 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     browser_step = next(
         step for step in job["steps"] if step.get("name") == "Install controlling browser"
     )
-    assert browser_step["if"] == "${{ matrix.mode == 'browser' }}"
+    assert browser_step["if"] == (
+        "${{ matrix.mode == 'browser' || matrix.mode == 'workflow_chat' }}"
+    )
     assert "playwright install --with-deps chromium" in browser_step["run"]
 
 
@@ -97,15 +101,19 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Write publication manifest"
     )
-    assert "expected seven passing reports" in manifest["run"]
+    assert "expected eight passing reports" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3508" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3480" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3471" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3456" in manifest["run"]
     assert "MoonLadderStudios/MoonMind#3448" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3642" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3632" in manifest["run"]
     assert "moonmind.omnigent.product-acceptance/v1" in manifest["run"]
     assert '"sourceCommit": os.environ["GITHUB_SHA"]' in manifest["run"]
     assert '"browserRows": rows' in manifest["run"]
+    assert "validate_workflow_chat_acceptance_manifest" in manifest["run"]
+    assert '"nativeWorkflowChatEvidence"' in manifest["run"]
     assert "product evidence lacks independently resolved production records" in manifest["run"]
     assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]
     assert '"safeIdentities": product["identifiers"]' in manifest["run"]
@@ -136,12 +144,12 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     link = next(
         step
         for step in job["steps"]
-        if step.get("name") == (
-            "Link passing acceptance report from issues 3508 and 3448"
-        )
+        if step.get("name") == "Link passing acceptance report from owning issues"
     )
     assert "gh issue comment 3508" in link["run"]
     assert "gh issue comment 3448" in link["run"]
+    assert "gh issue comment 3642" in link["run"]
+    assert "gh issue comment 3632" in link["run"]
     assert "github.run_id" in link["run"]
     assert "github.run_attempt" in link["run"]
     assert "github.sha" in link["run"]

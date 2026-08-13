@@ -4177,13 +4177,13 @@ async def _dispatch_native_ui_http(
         return {
             "hosts": [{"id": chat_binding_id, "state": _facade_reconnect_state(row)}]
         }
-    if route.name in {"runner_liveness", "session_reconnect"}:
+    if route.name == "runner_liveness":
         return {
             "chatBindingId": chat_binding_id,
             "state": _facade_reconnect_state(row),
             "readOnly": is_read_only(session_status),
         }
-    if not provider_session_id:
+    if not provider_session_id and route.name != "session_reconnect":
         raise WorkflowChatFacadeError(
             "The Workflow Chat binding has no active provider session yet.",
             failure_class="user_error",
@@ -4269,6 +4269,53 @@ async def _dispatch_native_ui_http(
             )
 
     from urllib.parse import urlencode, urlsplit
+
+    # Reconnect is a MoonMind-owned durable-state projection in the pinned
+    # compatibility profile.  It still is a mutation: claim the idempotency key,
+    # revalidate authority, and persist the same terminal receipt as an upstream
+    # mutation before reporting success.  An early local return here previously
+    # left this one stock native control without mutation evidence (#3632).
+    if route.name == "session_reconnect":
+        assert effective_key and scan_evidence and request_time
+        dispatch_time = datetime.now(tz=UTC).isoformat()
+        normalized = {
+            "chatBindingId": chat_binding_id,
+            "state": _facade_reconnect_state(fresh_row),
+            "readOnly": is_read_only(str(getattr(fresh_row, "status", "") or "")),
+        }
+        encoded = json.dumps(normalized, separators=(",", ":")).encode()
+        receipt_result = {
+            "statusCode": status.HTTP_200_OK,
+            "mediaType": "application/json",
+            "headers": {},
+            "bodyDigest": sha256(encoded).hexdigest(),
+            "json": normalized,
+        }
+        await _record_facade_mutation_audit(
+            store=store,
+            row=fresh_row,
+            control_type=route.name,
+            outcome="posted",
+            actor=str(user.id),
+            idempotency_key=effective_key,
+            scan_evidence=scan_evidence,
+            upstream_result=receipt_result,
+            request_time=request_time,
+            dispatch_time=dispatch_time,
+            request_preconditions=request_preconditions,
+        )
+        _audit_facade(
+            outcome="mutation",
+            operation=route.name,
+            chat_binding_id=chat_binding_id,
+            user=user,
+            reason="binding_scoped_native_local",
+        )
+        return Response(
+            content=encoded,
+            status_code=status.HTTP_200_OK,
+            media_type="application/json",
+        )
 
     upstream_path = upstream_http_path(match, provider_session_id)
     query = urlencode(list(request.query_params.multi_items()))
@@ -4369,6 +4416,38 @@ async def _dispatch_native_ui_http(
             status_code=502,
             code="omnigent_chat_upstream_unavailable",
         ) from exc
+    except WorkflowChatFacadeError:
+        if route.mutation:
+            assert effective_key and scan_evidence and request_time
+            await _record_facade_mutation_audit(
+                store=store,
+                row=fresh_row,
+                control_type=route.name,
+                outcome="delivery_unknown",
+                actor=str(user.id),
+                idempotency_key=effective_key,
+                scan_evidence=scan_evidence,
+                request_time=request_time,
+                dispatch_time=dispatch_time,
+                request_preconditions=request_preconditions,
+            )
+        raise
+    except Exception:
+        if route.mutation:
+            assert effective_key and scan_evidence and request_time
+            await _record_facade_mutation_audit(
+                store=store,
+                row=fresh_row,
+                control_type=route.name,
+                outcome="delivery_unknown",
+                actor=str(user.id),
+                idempotency_key=effective_key,
+                scan_evidence=scan_evidence,
+                request_time=request_time,
+                dispatch_time=dispatch_time,
+                request_preconditions=request_preconditions,
+            )
+        raise
 
     if route.mutation:
         assert effective_key and scan_evidence and request_time and receipt_result

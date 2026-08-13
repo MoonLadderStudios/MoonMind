@@ -3,10 +3,23 @@
 Omnigent remediation and approvals use the exact
 [immutable policy version](../Omnigent/PolicyAuthority.md).
 
+Release support for operator remediation through the normal product path is
+qualified by the versioned controlling artifact
+`moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`);
+see [Operator remediation support matrix v1](../Omnigent/CodexSupportAndCutover.md#operator-remediation-support-matrix-v1).
+Autonomous mutating remediation stays fail-closed until every required row and
+operational gate passes. `admin_auto` is disabled in both remediation authoring
+surfaces and rejected by the ordinary Create service from the server-owned
+release status; a caller-supplied draft cannot bypass that boundary. Live
+qualification uses `tools/run_omnigent_live_conformance.py --mode remediation`,
+and combined release evidence is assembled with
+`tools/build_operator_remediation_release_evidence.py` from digest-bound,
+independently resolvable per-row observations.
+
 **Status:** Desired-state design
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Platform + dashboard
-**Last Updated:** 2026-07-03
+**Last Updated:** 2026-08-13
 **Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/CheckpointBranchSystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/Observability/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Artifacts/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/StepExecutionsAndCheckpointing.md`, `docs/Steps/SkillSystem.md`, `docs/Omnigent/OmnigentAdapter.md`
 
 ---

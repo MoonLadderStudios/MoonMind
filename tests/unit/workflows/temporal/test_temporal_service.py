@@ -1827,6 +1827,55 @@ async def test_create_execution_rejects_elevated_user_remediation_of_system_targ
                 idempotency_key=None,
             )
 
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_admin_auto_while_release_gate_is_closed(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        monkeypatch.delenv(
+            "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF",
+            raising=False,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="MoonLadderStudios/MoonMind#3626",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=owner_id,
+                title="Automatic remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "instructions": "Repair target",
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        },
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target_workflow_id(
     tmp_path, mock_client_adapter
