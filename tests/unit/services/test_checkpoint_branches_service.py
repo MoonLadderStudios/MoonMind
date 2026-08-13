@@ -92,10 +92,6 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
         root_workflow_id="MM-1087",
         source_run_id="run-MM-1087",
         source_execution_ordinal=1,
-        step_execution_manifest_ref=(
-            "artifact://MM-1090/output.branch_turn.step_execution_manifest.json"
-        ),
-        created_step_execution_id="step-MM-1090",
         follow_up_retrieval={
             "enabled": True,
             "collections": ["repo"],
@@ -134,9 +130,10 @@ async def test_prepare_checkpoint_branch_workspace_persists_binding_and_artifact
     assert turn.git_work_branch == result.git_work_branch
     assert turn.workspace_restore_ref == result.workspace_restore_ref
     assert turn.git_binding_ref == result.git_binding_ref
-    assert turn.step_execution_manifest_ref == (
-        "artifact://MM-1090/output.branch_turn.step_execution_manifest.json"
-    )
+    assert turn.created_step_execution_id is None
+    assert turn.step_execution_manifest_ref is None
+    assert turn.runtime_agent_run_id is None
+    assert turn.provider_session_id is None
     assert turn.diagnostics["followUpRetrieval"] == {
         "enabled": True,
         "collections": ["repo"],

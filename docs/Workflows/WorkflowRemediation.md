@@ -657,6 +657,11 @@ runtime and host support, live owning execution-adapter readiness, durable
 approval support, and authoritative verifier readiness. The owning service
 evaluates those inputs for the exact remediation link; static catalog
 enablement is not backend readiness.
+Checkpoint Branch execution readiness is derived from the registered production
+workflow, Activity catalog, and Activity handlers. Its verification readiness
+is derived independently from the registered remediation-verifier classifier;
+bridge metadata or a declared contract cannot make either boundary ready by
+itself.
 Actions without both an execution owner and verifier remain visible only in the
 capability matrix and are rejected before mutation. In particular, managed
 session terminate/restart, targeted janitor cleanup, cleanup verification,
@@ -738,6 +743,13 @@ A remediation-created branch should record:
 - idempotency key.
 
 Failed-step recovery remains the path that preserves original inputs and resumes from validated checkpoint evidence. It must not accept edited instructions, alternate branch settings, or publish-mode changes. Those belong to a Checkpoint Branch or a fresh workflow created through Create.
+
+The remediation action and public Checkpoint Branch API call the same durable
+branch-turn execution owner. Creating the graph is not execution success: the
+action projection reports graph persistence, launch acceptance, active or
+terminal turn state, and verification readiness independently. A Checkpoint
+Branch action is requestable only when both that execution owner and the
+authoritative `checkpoint_branch` verifier are ready.
 
 ### 9.10 Omnigent-backed remediation
 
@@ -952,7 +964,18 @@ Release a managed runtime slot lease when the lease is stale or orphaned accordi
 These operate on workload containers that MoonMind launched through the Docker workload plane. They do not imply arbitrary image execution or unrestricted Docker access.
 
 #### `checkpoint_branch.create_from_remediation_context`
-Create a branch from a validated remediation context and checkpoint. Use this when corrected instructions, alternate branch settings, alternate publish mode, or a different runtime/model are required. This action must preserve source checkpoint identity, immutable instruction refs, workspace policy, runtime context policy, publish mode, remediation provenance, and idempotency key.
+Create a branch from a validated remediation context and checkpoint, then ask
+the shared branch-turn execution owner to launch its initial turn. Use this when
+corrected instructions, alternate branch settings, alternate publish mode, or a
+different runtime/model are required. This action must preserve source
+checkpoint identity, immutable instruction refs, workspace policy, runtime
+context policy, publish mode, remediation provenance, and idempotency key.
+
+Action delivery, terminal branch execution, and target repair are separate
+facts. The action may be `applied` after the durable owner accepts the launch,
+while `terminalBranchResultAvailable` and the trusted post-action verification
+outcome remain pending. Neither graph persistence nor a completed branch turn
+may claim that the original target was repaired.
 
 ### 11.4 Action request contract
 

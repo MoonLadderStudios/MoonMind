@@ -543,6 +543,17 @@ Recovery chooses:
 
 A branch receives independent authority and never concurrently reuses the original mutable OAuth lease.
 
+A Checkpoint Branch turn is launched by one durable MoonMind owner. Before any
+lease, host, session, message, or repository side effect, it validates the
+pinned source and checkpoint, parent-turn lineage, immutable instructions, git
+binding, stored execution/profile/policy authority, and current credential
+generation. It then persists stable Step Execution, Agent Run, bridge, and
+workflow identities and dispatches the canonical profile-bound
+`external/omnigent` request using `branch_from_checkpoint`. Retry and replay
+reattach to those identities; terminal harvest records checkpoint, output,
+publication, diagnostics, capture, and cleanup evidence before host and Provider
+Profile authority are released in the normal release-last order.
+
 ---
 
 ## 18. Error and rate-limit behavior

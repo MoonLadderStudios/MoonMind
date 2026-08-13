@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -205,6 +206,39 @@ def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
     ).strip()
     step_execution_id = str(step.get("stepExecutionId") or "").strip() or None
     return workflow_id, step_execution_id
+
+
+def _profile_bound_max_budget_rejection(
+    request: AgentExecutionRequest,
+) -> AgentRunResult | None:
+    """Return a terminal rejection when a USD cap cannot be enforced."""
+
+    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+    value = parameters.get("maxBudgetUsd")
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
+        return AgentRunResult(
+            summary="maxBudgetUsd must be a finite positive number",
+            failureClass="user_error",
+            providerErrorCode="OMNIGENT_MAX_BUDGET_INVALID",
+            retryRecommendation="correct_max_budget",
+        )
+    # This path exposes terminal usage evidence, not a provider-native
+    # prospective USD hard stop. Starting anyway would silently discard
+    # billing authority, so reject before creating a bridge run or acquiring
+    # Provider Profile capacity.
+    return AgentRunResult(
+        summary="The selected profile-bound runtime cannot enforce maxBudgetUsd.",
+        failureClass="user_error",
+        providerErrorCode="OMNIGENT_MAX_BUDGET_ENFORCEMENT_UNAVAILABLE",
+        retryRecommendation="remove_budget_or_select_capable_runtime",
+    )
 
 
 def _bind_exact_host(
@@ -716,6 +750,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 await asyncio.sleep(retry_after)
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        budget_rejection = _profile_bound_max_budget_rejection(request)
+        if budget_rejection is not None:
+            return budget_rejection
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = _request_identity(request)
         await self._run_store.get_or_create(
@@ -2212,6 +2249,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     release_ordering=release_ordering,
                     reasons=authority_reasons,
                 )
+                if authority_result is not None:
+                    # ``return result`` is evaluated before this ``finally``
+                    # block. Mutate that same canonical envelope so callers
+                    # receive the final cleanup/release authority, not the
+                    # runner's pre-cleanup snapshot. The durable lifecycle
+                    # event remains the reconciliation source of truth.
+                    authority_result.metadata["authorityChain"] = authority_chain
                 await emit(
                     "authority_chain",
                     "completed",

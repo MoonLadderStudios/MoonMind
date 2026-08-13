@@ -98,13 +98,13 @@ class CheckpointBranchInstructionsModel(BaseModel):
 
 
 class CheckpointBranchCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     source: CheckpointBranchApiSourceModel
     label: str = Field(..., min_length=1, max_length=200)
     instructions: CheckpointBranchInstructionsModel
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(..., alias="workspacePolicy")
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
         "fresh_agent_run", alias="runtimeContextPolicy"
     )
     publish_mode: PublishMode = Field("none", alias="publishMode")
@@ -132,15 +132,15 @@ class CheckpointBranchCreateRequest(BaseModel):
 
 
 class CheckpointBranchContinueRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     label: str | None = Field(None, max_length=200)
     instructions: CheckpointBranchInstructionsModel
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         "continue_from_previous_execution", alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
-        "reuse_session_new_epoch", alias="runtimeContextPolicy"
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
+        "fresh_agent_run", alias="runtimeContextPolicy"
     )
     idempotency_key: str = Field(
         ..., alias="idempotencyKey", min_length=1, max_length=512
@@ -157,83 +157,32 @@ class CheckpointBranchForkRequest(CheckpointBranchContinueRequest):
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         "apply_previous_execution_diff_to_clean_baseline", alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
         "fresh_agent_run", alias="runtimeContextPolicy"
     )
 
 
 class CheckpointBranchTurnLaunchRequest(BaseModel):
+    """Operator intent for launching an already-persisted branch turn.
+
+    Runtime identities and evidence are deliberately absent.  The branch-turn
+    execution owner allocates them after validating the persisted source
+    authority (MoonLadderStudios/MoonMind#3621).
+    """
+
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    created_step_execution_id: str = Field(
-        ..., alias="createdStepExecutionId", min_length=1, max_length=255
+    idempotency_key: str = Field(
+        ..., alias="idempotencyKey", min_length=1, max_length=512
     )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1, max_length=255
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1, max_length=255
-    )
-    workspace_baseline: dict[str, Any] = Field(
-        default_factory=dict, alias="workspaceBaseline"
-    )
-    prior_evidence_refs: list[str] = Field(
-        default_factory=list, alias="priorEvidenceRefs"
-    )
-    bounded_summaries: list[dict[str, Any]] = Field(
-        default_factory=list, alias="boundedSummaries", max_length=10
-    )
-    builder_metadata: dict[str, Any] = Field(
-        default_factory=dict, alias="builderMetadata"
-    )
-    runtime_request_ref: str | None = Field(
-        None, alias="runtimeRequestRef", min_length=1, max_length=1024
-    )
-    runtime_result_ref: str | None = Field(
-        None, alias="runtimeResultRef", min_length=1, max_length=1024
-    )
-    diagnostics_ref: str | None = Field(
-        None, alias="diagnosticsRef", min_length=1, max_length=1024
+    expected_branch_head_version: int | None = Field(
+        None, alias="expectedBranchHeadVersion", ge=1
     )
 
-    @field_validator(
-        "created_step_execution_id",
-        "runtime_agent_run_id",
-        "provider_session_id",
-        "runtime_request_ref",
-        "runtime_result_ref",
-        "diagnostics_ref",
-        mode="before",
-    )
+    @field_validator("idempotency_key", mode="before")
     @classmethod
     def _strip_text(cls, value: Any) -> str | None:
         return _optional_text(value)
-
-    @field_validator("prior_evidence_refs", mode="after")
-    @classmethod
-    def _refs_are_bounded(cls, value: list[str]) -> list[str]:
-        refs = [_optional_text(item) for item in value]
-        compact = [item for item in refs if item]
-        if len(compact) != len(value):
-            raise ValueError("priorEvidenceRefs must contain non-empty refs")
-        if len(compact) > 25:
-            raise ValueError("priorEvidenceRefs must be bounded")
-        return compact
-
-    @field_validator("bounded_summaries", mode="after")
-    @classmethod
-    def _summaries_are_bounded(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        for item in value:
-            summary = item.get("summary")
-            if summary is not None and len(str(summary)) > 1200:
-                raise ValueError("boundedSummaries entries must be bounded")
-        return value
-
-    @model_validator(mode="after")
-    def _requires_runtime_evidence(self) -> "CheckpointBranchTurnLaunchRequest":
-        if not self.created_step_execution_id:
-            raise ValueError("launch requires Step Execution evidence")
-        return self
 
 
 class CheckpointBranchPromoteRequest(BaseModel):
@@ -481,7 +430,7 @@ class CheckpointBranchCreateModel(BaseModel):
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         ..., alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
         ..., alias="runtimeContextPolicy"
     )
     parent_branch_id: str | None = Field(None, alias="parentBranchId", min_length=1)
@@ -543,23 +492,11 @@ class CheckpointBranchTurnCreateModel(BaseModel):
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         ..., alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
         ..., alias="runtimeContextPolicy"
     )
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
-    context_bundle_ref: str | None = Field(
-        None, alias="contextBundleRef", min_length=1
-    )
-    created_step_execution_id: str | None = Field(
-        None, alias="createdStepExecutionId", min_length=1
-    )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1
-    )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     status: CheckpointBranchTurnStateValue = "created"
 
@@ -572,10 +509,6 @@ class CheckpointBranchTurnCreateModel(BaseModel):
 
     @model_validator(mode="after")
     def _requires_checkpoint_or_typed_state(self) -> "CheckpointBranchTurnCreateModel":
-        if self.created_step_execution_id in {self.branch_id, self.branch_turn_id}:
-            raise ValueError(
-                "branch turn Step Execution id must differ from branch and turn ids"
-            )
         if self.source_checkpoint_ref:
             return self
         if self.source_state_kind and self.source_state_ref:
@@ -752,18 +685,6 @@ class CheckpointBranchGraphCreateModel(CheckpointBranchCreateModel):
     branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
-    context_bundle_ref: str | None = Field(
-        None, alias="contextBundleRef", min_length=1
-    )
-    created_step_execution_id: str | None = Field(
-        None, alias="createdStepExecutionId", min_length=1
-    )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1
-    )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
     @field_validator("*", mode="before")
@@ -783,23 +704,11 @@ class CheckpointBranchContinueModel(BaseModel):
     workspace_policy: CheckpointBranchWorkspacePolicy | None = Field(
         None, alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy | None = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] | None = Field(
         None, alias="runtimeContextPolicy"
     )
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
-    context_bundle_ref: str | None = Field(
-        None, alias="contextBundleRef", min_length=1
-    )
-    created_step_execution_id: str | None = Field(
-        None, alias="createdStepExecutionId", min_length=1
-    )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1
-    )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
     @field_validator("*", mode="before")
@@ -821,24 +730,12 @@ class CheckpointBranchForkModel(BaseModel):
     workspace_policy: CheckpointBranchWorkspacePolicy = Field(
         ..., alias="workspacePolicy"
     )
-    runtime_context_policy: CheckpointBranchRuntimeContextPolicy = Field(
+    runtime_context_policy: Literal["fresh_agent_run"] = Field(
         ..., alias="runtimeContextPolicy"
     )
     branch_turn_id: str | None = Field(None, alias="branchTurnId", min_length=1)
     instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
     instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
-    context_bundle_ref: str | None = Field(
-        None, alias="contextBundleRef", min_length=1
-    )
-    created_step_execution_id: str | None = Field(
-        None, alias="createdStepExecutionId", min_length=1
-    )
-    runtime_agent_run_id: str | None = Field(
-        None, alias="runtimeAgentRunId", min_length=1
-    )
-    provider_session_id: str | None = Field(
-        None, alias="providerSessionId", min_length=1
-    )
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 
     @field_validator("*", mode="before")

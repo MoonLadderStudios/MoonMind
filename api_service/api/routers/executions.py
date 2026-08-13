@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import logging
@@ -32,6 +33,7 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
@@ -72,7 +74,12 @@ from api_service.services.control_stop_continuation import (
 )
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
-    build_branch_turn_launch_idempotency_key,
+)
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+    CheckpointBranchTurnLaunchError,
+    checkpoint_branch_turn_owner_operational,
+    get_checkpoint_branch_artifact_service,
 )
 from moonmind.config.settings import settings
 from moonmind.statuses.compat import (
@@ -94,6 +101,9 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationCapabilityContext,
     remediation_action_capability_matrix,
     remediation_action_kinds,
+)
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_backend_operational,
 )
 from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.runtime_intent import (
@@ -178,8 +188,6 @@ from moonmind.schemas.checkpoint_branch_models import (
 )
 from moonmind.workflows.checkpoint_branches import (
     CheckpointBranchGitBindingError,
-    CheckpointBranchContextBundleError,
-    build_checkpoint_branch_turn_context_bundle,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -917,7 +925,7 @@ class PublicationRecoveryResponse(BaseModel):
     rolloutGeneration: str
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     checkpointRef: str
     instructions: CheckpointBranchInstructionsModel
@@ -976,7 +984,13 @@ def _new_checkpoint_branch_turn_id() -> str:
     return f"cbt_{uuid4().hex[:24]}"
 
 
-def _instruction_identity(instructions: Any) -> tuple[str, str]:
+async def _instruction_identity(
+    *,
+    session: AsyncSession,
+    user: User,
+    instructions: Any,
+    branch_turn_id: str,
+) -> tuple[str, str]:
     instruction_ref = str(getattr(instructions, "instruction_ref", "") or "").strip()
     instruction_digest = str(
         getattr(instructions, "instruction_digest", "") or ""
@@ -984,10 +998,12 @@ def _instruction_identity(instructions: Any) -> tuple[str, str]:
     text = str(getattr(instructions, "text", "") or "")
     if instruction_ref and instruction_digest:
         return instruction_ref, instruction_digest
-    digest = f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
-    return (
-        f"inline://checkpoint-branch-instruction/{digest.removeprefix('sha256:')}",
-        digest,
+    return await CheckpointBranchTurnExecutionOwner(
+        session,
+        principal=_owner_id(user),
+    ).persist_instruction_text(
+        text=text,
+        branch_turn_id=branch_turn_id,
     )
 
 
@@ -1152,22 +1168,44 @@ def _checkpoint_branch_git_context(record: Any) -> dict[str, Any]:
 
 
 async def _write_checkpoint_branch_preparation_artifact(
+    *,
+    session: AsyncSession,
+    principal: str,
+    workflow_id: str,
+    run_id: str,
+    namespace: str,
     artifact_kind: str,
     payload: Mapping[str, Any],
     content_type: str,
 ) -> tuple[str, str]:
-    digest = _operation_digest(
-        {
-            "artifactKind": artifact_kind,
-            "contentType": content_type,
-            "payload": payload,
-        }
+    body = json.dumps(dict(payload), sort_keys=True, separators=(",", ":")).encode()
+    digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+    artifact_service = get_checkpoint_branch_artifact_service(session)
+    artifact, _upload = await artifact_service.create(
+        principal=principal,
+        content_type=content_type,
+        size_bytes=len(body),
+        sha256=digest.removeprefix("sha256:"),
+        retention_class=TemporalArtifactRetentionClass.LONG,
+        link={
+            "namespace": namespace,
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "link_type": "checkpoint_branch.preparation",
+            "label": artifact_kind,
+        },
+        metadata_json={
+            "artifact_kind": artifact_kind,
+            "issue": "MoonLadderStudios/MoonMind#3621",
+        },
     )
-    artifact_ref = (
-        "artifact://checkpoint-branch-preparation/"
-        f"{digest.removeprefix('sha256:')}/{artifact_kind}"
+    await artifact_service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=body,
+        content_type=content_type,
     )
-    return artifact_ref, digest
+    return f"artifact://{artifact.artifact_id}", digest
 
 
 def _checkpoint_branch_operation_artifact_ref(
@@ -1240,6 +1278,7 @@ async def _prepare_checkpoint_branch_launch(
     idempotency_key: str,
     instruction_ref: str,
     instruction_digest: str,
+    principal: str,
     requested_work_branch: str | None = None,
     parent_branch_id: str | None = None,
     parent_turn_id: str | None = None,
@@ -1253,6 +1292,25 @@ async def _prepare_checkpoint_branch_launch(
     )
     git_context = _checkpoint_branch_git_context(record)
     try:
+        async def write_preparation_artifact(
+            artifact_kind: str,
+            artifact_payload: Mapping[str, Any],
+            content_type: str,
+        ) -> tuple[str, str]:
+            return await _write_checkpoint_branch_preparation_artifact(
+                session=session,
+                principal=principal,
+                workflow_id=workflow_id,
+                run_id=source_run_id or str(getattr(record, "run_id", "")),
+                namespace=str(
+                    getattr(record, "namespace", None)
+                    or settings.temporal.namespace
+                ),
+                artifact_kind=artifact_kind,
+                payload=artifact_payload,
+                content_type=content_type,
+            )
+
         await prepare_checkpoint_branch_workspace(
             session=session,
             binding_input={
@@ -1276,7 +1334,7 @@ async def _prepare_checkpoint_branch_launch(
             current_ref=git_context["currentRef"],
             instruction_ref=instruction_ref,
             instruction_digest=instruction_digest,
-            artifact_writer=_write_checkpoint_branch_preparation_artifact,
+            artifact_writer=write_preparation_artifact,
             source_checkpoint_boundary=source_checkpoint_boundary,
             root_workflow_id=workflow_id,
             source_run_id=source_run_id,
@@ -1301,6 +1359,12 @@ def _bound_branch_follow_up_retrieval(
     if authored is None:
         return None
     bounded = dict(authored)
+    budgets = bounded.pop("budgets", None)
+    if isinstance(budgets, Mapping):
+        if "maxContextTokens" not in bounded:
+            bounded["maxContextTokens"] = budgets.get("tokens")
+        if "latencyMs" not in bounded:
+            bounded["latencyMs"] = budgets.get("latency_ms")
     allowed = tuple(
         item.strip()
         for item in os.getenv(
@@ -1647,65 +1711,6 @@ def _require_branch_turn_immutable_snapshot(
                     "field": key,
                 },
             )
-
-
-def _branch_turn_artifact_ref(
-    *,
-    branch_turn_id: str,
-    artifact_name: str,
-    payload_digest: str,
-) -> str:
-    return (
-        f"artifact://checkpoint-branch-turns/{branch_turn_id}/"
-        f"{artifact_name}/{payload_digest.removeprefix('sha256:')}.json"
-    )
-
-
-def _branch_turn_launch_manifest_payload(
-    *,
-    workflow_id: str,
-    branch: WorkflowCheckpointBranch,
-    turn: WorkflowCheckpointBranchTurn,
-    payload: CheckpointBranchTurnLaunchRequest,
-    context_bundle_ref: str,
-) -> dict[str, Any]:
-    follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
-    runtime_selection = (branch.diagnostics or {}).get("runtimeSelection")
-    return {
-        "workflowId": workflow_id,
-        "runId": branch.source_run_id,
-        "logicalStepId": branch.logical_step_id,
-        "executionOrdinal": branch.source_execution_ordinal,
-        "stepExecutionId": payload.created_step_execution_id,
-        "reason": "checkpoint_branch",
-        "status": "running",
-        "runtimeSelection": (
-            dict(runtime_selection)
-            if isinstance(runtime_selection, Mapping)
-            else {}
-        ),
-        "branch": {
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
-            "rootCheckpointRef": turn.source_checkpoint_ref,
-            "sourceStateKind": turn.source_state_kind,
-            "sourceStateRef": turn.source_state_ref,
-            "sourceStateDigest": turn.source_state_digest,
-            "parentBranchId": branch.parent_branch_id,
-            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
-            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
-        },
-        "inputs": {
-            "instructionRef": turn.instruction_ref,
-            "instructionDigest": turn.instruction_digest,
-            "contextBundleRef": context_bundle_ref,
-            **(
-                {"followUpRetrieval": dict(follow_up_retrieval)}
-                if isinstance(follow_up_retrieval, Mapping)
-                else {}
-            ),
-        },
-    }
 
 
 def _is_protected_ref(ref: str | None) -> bool:
@@ -12051,6 +12056,21 @@ def _serialize_remediation_link_summary(
         action_kind: action_kind in executor._adapters
         for action_kind in (row["actionKind"] for row in remediation_action_capability_matrix())
     }
+    checkpoint_action = "checkpoint_branch.create_from_remediation_context"
+    checkpoint_owner_ready = bool(
+        getattr(link, "checkpoint_branch_owner_ready", False)
+    )
+    checkpoint_verifier_ready = bool(
+        getattr(link, "checkpoint_branch_verifier_ready", False)
+    )
+    backend_readiness[checkpoint_action] = (
+        checkpoint_owner_ready and checkpoint_verifier_ready
+    )
+    verifier_readiness = {
+        str(row["actionKind"]): True
+        for row in remediation_action_capability_matrix()
+    }
+    verifier_readiness[checkpoint_action] = checkpoint_verifier_ready
     capability_context = RemediationCapabilityContext(
         target_runtime=(str(getattr(link, "target_runtime", "") or "").strip() or None),
         host_mode=(str(getattr(link, "host_mode", "") or "").strip() or None),
@@ -12064,6 +12084,7 @@ def _serialize_remediation_link_summary(
         caller_allowed_action_kinds=tuple(policy_actions or ()),
         execution_backend_readiness=backend_readiness,
         approval_backend_ready=approval_backend_ready,
+        verification_backend_readiness=verifier_readiness,
     )
     capability_matrix = [
         dict(row) for row in remediation_action_capability_matrix(context=capability_context)
@@ -12452,6 +12473,23 @@ async def _attach_remediation_capability_projection(
     link.host_mode = str(launch.get("hostMode") or "").strip() or None
     link.evidence_degraded = False
     link.unavailable_evidence_classes = ()
+    link.checkpoint_branch_owner_ready = bool(
+        bridge is not None
+        and checkpoint_branch_turn_owner_operational()
+        and all(
+            str(launch.get(field) or "").strip()
+            for field in (
+                "providerProfileId",
+                "executionProfileRef",
+                "launchPolicyRef",
+            )
+        )
+    )
+    # The verifier is an independent authority boundary. Keep its readiness
+    # separate so graph/executor availability cannot advertise repair proof.
+    link.checkpoint_branch_verifier_ready = verification_backend_operational(
+        "checkpoint_branch.create_from_remediation_context"
+    )
     actions = _build_action_capabilities(remediation)
     link.operator_controls = {
         "canCancel": bool(actions.can_cancel),
@@ -12902,11 +12940,34 @@ async def create_remediation_checkpoint_branch(
             workflow_id=link.target_workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=link.target_workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotencyKey},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
     agent_profile_snapshot = None
     if payload.agent_profile is not None:
         selection = dict(payload.agent_profile)
@@ -12940,6 +13001,7 @@ async def create_remediation_checkpoint_branch(
         idempotency_key=payload.idempotencyKey,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=payload.gitWorkBranch,
         source_run_id=link.target_run_id,
         source_execution_ordinal=source.execution_ordinal,
@@ -12964,6 +13026,7 @@ async def create_remediation_checkpoint_branch(
         "repairActionKind": "checkpoint_branch.create_from_remediation_context",
         "runtimeSelection": {
             "providerProfileRef": payload.provider_profile_ref,
+            "maxBudgetUsd": payload.maxBudgetUsd,
             "runtimeContextPolicy": runtime_context_policy,
             "publishMode": "none",
             "gitWorkBranch": payload.gitWorkBranch,
@@ -12979,6 +13042,28 @@ async def create_remediation_checkpoint_branch(
             "agentProfileSnapshot": agent_profile_snapshot,
         },
     }
+    turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_binding", "reason": "branch_turn_missing"},
+        )
+    turn.diagnostics = {
+        **(turn.diagnostics or {}),
+        "remediationContextRef": link.context_artifact_ref,
+        **(
+            {"maxBudgetUsd": payload.maxBudgetUsd}
+            if payload.maxBudgetUsd is not None
+            else {}
+        ),
+    }
+    await _record_checkpoint_branch_artifact_ref(
+        session=session,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        artifact_kind="input.branch_turn.remediation_context.json",
+        artifact_ref=link.context_artifact_ref,
+    )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=link.target_workflow_id,
@@ -13007,6 +13092,20 @@ async def create_remediation_checkpoint_branch(
     )
     link.latest_action_summary = f"Created checkpoint branch {branch_id}."
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=link.target_workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotencyKey},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(branch)
     return _branch_to_model(branch)
 
@@ -14388,11 +14487,34 @@ async def create_checkpoint_branch(
             workflow_id=workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotency_key},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
     agent_profile_snapshot = None
     if payload.agent_profile is not None:
         selection = dict(payload.agent_profile)
@@ -14426,6 +14548,7 @@ async def create_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=payload.git_work_branch,
         source_run_id=payload.source.run_id,
         source_execution_ordinal=payload.source.execution_ordinal,
@@ -14454,6 +14577,7 @@ async def create_checkpoint_branch(
             "executionProfileRef": payload.execution_profile_ref,
             "model": payload.model,
             "effort": payload.effort,
+            "maxBudgetUsd": payload.max_budget_usd,
             "runtimeContextPolicy": payload.runtime_context_policy,
             "publishMode": payload.publish_mode,
             "gitWorkBranch": payload.git_work_branch,
@@ -14483,6 +14607,20 @@ async def create_checkpoint_branch(
         )
     )
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(branch)
     return _branch_to_model(branch)
 
@@ -14543,31 +14681,11 @@ async def launch_checkpoint_branch_turn(
     user: User = Depends(get_current_user()),
 ) -> CheckpointBranchTurnModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    branch = await _load_checkpoint_branch(
-        session, workflow_id=workflow_id, branch_id=branch_id
-    )
-    turn_result = await session.execute(
-        select(WorkflowCheckpointBranchTurn).where(
-            WorkflowCheckpointBranchTurn.branch_turn_id == branch_turn_id,
-            WorkflowCheckpointBranchTurn.branch_id == branch.branch_id,
-        )
-    )
-    turn = turn_result.scalar_one_or_none()
-    if turn is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "checkpoint_branch_turn_not_found"},
-        )
-    launch_key = build_branch_turn_launch_idempotency_key(
-        workflow_id=workflow_id,
-        branch_id=branch.branch_id,
-        branch_turn_id=turn.branch_turn_id,
-    )
     request_digest = _scoped_operation_digest(
         payload,
         scope={
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
             "operation": "checkpoint_branch.turn.launch",
         },
     )
@@ -14575,150 +14693,130 @@ async def launch_checkpoint_branch_turn(
         await session.execute(
             select(WorkflowCheckpointBranchOperation).where(
                 WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
-                WorkflowCheckpointBranchOperation.idempotency_key == launch_key,
+                WorkflowCheckpointBranchOperation.idempotency_key
+                == payload.idempotency_key,
             )
         )
     ).scalar_one_or_none()
     if existing_op is not None:
         if (
             existing_op.operation != "checkpoint_branch.turn.launch"
-            or existing_op.branch_id != branch.branch_id
-            or existing_op.branch_turn_id != turn.branch_turn_id
+            or existing_op.branch_id != branch_id
+            or existing_op.branch_turn_id != branch_turn_id
             or existing_op.request_digest != request_digest
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "idempotency_key_conflict"},
             )
-        _require_branch_turn_immutable_snapshot(
-            turn,
-            existing_op.response_payload.get("immutableLaunchFields"),
-        )
-        return _turn_to_model(turn)
+        replayed = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+        if replayed is None or replayed.branch_id != branch_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "branch_turn_launch_state_missing"},
+            )
+        # A durable pre-claim intentionally contains the pre-launch snapshot.
+        # If the process crashed after the owner persisted runtime identities,
+        # let that owner recover/reattach before replacing the ledger response.
+        # Completed ledger records still require an exact immutable replay.
+        if existing_op.response_payload.get("claimState") != "claimed":
+            _require_branch_turn_immutable_snapshot(
+                replayed, existing_op.response_payload.get("immutableLaunchFields")
+            )
+        try:
+            replayed = await CheckpointBranchTurnExecutionOwner(
+                session,
+                principal=_owner_id(user),
+            ).launch(
+                workflow_id=workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=branch_turn_id,
+                intent=payload,
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "reason": exc.reason},
+            ) from exc
+        existing_op.response_payload = {
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "contextBundleRef": replayed.context_bundle_ref,
+            "stepExecutionManifestRef": replayed.step_execution_manifest_ref,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(replayed),
+        }
+        await session.commit()
+        return _turn_to_model(replayed)
 
-    _validate_branch_turn_launch_policy(branch, turn)
-
-    context_payload = {
-        "workflowId": workflow_id,
-        "runId": branch.source_run_id,
-        "logicalStepId": branch.logical_step_id,
-        "executionOrdinal": branch.source_execution_ordinal,
-        "branch": {
-            "branchId": branch.branch_id,
-            "branchTurnId": turn.branch_turn_id,
-            "sourceCheckpointRef": turn.source_checkpoint_ref,
-            "sourceStateKind": turn.source_state_kind,
-            "sourceStateRef": turn.source_state_ref,
-            "sourceStateDigest": turn.source_state_digest,
-            "parentBranchId": branch.parent_branch_id,
-            "parentTurnId": turn.parent_turn_id or branch.parent_turn_id,
-            "gitWorkBranch": branch.git_work_branch or turn.git_work_branch,
-        },
-        "workspacePolicy": turn.workspace_policy,
-        "runtimeSelection": dict(
-            (branch.diagnostics or {}).get("runtimeSelection") or {}
-        ),
-        "workspaceBaseline": payload.workspace_baseline
-        or {
-            "kind": "checkpoint_ref",
-            "checkpointRef": turn.source_checkpoint_ref,
-        },
-        "instructionRefs": [turn.instruction_ref],
-        "instructionDigests": [turn.instruction_digest],
-        "priorEvidenceRefs": payload.prior_evidence_refs,
-        "boundedSummaries": payload.bounded_summaries,
-        "builderMetadata": payload.builder_metadata
-        or {
-            "version": "checkpoint-branch-launch-api-v1",
-            "digest": "sha256:checkpoint-branch-launch-api-v1",
-        },
-    }
-    follow_up_retrieval = (turn.diagnostics or {}).get("followUpRetrieval")
-    if isinstance(follow_up_retrieval, Mapping):
-        context_payload["followUpRetrieval"] = dict(follow_up_retrieval)
-    try:
-        context_bundle = build_checkpoint_branch_turn_context_bundle(context_payload)
-    except CheckpointBranchContextBundleError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_branch_turn_context", "reason": str(exc)},
-        ) from exc
-    context_digest = _operation_digest(context_bundle)
-    context_bundle_ref = _branch_turn_artifact_ref(
-        branch_turn_id=turn.branch_turn_id,
-        artifact_name="context-bundle",
-        payload_digest=context_digest,
-    )
-    manifest_payload = _branch_turn_launch_manifest_payload(
-        workflow_id=workflow_id,
-        branch=branch,
-        turn=turn,
-        payload=payload,
-        context_bundle_ref=context_bundle_ref,
-    )
-    manifest_digest = _operation_digest(manifest_payload)
-    manifest_ref = _branch_turn_artifact_ref(
-        branch_turn_id=turn.branch_turn_id,
-        artifact_name="step-execution-manifest",
-        payload_digest=manifest_digest,
-    )
-    diagnostics_ref = (
-        payload.diagnostics_ref
-        or _branch_turn_artifact_ref(
-            branch_turn_id=turn.branch_turn_id,
-            artifact_name="diagnostics",
-            payload_digest=_operation_digest(
-                {
-                    "workflowId": workflow_id,
-                    "branchId": branch.branch_id,
-                    "branchTurnId": turn.branch_turn_id,
-                    "launchIdempotencyKey": launch_key,
-                }
-            ),
-        )
-    )
-    try:
-        launched = await CheckpointBranchService(session).launch_turn(
-            workflow_id=workflow_id,
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            context_bundle_ref=context_bundle_ref,
-            step_execution_manifest_ref=manifest_ref,
-            checkpoint_ref=None,
-            diagnostics_ref=diagnostics_ref,
-            idempotency_key=launch_key,
-            created_step_execution_id=payload.created_step_execution_id,
-            runtime_agent_run_id=payload.runtime_agent_run_id,
-            provider_session_id=payload.provider_session_id,
-            agent_request_ref=payload.runtime_request_ref,
-            agent_result_ref=payload.runtime_result_ref,
-        )
-    except ValueError as exc:
+    pending_turn = await session.get(WorkflowCheckpointBranchTurn, branch_turn_id)
+    if pending_turn is None or pending_turn.branch_id != branch_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "branch_turn_launch_rejected", "reason": str(exc)},
+            detail={"code": "branch_turn_launch_state_missing"},
+        )
+    launch_operation = WorkflowCheckpointBranchOperation(
+        workflow_id=workflow_id,
+        branch_id=branch_id,
+        branch_turn_id=branch_turn_id,
+        operation="checkpoint_branch.turn.launch",
+        idempotency_key=payload.idempotency_key,
+        request_digest=request_digest,
+        response_payload={
+            "branchId": branch_id,
+            "branchTurnId": branch_turn_id,
+            "immutableLaunchFields": _branch_turn_immutable_snapshot(pending_turn),
+            "claimState": "claimed",
+        },
+    )
+    session.add(launch_operation)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raced_op = (
+            await session.execute(
+                select(WorkflowCheckpointBranchOperation).where(
+                    WorkflowCheckpointBranchOperation.workflow_id == workflow_id,
+                    WorkflowCheckpointBranchOperation.idempotency_key
+                    == payload.idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if raced_op is None or (
+            raced_op.operation != "checkpoint_branch.turn.launch"
+            or raced_op.branch_id != branch_id
+            or raced_op.branch_turn_id != branch_turn_id
+            or raced_op.request_digest != request_digest
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "idempotency_key_conflict"},
+            )
+        launch_operation = raced_op
+
+    try:
+        launched = await CheckpointBranchTurnExecutionOwner(
+            session,
+            principal=_owner_id(user),
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            branch_turn_id=branch_turn_id,
+            intent=payload,
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
         ) from exc
 
-    session.add(
-        WorkflowCheckpointBranchOperation(
-            workflow_id=workflow_id,
-            branch_id=branch.branch_id,
-            branch_turn_id=turn.branch_turn_id,
-            operation="checkpoint_branch.turn.launch",
-            idempotency_key=launch_key,
-            request_digest=request_digest,
-            response_payload={
-                "branchId": branch.branch_id,
-                "branchTurnId": turn.branch_turn_id,
-                "contextBundleRef": context_bundle_ref,
-                "stepExecutionManifestRef": manifest_ref,
-                "diagnosticsRef": diagnostics_ref,
-                "contextBundle": context_bundle,
-                "manifest": manifest_payload,
-                "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
-            },
-        )
-    )
+    launch_operation.response_payload = {
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
+        "contextBundleRef": launched.context_bundle_ref,
+        "stepExecutionManifestRef": launched.step_execution_manifest_ref,
+        "immutableLaunchFields": _branch_turn_immutable_snapshot(launched),
+    }
     await session.commit()
     await session.refresh(launched)
     return _turn_to_model(launched)
@@ -14732,6 +14830,7 @@ async def _record_branch_turn_operation(
     payload: CheckpointBranchContinueRequest,
     operation_name: str,
     session: AsyncSession,
+    user: User,
     parent_turn_id: str | None = None,
 ) -> CheckpointBranchTurnModel:
     _validate_branch_policy(
@@ -14771,12 +14870,31 @@ async def _record_branch_turn_operation(
             )
         )
         turn = result.scalar_one()
-        return _turn_to_model(turn)
+        try:
+            launched = await CheckpointBranchTurnExecutionOwner(
+                session, principal=_owner_id(user)
+            ).launch(
+                workflow_id=workflow_id,
+                branch_id=branch.branch_id,
+                branch_turn_id=turn.branch_turn_id,
+                intent={"idempotencyKey": payload.idempotency_key},
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "reason": exc.reason},
+            ) from exc
+        return _turn_to_model(launched)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     branch_turn_id = _new_checkpoint_branch_turn_id()
-    source_checkpoint_ref = (
-        branch.current_head_checkpoint_ref or branch.source_checkpoint_ref
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
+    source_checkpoint_ref, source_checkpoint_digest, accepted_parent_turn_id = (
+        await _require_accepted_branch_head(session=session, branch=branch)
     )
     await _prepare_checkpoint_branch_launch(
         session=session,
@@ -14785,7 +14903,7 @@ async def _record_branch_turn_operation(
         branch_id=branch.branch_id,
         branch_turn_id=branch_turn_id,
         source_checkpoint_ref=source_checkpoint_ref,
-        source_checkpoint_digest=branch.source_checkpoint_digest,
+        source_checkpoint_digest=source_checkpoint_digest,
         logical_step_id=branch.logical_step_id,
         label=payload.label or branch.label,
         workspace_policy=payload.workspace_policy,
@@ -14793,9 +14911,10 @@ async def _record_branch_turn_operation(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         requested_work_branch=branch.git_work_branch,
         parent_branch_id=branch.parent_branch_id,
-        parent_turn_id=parent_turn_id,
+        parent_turn_id=parent_turn_id or accepted_parent_turn_id,
         source_run_id=branch.source_run_id,
         source_execution_ordinal=branch.source_execution_ordinal,
         source_checkpoint_boundary=branch.source_checkpoint_boundary,
@@ -14811,6 +14930,11 @@ async def _record_branch_turn_operation(
     branch.label = payload.label or branch.label
     branch.workspace_policy = payload.workspace_policy
     branch.runtime_context_policy = payload.runtime_context_policy
+    if payload.max_budget_usd is not None:
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "maxBudgetUsd": payload.max_budget_usd,
+        }
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -14826,8 +14950,21 @@ async def _record_branch_turn_operation(
         )
     )
     await session.commit()
-    await session.refresh(turn)
-    return _turn_to_model(turn)
+    try:
+        launched = await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
+    return _turn_to_model(launched)
 
 
 @router.post(
@@ -14856,6 +14993,65 @@ async def continue_checkpoint_branch(
         payload=payload,
         operation_name="checkpoint_branch.continue",
         session=session,
+        user=user,
+    )
+
+
+async def _require_accepted_branch_head(
+    *, session: AsyncSession, branch: WorkflowCheckpointBranch
+) -> tuple[str, str | None, str]:
+    """Resolve only a terminal, server-captured branch head for new work."""
+
+    head_step_id = str(branch.current_head_step_execution_id or "").strip()
+    head_checkpoint_ref = str(branch.current_head_checkpoint_ref or "").strip()
+    if not head_step_id or not head_checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_not_accepted",
+                "reason": "branch has no terminal server-owned head",
+            },
+        )
+    turn = (
+        await session.execute(
+            select(WorkflowCheckpointBranchTurn).where(
+                WorkflowCheckpointBranchTurn.branch_id == branch.branch_id,
+                WorkflowCheckpointBranchTurn.created_step_execution_id
+                == head_step_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if turn is None or turn.status not in {"checking", "succeeded"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_not_accepted",
+                "reason": "latest branch turn has no terminal result",
+            },
+        )
+    checkpoint = (
+        await session.execute(
+            select(WorkflowCheckpointBranchArtifact).where(
+                WorkflowCheckpointBranchArtifact.branch_id == branch.branch_id,
+                WorkflowCheckpointBranchArtifact.branch_turn_id
+                == turn.branch_turn_id,
+                WorkflowCheckpointBranchArtifact.artifact_kind
+                == "output.branch_turn.checkpoint.json",
+            )
+        )
+    ).scalar_one_or_none()
+    if checkpoint is None or checkpoint.artifact_ref != head_checkpoint_ref:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "branch_head_checkpoint_unavailable",
+                "reason": "terminal branch head checkpoint authority is missing",
+            },
+        )
+    return (
+        head_checkpoint_ref,
+        branch.current_head_checkpoint_digest,
+        turn.branch_turn_id,
     )
 
 
@@ -14901,16 +15097,35 @@ async def fork_checkpoint_branch(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "invalid_parent_turn"},
             )
-    fork_source_ref = (
-        parent_turn.source_checkpoint_ref
-        if parent_turn is not None
-        else parent.current_head_checkpoint_ref or parent.source_checkpoint_ref
-    )
-    fork_source_digest = (
-        parent_turn.source_checkpoint_digest
-        if parent_turn is not None
-        else parent.source_checkpoint_digest
-    )
+    if parent_turn is not None:
+        parent_checkpoint = (
+            await session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == parent.branch_id,
+                    WorkflowCheckpointBranchArtifact.branch_turn_id
+                    == parent_turn.branch_turn_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind
+                    == "output.branch_turn.checkpoint.json",
+                )
+            )
+        ).scalar_one_or_none()
+        if parent_checkpoint is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "parent_turn_checkpoint_unavailable",
+                    "reason": "parent turn has no terminal checkpoint authority",
+                },
+            )
+        fork_source_ref = parent_checkpoint.artifact_ref
+        fork_source_digest = parent_checkpoint.digest
+        selected_parent_turn_id = parent_turn.branch_turn_id
+    else:
+        (
+            fork_source_ref,
+            fork_source_digest,
+            selected_parent_turn_id,
+        ) = await _require_accepted_branch_head(session=session, branch=parent)
     request_digest = _scoped_operation_digest(
         payload, scope={"parentBranchId": parent.branch_id}
     )
@@ -14936,11 +15151,34 @@ async def fork_checkpoint_branch(
             workflow_id=workflow_id,
             branch_id=str(operation.branch_id),
         )
+        existing_turn = await session.get(
+            WorkflowCheckpointBranchTurn, operation.branch_turn_id
+        )
+        if existing_turn is not None:
+            try:
+                await CheckpointBranchTurnExecutionOwner(
+                    session, principal=_owner_id(user)
+                ).launch(
+                    workflow_id=workflow_id,
+                    branch_id=branch.branch_id,
+                    branch_turn_id=existing_turn.branch_turn_id,
+                    intent={"idempotencyKey": payload.idempotency_key},
+                )
+            except CheckpointBranchTurnLaunchError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": exc.code, "reason": exc.reason},
+                ) from exc
         return _branch_to_model(branch)
 
-    instruction_ref, instruction_digest = _instruction_identity(payload.instructions)
     forked_branch_id = _new_checkpoint_branch_id()
     branch_turn_id = _new_checkpoint_branch_turn_id()
+    instruction_ref, instruction_digest = await _instruction_identity(
+        session=session,
+        user=user,
+        instructions=payload.instructions,
+        branch_turn_id=branch_turn_id,
+    )
     await _prepare_checkpoint_branch_launch(
         session=session,
         record=record,
@@ -14956,8 +15194,9 @@ async def fork_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
+        principal=_owner_id(user),
         parent_branch_id=parent.branch_id,
-        parent_turn_id=payload.parent_turn_id,
+        parent_turn_id=selected_parent_turn_id,
         source_run_id=parent.source_run_id,
         source_execution_ordinal=parent.source_execution_ordinal,
         source_checkpoint_boundary=parent.source_checkpoint_boundary,
@@ -14976,6 +15215,38 @@ async def fork_checkpoint_branch(
     forked.publish_status = "unpublished"
     forked.idempotency_key = payload.idempotency_key
     forked.created_by = getattr(user, "email", None) or _owner_id(user)
+    inherited_selection = copy.deepcopy(
+        dict((parent.diagnostics or {}).get("runtimeSelection") or {})
+    )
+    inherited_selection["runtimeContextPolicy"] = payload.runtime_context_policy
+    inherited_selection["gitWorkBranch"] = forked.git_work_branch
+    if payload.max_budget_usd is not None:
+        inherited_selection["maxBudgetUsd"] = payload.max_budget_usd
+    forked.diagnostics = {
+        **(forked.diagnostics or {}),
+        "runtimeSelection": inherited_selection,
+    }
+    parent_profile_usage = (
+        await session.execute(
+            select(db_models.OmnigentAgentProfileUsage).where(
+                db_models.OmnigentAgentProfileUsage.consumer_type == "checkpoint",
+                db_models.OmnigentAgentProfileUsage.consumer_id == parent.branch_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if parent_profile_usage is not None:
+        session.add(
+            db_models.OmnigentAgentProfileUsage(
+                consumer_type="checkpoint",
+                consumer_id=forked_branch_id,
+                profile_id=parent_profile_usage.profile_id,
+                version=parent_profile_usage.version,
+                digest=parent_profile_usage.digest,
+                effective_snapshot=copy.deepcopy(
+                    parent_profile_usage.effective_snapshot
+                ),
+            )
+        )
     session.add(
         WorkflowCheckpointBranchOperation(
             workflow_id=workflow_id,
@@ -14991,6 +15262,20 @@ async def fork_checkpoint_branch(
         )
     )
     await session.commit()
+    try:
+        await CheckpointBranchTurnExecutionOwner(
+            session, principal=_owner_id(user)
+        ).launch(
+            workflow_id=workflow_id,
+            branch_id=forked_branch_id,
+            branch_turn_id=branch_turn_id,
+            intent={"idempotencyKey": payload.idempotency_key},
+        )
+    except CheckpointBranchTurnLaunchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "reason": exc.reason},
+        ) from exc
     await session.refresh(forked)
     return _branch_to_model(forked)
 

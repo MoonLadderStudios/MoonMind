@@ -761,8 +761,14 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     checkpoint_service.create_branch_graph.return_value = SimpleNamespace(
         branch=SimpleNamespace(branch_id="remediation-action-branch")
     )
+    turn_owner = AsyncMock()
+    turn_owner.launch.return_value = SimpleNamespace(
+        created_step_execution_id="repair:execution:1"
+    )
     plane = TemporalRemediationControlPlane(
-        client=AsyncMock(), checkpoint_branch_service=checkpoint_service
+        client=AsyncMock(),
+        checkpoint_branch_service=checkpoint_service,
+        checkpoint_branch_turn_owner=turn_owner,
     )
 
     result = await plane.handlers()[
@@ -778,6 +784,9 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
                 "checkpointRef": "artifact://checkpoint",
                 "instructionRef": "artifact://instructions",
                 "instructionDigest": "sha256:" + ("a" * 64),
+                "repository": "MoonLadderStudios/MoonMind",
+                "baseBranch": "main",
+                "baseCommit": "abc123",
             },
         },
         {},
@@ -785,8 +794,8 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     )
 
     assert result["status"] == "accepted"
-    assert result["deliveryStage"] == "branch_graph_created"
-    assert result["branchTurnLaunched"] is False
+    assert result["deliveryStage"] == "branch_turn_dispatched"
+    assert result["branchTurnLaunched"] is True
     assert result["terminalBranchResultAvailable"] is False
     assert result["idempotencyIdentity"] == "action-branch"
     assert result["verificationContract"]["automaticallyVerifiable"] is True
@@ -798,6 +807,23 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     assert payload["instructionRef"] == "artifact://instructions"
     assert payload["instructionDigest"] == "sha256:" + ("a" * 64)
     assert payload["idempotencyKey"] == "action-branch"
+    checkpoint_service.configure_server_launch_authority.assert_awaited_once_with(
+        workflow_id="target",
+        branch_id="remediation-action-branch",
+        branch_turn_id="remediation-action-branch-turn-1",
+        repository="MoonLadderStudios/MoonMind",
+        base_branch="main",
+        base_commit="abc123",
+        work_branch="remediation/action-branch",
+        provider_profile_ref=None,
+        remediation_context_ref="artifact://context",
+    )
+    turn_owner.launch.assert_awaited_once_with(
+        workflow_id="target",
+        branch_id="remediation-action-branch",
+        branch_turn_id="remediation-action-branch-turn-1",
+        intent={"idempotencyKey": "action-branch"},
+    )
 
 
 @pytest.mark.parametrize(

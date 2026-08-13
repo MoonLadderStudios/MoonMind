@@ -176,6 +176,43 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
             parameters={"api_key": "should-not-be-accepted"},
         )
 
+
+def test_agent_execution_request_allows_bounded_retrieval_token_budget() -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile:omnigent-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        parameters={
+            "followUpRetrieval": {
+                "maxContextTokens": 500,
+                "latencyMs": 250,
+            }
+        },
+    )
+
+    assert request.parameters["followUpRetrieval"]["maxContextTokens"] == 500
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "500"])
+def test_agent_execution_request_rejects_invalid_retrieval_token_budget(
+    value: object,
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="followUpRetrieval.maxContextTokens must be a positive integer",
+    ):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="profile:omnigent-default",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={"followUpRetrieval": {"maxContextTokens": value}},
+        )
+
+
 def test_agent_execution_request_accepts_compact_step_execution_launch_policy() -> None:
     request = AgentExecutionRequest(
         agentKind="managed",

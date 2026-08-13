@@ -88,7 +88,13 @@ def test_incomplete_owners_are_disabled_with_bounded_reasons() -> None:
 
 def test_production_executor_registers_only_requestable_actions() -> None:
     executor = build_remediation_action_executor()
-    assert set(executor._adapters) == set(remediation_action_kinds())
+    assert set(executor._adapters) == set(remediation_action_kinds()) - {
+        "checkpoint_branch.create_from_remediation_context"
+    }
+    assert (
+        "checkpoint_branch.create_from_remediation_context"
+        not in executor._adapters
+    )
     assert "session.terminate" not in executor._adapters
     assert "cleanup.request_janitor" not in executor._adapters
     assert "host.restart" not in executor._adapters
