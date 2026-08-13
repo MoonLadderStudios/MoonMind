@@ -207,6 +207,10 @@ const readyOmnigentCatalog = {
   ineligibleProviderProfiles: [],
   hostModes: ['on_demand_docker'],
   gateReasons: [],
+  remediationRelease: {
+    autonomousRolloutAuthorized: false,
+    blockers: ['autonomous_rollout_gate_closed'],
+  },
 };
 
 const uiInfo = {
@@ -436,6 +440,14 @@ describe('routed remediation operator journey', () => {
       );
       expect((screen.getByLabelText('Action policy') as HTMLSelectElement).value)
         .toBe('admin_healer_default');
+      expect(
+        within(screen.getByLabelText('Authority')).getByRole('option', {
+          name: 'Administrator automatic (release gated)',
+        }),
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/Autonomous mutation remains disabled until the operator remediation release matrix passes/i),
+      ).toBeTruthy();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });

@@ -71,6 +71,7 @@ services:
       - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
+      - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.

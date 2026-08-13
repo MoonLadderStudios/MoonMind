@@ -49,8 +49,8 @@ from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
 from moonmind.omnigent.conformance import (
-    REQUIRED_EVIDENCE_CHANNELS,
     ConformanceContractError,
+    assert_secret_free,
     require_pinned_images,
 )
 from moonmind.omnigent.cutover import (
@@ -99,17 +99,30 @@ REQUIRED_REMEDIATION_EVIDENCE_KINDS = (
     "verificationPreventionEvidence",
     "reliabilitySecurityEvidence",
 )
+REQUIRED_REMEDIATION_RETAINED_CHANNELS = (
+    "logs",
+    "events",
+    "screenshotsCaptures",
+    "diagnostics",
+    "artifacts",
+    "histories",
+    "archives",
+)
 
 # Remediation-specific telemetry the release status must carry (section 5).
 REQUIRED_REMEDIATION_TELEMETRY_GROUPS = (
-    "creationContextBuild",
-    "evidenceDegradation",
-    "approvalActionLock",
-    "verification",
-    "egress",
-    "cancellation",
-    "cumulativeAttemptExhaustion",
-    "autonomousManualOrigin",
+    "remediationCreation",
+    "contextBuild",
+    "evidenceAvailability",
+    "approvalOutcomes",
+    "actionOutcomesByKindAndRisk",
+    "lockCooldownDuplicateAndEscalation",
+    "branchLifecycleLatency",
+    "verificationOutcomes",
+    "repeatedFailureAndAttemptExhaustion",
+    "egressOutcomes",
+    "operatorCancellationAndTakeover",
+    "autonomousAndManualOrigin",
 )
 
 # Repair-verification outcome vocabulary. Mirror
@@ -151,6 +164,78 @@ PROHIBITED_UI_JOURNEY_MARKERS = (
     "logDerivedAuthority",
 )
 
+# Each live row must retain these independently digest-bound JSON records.  They
+# are deliberately semantic record types, not provider log names, so the matrix
+# can be replayed after the host and helper containers are gone.
+REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES = frozenset(
+    {
+        "scenarioObservation",
+        "browserTrace",
+        "authoredRequest",
+        "immutableInputSnapshot",
+        "workflowLineage",
+        "contextEvidence",
+        "profilePolicyAuthority",
+        "egressAttestation",
+        "approvalDecision",
+        "actionResult",
+        "verificationResult",
+        "publicationOutcome",
+        "cleanupOutcome",
+        "temporalHistory",
+        "sideEffectAudit",
+        "retainedEvidenceScan",
+    }
+)
+REMEDIATION_SOURCE_RECORD_CONTENT_TYPE = "application/json"
+MAX_REMEDIATION_SOURCE_RECORD_BYTES = 2 * 1024 * 1024
+
+# Durable identities and refs called out by #3626 section 4.  Rows may use an
+# explicit not-applicable artifact, but they may not silently omit a field.
+REQUIRED_REMEDIATION_LINEAGE_FIELDS = (
+    "authoredRequestRef",
+    "immutableInputSnapshotRef",
+    "targetWorkflowId",
+    "targetRunId",
+    "targetStepId",
+    "targetAttemptId",
+    "targetBranch",
+    "remediationWorkflowId",
+    "remediationRunId",
+    "remediationStepId",
+    "remediationAttemptId",
+    "remediationBranch",
+    "contextRef",
+    "evidenceAvailabilityRef",
+    "agentProfileRef",
+    "providerProfileRef",
+    "policyRef",
+    "approvalRef",
+    "egressRef",
+    "leaseRef",
+    "hostRef",
+    "bridgeRef",
+    "sessionRef",
+    "firstMessageRef",
+    "eventCursorRef",
+    "workspaceRef",
+    "checkpointRef",
+    "actionRequestRef",
+    "actionResultRef",
+    "beforeStateRef",
+    "afterStateRef",
+    "verificationResultRef",
+    "stabilizedTargetRef",
+    "immediateRepairOutcomeRef",
+    "preventionOutcomeRef",
+    "publicationRef",
+    "terminalHarvestRef",
+    "cleanupRef",
+    "janitorRef",
+    "lockReleaseRef",
+    "capacityReleaseRef",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationMatrixRow:
@@ -188,10 +273,12 @@ class RemediationMatrixRow:
     ui_journey: str
     target_provenance: tuple[str, ...] = ("omnigent",)
     remediation_provenance: tuple[str, ...] = ("omnigent",)
-    host_modes: tuple[str, ...] = ALLOWED_HOST_MODES
+    host_modes: tuple[str, ...] = ("on_demand",)
+    architectures: tuple[str, ...] = ("linux/amd64",)
     egress: str = EGRESS_NOT_APPLICABLE
     expected_outcome: str = OUTCOME_PASSED
     thresholds: tuple[str, ...] = ()
+    required_observations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.gate not in GATE_CLASSES:
@@ -211,6 +298,14 @@ class RemediationMatrixRow:
                 f"row {self.row_id!r} has invalid expected outcome "
                 f"{self.expected_outcome!r}"
             )
+        if not self.host_modes or any(
+            mode not in ALLOWED_HOST_MODES for mode in self.host_modes
+        ):
+            raise ValueError(f"row {self.row_id!r} has invalid host modes")
+        if not self.architectures or any(
+            not architecture.strip() for architecture in self.architectures
+        ):
+            raise ValueError(f"row {self.row_id!r} has invalid architectures")
 
     @property
     def is_mutation(self) -> bool:
@@ -376,6 +471,13 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ui_journey="workflow-detail.remediate.approval",
         expected_outcome=OUTCOME_DENIED,
         thresholds=("approvalRejectionRate",),
+        required_observations=(
+            "denied",
+            "expired",
+            "consumed",
+            "unauthorized",
+            "stale_state",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.action.high-risk-stronger-authority",
@@ -399,6 +501,16 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ui_journey="workflow-detail.remediate.action",
         expected_outcome=OUTCOME_DENIED,
         thresholds=("staleAuthorityRejectionRate",),
+        required_observations=(
+            "target",
+            "run",
+            "checkpoint",
+            "session",
+            "host",
+            "lease",
+            "credential_generation",
+            "policy",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.lock.mutation-conflict-diagnosis-parallelism",
@@ -432,6 +544,13 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.session-control",
         thresholds=("sessionControlDeliveryRate",),
+        required_observations=(
+            "interrupt",
+            "clear",
+            "cancel",
+            "terminate",
+            "restart",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.lease.provider-profile-host-reconciliation",
@@ -499,6 +618,12 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.verification",
         thresholds=("verificationNonResolvedRate",),
+        required_observations=(
+            "still_failed",
+            "regressed",
+            "evidence_unavailable",
+            "verification_failed",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.prevention.repair-fail-then-prevention-pr",
@@ -545,6 +670,15 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.cancellation",
         thresholds=("cancellationHonoredRate",),
+        required_observations=(
+            "diagnosis",
+            "approval_wait",
+            "action",
+            "branch_execution",
+            "verification",
+            "publication",
+            "cleanup",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.reliability.worker-restart-temporal-replay",
@@ -556,6 +690,15 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
         thresholds=("replaySafeRate",),
+        required_observations=(
+            "diagnosis",
+            "approval_wait",
+            "action",
+            "branch_execution",
+            "verification",
+            "publication",
+            "cleanup",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.security.duplicate-prevention-idempotency",
@@ -567,9 +710,19 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
         thresholds=("duplicateSuppressionRate",),
+        required_observations=(
+            "first_message",
+            "host",
+            "session",
+            "branch",
+            "commit",
+            "pull_request",
+            "action",
+            "verification",
+        ),
     ),
     RemediationMatrixRow(
-        "remediation.host.static-on-demand-lifecycle",
+        "remediation.host.static-lifecycle",
         owner="moonmind.remediation.reliability",
         gate=GATE_MANUAL_MUTATION,
         evidence_kind="reliabilitySecurityEvidence",
@@ -577,6 +730,19 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         verification_capability="verification.host-reconciled",
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
+        host_modes=("static",),
+        thresholds=("hostLifecycleReconciliationRate",),
+    ),
+    RemediationMatrixRow(
+        "remediation.host.on-demand-lifecycle",
+        owner="moonmind.remediation.reliability",
+        gate=GATE_MANUAL_MUTATION,
+        evidence_kind="reliabilitySecurityEvidence",
+        action_capability="host.lifecycle",
+        verification_capability="verification.host-reconciled",
+        authority_mode="approval_gated",
+        ui_journey="workflow-detail.remediate.action",
+        host_modes=("on_demand",),
         thresholds=("hostLifecycleReconciliationRate",),
     ),
     RemediationMatrixRow(
@@ -604,6 +770,47 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         expected_outcome=OUTCOME_DENIED,
         thresholds=("egressDenialRate",),
     ),
+    RemediationMatrixRow(
+        "remediation.security.prohibited-authority-denied",
+        owner="moonmind.remediation.reliability",
+        gate=GATE_MANUAL_MUTATION,
+        evidence_kind="reliabilitySecurityEvidence",
+        action_capability="security.authority-boundary",
+        verification_capability="verification.prohibited-authority-denied",
+        authority_mode="approval_gated",
+        ui_journey="workflow-detail.remediate.action",
+        expected_outcome=OUTCOME_DENIED,
+        thresholds=("prohibitedAuthorityDenialRate",),
+        required_observations=(
+            "raw_host_shell",
+            "docker",
+            "sql",
+            "storage_key",
+            "filesystem_path",
+            "credential",
+            "secret_read",
+            "redaction_bypass",
+        ),
+    ),
+    RemediationMatrixRow(
+        "remediation.cleanup.complete-provider-profile-release-last",
+        owner="moonmind.remediation.reliability",
+        gate=GATE_MANUAL_MUTATION,
+        evidence_kind="reliabilitySecurityEvidence",
+        action_capability="cleanup.complete",
+        verification_capability="verification.provider-profile-release-last",
+        authority_mode="approval_gated",
+        ui_journey="workflow-detail.remediate.cleanup",
+        thresholds=("providerProfileReleaseLastRate",),
+        required_observations=(
+            "terminal_harvest",
+            "targeted_cleanup",
+            "janitor",
+            "lock_release",
+            "capacity_release",
+            "provider_profile_release_last",
+        ),
+    ),
     # The autonomous rollout gate row. It is intentionally DENIED in v1: the
     # matrix proves the autonomous-mutation gate refuses ``admin_auto`` and never
     # grants it by publishing evidence (acceptance criterion 9).
@@ -628,6 +835,54 @@ REMEDIATION_ROW_CATALOG_BY_ID: dict[str, RemediationMatrixRow] = {
     row.row_id: row for row in REMEDIATION_ROW_CATALOG
 }
 
+
+def remediation_catalog_document() -> dict[str, Any]:
+    """Return the catalog as a portable, versioned machine-readable document."""
+
+    return {
+        "issue": "MoonLadderStudios/MoonMind#3626",
+        "matrixVersion": REMEDIATION_MATRIX_VERSION,
+        "evidenceSchema": REMEDIATION_ARTIFACT_SCHEMA_VERSION,
+        "lineageFields": list(REQUIRED_REMEDIATION_LINEAGE_FIELDS),
+        "retainedEvidenceChannels": list(REQUIRED_REMEDIATION_RETAINED_CHANNELS),
+        "sourceRecordContract": {
+            "requiredTypes": sorted(REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES),
+            "contentType": REMEDIATION_SOURCE_RECORD_CONTENT_TYPE,
+            "maxBytes": MAX_REMEDIATION_SOURCE_RECORD_BYTES,
+            "digest": "sha256",
+            "freshnessSeconds": MAX_EVIDENCE_AGE_SECONDS,
+        },
+        "telemetryGroups": list(REQUIRED_REMEDIATION_TELEMETRY_GROUPS),
+        "rows": [
+            {
+                "rowId": row.row_id,
+                "owner": row.owner,
+                "targetRuntimeProvenance": list(row.target_provenance),
+                "remediationRuntimeProvenance": list(row.remediation_provenance),
+                "hostModes": list(row.host_modes),
+                "architectures": list(row.architectures),
+                "actionCapability": row.action_capability,
+                "verificationCapability": row.verification_capability,
+                "authorityMode": row.authority_mode,
+                "egressAuthority": row.egress,
+                "uiJourney": row.ui_journey,
+                "evidenceKind": row.evidence_kind,
+                "evidenceSchema": REMEDIATION_ARTIFACT_SCHEMA_VERSION,
+                "expectedDisposition": row.expected_outcome,
+                "thresholds": {
+                    threshold: {
+                        "rule": "all_observations_pass",
+                        "minimumSampleCount": 1,
+                    }
+                    for threshold in row.thresholds
+                },
+                "requiredObservations": list(row.required_observations),
+                "gate": row.gate,
+            }
+            for row in REMEDIATION_ROW_CATALOG
+        ],
+    }
+
 # The rows whose passing observation is required before manual mutation may be
 # claimed supported. Diagnosis rows gate diagnosis only.
 _MANUAL_DIAGNOSIS_ROWS = frozenset(
@@ -651,7 +906,13 @@ class RemediationMatrixError(ValueError):
     """Raised when a protected artifact fails observed-evidence row binding."""
 
 
-def _validate_row_secret_scan(secret_scan: Any, *, row_id: str) -> None:
+def _validate_row_secret_scan(
+    secret_scan: Any,
+    *,
+    row_id: str,
+    evidence_document_path: Path | None,
+    evidence_time: datetime | None,
+) -> None:
     """Bind a row to validated per-channel secret-scan evidence.
 
     Mirrors :func:`moonmind.omnigent.cutover._validate_row_secret_scan`. A
@@ -664,12 +925,12 @@ def _validate_row_secret_scan(secret_scan: Any, *, row_id: str) -> None:
         raise RemediationMatrixError(
             f"row {row_id!r} secret scan must carry per-channel evidence"
         )
-    missing = set(REQUIRED_EVIDENCE_CHANNELS) - set(secret_scan)
+    missing = set(REQUIRED_REMEDIATION_RETAINED_CHANNELS) - set(secret_scan)
     if missing:
         raise RemediationMatrixError(
             f"row {row_id!r} secret scan is missing channels: {sorted(missing)}"
         )
-    for channel in REQUIRED_EVIDENCE_CHANNELS:
+    for channel in REQUIRED_REMEDIATION_RETAINED_CHANNELS:
         result = secret_scan.get(channel)
         evidence_ref = (
             result.get("evidenceRef") if isinstance(result, Mapping) else None
@@ -679,10 +940,78 @@ def _validate_row_secret_scan(secret_scan: Any, *, row_id: str) -> None:
             or result.get("status") != "passed"
             or not isinstance(evidence_ref, str)
             or not evidence_ref.strip()
+            or not isinstance(result.get("sha256"), str)
+            or len(result["sha256"]) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in result["sha256"]
+            )
+            or result.get("contentType") != REMEDIATION_SOURCE_RECORD_CONTENT_TYPE
+            or result.get("schemaVersion")
+            != "moonmind.retained-evidence-secret-scan/v1"
+            or not isinstance(result.get("sizeBytes"), int)
+            or isinstance(result.get("sizeBytes"), bool)
+            or result["sizeBytes"] < 2
+            or result["sizeBytes"] > MAX_REMEDIATION_SOURCE_RECORD_BYTES
+            or not isinstance(result.get("generatedAt"), str)
         ):
             raise RemediationMatrixError(
                 f"row {row_id!r} secret scan channel {channel!r} lacks passing "
                 "evidence"
+            )
+        try:
+            generated = datetime.fromisoformat(
+                result["generatedAt"].replace("Z", "+00:00")
+            )
+            if generated.tzinfo is None:
+                raise ValueError
+        except ValueError as exc:
+            raise RemediationMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} has invalid freshness"
+            ) from exc
+        if evidence_time is not None:
+            age = (evidence_time - generated).total_seconds()
+            if age < 0 or age > MAX_EVIDENCE_AGE_SECONDS:
+                raise RemediationMatrixError(
+                    f"row {row_id!r} secret scan channel {channel!r} is stale"
+                )
+        if evidence_document_path is None:
+            continue
+        base = evidence_document_path.resolve().parent
+        try:
+            scan_path = _evidence_path(evidence_ref)
+            if not scan_path.is_absolute():
+                scan_path = base / scan_path
+            scan_path = scan_path.resolve()
+            if scan_path != base and base not in scan_path.parents:
+                raise ValueError("secret scan escaped evidence root")
+            content = scan_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise RemediationMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} is unreadable"
+            ) from exc
+        if (
+            len(content) != result["sizeBytes"]
+            or hashlib.sha256(content).hexdigest() != result["sha256"]
+        ):
+            raise RemediationMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} digest mismatch"
+            )
+        try:
+            scan_payload = json.loads(content)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise RemediationMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} is not JSON"
+            ) from exc
+        if (
+            not isinstance(scan_payload, Mapping)
+            or scan_payload.get("schemaVersion") != result["schemaVersion"]
+            or scan_payload.get("status") != "passed"
+            or scan_payload.get("secretFindings") != 0
+            or scan_payload.get("prohibitedAuthorityFindings") != 0
+        ):
+            raise RemediationMatrixError(
+                f"row {row_id!r} secret scan channel {channel!r} did not pass"
             )
 
 
@@ -705,14 +1034,24 @@ def _validate_ui_journey(ui_journey: Any, *, row: RemediationMatrixRow) -> None:
             f"row {row.row_id!r} UI journey is not the required {row.ui_journey!r}"
         )
     for assertion in REQUIRED_UI_JOURNEY_ASSERTIONS:
+        if (
+            assertion == "normalCreateRequest"
+            and row.row_id == "remediation.autonomous.rollout-gate-closed"
+        ):
+            if ui_journey.get("autonomousAdmissionDenied") is not True:
+                raise RemediationMatrixError(
+                    f"row {row.row_id!r} did not observe autonomous admission denial"
+                )
+            continue
         if ui_journey.get(assertion) is not True:
             raise RemediationMatrixError(
                 f"row {row.row_id!r} UI journey is missing assertion {assertion!r}"
             )
     for marker in PROHIBITED_UI_JOURNEY_MARKERS:
-        if ui_journey.get(marker):
+        if ui_journey.get(marker) is not False:
             raise RemediationMatrixError(
-                f"row {row.row_id!r} UI journey used prohibited authority {marker!r}"
+                f"row {row.row_id!r} UI journey did not explicitly exclude "
+                f"prohibited authority {marker!r}"
             )
 
 
@@ -746,6 +1085,12 @@ def _validate_delivery_and_repair(entry: Mapping[str, Any], *, row: RemediationM
         raise RemediationMatrixError(
             f"row {row.row_id!r} repair verification outcome is unrecognized"
         )
+    if row.expected_outcome == OUTCOME_DENIED and (
+        delivery_status == "delivered" or repair_outcome == "verified_resolved"
+    ):
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} denial evidence reports a delivered repair"
+        )
     if delivery is repair:
         raise RemediationMatrixError(
             f"row {row.row_id!r} collapses action delivery into repair "
@@ -764,11 +1109,194 @@ def _validate_thresholds(thresholds: Any, *, row: RemediationMatrixRow) -> None:
         )
     for key in row.thresholds:
         result = thresholds.get(key)
-        if not isinstance(result, Mapping) or result.get("within") is not True:
+        passed = result.get("passed") if isinstance(result, Mapping) else None
+        total = result.get("total") if isinstance(result, Mapping) else None
+        if (
+            not isinstance(result, Mapping)
+            or result.get("within") is not True
+            or not isinstance(passed, int)
+            or isinstance(passed, bool)
+            or not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 1
+            or passed != total
+        ):
             raise RemediationMatrixError(
                 f"row {row.row_id!r} threshold {key!r} was not observed within "
                 "limits"
             )
+
+
+def _validate_required_observations(
+    observations: Any, *, row: RemediationMatrixRow
+) -> None:
+    """Require every issue-named sub-scenario to have an observed outcome."""
+
+    if not row.required_observations:
+        return
+    if not isinstance(observations, Mapping):
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} lacks required scenario observations"
+        )
+    missing = [
+        observation
+        for observation in row.required_observations
+        if observations.get(observation) is not True
+    ]
+    if missing:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} lacks observed scenarios: {missing}"
+        )
+
+
+def _validate_timings(timings: Any, *, row: RemediationMatrixRow) -> None:
+    if not isinstance(timings, Mapping):
+        raise RemediationMatrixError(f"row {row.row_id!r} lacks observed timings")
+    duration_ms = timings.get("durationMs")
+    phase_latencies = timings.get("phaseLatenciesMs")
+    if (
+        not isinstance(duration_ms, int)
+        or isinstance(duration_ms, bool)
+        or duration_ms < 0
+        or not isinstance(phase_latencies, Mapping)
+        or not phase_latencies
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in phase_latencies.values()
+        )
+    ):
+        raise RemediationMatrixError(f"row {row.row_id!r} timings are malformed")
+    try:
+        started = datetime.fromisoformat(
+            str(timings.get("startedAt")).replace("Z", "+00:00")
+        )
+        completed = datetime.fromisoformat(
+            str(timings.get("completedAt")).replace("Z", "+00:00")
+        )
+        if started.tzinfo is None or completed.tzinfo is None or completed < started:
+            raise ValueError
+    except ValueError as exc:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} timing timestamps are malformed"
+        ) from exc
+
+
+def _validate_lineage_and_source_manifest(
+    entry: Mapping[str, Any],
+    *,
+    row: RemediationMatrixRow,
+    evidence_document_path: Path | None,
+    evidence_time: datetime | None,
+) -> None:
+    """Validate complete lineage plus bounded, digest-bound source records."""
+
+    lineage = entry.get("lineage")
+    if not isinstance(lineage, Mapping):
+        raise RemediationMatrixError(f"row {row.row_id!r} lacks durable lineage")
+    missing_lineage = [
+        field
+        for field in REQUIRED_REMEDIATION_LINEAGE_FIELDS
+        if not isinstance(lineage.get(field), str) or not lineage[field].strip()
+    ]
+    if missing_lineage:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} lacks durable lineage fields: {missing_lineage}"
+        )
+
+    manifest = entry.get("evidenceManifest")
+    if not isinstance(manifest, list):
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} lacks a source evidence manifest"
+        )
+    observed_types: set[str] = set()
+    for record in manifest:
+        if not isinstance(record, Mapping):
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence record is malformed"
+            )
+        record_type = record.get("type")
+        ref = record.get("ref")
+        digest = record.get("sha256")
+        schema_version = record.get("schemaVersion")
+        generated_at = record.get("generatedAt")
+        size_bytes = record.get("sizeBytes")
+        if (
+            record_type not in REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES
+            or record_type in observed_types
+            or not isinstance(ref, str)
+            or not ref.strip()
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or not isinstance(schema_version, str)
+            or not schema_version.strip()
+            or record.get("contentType") != REMEDIATION_SOURCE_RECORD_CONTENT_TYPE
+            or not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes < 2
+            or size_bytes > MAX_REMEDIATION_SOURCE_RECORD_BYTES
+            or not isinstance(generated_at, str)
+        ):
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence record is malformed"
+            )
+        try:
+            generated = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            if generated.tzinfo is None:
+                raise ValueError
+        except ValueError as exc:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence timestamp is invalid"
+            ) from exc
+        if evidence_time is not None:
+            age = (evidence_time - generated).total_seconds()
+            if age < 0 or age > MAX_EVIDENCE_AGE_SECONDS:
+                raise RemediationMatrixError(
+                    f"row {row.row_id!r} source evidence is stale"
+                )
+        observed_types.add(str(record_type))
+
+        if evidence_document_path is None:
+            continue
+        base = evidence_document_path.resolve().parent
+        try:
+            record_path = _evidence_path(ref)
+            if not record_path.is_absolute():
+                record_path = base / record_path
+            record_path = record_path.resolve()
+            if record_path != base and base not in record_path.parents:
+                raise ValueError("source record escaped evidence root")
+            content = record_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence ref is unreadable"
+            ) from exc
+        if len(content) != size_bytes or hashlib.sha256(content).hexdigest() != digest:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence digest or size mismatch"
+            )
+        try:
+            source = json.loads(content)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence is not JSON"
+            ) from exc
+        if not isinstance(source, Mapping) or source.get("schemaVersion") != schema_version:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence schema mismatch"
+            )
+        try:
+            assert_secret_free(content.decode("utf-8"))
+        except ConformanceContractError as exc:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} source evidence contains secret-like material"
+            ) from exc
+
+    missing_types = REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES - observed_types
+    if missing_types:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} lacks source evidence types: {sorted(missing_types)}"
+        )
 
 
 def validate_remediation_evidence_artifact(
@@ -782,6 +1310,8 @@ def validate_remediation_evidence_artifact(
     policy_version: Any,
     agent_profile_version: Any,
     remediation_policy_version: Any,
+    evidence_document_path: Path | None = None,
+    evidence_time: datetime | None = None,
 ) -> tuple[str, frozenset[str]]:
     """Bind one protected artifact to the rows it independently proves.
 
@@ -889,10 +1419,23 @@ def validate_remediation_evidence_artifact(
         _validate_ui_journey(entry.get("uiJourney"), row=row)
         _validate_delivery_and_repair(entry, row=row)
         _validate_thresholds(entry.get("thresholds"), row=row)
-        _validate_row_secret_scan(entry.get("secretScan"), row_id=row.row_id)
+        _validate_required_observations(entry.get("observations"), row=row)
+        _validate_timings(entry.get("timings"), row=row)
+        _validate_lineage_and_source_manifest(
+            entry,
+            row=row,
+            evidence_document_path=evidence_document_path,
+            evidence_time=evidence_time,
+        )
+        _validate_row_secret_scan(
+            entry.get("secretScan"),
+            row_id=row.row_id,
+            evidence_document_path=evidence_document_path,
+            evidence_time=evidence_time,
+        )
 
         architecture = entry.get("architecture")
-        if architecture not in architecture_set:
+        if architecture not in architecture_set or architecture not in row.architectures:
             raise RemediationMatrixError(
                 f"row {row_id!r} was not observed on a released architecture"
             )
@@ -970,6 +1513,10 @@ class RemediationReleaseStatus:
     autonomous_rollout_authorized: bool
     blockers: tuple[str, ...]
     evidence_ref: str | None
+    generated_at: str | None = None
+    expires_at: str | None = None
+    telemetry: Mapping[str, Any] | None = None
+    thresholds: Mapping[str, Any] | None = None
     policy_version: str = REMEDIATION_RELEASE_POLICY_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -982,7 +1529,34 @@ class RemediationReleaseStatus:
             "manualMutationSupported": self.manual_mutation_supported,
             "autonomousRolloutAuthorized": self.autonomous_rollout_authorized,
             "promotionAllowed": not self.blockers,
+            "manualPromotionAllowed": self.manual_mutation_supported,
+            "autonomousPromotionAllowed": self.autonomous_rollout_authorized,
+            "rollbackRequired": any(
+                blocker != "autonomous_rollout_gate_closed"
+                for blocker in self.blockers
+            ),
             "evidenceRef": self.evidence_ref,
+            "generatedAt": self.generated_at,
+            "expiresAt": self.expires_at,
+            "telemetry": dict(self.telemetry or {}),
+            "thresholds": dict(self.thresholds or {}),
+            "alerts": [
+                {
+                    "code": blocker,
+                    "severity": (
+                        "warning"
+                        if blocker == "autonomous_rollout_gate_closed"
+                        else "critical"
+                    ),
+                    "operatorAction": (
+                        "keep_autonomous_mutation_disabled"
+                        if blocker == "autonomous_rollout_gate_closed"
+                        else "block_or_rollback_manual_promotion"
+                    ),
+                }
+                for blocker in self.blockers
+            ],
+            "catalog": remediation_catalog_document(),
             "blockers": list(self.blockers),
         }
 
@@ -1022,6 +1596,7 @@ def evaluate_remediation_release(
         blockers.append("unsupported_support_matrix_version")
 
     generated_at = evidence.get("generatedAt")
+    expires_at: str | None = None
     try:
         generated = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
         if generated.tzinfo is None:
@@ -1029,6 +1604,10 @@ def evaluate_remediation_release(
         age = ((now or datetime.now(timezone.utc)) - generated).total_seconds()
         if age < 0 or age > MAX_EVIDENCE_AGE_SECONDS:
             blockers.append("remediation_release_evidence_stale")
+        expires_at = datetime.fromtimestamp(
+            generated.timestamp() + MAX_EVIDENCE_AGE_SECONDS,
+            tz=timezone.utc,
+        ).isoformat()
     except (TypeError, ValueError):
         blockers.append("remediation_release_evidence_timestamp_invalid")
 
@@ -1104,6 +1683,10 @@ def evaluate_remediation_release(
         autonomous_rollout_authorized=False,
         blockers=tuple(dict.fromkeys(blockers)),
         evidence_ref=evidence_ref,
+        generated_at=generated_at if isinstance(generated_at, str) else None,
+        expires_at=expires_at,
+        telemetry=telemetry if isinstance(telemetry, Mapping) else None,
+        thresholds=thresholds if isinstance(thresholds, Mapping) else None,
     )
 
 
@@ -1139,6 +1722,14 @@ def _verify_remediation_manifest(
     policy_version = evidence.get("launchPolicyVersion")
     agent_profile_version = evidence.get("agentProfileVersion")
     remediation_policy_version = evidence.get("remediationPolicyVersion")
+    try:
+        evidence_time = datetime.fromisoformat(
+            str(evidence.get("generatedAt")).replace("Z", "+00:00")
+        )
+        if evidence_time.tzinfo is None:
+            evidence_time = None
+    except ValueError:
+        evidence_time = None
 
     observed_rows: set[str] = set()
     seen_kinds: set[str] = set()
@@ -1182,6 +1773,8 @@ def _verify_remediation_manifest(
                 policy_version=policy_version,
                 agent_profile_version=agent_profile_version,
                 remediation_policy_version=remediation_policy_version,
+                evidence_document_path=artifact_path,
+                evidence_time=evidence_time,
             )
         except (json.JSONDecodeError, UnicodeError, RemediationMatrixError):
             blockers.append("evidence_row_binding_invalid")
@@ -1275,15 +1868,21 @@ __all__ = [
     "EGRESS_RESTRICTED_ALLOWED",
     "EGRESS_RESTRICTED_DENIED",
     "REQUIRED_REMEDIATION_EVIDENCE_KINDS",
+    "REQUIRED_REMEDIATION_RETAINED_CHANNELS",
     "REQUIRED_REMEDIATION_TELEMETRY_GROUPS",
     "REMEDIATION_REPAIR_OUTCOMES",
     "REMEDIATION_DELIVERY_STATUSES",
     "REQUIRED_UI_JOURNEY_ASSERTIONS",
     "PROHIBITED_UI_JOURNEY_MARKERS",
+    "REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES",
+    "REMEDIATION_SOURCE_RECORD_CONTENT_TYPE",
+    "MAX_REMEDIATION_SOURCE_RECORD_BYTES",
+    "REQUIRED_REMEDIATION_LINEAGE_FIELDS",
     "RemediationMatrixRow",
     "REMEDIATION_ROW_CATALOG",
     "REQUIRED_REMEDIATION_MATRIX_ROWS",
     "REMEDIATION_ROW_CATALOG_BY_ID",
+    "remediation_catalog_document",
     "RemediationMatrixError",
     "validate_remediation_evidence_artifact",
     "RemediationReleaseStatus",

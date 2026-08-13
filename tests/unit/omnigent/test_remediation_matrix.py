@@ -11,12 +11,14 @@ autonomous rollout gate stays closed).
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent.conformance import REQUIRED_EVIDENCE_CHANNELS
 from moonmind.omnigent.remediation_matrix import (
     AUTHORITY_MODES,
     GATE_AUTONOMOUS_ROLLOUT,
@@ -30,12 +32,20 @@ from moonmind.omnigent.remediation_matrix import (
     REMEDIATION_ROW_CATALOG,
     REMEDIATION_ROW_CATALOG_BY_ID,
     REQUIRED_REMEDIATION_EVIDENCE_KINDS,
+    REQUIRED_REMEDIATION_LINEAGE_FIELDS,
     REQUIRED_REMEDIATION_MATRIX_ROWS,
+    REQUIRED_REMEDIATION_RETAINED_CHANNELS,
+    REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES,
     REQUIRED_REMEDIATION_TELEMETRY_GROUPS,
     REQUIRED_UI_JOURNEY_ASSERTIONS,
     RemediationMatrixError,
     evaluate_remediation_release,
+    remediation_catalog_document,
     validate_remediation_evidence_artifact,
+)
+from moonmind.omnigent.remediation_matrix_conformance import (
+    RemediationEvidenceBuildError,
+    build_remediation_release_evidence,
 )
 
 NOW = datetime(2026, 8, 7, tzinfo=timezone.utc)
@@ -54,8 +64,16 @@ REMEDIATION_POLICY_VERSION = "moonmind.omnigent.remediation-policy/v1"
 
 def _clean_secret_scan() -> dict[str, object]:
     return {
-        channel: {"status": "passed", "evidenceRef": f"evidence/{channel}.json"}
-        for channel in REQUIRED_EVIDENCE_CHANNELS
+        channel: {
+            "status": "passed",
+            "evidenceRef": f"secret-scans/{channel}.json",
+            "sha256": "a" * 64,
+            "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
+            "contentType": "application/json",
+            "sizeBytes": 2,
+            "generatedAt": NOW.isoformat(),
+        }
+        for channel in REQUIRED_REMEDIATION_RETAINED_CHANNELS
     }
 
 
@@ -89,12 +107,51 @@ def _observed_row(row_id: str) -> dict[str, object]:
         "launchPolicyVersion": POLICY_VERSION,
         "agentProfileVersion": AGENT_PROFILE_VERSION,
         "remediationPolicyVersion": REMEDIATION_POLICY_VERSION,
-        "thresholds": {key: {"within": True} for key in row.thresholds},
+        "thresholds": {
+            key: {"within": True, "passed": 1, "total": 1}
+            for key in row.thresholds
+        },
+        "timings": {
+            "startedAt": (NOW - timedelta(seconds=1)).isoformat(),
+            "completedAt": NOW.isoformat(),
+            "durationMs": 1000,
+            "phaseLatenciesMs": {"scenario": 1000},
+        },
+        "observations": {
+            observation: True for observation in row.required_observations
+        },
         "secretScan": _clean_secret_scan(),
+        "lineage": {
+            field: f"artifact://{row_id}/{field}"
+            for field in REQUIRED_REMEDIATION_LINEAGE_FIELDS
+        },
+        "evidenceManifest": [
+            {
+                "type": record_type,
+                "ref": f"source/{row_id}/{record_type}.json",
+                "sha256": "a" * 64,
+                "schemaVersion": f"moonmind.{record_type}/v1",
+                "contentType": "application/json",
+                "sizeBytes": 2,
+                "generatedAt": NOW.isoformat(),
+            }
+            for record_type in sorted(REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES)
+        ],
     }
     if row.is_mutation:
-        entry["actionDelivery"] = {"status": "delivered"}
-        entry["repairVerification"] = {"outcome": "verified_resolved"}
+        entry["actionDelivery"] = {
+            "status": "denied" if row.expected_outcome == "denied" else "delivered"
+        }
+        entry["repairVerification"] = {
+            "outcome": (
+                "approval_required"
+                if row.expected_outcome == "denied"
+                else "verified_resolved"
+            )
+        }
+    if row.row_id == "remediation.autonomous.rollout-gate-closed":
+        entry["uiJourney"]["normalCreateRequest"] = False
+        entry["uiJourney"]["autonomousAdmissionDenied"] = True
     return entry
 
 
@@ -113,6 +170,43 @@ def _artifact(kind: str, row_ids: list[str] | None = None) -> dict[str, object]:
     }
 
 
+def _stage_row_dependencies(tmp_path, artifact) -> None:
+    for entry in artifact["rows"]:
+        for record in entry["evidenceManifest"]:
+            path = tmp_path / record["ref"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = json.dumps(
+                {
+                    "schemaVersion": record["schemaVersion"],
+                    "generatedAt": record["generatedAt"],
+                },
+                sort_keys=True,
+            ).encode()
+            path.write_bytes(content)
+            record["sha256"] = hashlib.sha256(content).hexdigest()
+            record["sizeBytes"] = len(content)
+        for channel, scan in entry["secretScan"].items():
+            path = tmp_path / scan["evidenceRef"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = (
+                json.dumps(
+                    {
+                        "schemaVersion": scan["schemaVersion"],
+                        "generatedAt": scan["generatedAt"],
+                        "channel": channel,
+                        "status": "passed",
+                        "secretFindings": 0,
+                        "prohibitedAuthorityFindings": 0,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode()
+            path.write_bytes(content)
+            scan["sha256"] = hashlib.sha256(content).hexdigest()
+            scan["sizeBytes"] = len(content)
+
+
 def _stage_release(tmp_path, *, artifacts=None):
     """Write per-kind artifacts + the release document to ``tmp_path``."""
 
@@ -120,6 +214,7 @@ def _stage_release(tmp_path, *, artifacts=None):
         artifacts = {kind: _artifact(kind) for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS}
     manifest = []
     for kind, artifact in artifacts.items():
+        _stage_row_dependencies(tmp_path, artifact)
         content = json.dumps(artifact, sort_keys=True).encode()
         path = tmp_path / f"{kind}.json"
         path.write_bytes(content)
@@ -166,10 +261,40 @@ def test_catalog_covers_every_kind_with_unique_owned_rows() -> None:
     # Every row names an owner and a gate class.
     for row in REMEDIATION_ROW_CATALOG:
         assert row.owner.strip()
+        assert row.host_modes
+        assert row.architectures
         assert row.gate in (
             GATE_MANUAL_DIAGNOSIS,
             GATE_MANUAL_MUTATION,
             GATE_AUTONOMOUS_ROLLOUT,
+        )
+
+
+def test_catalog_document_exposes_complete_owned_threshold_contract() -> None:
+    document = remediation_catalog_document()
+    assert document["issue"] == "MoonLadderStudios/MoonMind#3626"
+    assert document["matrixVersion"] == REMEDIATION_MATRIX_VERSION
+    assert {row["rowId"] for row in document["rows"]} == set(
+        REQUIRED_REMEDIATION_MATRIX_ROWS
+    )
+    assert set(document["lineageFields"]) == set(REQUIRED_REMEDIATION_LINEAGE_FIELDS)
+    assert set(document["retainedEvidenceChannels"]) == set(
+        REQUIRED_REMEDIATION_RETAINED_CHANNELS
+    )
+    assert set(document["sourceRecordContract"]["requiredTypes"]) == set(
+        REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES
+    )
+    assert set(document["telemetryGroups"]) == set(
+        REQUIRED_REMEDIATION_TELEMETRY_GROUPS
+    )
+    for row in document["rows"]:
+        assert row["owner"]
+        assert row["hostModes"]
+        assert row["architectures"]
+        assert row["evidenceSchema"] == REMEDIATION_ARTIFACT_SCHEMA_VERSION
+        assert all(
+            threshold["rule"] == "all_observations_pass"
+            for threshold in row["thresholds"].values()
         )
 
 
@@ -301,6 +426,14 @@ def test_prohibited_ui_authority_fails_the_row(marker) -> None:
         _validate(artifact)
 
 
+@pytest.mark.parametrize("marker", PROHIBITED_UI_JOURNEY_MARKERS)
+def test_missing_prohibited_ui_authority_observation_fails_the_row(marker) -> None:
+    artifact = _artifact("diagnosisEvidence")
+    del artifact["rows"][0]["uiJourney"][marker]
+    with pytest.raises(RemediationMatrixError, match="prohibited authority"):
+        _validate(artifact)
+
+
 @pytest.mark.parametrize("assertion", REQUIRED_UI_JOURNEY_ASSERTIONS)
 def test_missing_ui_assertion_fails_the_row(assertion) -> None:
     artifact = _artifact("diagnosisEvidence")
@@ -320,8 +453,36 @@ def test_threshold_not_within_limits_fails_the_row() -> None:
     artifact = _artifact("diagnosisEvidence")
     row = artifact["rows"][0]
     key = next(iter(REMEDIATION_ROW_CATALOG_BY_ID[row["row"]].thresholds))
-    row["thresholds"][key] = {"within": False}
+    row["thresholds"][key] = {"within": False, "passed": 0, "total": 1}
     with pytest.raises(RemediationMatrixError, match="within"):
+        _validate(artifact)
+
+
+def test_missing_required_subscenario_fails_the_row() -> None:
+    kind = "reliabilitySecurityEvidence"
+    artifact = _artifact(kind)
+    row = next(
+        entry for entry in artifact["rows"]
+        if entry["row"] == "remediation.reliability.cancellation-each-phase"
+    )
+    row["observations"]["cleanup"] = False
+    with pytest.raises(RemediationMatrixError, match="lacks observed scenarios"):
+        _validate(artifact, kind=kind)
+
+
+def test_missing_required_lineage_field_fails_the_row() -> None:
+    artifact = _artifact("diagnosisEvidence")
+    del artifact["rows"][0]["lineage"]["firstMessageRef"]
+    with pytest.raises(RemediationMatrixError, match="durable lineage fields"):
+        _validate(artifact)
+
+
+def test_missing_source_record_type_fails_the_row() -> None:
+    artifact = _artifact("diagnosisEvidence")
+    artifact["rows"][0]["evidenceManifest"] = artifact["rows"][0][
+        "evidenceManifest"
+    ][1:]
+    with pytest.raises(RemediationMatrixError, match="lacks source evidence types"):
         _validate(artifact)
 
 
@@ -392,6 +553,85 @@ def test_complete_release_supports_manual_but_never_autonomous(tmp_path) -> None
     assert projection["promotionAllowed"] is False
 
 
+def test_builder_derives_complete_release_coverage_telemetry_and_thresholds(
+    tmp_path,
+) -> None:
+    release, _ = _stage_release(tmp_path)
+    document = build_remediation_release_evidence(
+        release=release,
+        artifact_paths=[
+            tmp_path / f"{kind}.json"
+            for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
+        ],
+        generated_at=NOW,
+    )
+
+    assert document["issue"] == "MoonLadderStudios/MoonMind#3626"
+    assert document["matrixRows"] == list(REQUIRED_REMEDIATION_MATRIX_ROWS)
+    assert set(document["telemetry"]) == set(
+        REQUIRED_REMEDIATION_TELEMETRY_GROUPS
+    )
+    assert document["thresholds"]["withinLimits"] is True
+    assert all(document["thresholds"]["results"].values())
+    assert len(document["evidenceManifest"]) == len(
+        REQUIRED_REMEDIATION_EVIDENCE_KINDS
+    )
+
+
+def test_builder_rejects_incomplete_observed_matrix(tmp_path) -> None:
+    release, _ = _stage_release(tmp_path)
+    paths = [
+        tmp_path / f"{kind}.json"
+        for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
+        if kind != "reliabilitySecurityEvidence"
+    ]
+    with pytest.raises(RemediationEvidenceBuildError, match="missingKinds"):
+        build_remediation_release_evidence(
+            release=release,
+            artifact_paths=paths,
+            generated_at=NOW,
+        )
+
+
+def test_release_builder_cli_stages_nested_evidence_for_post_cleanup_validation(
+    tmp_path, monkeypatch
+) -> None:
+    release, _ = _stage_release(tmp_path)
+    release_config = tmp_path / "release-config.json"
+    release_config.write_text(json.dumps(release), encoding="utf-8")
+    output = tmp_path / "bundle" / "release.json"
+    script = (
+        Path(__file__).parents[3]
+        / "tools"
+        / "build_operator_remediation_release_evidence.py"
+    )
+    spec = importlib.util.spec_from_file_location("remediation_builder_cli", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    argv = [
+        str(script),
+        "--release",
+        str(release_config),
+        "--output",
+        str(output),
+    ]
+    for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS:
+        argv.extend(["--artifact", str(tmp_path / f"{kind}.json")])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert module.main() == 0
+    document = json.loads(output.read_text(encoding="utf-8"))
+    status = evaluate_remediation_release(
+        evidence=document,
+        evidence_document_path=output,
+        evidence_ref=str(output),
+        now=datetime.fromisoformat(document["generatedAt"]),
+    )
+    assert status.manual_mutation_supported is True
+    assert status.blockers == ("autonomous_rollout_gate_closed",)
+
+
 def test_stale_release_evidence_blocks_promotion(tmp_path) -> None:
     release, release_path = _stage_release(tmp_path)
     release["generatedAt"] = (NOW - timedelta(days=30)).isoformat()
@@ -446,6 +686,24 @@ def test_digest_mismatch_blocks_promotion(tmp_path) -> None:
     assert status.manual_diagnosis_supported is False
 
 
+def test_nested_source_record_digest_mismatch_blocks_promotion(tmp_path) -> None:
+    release, release_path = _stage_release(tmp_path)
+    first_artifact_path = tmp_path / release["evidenceManifest"][0]["ref"]
+    artifact = json.loads(first_artifact_path.read_text(encoding="utf-8"))
+    source_path = tmp_path / artifact["rows"][0]["evidenceManifest"][0]["ref"]
+    source_path.write_text('{"schemaVersion":"tampered/v1"}', encoding="utf-8")
+
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert status.manual_mutation_supported is False
+
+
 def test_split_evidence_kind_is_rejected(tmp_path) -> None:
     # Two artifacts share a kind but own disjoint rows -> split coverage.
     kind = "diagnosisEvidence"
@@ -459,6 +717,7 @@ def test_split_evidence_kind_is_rejected(tmp_path) -> None:
     artifacts[kind] = first
     release, release_path = _stage_release(tmp_path, artifacts=artifacts)
     # Stage the second same-kind artifact and append it to the manifest.
+    _stage_row_dependencies(tmp_path, second)
     content = _artifact_bytes(second)
     (tmp_path / "diagnosisEvidence-2.json").write_bytes(content)
     release["evidenceManifest"].append(

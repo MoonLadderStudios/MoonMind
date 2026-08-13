@@ -6,12 +6,14 @@
     "issueLinks": [
       "MoonLadderStudios/MoonMind#3480",
       "MoonLadderStudios/MoonMind#3471",
-      "MoonLadderStudios/MoonMind#3456"
+      "MoonLadderStudios/MoonMind#3456",
+      "MoonLadderStudios/MoonMind#3626"
     ]
   },
   "cases": [
     {"id": "product.normal-create-api", "layer": "product-provider", "critical": true},
     {"id": "product.cumulative-remediation", "layer": "product-provider", "critical": true},
+    {"id": "product.operator-remediation-release-matrix", "layer": "product-provider", "critical": true},
     {"id": "proxy.routes", "layer": "fake-and-stock", "critical": true},
     {"id": "session.first-message-crash-matrix", "layer": "fake", "critical": true},
     {"id": "events.durable-replay-sse", "layer": "api", "critical": true},

@@ -207,7 +207,10 @@ row records its owned `row`, `gate`, `observedDisposition`, `hostMode`,
 `actionCapability`/`verificationCapability`, a normal-product-path `uiJourney`,
 immutable `images`, `profileVersion`/`profileSha256`, `launchPolicyVersion`,
 `agentProfileVersion`, `remediationPolicyVersion`, `thresholds`, and per-channel
-`secretScan`. Mutating rows additionally record `actionDelivery.status` and,
+`secretScan`. Every row also carries complete durable `lineage` and an exact
+`evidenceManifest` containing each required semantic source-record type with its
+schema version, content type, generated time, byte bound, and SHA-256 digest.
+Mutating rows additionally record `actionDelivery.status` and,
 **as a separate field**, `repairVerification.outcome`: action delivery and
 target repair are never the same column (MoonLadderStudios/MoonMind#3622). The
 `uiJourney` must assert the browser-originated normal Create path
@@ -232,17 +235,46 @@ manifest ref, binds its bytes to the recorded digest, re-validates each artifact
 binds each evidence kind to exactly one artifact, and requires the full row
 cross-product before it reports `manualDiagnosisSupported` or
 `manualMutationSupported`. A missing, stale, malformed, secret-bearing, or
-over-threshold document fails closed.
+over-threshold document fails closed. Compose defaults that reference to
+`/workspace/cutover/remediation-release.json` on the existing read-only
+`MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR` mount.
+
+The repository-owned live controller is
+`tools/run_omnigent_live_conformance.py --mode remediation`. For every catalog
+row it asks the deployment adapter only to establish the target fixture and
+perform the named scenario; MoonMind owns the target-Detail → Remediate → visible
+Create → ordinary create request → remediation/target Detail replay browser
+journey and derives qualification from resolved observations. The controller
+requires immutable images and exact launch-policy, Agent Profile, and
+remediation-policy versions, re-resolves and hashes all semantic source records,
+performs retained-channel scans after cleanup, and emits one artifact per owning
+evidence kind. `tools/build_operator_remediation_release_evidence.py` stages the
+row artifacts and their nested source/scan records into a deployment-local
+bundle, re-validates complete catalog coverage, and derives telemetry,
+thresholds, manifest digests, and the combined release document; callers cannot
+supply passed rows or ownership.
+
+The derived telemetry groups separately expose creation, context build,
+evidence availability, approval outcomes, action outcomes by kind/risk,
+lock/cooldown/duplicate/escalation, branch lifecycle latency, verification
+outcomes, repeated failure/attempt exhaustion, egress outcomes, operator
+cancellation/takeover, and autonomous/manual origin. The release projection
+turns every blocker into an operator alert and reports whether manual promotion
+is allowed or rollback is required. Each row threshold uses the objective rule
+“at least one sample and every sample passed”; missing telemetry, missing or
+failed threshold samples, stale evidence, or any non-autonomous blocker forces
+manual promotion off and rollback on.
 
 **Autonomous rollout stays disabled.** A fully passing manual matrix never
 authorizes autonomous mutating remediation: `autonomousRolloutAuthorized` is
 always `false` and `autonomous_rollout_gate_closed` is a permanent blocker in
 this matrix version (acceptance criterion 9). No workflow is granted
-`admin_auto` by publishing evidence. The manual-diagnosis and manual-mutation
-rows, the production-shaped browser scenario execution, and the independently
-resolvable per-row evidence artifacts remain required work before this matrix
-qualifies operator remediation as supported; until then the classification above
-stays `partial; autonomous gate closed`.
+`admin_auto` by publishing evidence. The normal Create service rejects that
+authority mode from the server-owned release status, and both Workflow Detail
+and Create show it as release-gated. A production-shaped run must still publish
+fresh passing live artifacts before this matrix qualifies operator remediation
+as supported; until such evidence is mounted, the classification above stays
+`partial; autonomous gate closed`.
 
 ## Release thresholds and telemetry
 

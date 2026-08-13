@@ -25,6 +25,12 @@ from moonmind.omnigent.bridge_proxy import (
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.settings import is_omnigent_enabled
+from moonmind.omnigent.remediation_matrix import (
+    REMEDIATION_MATRIX_VERSION,
+    REMEDIATION_ROW_CATALOG,
+    REQUIRED_REMEDIATION_EVIDENCE_KINDS,
+    validate_remediation_evidence_artifact,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 pytestmark = [
@@ -316,6 +322,68 @@ async def test_live_cumulative_remediation_journey(bridge_store) -> None:
         "canary", "disableNewSelection", "rollback", "historicalReads",
         "workerVersionReplay",
     ))
+
+
+async def test_live_operator_remediation_release_matrix(bridge_store) -> None:
+    _require_mode("remediation")
+    evidence = _scenario_evidence(
+        "MOONMIND_OMNIGENT_REMEDIATION_MATRIX_EVIDENCE"
+    )
+    assert evidence.get("issue") == "MoonLadderStudios/MoonMind#3626"
+    assert evidence.get("matrixVersion") == REMEDIATION_MATRIX_VERSION
+    assert evidence.get("entrypoint") == "workflow-detail.remediate.normal-create"
+    rows = evidence.get("rows")
+    assert isinstance(rows, dict)
+    assert set(rows) == {row.row_id for row in REMEDIATION_ROW_CATALOG}
+    for row in rows.values():
+        browser = row.get("browserObservation")
+        assert isinstance(browser, dict)
+        assert browser.get("browserOriginated") is True
+        assert browser.get("importedPinnedRemediationDraft") is True
+        assert browser.get("validatedPolicyProfileFields") is True
+        assert browser.get("workflowDetailFollowThrough") is True
+        assert set(row.get("sourceRecordTypes") or ()) == {
+            "scenarioObservation",
+            "browserTrace",
+            "authoredRequest",
+            "immutableInputSnapshot",
+            "workflowLineage",
+            "contextEvidence",
+            "profilePolicyAuthority",
+            "egressAttestation",
+            "approvalDecision",
+            "actionResult",
+            "verificationResult",
+            "publicationOutcome",
+            "cleanupOutcome",
+            "temporalHistory",
+            "sideEffectAudit",
+            "retainedEvidenceScan",
+        }
+    artifact_refs = evidence.get("artifactRefs")
+    assert isinstance(artifact_refs, list)
+    assert len(artifact_refs) == len(REQUIRED_REMEDIATION_EVIDENCE_KINDS)
+    observed_rows: set[str] = set()
+    for ref in artifact_refs:
+        assert isinstance(ref, str) and ref.startswith("file://")
+        artifact_path = Path(ref.removeprefix("file://"))
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        first = payload["rows"][0]
+        kind, artifact_rows = validate_remediation_evidence_artifact(
+            payload,
+            expected_kind=payload["kind"],
+            images=first["images"],
+            architectures=evidence["architectures"],
+            profile_version=first["profileVersion"],
+            profile_sha256=first["profileSha256"],
+            policy_version=first["launchPolicyVersion"],
+            agent_profile_version=first["agentProfileVersion"],
+            remediation_policy_version=first["remediationPolicyVersion"],
+            evidence_document_path=artifact_path,
+        )
+        assert kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
+        observed_rows.update(artifact_rows)
+    assert observed_rows == {row.row_id for row in REMEDIATION_ROW_CATALOG}
 
 
 async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:

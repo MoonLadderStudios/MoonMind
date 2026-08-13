@@ -627,6 +627,10 @@ interface OmnigentCodexCatalogReadiness {
   }>;
   gateReasons: OmnigentCatalogGateReason[];
   supportGateReasons: OmnigentCatalogGateReason[];
+  remediationRelease: {
+    autonomousRolloutAuthorized: boolean;
+    blockers: string[];
+  };
 }
 
 interface ProviderModelEffortTier {
@@ -11781,9 +11785,24 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 >
                   <option value="observe_only">Observe only</option>
                   <option value="approval_gated">Approval gated</option>
-                  <option value="admin_auto">Administrator automatic</option>
+                  <option
+                    value="admin_auto"
+                    disabled={
+                      omnigentCatalogQuery.data?.remediationRelease
+                        ?.autonomousRolloutAuthorized !== true
+                    }
+                  >
+                    Administrator automatic (release gated)
+                  </option>
                 </select>
               </label>
+              {omnigentCatalogQuery.data?.remediationRelease
+                ?.autonomousRolloutAuthorized !== true ? (
+                  <p className="small" role="status">
+                    Autonomous mutation remains disabled until the operator
+                    remediation release matrix passes.
+                  </p>
+                ) : null}
               <label>
                 Action policy
                 <select

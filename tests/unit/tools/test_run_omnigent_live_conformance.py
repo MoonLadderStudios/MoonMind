@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _module():
     path = Path(__file__).parents[3] / "tools/run_omnigent_live_conformance.py"
@@ -298,6 +300,186 @@ def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypat
         raise AssertionError("incomplete browser acceptance evidence was accepted")
 
 
+def test_remediation_derives_every_catalog_row_from_observed_records(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={
+            "MOONMIND_OMNIGENT_LAUNCH_POLICY_VERSION": "launch-policy/v1",
+            "MOONMIND_OMNIGENT_AGENT_PROFILE_VERSION": "agent-profile/v1",
+            "MOONMIND_OMNIGENT_REMEDIATION_POLICY_VERSION": "remediation-policy/v1",
+        },
+    )
+    images = {
+        "server": "example/server@sha256:" + "1" * 64,
+        "host": "example/host@sha256:" + "2" * 64,
+    }
+    row_by_id = {row.row_id: row for row in module.REMEDIATION_ROW_CATALOG}
+
+    def action(scenario, name, **inputs):
+        if scenario == "browser-setup":
+            return {
+                "targetWorkflowId": f"target-{name}",
+                "targetRunId": f"run-{name}",
+                "evidenceRefs": [f"artifact://setup/{name}"],
+            }
+        row = row_by_id[name]
+        delivery = {
+            "status": "denied" if row.expected_outcome == "denied" else "delivered"
+        }
+        repair = {
+            "outcome": (
+                "approval_required"
+                if row.expected_outcome == "denied"
+                else "verified_resolved"
+            )
+        }
+        facts = {
+            "schemaVersion": "moonmind.operator-remediation-scenario-observation/v1",
+            "generatedAt": "2026-08-13T00:00:00+00:00",
+            "row": name,
+            "observed": True,
+            "observedDisposition": row.expected_outcome,
+            "hostMode": row.host_modes[0],
+            "architecture": row.architectures[0],
+            "targetProvenance": row.target_provenance[0],
+            "remediationProvenance": row.remediation_provenance[0],
+            "remainingLiveResources": 0,
+            "timings": {
+                "startedAt": "2026-08-12T23:59:59+00:00",
+                "completedAt": "2026-08-13T00:00:00+00:00",
+                "durationMs": 1000,
+                "phaseLatenciesMs": {"scenario": 1000},
+            },
+            "thresholdSamples": {
+                threshold: {"passed": 1, "total": 1}
+                for threshold in row.thresholds
+            },
+            "observations": {
+                observation: True for observation in row.required_observations
+            },
+            "lineage": {
+                key: f"artifact://{name}/{key}"
+                for key in module.REQUIRED_REMEDIATION_LINEAGE_FIELDS
+            },
+            "actionDelivery": delivery,
+            "repairVerification": repair,
+        }
+        facts["lineage"].update(
+            {
+                "targetWorkflowId": f"target-{name}",
+                "targetRunId": f"run-{name}",
+                "remediationWorkflowId": f"remediation-{name}",
+            }
+        )
+        records = [
+            {
+                "type": record_type,
+                "ref": f"artifact://{name}/{record_type}",
+                "sha256": "a" * 64,
+                "_resolved": (
+                    facts
+                    if record_type == "scenarioObservation"
+                    else {
+                        "schemaVersion": f"moonmind.{record_type}/v1",
+                        "generatedAt": "2026-08-13T00:00:00+00:00",
+                    }
+                ),
+                "_sizeBytes": 2,
+            }
+            for record_type in module.REMEDIATION_RECORD_TYPES
+        ]
+        return {
+            "_sourceRecords": records,
+            "evidenceRefs": [f"artifact://row/{name}"],
+        }
+
+    def browser(row_id, **kwargs):
+        row = row_by_id[row_id]
+        denied = row_id == "remediation.autonomous.rollout-gate-closed"
+        return {
+            "schemaVersion": "moonmind.operator-remediation-browser-observation/v1",
+            "row": row_id,
+            "selected": {
+                "hostMode": (
+                    "static_compose"
+                    if row.host_modes[0] == "static"
+                    else "on_demand_docker"
+                )
+            },
+            "workflowId": None if denied else f"remediation-{row_id}",
+            "targetWorkflowId": f"target-{row_id}",
+            "targetRunId": f"run-{row_id}",
+            **{
+                assertion: assertion != "normalCreateRequest" or not denied
+                for assertion in module.REQUIRED_UI_JOURNEY_ASSERTIONS
+            },
+            **{
+                marker: False
+                for marker in module.PROHIBITED_UI_JOURNEY_MARKERS
+            },
+            "admissionRejected": denied,
+            "admissionReason": "autonomous_rollout_gate" if denied else None,
+        }
+
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "browser_observation", browser)
+    monkeypatch.setattr(
+        runner,
+        "scan",
+        lambda **kwargs: {
+            channel: {
+                "status": "passed",
+                "evidenceRef": f"artifact://scan/{channel}",
+                "sha256": "b" * 64,
+                "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
+                "contentType": "application/json",
+                "sizeBytes": 2,
+                "generatedAt": "2026-08-13T00:00:00+00:00",
+            }
+            for channel in module.REQUIRED_REMEDIATION_RETAINED_CHANNELS
+        },
+    )
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+
+    runner.remediation(images)
+
+    summary = json.loads((tmp_path / "remediation-evidence.json").read_text())
+    assert summary["issue"] == "MoonLadderStudios/MoonMind#3626"
+    assert set(summary["rows"]) == {
+        row.row_id for row in module.REMEDIATION_ROW_CATALOG
+    }
+    assert len(summary["artifactRefs"]) == len(
+        module.REQUIRED_REMEDIATION_EVIDENCE_KINDS
+    )
+
+
+def test_remediation_rejects_observation_for_a_different_browser_workflow() -> None:
+    module = _module()
+
+    with pytest.raises(
+        module.ConformanceContractError,
+        match="browser-created remediation workflow",
+    ):
+        module._validate_remediation_browser_lineage(
+            row_id="remediation.branch.corrected-instruction-repair",
+            browser_observation={
+                "workflowId": "remediation-from-browser",
+                "targetWorkflowId": "target-1",
+                "targetRunId": "run-1",
+            },
+            lineage={
+                "targetWorkflowId": "target-1",
+                "targetRunId": "run-1",
+                "remediationWorkflowId": "unrelated-remediation",
+            },
+            target_workflow_id="target-1",
+            target_run_id="run-1",
+        )
+
+
 def test_cumulative_journey_requires_destroyed_source_and_distinct_attempts(
     tmp_path, monkeypatch
 ):
@@ -376,6 +558,20 @@ def test_scan_rejects_secret_like_live_evidence(tmp_path):
         assert "secret-like material" in str(exc)
     else:
         raise AssertionError("secret-like evidence was accepted")
+
+
+def test_scan_rejects_retained_raw_authority(tmp_path):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    log = tmp_path / "provider.log"
+    log.write_text('{"dockerSocket":"/var/run/docker.sock"}')
+    runner.logs.append(log)
+    try:
+        runner.scan()
+    except module.ConformanceContractError as exc:
+        assert "prohibited raw authority" in str(exc)
+    else:
+        raise AssertionError("prohibited raw authority was accepted")
 
 
 def test_each_mode_selects_a_distinct_provider_node():
