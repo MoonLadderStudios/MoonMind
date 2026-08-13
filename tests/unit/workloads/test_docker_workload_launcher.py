@@ -1563,6 +1563,8 @@ async def test_launcher_holds_helper_concurrency_lease_until_stop(
             return _Process(returncode=0, stdout=b"PONG\n")
         if args[1] == "logs":
             return _Process(returncode=0, stdout=b"service log\n")
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"")
         return _Process(returncode=0)
 
     monkeypatch.setattr(
@@ -1770,6 +1772,8 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
             return _Process(returncode=0, stdout=b"PONG\n")
         if args[1] == "logs":
             return _Process(returncode=0, stdout=b"helper stdout\n", stderr=b"warn\n")
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"")
         return _Process(returncode=0)
 
     monkeypatch.setattr(
@@ -1805,6 +1809,49 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
     assert stop_result.metadata["helper"]["teardown"]["reason"] == (
         "bounded_window_complete"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("network_policy", ["none", "docker_proxy"])
+async def test_helper_cleanup_failure_holds_lease_for_every_network_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    network_policy: str,
+) -> None:
+    cleanup_started = False
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal cleanup_started
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        if args[1] == "logs":
+            cleanup_started = True
+            return _Process(returncode=0, stdout=b"service log\n")
+        if args[1] == "ps" and cleanup_started:
+            return _Process(
+                returncode=0,
+                stdout=b"mm-helper-task-helper-step-service-1\n",
+            )
+        return _Process(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    validated = _validated_helper_request(
+        tmp_path,
+        profiles=[_helper_profile_payload(network_policy=network_policy)],
+    )
+    await launcher.start_helper(validated)
+
+    with pytest.raises(DockerWorkloadLauncherError, match="requires reconciliation"):
+        await launcher.stop_helper(validated)
+
+    assert limiter._active_total == 1
 
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_bounded_helpers(
@@ -1997,7 +2044,7 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
             ).encode()
         )
     if subcommand == "exec":
-        if args[3:5] == ["tail", "-n"]:
+        if args[3] == "cat":
             return _Process(stdout=b"")
         if args[2] != DEFAULT_EGRESS_PROFILE.gateway_ref:
             return _Process(stdout=b"PONG\n")

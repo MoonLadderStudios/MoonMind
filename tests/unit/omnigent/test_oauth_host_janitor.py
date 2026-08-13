@@ -26,6 +26,9 @@ class _Repository:
             )
         )
 
+    async def get_binding_for_profile(self, _profile_id):
+        return None
+
     async def get_host_lease(self, lease_id):
         return self.lease if lease_id == self.lease.lease_id else None
 
@@ -55,6 +58,8 @@ class _Runtime:
         self.removed: list[str] = []
         self.order = order if order is not None else []
         self.stop_kwargs: list[dict] = []
+        self.static_stops = 0
+        self.managed_containers: list[str] = []
 
     async def container_exists(self, _name):
         return True
@@ -71,7 +76,10 @@ class _Runtime:
         return {}
 
     async def list_managed_containers(self):
-        return []
+        return list(self.managed_containers)
+
+    async def stop_static_host(self, **_kwargs):
+        self.static_stops += 1
 
     async def remove_container(self, name):
         self.removed.append(name)
@@ -448,3 +456,129 @@ async def test_janitor_reconciles_each_durable_embedded_abandonment_class(
 
     assert result["actions"][-1]["action"] == action
     assert repository.order == ["host_stopped", "lease_released"]
+
+
+@pytest.mark.asyncio
+async def test_pre_upgrade_restricted_lease_uses_bounded_cleanup_cutover() -> None:
+    lease = _lease()
+    lease.effective_launch_snapshot = {"enforcedEgress": True}
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return None
+
+        async def record_terminal_cleanup(self, **_kwargs):
+            return None
+
+    await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=RunStore(),
+        lease_client=lease_client,
+    ).run_action(
+        action_kind="host.stop",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="ready",
+        request_id="legacy-cutover",
+    )
+
+    assert runtime.stop_kwargs[0].get("effective_launch") is None
+    assert repository.order == [
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_current_restricted_lease_without_cleanup_authority_fails_closed() -> None:
+    lease = _lease()
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime()
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return None
+
+        async def record_terminal_cleanup(self, **_kwargs):
+            return None
+
+    with pytest.raises(ValueError, match="cleanup authority is unavailable"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            run_store=RunStore(),
+            lease_client=_LeaseClient(),
+        ).run_action(
+            action_kind="host.stop",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="current-missing-authority",
+        )
+
+    assert runtime.stopped == 0
+    assert repository.stopped == []
+
+
+@pytest.mark.asyncio
+async def test_forced_profile_drain_stops_idle_static_host_without_lease() -> None:
+    repository = _Repository(_lease())
+
+    async def no_leases():
+        return []
+
+    binding = SimpleNamespace(
+        binding_ref="binding-static",
+        host_launch_profile_ref=None,
+    )
+    repository.list_active_host_leases = no_leases
+
+    async def get_binding(_profile_id):
+        return binding
+
+    repository.get_binding_for_profile = get_binding
+    runtime = _Runtime()
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+    ).run(profile_id="profile-1", force=True)
+
+    assert runtime.static_stops == 1
+    assert result["actions"] == [
+        {"hostBindingRef": "binding-static", "action": "static_host_stopped"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_janitor_removes_label_owned_orphan_instead_of_repeating_report() -> None:
+    repository = _Repository(_lease())
+    runtime = _Runtime()
+    runtime.managed_containers = ["orphan-host"]
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+    ).run()
+
+    assert runtime.removed == ["orphan-host"]
+    assert result["actions"] == [
+        {
+            "containerName": "orphan-host",
+            "action": "orphan_container_removed",
+            "providerLeaseReleased": False,
+        }
+    ]

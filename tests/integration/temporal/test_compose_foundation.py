@@ -691,7 +691,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     init_service = compose["services"]["omnigent-host-claude-init"]
     assert init_service["network_mode"] == "none"
     assert init_service["cap_drop"] == ["ALL"]
-    assert init_service["cap_add"] == ["CHOWN"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
     assert init_service["security_opt"] == ["no-new-privileges:true"]
     assert init_service["read_only"] is True
     assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
@@ -808,10 +808,12 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert init_service["user"] == "0:0"
     assert init_service["network_mode"] == "none"
     assert init_service["cap_drop"] == ["ALL"]
-    assert init_service["cap_add"] == ["CHOWN"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
     assert init_service["security_opt"] == ["no-new-privileges:true"]
     assert init_service["read_only"] is True
     assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert "omnigent-host-artifacts:/artifacts" in init_service["volumes"]
+    assert "omnigent-host-cache:/home/app/.cache" in init_service["volumes"]
     assert init_service["depends_on"] == {
         "codex-auth-init": {"condition": "service_completed_successfully"}
     }

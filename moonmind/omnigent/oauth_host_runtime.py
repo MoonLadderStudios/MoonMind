@@ -304,6 +304,55 @@ class OmnigentOAuthHostRuntime:
         # reconciliation requirement. Never carries credentials or raw paths.
         self._last_workspace_denial_evidence: dict[str, Any] = {}
 
+    @staticmethod
+    def _deployment_compose_command() -> tuple[str, ...]:
+        """Resolve Compose through the deployment-owned checkout and project."""
+
+        local_root = Path(
+            os.getenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "") or Path.cwd()
+        ).expanduser()
+        host_root_text = os.getenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", "").strip()
+        compose_text = os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
+        if compose_text:
+            configured = Path(compose_text).expanduser()
+            if configured.is_absolute() and not configured.exists():
+                relative: Path | None = None
+                if host_root_text:
+                    try:
+                        relative = configured.relative_to(
+                            Path(host_root_text).expanduser()
+                        )
+                    except ValueError:
+                        relative = None
+                compose_path = local_root / (relative or configured.name)
+            elif configured.is_absolute():
+                compose_path = configured
+            else:
+                compose_path = local_root / configured
+        else:
+            compose_path = local_root / "docker-compose.yaml"
+        project_name = os.getenv(
+            "MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind"
+        ).strip() or "moonmind"
+        if not _SAFE_NETWORK.fullmatch(project_name):
+            raise OmnigentOAuthHostError(
+                "deployment Compose project identity is unsafe",
+                code="OMNIGENT_DEPLOYMENT_COMPOSE_UNAVAILABLE",
+            )
+        if not compose_path.is_file():
+            raise OmnigentOAuthHostError(
+                "deployment Compose file is unavailable",
+                code="OMNIGENT_DEPLOYMENT_COMPOSE_UNAVAILABLE",
+            )
+        return (
+            "docker",
+            "compose",
+            "--project-name",
+            project_name,
+            "-f",
+            str(compose_path.resolve()),
+        )
+
     async def prepare_host(
         self,
         *,
@@ -392,6 +441,7 @@ class OmnigentOAuthHostRuntime:
             daemon_root=daemon_workspace_root,
         )
         launched_container_name: str | None = None
+        static_compose_env: Mapping[str, str] | None = None
         if binding.host_launch_profile_ref:
             container_job_environment = self._container_job_environment(
                 binding=binding,
@@ -426,10 +476,8 @@ class OmnigentOAuthHostRuntime:
                 effective_launch=launch,
                 egress_attestation=egress_attestation,
             )
-            await self._exec_check(container_name)
-            await self._exec_tools_check(container_name)
         else:
-            await self._compose_static_check(
+            static_compose_env = await self._compose_static_check(
                 binding=binding,
                 workspace_source=daemon_workspace_source,
                 skill_projection=daemon_skill_projection,
@@ -437,97 +485,124 @@ class OmnigentOAuthHostRuntime:
                 egress_attestation=egress_attestation,
             )
 
-        # Record the actual Docker container attached to the attested egress
-        # network, not the logical/UUID registered host id. A logical id proves
-        # nothing about the running workload's network attachment, so the
-        # authority chain could otherwise claim an attachment that was never
-        # inspected.
-        attachment_identity = await self._resolve_workload_attachment_identity(
-            binding=binding,
-            host_lease=host_lease,
-            container_name=launched_container_name,
-        )
-        egress_evidence = await self._attest_launched_workload_egress(
-            attestation=egress_attestation,
-            attachment_identity=attachment_identity,
-            expected_image_ref=str(launch["hostImageRef"]),
-        )
-        egress_evidence["attachmentRef"] = f"container:{attachment_identity}"
-        egress_evidence.update(
-            {
-                "executionProfileRef": launch.get("executionProfileRef"),
-                "launchPolicyRef": launch.get("launchPolicyRef"),
-                "policyAuthority": launch.get("policyAuthority"),
-                "serverImageRef": launch.get("serverImageRef"),
-                "hostImageRef": launch.get("hostImageRef"),
-                "releasedArchitectures": list(launch.get("architectures") or ()),
-                "hostMode": launch.get("hostMode"),
-                "runtimeProvenance": "omnigent",
-                **server_image_evidence,
-            }
-        )
-        # Attachment evidence is an authority gate: do not contact the host,
-        # inspect provider state, or run mounted-tool preflight until the exact
-        # production-created container is proven to have only the approved
-        # network attachment.
-        host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
-        host_id = str(host.get("id") or host.get("host_id") or host.get("hostId") or "")
-        if adapter["harness"] not in self._ready_host_harnesses(host):
-            raise OmnigentOAuthHostError(
-                f"registered host does not advertise {adapter['harness']}",
-                code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
-            )
-        mounted_tool_evidence = await self._preflight_mounted_tools(
-            binding=binding,
-            host_lease=host_lease,
-            required_capabilities=required_capabilities,
-            repository=target_repository,
-            mutation_required=github_mutation_required,
-        )
-        result = {
-            "status": "ready",
-            "providerProfileId": binding.provider_profile_id,
-            "runtimeId": binding.credential_mount_ref.auth_volume_ref.runtime_id,
-            "providerId": adapter["provider"],
-            "credentialGeneration": host_lease.credential_generation,
-            "mountPath": adapter["home"],
-            "runtimeUid": 1000,
-            "runtimeGid": 1000,
-            "loginStatus": "authenticated",
-            "hostId": host_id,
-            "harness": adapter["harness"],
-            "competingCredentialsPresent": False,
-            "mountedTools": mounted_tool_evidence,
-            "egressAttestation": egress_evidence,
-            "workspacePath": (
-                "/workspaces/run"
-                if binding.host_launch_profile_ref
-                else "/workspaces/run"
+        launch_ref: str | None = None
+        attachment_identity = launched_container_name or ""
+        egress_evidence: dict[str, Any] = {
+            **egress_attestation.model_dump(by_alias=True, mode="json"),
+            **(
+                {
+                    "attachmentIdentity": attachment_identity,
+                    "attachmentRef": f"container:{attachment_identity}",
+                }
+                if attachment_identity
+                else {}
             ),
+            "executionProfileRef": launch.get("executionProfileRef"),
+            "launchPolicyRef": launch.get("launchPolicyRef"),
+            "policyAuthority": launch.get("policyAuthority"),
+            "serverImageRef": launch.get("serverImageRef"),
+            "hostImageRef": launch.get("hostImageRef"),
+            "releasedArchitectures": list(launch.get("architectures") or ()),
+            "hostMode": launch.get("hostMode"),
+            "runtimeProvenance": "omnigent",
+            **server_image_evidence,
         }
-        validated = validate_preflight_result(
-            result=result,
-            binding=binding,
-            host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
-        )
-        validated["workspacePath"] = result["workspacePath"]
-        validated["activeSkillsPath"] = str(skill_projection)
-        validated["mountedTools"] = mounted_tool_evidence
-        validated["egressAttestation"] = result["egressAttestation"]
-        validated["workspaceResolution"] = dict(self._last_workspace_evidence)
-        if evidence_request is not None and artifact_gateway is not None:
-            launch_ref: str | None = None
-            try:
-                existing_authority = None
-                if cleanup_authority_store is not None and hasattr(
-                    cleanup_authority_store, "get_egress_cleanup_authority"
-                ):
-                    existing_authority = (
-                        await cleanup_authority_store.get_egress_cleanup_authority(
-                            host_lease_ref=host_lease.lease_id
-                        )
+
+        def prepared_host_evidence() -> dict[str, Any]:
+            return {
+                "status": "launched",
+                "providerProfileId": binding.provider_profile_id,
+                "runtimeId": binding.credential_mount_ref.auth_volume_ref.runtime_id,
+                "credentialGeneration": host_lease.credential_generation,
+                "workspacePath": "/workspaces/run",
+                "egressAttestation": dict(egress_evidence),
+                "egressEvidenceRef": launch_ref,
+            }
+
+        try:
+            # Resolve the production-created container immediately. From this
+            # point onward every fallible check has a bounded cleanup handoff.
+            attachment_identity = await self._resolve_workload_attachment_identity(
+                binding=binding,
+                host_lease=host_lease,
+                container_name=launched_container_name,
+            )
+            egress_evidence.update(
+                {
+                    "attachmentIdentity": attachment_identity,
+                    "attachmentRef": f"container:{attachment_identity}",
+                }
+            )
+            existing_authority = None
+            if cleanup_authority_store is not None and hasattr(
+                cleanup_authority_store, "get_egress_cleanup_authority"
+            ):
+                existing_authority = (
+                    await cleanup_authority_store.get_egress_cleanup_authority(
+                        host_lease_ref=host_lease.lease_id
                     )
+                )
+            if evidence_request is not None and artifact_gateway is not None:
                 if isinstance(existing_authority, Mapping):
+                    stored_launch = existing_authority.get("effectiveLaunch")
+                    stored_evidence = existing_authority.get("egressEvidence")
+                    if (
+                        not isinstance(stored_launch, Mapping)
+                        or stored_launch.get("snapshotRef") != launch.get("snapshotRef")
+                        or not isinstance(stored_evidence, Mapping)
+                        or stored_evidence.get("attachmentIdentity")
+                        != attachment_identity
+                    ):
+                        raise OmnigentOAuthHostError(
+                            "durable egress cleanup authority does not match the launch",
+                            code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+                        )
+                    launch_ref = str(
+                        existing_authority.get("launchEvidenceRef") or ""
+                    ).strip() or None
+                else:
+                    provisional_launch = self._host_egress_evidence_payload(
+                        binding=binding,
+                        host_lease=host_lease,
+                        launch=launch,
+                        egress_evidence=egress_evidence,
+                        evidence_request=evidence_request,
+                        state="launched",
+                        cleanup_result="pending",
+                        reconciliation_result="not_required",
+                    )
+                    launch_ref = await self._publish_host_egress_evidence(
+                        artifact_gateway=artifact_gateway,
+                        evidence_request=evidence_request,
+                        name=(
+                            f"omnigent-{host_lease.lease_id}"
+                            "-egress-launch-pending.json"
+                        ),
+                        payload=provisional_launch,
+                    )
+                    if cleanup_authority_store is not None:
+                        await cleanup_authority_store.bind_egress_cleanup_authority(
+                            request=evidence_request,
+                            host_lease_ref=host_lease.lease_id,
+                            egress_evidence=egress_evidence,
+                            launch_evidence_ref=launch_ref,
+                            phase="launched",
+                        )
+
+            observed_egress = await self._attest_launched_workload_egress(
+                attestation=egress_attestation,
+                attachment_identity=attachment_identity,
+                expected_image_ref=str(launch["hostImageRef"]),
+            )
+            observed_egress["attachmentRef"] = f"container:{attachment_identity}"
+            egress_evidence.update(observed_egress)
+            if evidence_request is not None and artifact_gateway is not None:
+                existing_phase = (
+                    str(existing_authority.get("phase") or "attested")
+                    if isinstance(existing_authority, Mapping)
+                    else ""
+                )
+                if existing_phase == "attested":
                     launch_ref = self._validate_reused_cleanup_authority(
                         authority=existing_authority,
                         launch=launch,
@@ -556,31 +631,80 @@ class OmnigentOAuthHostRuntime:
                             host_lease_ref=host_lease.lease_id,
                             egress_evidence=egress_evidence,
                             launch_evidence_ref=launch_ref,
+                            phase="attested",
                         )
-                validated["egressEvidenceRef"] = launch_ref
-            except (Exception, asyncio.CancelledError) as exc:
-                # Attachment and immutable egress evidence already exist. Do not
-                # collapse this into an empty preflight failure: the coordinator
-                # needs the exact runtime-observed values to publish terminal
-                # cleanup evidence or retain the leases for its janitor.
-                prepared_host_evidence = {
-                    **dict(validated),
-                    "egressAttestation": dict(egress_evidence),
-                    "egressEvidenceRef": launch_ref,
-                }
-                if isinstance(exc, asyncio.CancelledError):
-                    exc.prepared_host_evidence = prepared_host_evidence  # type: ignore[attr-defined]
-                    raise
-                if isinstance(exc, OmnigentOAuthHostError):
-                    exc.prepared_host_evidence = prepared_host_evidence
-                    raise
+
+            # Only after full cleanup authority is durable may host login,
+            # projection, registration, harness, or mounted-tool checks run.
+            if binding.host_launch_profile_ref:
+                await self._exec_check(attachment_identity)
+                await self._exec_tools_check(attachment_identity)
+            else:
+                await self._compose_static_exec_check(
+                    binding=binding,
+                    env=static_compose_env,
+                )
+            host = await self._resolve_exact_host(
+                binding=binding, host_lease=host_lease
+            )
+            host_id = str(
+                host.get("id") or host.get("host_id") or host.get("hostId") or ""
+            )
+            if adapter["harness"] not in self._ready_host_harnesses(host):
                 raise OmnigentOAuthHostError(
-                    "Omnigent host launch evidence could not be durably bound",
-                    code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_UNBOUND",
+                    f"registered host does not advertise {adapter['harness']}",
+                    code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
+                )
+            mounted_tool_evidence = await self._preflight_mounted_tools(
+                binding=binding,
+                host_lease=host_lease,
+                required_capabilities=required_capabilities,
+                repository=target_repository,
+                mutation_required=github_mutation_required,
+            )
+            result = {
+                "status": "ready",
+                "providerProfileId": binding.provider_profile_id,
+                "runtimeId": binding.credential_mount_ref.auth_volume_ref.runtime_id,
+                "providerId": adapter["provider"],
+                "credentialGeneration": host_lease.credential_generation,
+                "mountPath": adapter["home"],
+                "runtimeUid": 1000,
+                "runtimeGid": 1000,
+                "loginStatus": "authenticated",
+                "hostId": host_id,
+                "harness": adapter["harness"],
+                "competingCredentialsPresent": False,
+                "mountedTools": mounted_tool_evidence,
+                "egressAttestation": egress_evidence,
+                "workspacePath": "/workspaces/run",
+            }
+            validated = validate_preflight_result(
+                result=result,
+                binding=binding,
+                host_lease=host_lease.model_copy(
+                    update={"omnigent_host_id": host_id}
+                ),
+            )
+            validated["workspacePath"] = result["workspacePath"]
+            validated["activeSkillsPath"] = str(skill_projection)
+            validated["mountedTools"] = mounted_tool_evidence
+            validated["egressAttestation"] = result["egressAttestation"]
+            validated["workspaceResolution"] = dict(self._last_workspace_evidence)
+            validated["egressEvidenceRef"] = launch_ref
+            return validated
+        except (Exception, asyncio.CancelledError) as exc:
+            evidence = prepared_host_evidence()
+            try:
+                exc.prepared_host_evidence = evidence  # type: ignore[attr-defined]
+            except (AttributeError, TypeError):
+                raise OmnigentOAuthHostError(
+                    "Omnigent post-launch preflight failed with cleanup authority",
+                    code="OMNIGENT_POST_LAUNCH_PREFLIGHT_FAILED",
                     egress_evidence_ref=launch_ref,
-                    prepared_host_evidence=prepared_host_evidence,
+                    prepared_host_evidence=evidence,
                 ) from exc
-        return validated
+            raise
 
     @staticmethod
     async def _verified_no_commit_publication(
@@ -885,10 +1009,7 @@ class OmnigentOAuthHostRuntime:
         """Bind the live Omnigent server container to its immutable image."""
 
         service = await self._run(
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.yaml",
+            *self._deployment_compose_command(),
             "ps",
             "-q",
             "omnigent",
@@ -1239,10 +1360,7 @@ class OmnigentOAuthHostRuntime:
         else:
             adapter = self._runtime_adapter(binding)
             code, out, _err = await self._run(
-                "docker",
-                "compose",
-                "-f",
-                "docker-compose.yaml",
+                *self._deployment_compose_command(),
                 "--profile",
                 str(adapter["compose_profile"]),
                 "ps",
@@ -1786,17 +1904,19 @@ class OmnigentOAuthHostRuntime:
             if binding is not None
             else _RUNTIME_ADAPTERS["codex_cli"]
         )
-        await self._run(
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.yaml",
+        result = await self._run(
+            *self._deployment_compose_command(),
             "--profile",
             str(adapter["compose_profile"]),
             "stop",
             str(adapter["compose_service"]),
             check=False,
         )
+        if result[0] != 0:
+            raise OmnigentOAuthHostError(
+                "static Omnigent host could not be stopped",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+            )
 
     async def container_exists(self, container_name: str) -> bool:
         result = await self._run(
@@ -1870,6 +1990,21 @@ class OmnigentOAuthHostRuntime:
         await self._run(
             "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
         )
+        remaining_container = await self._container_present(container_name)
+        remaining_volumes = [
+            name
+            for name in (
+                f"{container_name}-state",
+                f"{container_name}-artifacts",
+                f"{container_name}-cache",
+            )
+            if await self._volume_present(name)
+        ]
+        if remaining_container or remaining_volumes:
+            raise OmnigentOAuthHostError(
+                "orphaned Omnigent host cleanup could not be reconciled",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+            )
 
     async def _launch_on_demand(
         self,
@@ -1929,6 +2064,8 @@ class OmnigentOAuthHostRuntime:
             "ALL",
             "--cap-add",
             "CHOWN",
+            "--cap-add",
+            "FOWNER",
             "--security-opt",
             "no-new-privileges",
             "--read-only",
@@ -3189,7 +3326,7 @@ class OmnigentOAuthHostRuntime:
         skill_projection: Path | None = None,
         effective_launch: Mapping[str, Any] | None = None,
         egress_attestation: EgressAttestation | None = None,
-    ) -> None:
+    ) -> dict[str, str]:
         child_env = dict(os.environ)
         child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
         if binding is not None:
@@ -3253,10 +3390,7 @@ class OmnigentOAuthHostRuntime:
             else _RUNTIME_ADAPTERS["codex_cli"]
         )
         await self._run(
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.yaml",
+            *self._deployment_compose_command(),
             "--profile",
             str(adapter["compose_profile"]),
             "up",
@@ -3264,18 +3398,28 @@ class OmnigentOAuthHostRuntime:
             str(adapter["compose_service"]),
             env=child_env,
         )
+        return child_env
+
+    async def _compose_static_exec_check(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        adapter = (
+            self._runtime_adapter(binding)
+            if binding is not None
+            else _RUNTIME_ADAPTERS["codex_cli"]
+        )
         await self._run(
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.yaml",
+            *self._deployment_compose_command(),
             "--profile",
             str(adapter["compose_profile"]),
             "exec",
             "-T",
             str(adapter["compose_service"]),
             "/opt/moonmind/check-runner-projections.sh",
-            env=child_env,
+            env=dict(env or os.environ),
         )
 
     async def _exec_check(self, container_name: str) -> None:

@@ -184,7 +184,7 @@ async def test_runtime_evidence_scopes_denials_and_counts_full(tmp_path) -> None
             return 0, json.dumps(
                 {EGRESS_NETWORK_REF: {"IPAddress": "172.31.0.9"}}
             ).encode(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, access_log, b""
         raise AssertionError(args)
 
@@ -262,7 +262,7 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
                 EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
                 + "  /etc/squid/squid.conf\n"
             ).encode(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, b"", b""
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
             return 1, b"", b"no such container"

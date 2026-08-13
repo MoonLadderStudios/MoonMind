@@ -321,7 +321,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                 EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
                 + "  /etc/squid/squid.conf\n"
             ).encode(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, b"", b""
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             preliminary = json.loads(published[0][1])
@@ -420,7 +420,7 @@ async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
             return 0, _sole_network_inspect(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, (
                 b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
                 b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
@@ -486,12 +486,19 @@ async def test_runtime_egress_evidence_scopes_and_counts_beyond_cap(tmp_path) ->
         f"blocked{index}.invalid:443/ - HIER_NONE/- text/html"
         for index in range(25)
     ]
-    access_log = ("\n".join(prior_lines + window_lines) + "\n").encode()
+    later_unrelated_lines = [
+        f"{in_window + 30} 2 172.31.0.99 TCP_DENIED/403 0 CONNECT "
+        f"noise{index}.invalid:443/ - HIER_NONE/- text/html"
+        for index in range(600)
+    ]
+    access_log = (
+        "\n".join(prior_lines + window_lines + later_unrelated_lines) + "\n"
+    ).encode()
 
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
             return 0, _sole_network_inspect(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, access_log, b""
         raise AssertionError(args)
 

@@ -1136,11 +1136,26 @@ class DockerWorkloadLauncher:
     ) -> dict[str, object]:
         if (
             request.profile is None
-            or not request.profile.cleanup.remove_container_on_exit
         ):
+            raise DockerWorkloadLauncherError(
+                "helper cleanup requires a resolved runner profile"
+            )
+        if not request.profile.cleanup.remove_container_on_exit:
+            stdout, _stderr, code = await self._janitor._run_control(
+                (
+                    "inspect",
+                    "--format",
+                    "{{.State.Running}}",
+                    request.container_name,
+                )
+            )
+            if code == 0 and stdout.strip().lower() == "true":
+                raise DockerWorkloadLauncherError(
+                    "retained helper cleanup could not be verified"
+                )
             return {
                 "cleanupResult": "retained_by_policy",
-                "reconciliationResult": "not_required",
+                "reconciliationResult": "succeeded",
             }
         stdout, _stderr, code = await self._janitor._run_control(
             (
@@ -1154,7 +1169,7 @@ class DockerWorkloadLauncher:
         )
         if code != 0 or stdout.strip():
             raise DockerWorkloadLauncherError(
-                "restricted-egress workload cleanup could not be verified"
+                "helper workload cleanup could not be verified"
             )
         return {
             "cleanupResult": "succeeded",
@@ -1678,18 +1693,15 @@ class DockerWorkloadLauncher:
             # A failed remove command is auxiliary if reconciliation proves
             # the owned attachment is already absent.
             pass
-        if request.profile.network_policy == "restricted_egress":
-            try:
-                cleanup_evidence = await self._verify_container_cleanup(
-                    request
-                )
-            except Exception as exc:
-                cleanup_error = exc
-                cleanup_evidence = {
-                    "cleanupResult": "failed",
-                    "reconciliationResult": "required",
-                    "cleanupErrorCode": type(exc).__name__,
-                }
+        try:
+            cleanup_evidence = await self._verify_container_cleanup(request)
+        except Exception as exc:
+            cleanup_error = exc
+            cleanup_evidence = {
+                "cleanupResult": "failed",
+                "reconciliationResult": "required",
+                "cleanupErrorCode": type(exc).__name__,
+            }
         completed_at = datetime.now(UTC)
         egress_workload_evidence = (
             {
@@ -1780,7 +1792,7 @@ class DockerWorkloadLauncher:
             self._helper_egress_evidence.pop(request.container_name, None)
         if cleanup_error is not None:
             raise DockerWorkloadLauncherError(
-                "restricted-egress helper cleanup requires reconciliation; "
+                "helper cleanup requires reconciliation; "
                 f"evidence={egress_authority_ref or 'unavailable'}"
             ) from cleanup_error
         if terminal_validation_error is not None:

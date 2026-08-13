@@ -1343,6 +1343,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                 "effectiveLaunch": launch,
                 "egressEvidence": kwargs["egress_evidence"],
                 "launchEvidenceRef": kwargs["launch_evidence_ref"],
+                "phase": kwargs["phase"],
             }
 
     cleanup_authority_store = CleanupAuthorityStore()
@@ -1377,10 +1378,18 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert first["egressAttestation"]["serverArchitecture"] == "amd64"
     assert first["egressEvidenceRef"].startswith("artifact://")
     assert retry["egressEvidenceRef"] == first["egressEvidenceRef"]
-    assert len(cleanup_authority_store.bind_calls) == 1
+    assert [call["phase"] for call in cleanup_authority_store.bind_calls] == [
+        "launched",
+        "attested",
+    ]
     cleanup_call = cleanup_authority_store.bind_calls[0]
     assert cleanup_call["host_lease_ref"] == lease.lease_id
-    assert cleanup_call["launch_evidence_ref"] == first["egressEvidenceRef"]
+    assert cleanup_call["launch_evidence_ref"].endswith(
+        "egress-launch-pending.json"
+    )
+    assert cleanup_authority_store.bind_calls[1]["launch_evidence_ref"] == first[
+        "egressEvidenceRef"
+    ]
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1590,6 +1599,12 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][commands[2].index("--hostname") + 1] == "mm-host-lease-1"
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
     assert commands[1][-1] == snapshot_image
+    cap_additions = [
+        commands[1][index + 1]
+        for index, value in enumerate(commands[1][:-1])
+        if value == "--cap-add"
+    ]
+    assert cap_additions == ["CHOWN", "FOWNER"]
     image_index = commands[2].index(snapshot_image)
     assert commands[2][image_index - 2 : image_index] == (
         "--entrypoint",
@@ -2281,7 +2296,15 @@ async def test_tools_check_uses_host_login_shell_and_manifest(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) -> None:
+async def test_static_host_runtime_uses_only_canonical_compose_file(
+    tmp_path, monkeypatch
+) -> None:
+    deployment_root = tmp_path / "deployment"
+    deployment_root.mkdir()
+    compose_path = deployment_root / "docker-compose.yaml"
+    compose_path.write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(deployment_root))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-live")
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -2296,12 +2319,13 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
     )
     workspace = tmp_path / "authorized-workspace"
     skills = tmp_path / "authorized-skills"
-    await runtime._compose_static_check(
+    compose_env = await runtime._compose_static_check(
         workspace_source=workspace,
         skill_projection=skills,
         effective_launch=launch,
         egress_attestation=_egress_attestation(),
     )
+    await runtime._compose_static_exec_check(env=compose_env)
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -2309,8 +2333,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "up",
@@ -2320,8 +2346,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "exec",
@@ -2332,8 +2360,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "stop",
@@ -4610,7 +4640,7 @@ async def _run_coordinator_failure_case(
             if fail_at == "host_remove":
                 raise error
             actions.append("host_stopped")
-        elif command == ("docker", "compose", "-f") and "stop" in args:
+        elif args[:2] == ("docker", "compose") and "stop" in args:
             owners.calls.append("host_stop")
             if fail_at == "host_stop":
                 raise error
@@ -4855,6 +4885,26 @@ async def test_post_attachment_evidence_failure_publishes_terminal_cleanup_befor
     assert actions.index("host_stopped") < actions.index("provider_released")
     assert terminal["cleanupCompleted"] is True
     assert terminal["leaseReleased"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fail_at",
+    ["credential_login", "host_registration", "harness_readiness"],
+)
+async def test_post_launch_preflight_failures_bind_cleanup_authority_before_cleanup(
+    fail_at: str,
+) -> None:
+    _events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at=fail_at,
+        code=f"{fail_at}_failed",
+    )
+
+    assert actions.index("egress_cleanup_authority_bound") < actions.index(
+        "host_stopped"
+    )
+    assert actions.index("host_stopped") < actions.index("provider_released")
+    assert any(owner in owner_calls for owner in {fail_at, "host_remove", "host_stop"})
 
 
 @pytest.mark.asyncio

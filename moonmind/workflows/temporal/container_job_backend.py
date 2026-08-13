@@ -2588,9 +2588,7 @@ class DockerContainerJobBackend:
             (
                 "exec",
                 DEFAULT_EGRESS_PROFILE.gateway_ref,
-                "tail",
-                "-n",
-                "500",
+                "cat",
                 "/var/log/squid/access.log",
             )
         )
@@ -2598,7 +2596,9 @@ class DockerContainerJobBackend:
             raise RuntimeError("restricted-egress denial evidence is unavailable")
         # Scope denials to this launch by client address and, when known, the
         # container start/finish interval so a reused bridge IP cannot attribute
-        # a prior holder's denials from the gateway's line tail to this job.
+        # a prior holder's denials from the gateway log to this job. The complete
+        # log is scanned so older in-lifetime denials cannot fall outside a tail;
+        # only the bounded normalized sample below enters durable evidence.
         denial_diagnostics = bounded_denial_diagnostics(
             access_log,
             client_address=client_address,

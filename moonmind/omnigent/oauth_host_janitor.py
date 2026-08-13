@@ -82,9 +82,22 @@ class OmnigentOAuthHostJanitor:
         requires_authority = bool(
             isinstance(launch, dict) and launch.get("enforcedEgress") is True
         )
-        if authority is None and requires_authority:
+        authority_required = bool(
+            isinstance(launch, dict)
+            and launch.get("egressCleanupAuthorityRequired") is True
+        )
+        if authority is None and requires_authority and authority_required:
             raise ValueError(
                 "restricted-egress host cleanup authority is unavailable"
+            )
+        if (
+            authority is None
+            and requires_authority
+            and "egressCleanupAuthorityRequired" in launch
+            and not authority_required
+        ):
+            raise ValueError(
+                "restricted-egress host cleanup authority requirement is invalid"
             )
         return authority
 
@@ -96,7 +109,15 @@ class OmnigentOAuthHostJanitor:
             result = await self._runtime.stop_host(
                 binding=binding, host_lease=lease
             )
-            return dict(result or {})
+            cleanup = dict(result or {})
+            launch = getattr(lease, "effective_launch_snapshot", None)
+            if isinstance(launch, dict) and launch.get("enforcedEgress") is True:
+                # Leases written before the cleanup-authority marker cannot have
+                # the bridge metadata introduced with it. Stop and objectively
+                # reconcile the credential-bearing host without claiming egress
+                # conformance evidence, then let release-last ordering proceed.
+                cleanup["cleanupAuthorityDisposition"] = "pre_upgrade_cutover"
+            return cleanup
         if self._artifact_gateway is None:
             raise ValueError(
                 "restricted-egress host cleanup evidence publisher is unavailable"
@@ -291,6 +312,16 @@ class OmnigentOAuthHostJanitor:
         self, *, profile_id: str | None = None, force: bool = False
     ) -> dict[str, Any]:
         actions: list[dict[str, Any]] = []
+        if force and profile_id:
+            binding = await self._repository.get_binding_for_profile(profile_id)
+            if binding is not None and not binding.host_launch_profile_ref:
+                await self._runtime.stop_static_host(binding=binding)
+                actions.append(
+                    {
+                        "hostBindingRef": binding.binding_ref,
+                        "action": "static_host_stopped",
+                    }
+                )
         leases = await self._repository.list_active_host_leases()
         terminal_provider_leases = (
             await self._repository.list_terminal_host_leases_with_active_provider_capacity()
@@ -419,14 +450,15 @@ class OmnigentOAuthHostJanitor:
         for container_name in await self._runtime.list_managed_containers():
             if container_name in known_containers:
                 continue
-            # A container name and owner label are insufficient to publish the
-            # immutable launch/egress chain required before deletion. Preserve
-            # the owned resource for bounded reconciliation instead of erasing
-            # the last live evidence through an unattested remove path.
+            # No lease can resume or publish authority for an orphan. The runtime
+            # revalidates the deployment ownership label and objective absence,
+            # so remove the credential-bearing resource instead of repeatedly
+            # reporting an action that has no durable consumer.
+            await self._runtime.remove_container(container_name)
             actions.append(
                 {
                     "containerName": container_name,
-                    "action": "orphan_container_reconciliation_required",
+                    "action": "orphan_container_removed",
                     "providerLeaseReleased": False,
                 }
             )

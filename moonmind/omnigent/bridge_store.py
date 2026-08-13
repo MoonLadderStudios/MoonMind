@@ -1036,8 +1036,9 @@ class OmnigentBridgeSessionStore:
         host_lease_ref: str,
         egress_evidence: Mapping[str, Any],
         launch_evidence_ref: str,
+        phase: str = "attested",
     ) -> OmnigentBridgeSession:
-        """Persist the post-launch authority required by a later janitor."""
+        """Persist or monotonically attest authority required by a later janitor."""
 
         safe_evidence = redact_sensitive_payload(dict(egress_evidence))
         if not isinstance(safe_evidence, dict):
@@ -1048,6 +1049,10 @@ class OmnigentBridgeSessionStore:
         if not safe_launch_ref:
             raise OmnigentIdempotencyError(
                 "egress cleanup authority requires protected launch evidence"
+            )
+        if phase not in {"launched", "attested"}:
+            raise OmnigentIdempotencyError(
+                "egress cleanup authority phase is invalid"
             )
         async with self._session_factory() as session:
             row = await self._require(session, request.idempotency_key)
@@ -1069,6 +1074,7 @@ class OmnigentBridgeSessionStore:
                 "effectiveLaunchRef": effective_launch_ref,
                 "egressEvidence": safe_evidence,
                 "launchEvidenceRef": safe_launch_ref,
+                "phase": phase,
                 "evidenceRequest": {
                     "correlationId": request.correlation_id,
                     "idempotencyKey": request.idempotency_key,
@@ -1077,9 +1083,48 @@ class OmnigentBridgeSessionStore:
             }
             metadata = dict(row.metadata_ or {})
             existing = metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
-            if existing is not None and existing != authority:
+            if isinstance(existing, dict) and existing != authority:
+                normalized_existing = {
+                    **existing,
+                    "phase": existing.get("phase", "attested"),
+                }
+                if normalized_existing == authority:
+                    existing = authority
+                else:
+                    old_evidence = normalized_existing.get("egressEvidence")
+                    same_identity = all(
+                        normalized_existing.get(field) == authority.get(field)
+                        for field in (
+                            "schemaVersion",
+                            "hostLeaseRef",
+                            "effectiveLaunchRef",
+                            "evidenceRequest",
+                        )
+                    )
+                    evidence_upgrade = bool(
+                        isinstance(old_evidence, dict)
+                        and all(
+                            safe_evidence.get(key) == value
+                            for key, value in old_evidence.items()
+                            if key not in {
+                                "deniedConnectionCount",
+                                "denialDiagnostics",
+                                "diagnostics",
+                            }
+                        )
+                    )
+                    if not (
+                        normalized_existing.get("phase") == "launched"
+                        and phase == "attested"
+                        and same_identity
+                        and evidence_upgrade
+                    ):
+                        raise OmnigentIdempotencyError(
+                            "bridge session is already bound to different egress cleanup authority"
+                        )
+            elif existing is not None and existing != authority:
                 raise OmnigentIdempotencyError(
-                    "bridge session is already bound to different egress cleanup authority"
+                    "bridge session has malformed egress cleanup authority"
                 )
             metadata[EGRESS_CLEANUP_AUTHORITY_KEY] = authority
             row.metadata_ = metadata

@@ -588,6 +588,9 @@ def _compile_persisted_effective_launch(
         "networkRef": network["attachmentRef"],
         "egressProfileRef": network["egressProfileRef"],
         "enforcedEgress": bool(network["egressProfileRef"]),
+        # Distinguishes launches that must have the post-launch bridge authority
+        # from pre-upgrade leases that require the janitor's bounded cutover.
+        "egressCleanupAuthorityRequired": True,
         "limits": {
             "cpuMillis": resources["cpuMillis"],
             "memoryMiB": resources["memoryMiB"],

@@ -592,9 +592,7 @@ async def attest_docker_workload_egress(
         (
             "exec",
             profile.gateway_ref,
-            "tail",
-            "-n",
-            "500",
+            "cat",
             "/var/log/squid/access.log",
         )
     )
