@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [browser, product, cumulative, stock, static, ondemand, failures]
+        mode: [browser, product, cumulative, stock, static, ondemand, failures, workflow_chat]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -43,12 +43,12 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -e .[tests]
       - name: Install controlling browser
-        if: ${{ matrix.mode == 'browser' }}
+        if: ${{ matrix.mode == 'browser' || matrix.mode == 'workflow_chat' }}
         run: |
           npm ci --no-fund --no-audit
           npx playwright install --with-deps chromium
       - name: Materialize browser authentication state
-        if: ${{ matrix.mode == 'browser' }}
+        if: ${{ matrix.mode == 'browser' || matrix.mode == 'workflow_chat' }}
         env:
           BROWSER_STORAGE_STATE: ${{ secrets.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE }}
         run: |
@@ -97,6 +97,7 @@ jobs:
             --mode "${{ matrix.mode }}" \
             --server-image "${{ steps.images.outputs.server }}" \
             --host-image "${{ steps.images.outputs.host }}" \
+            --source-commit "${{ github.sha }}" \
             --output-dir "artifacts/omnigent-conformance/live/${{ matrix.mode }}"
       - name: Stage secret-safe case evidence
         if: always()
@@ -131,6 +132,14 @@ jobs:
       contents: read
       issues: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install acceptance validator dependencies
+        run: python -m pip install -e .
       - name: Download passing case evidence
         uses: actions/download-artifact@v8
         with:
@@ -146,8 +155,8 @@ jobs:
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 7:
-              raise SystemExit(f"expected seven passing reports, found {len(reports)}")
+          if len(reports) != 8:
+              raise SystemExit(f"expected eight passing reports, found {len(reports)}")
           report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
           for path, report in zip(reports, report_payloads):
               if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
@@ -204,6 +213,24 @@ jobs:
           browser["rows"] = rows
           browser_paths[0].write_text(
               json.dumps(browser, indent=2) + "\n", encoding="utf-8"
+          )
+          workflow_chat_paths = list(root.glob("*/workflow-chat-acceptance.json"))
+          if len(workflow_chat_paths) != 1:
+              raise SystemExit(
+                  "expected one Workflow Chat acceptance artifact, "
+                  f"found {len(workflow_chat_paths)}"
+              )
+          from moonmind.omnigent.workflow_chat_acceptance import (
+              validate_workflow_chat_acceptance_manifest,
+          )
+          workflow_chat_path = workflow_chat_paths[0]
+          workflow_chat = json.loads(
+              workflow_chat_path.read_text(encoding="utf-8")
+          )
+          validate_workflow_chat_acceptance_manifest(
+              workflow_chat,
+              evidence_root=workflow_chat_path.parent,
+              expected_commit=os.environ["GITHUB_SHA"],
           )
           authority_fields = {
               "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
@@ -347,6 +374,8 @@ jobs:
               "acceptanceIssue": "MoonLadderStudios/MoonMind#3456",
               "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
               "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
+              "nativeWorkflowChatIssue": "MoonLadderStudios/MoonMind#3642",
+              "nativeWorkflowChatParent": "MoonLadderStudios/MoonMind#3632",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "sourceCommit": os.environ["GITHUB_SHA"],
@@ -363,6 +392,7 @@ jobs:
               "browserEvidence": str(browser_paths[0].relative_to(root)),
               "browserRows": rows,
               "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
+              "nativeWorkflowChatEvidence": str(workflow_chat_path.relative_to(root)),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],
@@ -383,7 +413,7 @@ jobs:
               "cleanupAndRelease": acceptance["cleanupAndRelease"],
               "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
               "noFallback": product["assertions"]["no_fallback"],
-              "modes": ["browser", "product", "cumulative", "stock", "static", "ondemand", "failures"],
+              "modes": ["browser", "product", "cumulative", "stock", "static", "ondemand", "failures", "workflow_chat"],
               "status": "passed",
               "generatedAt": datetime.now(timezone.utc).isoformat(),
               "expiresAt": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
@@ -407,11 +437,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issues: \`MoonLadderStudios/MoonMind#3508\` (parent \`#3448\`)"
-            echo "- Result: browser, product-create, cumulative remediation, stock, static, on-demand, and failure cases passed"
+            echo "- Issues: \`MoonLadderStudios/MoonMind#3508\` (parent \`#3448\`) and native Workflow Chat \`#3642\` (parent \`#3632\`)"
+            echo "- Result: browser, product-create, cumulative remediation, stock, static, on-demand, failure, and native Workflow Chat cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing acceptance report from issues 3508 and 3448
+      - name: Link passing acceptance report from owning issues
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -424,9 +454,11 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Modes: \`browser\`, \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`, \`workflow_chat\`"
             echo "- Durable artifact: \`${artifact}\`"
-            echo "- Evidence refs and immutable image digests: the six \`report.json\` trees in \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the eight \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
           gh issue comment 3508 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3642 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3632 --repo "${{ github.repository }}" --body-file "$comment_file"

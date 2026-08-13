@@ -78,7 +78,8 @@ requires immutable image references and an already-enrolled OAuth profile:
 MOONMIND_OMNIGENT_ACTION_COMMAND=/path/to/live-action-adapter \
 python tools/run_omnigent_live_conformance.py --mode all \
   --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
-  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest> \
+  --source-commit "$(git rev-parse HEAD)"
 ```
 
 The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
@@ -109,9 +110,20 @@ and cleanup-reconciliation rows. Every row resolves the full profile, policy,
 runtime, host, session, workspace, artifact, cleanup, janitor, and lease
 authority chain and fails on any direct-Codex or alternate-authority fallback.
 
-`--mode static` covers restart and replay; `stock`,
-`product`, `cumulative`, `ondemand`, and `failures` can be gated independently in provider
-environments.
+`--mode workflow_chat` is the #3642 protected controller. It runs the four
+native-conversation, scoped-transport/resource, authority/security-denial, and
+terminal/evidence/continuation actions in order against the digest-pinned stock
+host. It resolves the typed source records returned by the live action adapter,
+derives assertions from those records, scans the logs, Temporal history,
+screenshots, and archives, builds and validates the commit-bound
+`moonmind.omnigent.workflow-chat-acceptance/v1` artifact, and then invokes the
+dedicated provider gate. A missing row, source record, raw evidence channel,
+digest correlation, or provider-test result fails the mode before its evidence
+can enter the publication job.
+
+`--mode static` covers restart and replay; `stock`, `product`, `cumulative`,
+`ondemand`, `failures`, and `workflow_chat` can be gated independently in
+provider environments.
 
 The cumulative mode is the controlling gate for #3480. It begins at the same
 normal create boundary as the product mode and records authored state,

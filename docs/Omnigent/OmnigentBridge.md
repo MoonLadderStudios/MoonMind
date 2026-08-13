@@ -1077,6 +1077,31 @@ Every raw evidence channel is secret-scanned, and the manifest is valid only for
 its recorded source commit, compatibility profile, image digests, and freshness
 window.
 
+Every source record carries an observation timestamp, immutable image digests,
+and one server-owned correlation envelope containing the Workflow, chat binding,
+bridge session, provider session, and browser trace identities. All records in a
+row bind to the same envelope; all rows bind to the same Workflow/binding/session;
+and every record request id resolves to the row's browser network trace. The
+record-specific observed facts are:
+
+| Record | Required observed facts |
+|---|---|
+| `browserTrace` | Workflow Chat route, MoonMind-scoped network events, response statuses, no direct upstream requests or provider identity exposure, screenshot digest |
+| `bindingSnapshot` | authoritative binding, run/state/read-only projection, capability digest |
+| `nativeConversation` | native renderer, transcript, composer request, queued message, native application version |
+| `nativeControls` | native approval/tool/file/terminal/agent/task controls and no MoonMind composer |
+| `facadeRequests` | exact compatibility route inventory, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
+| `resourceInventory` | request-correlated approval/tool/file/terminal/agent/task resources |
+| `mutationReceipts` | actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
+| `denialAudit` | alternate-binding, provider-session, hidden-control, and immutable-policy denials before upstream forwarding |
+| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs and their recomputed intersection digest |
+| `scanAudit` | blocked-content and unavailable-enforcement sends, neither forwarded |
+| `credentialBoundary` | no upstream credential in the browser, no MoonMind credential upstream, server-side credential injection ref |
+| `terminalSnapshot` | terminal state, read-only projection, denied mutation requests |
+| `capturedEvidence` | resolved MoonMind artifact and capture-manifest refs |
+| `continuationReceipt` | distinct linked Workflow, idempotency, separate action, unchanged source |
+| `replaySnapshot` | host unavailable and replay resolved from the captured MoonMind artifacts |
+
 ---
 
 ## 21. Open questions

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run credentialed Omnigent conformance and browser product journeys for #3508.
+"""Run credentialed Omnigent conformance and protected product journeys.
 
 The runner owns only an isolated Compose project.  In particular, it never
 removes volumes: the enrolled Codex OAuth volume is operator-owned evidence,
@@ -19,6 +19,7 @@ import shlex
 import xml.etree.ElementTree as ET
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -27,12 +28,24 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from moonmind.omnigent.conformance import (  # noqa: E402
+    REPORT_VERSION,
     CaseResult,
     ConformanceContractError,
     assert_secret_free,
     build_report,
     load_profile,
     require_pinned_images,
+)
+from moonmind.omnigent.workflow_chat_acceptance import (  # noqa: E402
+    REQUIRED_WORKFLOW_CHAT_ROWS,
+    REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS,
+    WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
+    WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
+    WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
+    WORKFLOW_CHAT_PARENT_ISSUE,
+    build_workflow_chat_acceptance_manifest,
+    validate_workflow_chat_acceptance_manifest,
+    validate_workflow_chat_source_records,
 )
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
@@ -52,6 +65,7 @@ LIVE_CASES = {
     "static": {"compose.static-codex-oauth"},
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
+    "workflow_chat": {"workflow-chat.native-release-matrix"},
 }
 BROWSER_ROWS = (
     "static_profile_bound",
@@ -210,6 +224,7 @@ ONDEMAND_ACTIONS = (
     "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
     "host_removed", "workflow_detail_reloaded", "lease_released",
 )
+WORKFLOW_CHAT_ACTIONS = tuple(REQUIRED_WORKFLOW_CHAT_ROWS)
 SCENARIOS = {
     "browser": f"{PROVIDER_TEST}::test_live_browser_release_matrix",
     "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
@@ -218,6 +233,9 @@ SCENARIOS = {
     "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
     "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
     "failures": f"{PROVIDER_TEST}::test_live_failure_matrix_and_durable_evidence",
+    "workflow_chat": (
+        f"{PROVIDER_TEST}::test_live_native_workflow_chat_release_matrix"
+    ),
 }
 EVIDENCE_ENV = {
     "logs": "MOONMIND_OMNIGENT_LOG_EVIDENCE",
@@ -233,6 +251,7 @@ SCENARIO_EVIDENCE_ENV = {
     "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
     "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
     "failures": "MOONMIND_OMNIGENT_FAILURE_EVIDENCE",
+    "workflow_chat": "MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE",
 }
 
 
@@ -242,6 +261,7 @@ class LiveRunner:
         self.env = env
         self.logs: list[Path] = []
         self.evidence_refs: list[str] = []
+        self._completed_scans: dict[str, dict[str, str]] | None = None
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_STATE", str(output_dir / "backend-state.json"))
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_EVIDENCE_DIR", str(output_dir))
 
@@ -314,7 +334,13 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
-        if scenario in {"browser", "product", "cumulative", "failures"}:
+        if scenario in {
+            "browser",
+            "product",
+            "cumulative",
+            "failures",
+            "workflow_chat",
+        }:
             records = [
                 record
                 for item in observations
@@ -336,6 +362,8 @@ class LiveRunner:
                 else {"cumulativeRunState", "sideEffectAudit"}
                 if scenario == "cumulative"
                 else {"injectionControl", "terminalProjection", "sideEffectAudit"}
+                if scenario == "failures"
+                else REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[action]
             )
             observed_types = {record.get("type") for record in records}
             missing = sorted(required_types - observed_types)
@@ -485,6 +513,211 @@ class LiveRunner:
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         self.env[SCENARIO_EVIDENCE_ENV[mode]] = str(path)
         return path
+
+    def _portable_ref(self, ref: str) -> str:
+        """Keep run-local file evidence resolvable after artifact publication."""
+
+        parsed = urllib.parse.urlparse(ref)
+        if parsed.scheme != "file":
+            return ref
+        path = Path(urllib.request.url2pathname(parsed.path)).resolve()
+        root = self.output_dir.resolve()
+        if path != root and root not in path.parents:
+            raise ConformanceContractError(
+                "workflow Chat evidence is outside the run output directory"
+            )
+        return str(path.relative_to(root))
+
+    def _write_workflow_chat_report(
+        self,
+        *,
+        images: dict[str, str],
+        case_refs: list[str],
+        scans: dict[str, dict[str, str]],
+    ) -> Path:
+        report = {
+            "schemaVersion": REPORT_VERSION,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "images": images,
+            "hostArchitecture": platform.machine(),
+            "authMode": "codex-oauth",
+            "protocolVersion": "omnigent/v1",
+            "capabilities": ["workflow_chat"],
+            "evidenceScans": scans,
+            "cases": [
+                {
+                    "caseId": f"workflow-chat-{row_name}",
+                    "status": "passed",
+                    "evidenceRefs": [case_ref],
+                    "diagnostics": [],
+                }
+                for row_name, case_ref in zip(
+                    WORKFLOW_CHAT_ACTIONS, case_refs, strict=True
+                )
+            ],
+            "summary": {
+                "passed": len(case_refs),
+                "failed": 0,
+                "skipped": 0,
+            },
+        }
+        assert_secret_free(report)
+        path = self.output_dir / "workflow-chat-report.json"
+        path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def _scan_publication_tree(self) -> Path:
+        """Fail closed unless every file about to be published is secret-free."""
+
+        files: list[dict[str, str]] = []
+        root = self.output_dir.resolve()
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            if path.name == "publication-secret-scan.json":
+                continue
+            raw = path.read_bytes()
+            assert_secret_free(raw.decode("utf-8", errors="replace"))
+            files.append(
+                {
+                    "ref": str(path.relative_to(root)),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        if not files:
+            raise ConformanceContractError(
+                "workflow Chat publication tree contains no evidence"
+            )
+        payload = {"status": "passed", "files": files}
+        assert_secret_free(payload)
+        path = self.output_dir / "publication-secret-scan.json"
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def workflow_chat(self, images: dict[str, str], source_commit: str) -> None:
+        """Own the protected #3642 browser-to-stock-host acceptance matrix."""
+
+        if not source_commit.strip():
+            raise ConformanceContractError(
+                "workflow Chat mode requires the tested source commit"
+            )
+        self.env["MOONMIND_OMNIGENT_SOURCE_COMMIT"] = source_commit
+        self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE_DIR"] = str(
+            self.output_dir
+        )
+        self.run(
+            "workflow-chat-up",
+            self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
+        )
+        rows: dict[str, dict[str, object]] = {}
+        case_refs: list[str] = []
+        correlation: dict[str, str] | None = None
+        state: dict[str, object] = {}
+        for index, row_name in enumerate(WORKFLOW_CHAT_ACTIONS):
+            result = self.action("workflow_chat", row_name, **state)
+            if result.get("row") != row_name:
+                raise ConformanceContractError(
+                    f"workflow Chat action returned the wrong row: {row_name}"
+                )
+            records = result.get("_sourceRecords")
+            if not isinstance(records, list):
+                raise ConformanceContractError(
+                    f"workflow Chat action lacks resolved source records: {row_name}"
+                )
+            sources = {
+                str(record["type"]): record["_resolved"]
+                for record in records
+                if isinstance(record, dict)
+                and isinstance(record.get("_resolved"), dict)
+            }
+            assertions, observed_correlation = validate_workflow_chat_source_records(
+                sources,
+                row_name=row_name,
+                source_commit=source_commit,
+                images=images,
+                generated_at=datetime.now(timezone.utc),
+                expected_correlation=correlation,
+            )
+            if correlation is None:
+                correlation = observed_correlation
+            state = {
+                field: observed_correlation[field]
+                for field in (
+                    "workflowId",
+                    "chatBindingId",
+                    "bridgeSessionId",
+                    "providerSessionId",
+                )
+            }
+            case_ref = f"workflow-chat-case-{index}.json"
+            case_payload = {
+                "schemaVersion": WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
+                "issue": WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
+                "parentIssue": WORKFLOW_CHAT_PARENT_ISSUE,
+                "row": row_name,
+                "status": "passed",
+                "sourceCommit": source_commit,
+                "images": images,
+                "stockHostUnmodified": True,
+                "browserOriginated": True,
+                "moonmindScopedOnly": True,
+                "assertions": assertions,
+                "sourceRecords": [
+                    {
+                        "type": record["type"],
+                        "ref": self._portable_ref(str(record["ref"])),
+                        "sha256": record["sha256"],
+                    }
+                    for record in records
+                ],
+                "observations": [
+                    "typed production records resolved by the protected controller"
+                ],
+            }
+            (self.output_dir / case_ref).write_text(
+                json.dumps(case_payload, indent=2) + "\n", encoding="utf-8"
+            )
+            rows[row_name] = {
+                "status": "passed",
+                "assertions": assertions,
+                "evidenceRefs": [case_ref],
+            }
+            case_refs.append(case_ref)
+
+        scans = self.scan()
+        report_path = self._write_workflow_chat_report(
+            images=images, case_refs=case_refs, scans=scans
+        )
+        generated_at = datetime.now(timezone.utc)
+        matrix = {
+            "generatedAt": generated_at.isoformat(),
+            "expiresAt": (generated_at + timedelta(days=7)).isoformat(),
+            "sourceCommit": source_commit,
+            "compatibilityProfile": WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
+            "images": images,
+            "rows": rows,
+            "reports": [report_path.name],
+            "evidenceScans": scans,
+        }
+        matrix_path = self.output_dir / "workflow-chat-matrix.json"
+        matrix_path.write_text(
+            json.dumps(matrix, indent=2) + "\n", encoding="utf-8"
+        )
+        manifest = build_workflow_chat_acceptance_manifest(
+            matrix, evidence_root=self.output_dir
+        )
+        validate_workflow_chat_acceptance_manifest(
+            manifest,
+            evidence_root=self.output_dir,
+            expected_commit=source_commit,
+            now=generated_at,
+        )
+        manifest_path = self.output_dir / "workflow-chat-acceptance.json"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self.env[SCENARIO_EVIDENCE_ENV["workflow_chat"]] = str(manifest_path)
+        self.scenario("workflow_chat")
+        self._scan_publication_tree()
 
     def stock(self, images: dict[str, str]) -> None:
         self.run(
@@ -936,6 +1169,8 @@ class LiveRunner:
         self.run(f"{mode}-cleanup", self.compose("down", "--remove-orphans"))
 
     def scan(self) -> dict[str, dict[str, str]]:
+        if self._completed_scans is not None:
+            return {key: dict(value) for key, value in self._completed_scans.items()}
         scans: dict[str, dict[str, str]] = {}
         for channel, env_name in EVIDENCE_ENV.items():
             raw = self.env.get(env_name, "")
@@ -947,19 +1182,52 @@ class LiveRunner:
                 paths.extend(sorted(self.output_dir.glob("*-replay.png")))
             if not paths or any(not path.is_file() for path in paths):
                 raise ConformanceContractError(f"{channel} evidence was not collected")
-            for evidence in paths:
-                assert_secret_free(evidence.read_bytes().decode("utf-8", errors="replace"))
+            unique_paths = list(dict.fromkeys(path.resolve() for path in paths))
+            files: list[dict[str, str]] = []
+            for index, evidence in enumerate(unique_paths):
+                raw_bytes = evidence.read_bytes()
+                assert_secret_free(raw_bytes.decode("utf-8", errors="replace"))
+                root = self.output_dir.resolve()
+                if evidence != root and root not in evidence.parents:
+                    staged = self.output_dir / "raw-evidence" / (
+                        f"{channel}-{index}-{evidence.name}"
+                    )
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(raw_bytes)
+                else:
+                    staged = evidence
+                files.append(
+                    {
+                        "ref": str(staged.resolve().relative_to(root)),
+                        "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                    }
+                )
             scan_path = self.output_dir / f"secret-scan-{channel}.json"
-            scan_path.write_text(json.dumps({"status": "passed", "files": [str(p) for p in paths]}) + "\n")
-            scans[channel] = {"status": "passed", "evidenceRef": str(scan_path)}
-        return scans
+            scan_path.write_text(
+                json.dumps(
+                    {"status": "passed", "channel": channel, "files": files}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            scans[channel] = {
+                "status": "passed",
+                "evidenceRef": scan_path.name,
+            }
+        self._completed_scans = scans
+        return {key: dict(value) for key, value in scans.items()}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run live Omnigent conformance for MoonLadderStudios/MoonMind#3368")
+    parser = argparse.ArgumentParser(description="Run protected live Omnigent conformance")
     parser.add_argument("--mode", choices=(*LIVE_CASES, "all"), default="all")
     parser.add_argument("--server-image", required=True)
     parser.add_argument("--host-image", required=True)
+    parser.add_argument(
+        "--source-commit",
+        default=os.environ.get("GITHUB_SHA", ""),
+        help="tested repository commit (required for workflow_chat mode)",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/omnigent-conformance/live"))
     args = parser.parse_args()
     images = {"server": args.server_image, "host": args.host_image}
@@ -976,6 +1244,12 @@ def main() -> int:
     })
     runner = LiveRunner(output_dir=output_dir, env=env)
     selected = tuple(LIVE_CASES) if args.mode == "all" else (args.mode,)
+    if "workflow_chat" in selected and not args.source_commit.strip():
+        print(
+            "live conformance failed: workflow Chat mode requires --source-commit",
+            file=sys.stderr,
+        )
+        return 2
     passed: set[str] = set()
     failure: str | None = None
     try:
@@ -993,6 +1267,8 @@ def main() -> int:
                     runner.static()
                 elif mode == "ondemand":
                     runner.ondemand()
+                elif mode == "workflow_chat":
+                    runner.workflow_chat(images, args.source_commit)
                 else:
                     runner.failures()
             finally:
@@ -1027,9 +1303,30 @@ def main() -> int:
         status = "passed" if case_id in passed else "failed" if case_id in requested else "skipped"
         results.append(CaseResult(case_id, status, refs))
     try:
-        report = build_report(profile=profile, images=images, host_architecture=platform.machine(), auth_mode="codex-oauth", capabilities=selected, cases=results, protocol_version="omnigent/v1", evidence_scans=scans)
-        (output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    except ConformanceContractError as exc:
+        report = None
+        if selected == ("workflow_chat",):
+            if failure is None:
+                report = json.loads(
+                    (output_dir / "workflow-chat-report.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        else:
+            report = build_report(
+                profile=profile,
+                images=images,
+                host_architecture=platform.machine(),
+                auth_mode="codex-oauth",
+                capabilities=selected,
+                cases=results,
+                protocol_version="omnigent/v1",
+                evidence_scans=scans,
+            )
+        if report is not None:
+            (output_dir / "report.json").write_text(
+                json.dumps(report, indent=2) + "\n", encoding="utf-8"
+            )
+    except (ConformanceContractError, OSError, json.JSONDecodeError) as exc:
         failure = failure or str(exc)
     if failure:
         print(f"live conformance failed: {failure}", file=sys.stderr)
