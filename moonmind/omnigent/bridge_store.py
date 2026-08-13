@@ -1088,9 +1088,7 @@ class OmnigentBridgeSessionStore:
                     **existing,
                     "phase": existing.get("phase", "attested"),
                 }
-                if normalized_existing == authority:
-                    existing = authority
-                else:
+                if normalized_existing != authority:
                     old_evidence = normalized_existing.get("egressEvidence")
                     same_identity = all(
                         normalized_existing.get(field) == authority.get(field)
