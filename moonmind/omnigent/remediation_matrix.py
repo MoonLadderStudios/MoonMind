@@ -258,6 +258,69 @@ REMEDIATION_APPROVAL_OUTCOMES = (
     "not_required",
 )
 
+# Raw, side-effect-owner observations used to qualify catalog rows.  These
+# values live in the independently retained typed records below; the
+# ``scenarioObservation`` and ``sideEffectAudit`` records only summarize them.
+CONTEXT_FOLLOW_PHASES = ("snapshot", "follow", "reconnect", "cursor_recovery")
+CONTEXT_DENIAL_CASES = ("missing", "unauthorized")
+CONTEXT_NONDISCLOSURE_PROTECTIONS = ("target_existence", "storage_authority")
+RESUME_AUTHORITY_CASES = ("stale", "incomplete", "mismatched")
+BRANCH_CHANGED_CHOICES = (
+    "model",
+    "profile",
+    "policy",
+    "branch",
+    "publish",
+    "retrieval",
+)
+ACTION_RISK_CASES = ("low", "medium")
+STALE_AUTHORITY_CASES = (
+    "target",
+    "run",
+    "checkpoint",
+    "session",
+    "host",
+    "lease",
+    "credential_generation",
+    "policy",
+)
+SESSION_CONTROL_CASES = ("interrupt", "clear", "cancel", "terminate", "restart")
+NON_RESOLVED_VERIFICATION_CASES = (
+    "still_failed",
+    "regressed",
+    "evidence_unavailable",
+    "verification_failed",
+)
+REMEDIATION_DURABLE_PHASES = (
+    "diagnosis",
+    "approval_wait",
+    "action",
+    "branch_execution",
+    "verification",
+    "publication",
+    "cleanup",
+)
+DUPLICATE_EFFECT_CASES = (
+    "first_message",
+    "host",
+    "session",
+    "branch",
+    "commit",
+    "pull_request",
+    "action",
+    "verification",
+)
+PROHIBITED_AUTHORITY_CASES = (
+    "raw_host_shell",
+    "docker",
+    "sql",
+    "storage_key",
+    "filesystem_path",
+    "credential",
+    "secret_read",
+    "redaction_bypass",
+)
+
 # Durable identities and refs called out by #3626 section 4.  Rows may use an
 # explicit not-applicable artifact, but they may not silently omit a field.
 REQUIRED_REMEDIATION_LINEAGE_FIELDS = (
@@ -470,6 +533,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="observe_only",
         ui_journey="workflow-detail.remediate.live-follow",
         thresholds=("reconnectCursorRecoveryRate",),
+        required_observations=CONTEXT_FOLLOW_PHASES,
     ),
     RemediationMatrixRow(
         "remediation.evidence.missing-unauthorized-denied",
@@ -482,6 +546,10 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ui_journey="workflow-detail.remediate.diagnosis",
         expected_outcome=OUTCOME_DENIED,
         thresholds=("evidenceDenialNoLeakRate",),
+        required_observations=(
+            *CONTEXT_DENIAL_CASES,
+            *CONTEXT_NONDISCLOSURE_PROTECTIONS,
+        ),
     ),
     # --- Recovery and branch repair ----------------------------------------
     RemediationMatrixRow(
@@ -494,6 +562,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.resume",
         thresholds=("verificationResolvedRate",),
+        required_observations=("resume", "unchanged_immutable_input"),
     ),
     RemediationMatrixRow(
         "remediation.resume.unavailable-stale-mismatch",
@@ -506,6 +575,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ui_journey="workflow-detail.remediate.resume",
         expected_outcome=OUTCOME_DENIED,
         thresholds=("staleAuthorityRejectionRate",),
+        required_observations=RESUME_AUTHORITY_CASES,
     ),
     RemediationMatrixRow(
         "remediation.branch.corrected-instruction-repair",
@@ -517,6 +587,11 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.branch",
         thresholds=("verificationResolvedRate",),
+        required_observations=(
+            "branch_created",
+            "new_semantic_step_execution",
+            "fresh_stock_session",
+        ),
     ),
     RemediationMatrixRow(
         "remediation.branch.changed-choices-require-branch",
@@ -528,6 +603,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.branch",
         thresholds=("immutableInputPreservedRate",),
+        required_observations=BRANCH_CHANGED_CHOICES,
     ),
     RemediationMatrixRow(
         "remediation.repair.cumulative-multi-attempt",
@@ -539,6 +615,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.branch",
         thresholds=("cumulativeProgressPreservedRate",),
+        required_observations=("multiple_attempts", "accepted_workspace_progress"),
     ),
     RemediationMatrixRow(
         "remediation.repair.no-progress-exhaustion",
@@ -563,6 +640,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
         thresholds=("actionDeliveryRate", "verificationResolvedRate"),
+        required_observations=ACTION_RISK_CASES,
     ),
     RemediationMatrixRow(
         "remediation.action.approval-gated-approved",
@@ -637,6 +715,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
         thresholds=("mutationLockConflictRate",),
+        required_observations=("mutation_conflict", "diagnosis_parallel"),
     ),
     RemediationMatrixRow(
         "remediation.idempotency.duplicate-suppression",
@@ -688,6 +767,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.action",
         thresholds=("helperReapLinkageRate",),
+        required_observations=("restart", "reap", "target_linkage"),
     ),
     RemediationMatrixRow(
         "remediation.cleanup.targeted-janitor-verification",
@@ -699,6 +779,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.cleanup",
         thresholds=("cleanupJanitorRate",),
+        required_observations=("targeted_cleanup", "janitor"),
     ),
     # --- Verification and prevention ---------------------------------------
     RemediationMatrixRow(
@@ -750,6 +831,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.prevention",
         thresholds=("preventionPrPublishRate",),
+        required_observations=("immediate_repair_failed", "reviewable_prevention_pr"),
     ),
     RemediationMatrixRow(
         "remediation.prevention.repair-success-separate-analysis",
@@ -761,6 +843,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         authority_mode="approval_gated",
         ui_journey="workflow-detail.remediate.prevention",
         thresholds=("preventionSeparationRate",),
+        required_observations=("immediate_repair_succeeded", "separate_analysis"),
     ),
     RemediationMatrixRow(
         "remediation.prevention.pr-verification-failure-not-relabeled",
@@ -773,6 +856,7 @@ REMEDIATION_ROW_CATALOG: tuple[RemediationMatrixRow, ...] = (
         ui_journey="workflow-detail.remediate.prevention",
         expected_outcome=OUTCOME_DENIED,
         thresholds=("preventionRelabelPreventionRate",),
+        required_observations=("pr_verification_failed", "target_not_relabeled"),
     ),
     # --- Reliability and security ------------------------------------------
     RemediationMatrixRow(
@@ -994,7 +1078,7 @@ def remediation_catalog_document() -> dict[str, Any]:
                 "expectedDisposition": row.expected_outcome,
                 "thresholds": {
                     threshold: {
-                        "rule": "all_observations_pass",
+                        "rule": "catalog_owned_typed_fact_predicate",
                         "minimumSampleCount": 1,
                     }
                     for threshold in row.thresholds
@@ -1208,12 +1292,6 @@ def _validate_delivery_and_repair(entry: Mapping[str, Any], *, row: RemediationM
         raise RemediationMatrixError(
             f"row {row.row_id!r} repair verification outcome is unrecognized"
         )
-    if row.expected_outcome == OUTCOME_DENIED and (
-        delivery_status == "delivered" or repair_outcome == "verified_resolved"
-    ):
-        raise RemediationMatrixError(
-            f"row {row.row_id!r} denial evidence reports a delivered repair"
-        )
     if delivery is repair:
         raise RemediationMatrixError(
             f"row {row.row_id!r} collapses action delivery into repair "
@@ -1348,6 +1426,463 @@ def _required_nonnegative_int(
     return value
 
 
+def _required_source_string_set(
+    source: Mapping[str, Any],
+    key: str,
+    *,
+    allowed: tuple[str, ...],
+    row_id: str,
+    record_type: str,
+) -> frozenset[str]:
+    """Return one exact, duplicate-free typed observation set."""
+
+    value = source.get(key)
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+        or len(value) != len(set(value))
+        or not set(value).issubset(allowed)
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} {record_type!r} source record has invalid {key!r}"
+        )
+    return frozenset(value)
+
+
+def _derive_catalog_semantics(
+    *, row: RemediationMatrixRow, facts: Mapping[str, Any]
+) -> tuple[str, dict[str, bool], dict[str, dict[str, int]]]:
+    """Derive row qualification from catalog-owned, side-effect-owner facts.
+
+    Every threshold is a fixed predicate over typed records.  Summary records
+    cannot choose the predicate, disposition, observations, numerator, or
+    denominator.  Each v1 row represents one required live case, so a named
+    threshold has an objective denominator of one; composite cases are also
+    expanded into independently derived ``required_observations``.
+    """
+
+    row_id = row.row_id
+    observations: dict[str, bool] = {}
+    if row_id == "remediation.evidence.active-snapshot-follow-reconnect":
+        observations = {
+            name: name in facts["contextFollowPhases"]
+            for name in CONTEXT_FOLLOW_PHASES
+        }
+    elif row_id == "remediation.evidence.missing-unauthorized-denied":
+        observations = {
+            **{
+                name: name in facts["contextDenialCases"]
+                for name in CONTEXT_DENIAL_CASES
+            },
+            **{
+                name: name in facts["contextNondisclosureProtections"]
+                for name in CONTEXT_NONDISCLOSURE_PROTECTIONS
+            },
+        }
+    elif row_id == "remediation.resume.evidence-gated-success":
+        observations = {
+            "resume": facts["resumeOutcome"] == "resumed",
+            "unchanged_immutable_input": facts["immutableInputPreserved"],
+        }
+    elif row_id == "remediation.resume.unavailable-stale-mismatch":
+        observations = {
+            name: name in facts["resumeAuthorityCases"]
+            for name in RESUME_AUTHORITY_CASES
+        }
+    elif row_id == "remediation.branch.corrected-instruction-repair":
+        observations = {
+            "branch_created": facts["branchCreated"],
+            "new_semantic_step_execution": facts["newSemanticStepExecution"],
+            "fresh_stock_session": facts["freshStockSession"],
+        }
+    elif row_id == "remediation.branch.changed-choices-require-branch":
+        observations = {
+            name: name in facts["branchChangedChoices"]
+            for name in BRANCH_CHANGED_CHOICES
+        }
+    elif row_id == "remediation.repair.cumulative-multi-attempt":
+        observations = {
+            "multiple_attempts": facts["attemptCount"] >= 2,
+            "accepted_workspace_progress": facts[
+                "acceptedWorkspaceProgressPreserved"
+            ],
+        }
+    elif row_id == "remediation.action.low-medium-risk-allowed":
+        observations = {
+            name: name in facts["actionRiskCasesDelivered"]
+            for name in ACTION_RISK_CASES
+        }
+    elif row_id == "remediation.approval.denied-expired-consumed-unauthorized-stale":
+        observations = {
+            name: ("stale" if name == "stale_state" else name)
+            in facts["approvalOutcomesObserved"]
+            for name in row.required_observations
+        }
+    elif row_id == "remediation.staleness.generation-rejected":
+        observations = {
+            name: name in facts["staleAuthorityRejections"]
+            for name in STALE_AUTHORITY_CASES
+        }
+    elif row_id == "remediation.lock.mutation-conflict-diagnosis-parallelism":
+        observations = {
+            "mutation_conflict": facts["lockConflict"],
+            "diagnosis_parallel": facts["diagnosisParallelAllowed"],
+        }
+    elif row_id == "remediation.session.interrupt-clear-cancel-terminate-restart":
+        observations = {
+            name: name in facts["sessionControlsDelivered"]
+            for name in SESSION_CONTROL_CASES
+        }
+    elif row_id == "remediation.helper.container-restart-reap-linkage":
+        observations = {
+            "restart": facts["helperRestarted"],
+            "reap": facts["helperReaped"],
+            "target_linkage": facts["helperTargetLinked"],
+        }
+    elif row_id == "remediation.cleanup.targeted-janitor-verification":
+        observations = {
+            "targeted_cleanup": facts["targetedCleanup"],
+            "janitor": facts["janitorVerified"],
+        }
+    elif row_id == "remediation.verify.still-failed-regressed-unavailable":
+        observations = {
+            name: name in facts["verificationOutcomesObserved"]
+            for name in NON_RESOLVED_VERIFICATION_CASES
+        }
+    elif row_id == "remediation.prevention.repair-fail-then-prevention-pr":
+        observations = {
+            "immediate_repair_failed": facts["immediateRepairOutcome"]
+            in {"still_failed", "regressed", "verification_failed"},
+            "reviewable_prevention_pr": facts["preventionPrOutcome"]
+            == "published_reviewable",
+        }
+    elif row_id == "remediation.prevention.repair-success-separate-analysis":
+        observations = {
+            "immediate_repair_succeeded": facts["immediateRepairOutcome"]
+            == "verified_resolved",
+            "separate_analysis": facts["preventionAnalysisSeparate"],
+        }
+    elif row_id == "remediation.prevention.pr-verification-failure-not-relabeled":
+        observations = {
+            "pr_verification_failed": facts["preventionPrOutcome"]
+            == "verification_failed",
+            "target_not_relabeled": not facts["targetRelabeledRepaired"],
+        }
+    elif row_id == "remediation.reliability.cancellation-each-phase":
+        observations = {
+            name: name in facts["cancellationPhases"]
+            for name in REMEDIATION_DURABLE_PHASES
+        }
+    elif row_id == "remediation.reliability.worker-restart-temporal-replay":
+        observations = {
+            name: name in facts["replayPhases"]
+            for name in REMEDIATION_DURABLE_PHASES
+        }
+    elif row_id == "remediation.security.duplicate-prevention-idempotency":
+        observations = {
+            name: name in facts["duplicateEffectsSuppressed"]
+            for name in DUPLICATE_EFFECT_CASES
+        }
+    elif row_id == "remediation.security.prohibited-authority-denied":
+        observations = {
+            name: name in facts["prohibitedAuthoritiesDenied"]
+            for name in PROHIBITED_AUTHORITY_CASES
+        }
+    elif row_id == "remediation.cleanup.complete-provider-profile-release-last":
+        observations = {
+            "terminal_harvest": facts["terminalHarvested"],
+            "targeted_cleanup": facts["targetedCleanup"],
+            "janitor": facts["janitorVerified"],
+            "lock_release": facts["lockReleased"],
+            "capacity_release": facts["capacityReleased"],
+            "provider_profile_release_last": facts["providerProfileReleasedLast"],
+        }
+
+    if set(observations) != set(row.required_observations):
+        raise RemediationMatrixError(
+            f"row {row_id!r} catalog lacks an authoritative observation predicate"
+        )
+
+    all_observations = all(observations.values())
+    delivered = (
+        facts["deliveryStatus"] == "delivered"
+        and facts["actionOutcome"] in {"delivered", "no_op"}
+    )
+    denied_delivery = (
+        facts["deliveryStatus"] in {"denied", "not_delivered"}
+        and facts["actionOutcome"] in {"denied", "failure"}
+    )
+    cleanup_complete = (
+        facts["cleanupOutcome"] == "completed"
+        and facts["remainingLiveResources"] == 0
+    )
+    resolved = (
+        facts["repairOutcome"] == "verified_resolved"
+        and not facts["unverifiedMutation"]
+    )
+
+    approval_denial_rows = {
+        "remediation.resume.unavailable-stale-mismatch",
+        "remediation.approval.denied-expired-consumed-unauthorized-stale",
+        "remediation.staleness.generation-rejected",
+        "remediation.egress.restricted-denied",
+        "remediation.security.prohibited-authority-denied",
+    }
+    expected_approval_outcome = (
+        "not_required"
+        if not row.is_mutation or row.authority_mode == "admin_auto"
+        else "denied"
+        if row_id in approval_denial_rows
+        else "approved"
+    )
+    expected_delivery_status = "delivered"
+    expected_repair_outcome = "verified_resolved"
+    if not row.is_mutation:
+        expected_delivery_status, expected_repair_outcome = (
+            "not_applicable",
+            "canceled",
+        )
+    elif row_id in {
+        "remediation.idempotency.duplicate-suppression",
+        "remediation.security.duplicate-prevention-idempotency",
+    }:
+        expected_delivery_status, expected_repair_outcome = (
+            "suppressed_idempotent",
+            "verified_no_change",
+        )
+    elif row_id == "remediation.lock.mutation-conflict-diagnosis-parallelism":
+        expected_delivery_status, expected_repair_outcome = (
+            "denied",
+            "approval_required",
+        )
+    elif row_id == "remediation.verify.action-delivered-no-change":
+        expected_repair_outcome = "verified_no_change"
+    elif row_id in {
+        "remediation.verify.still-failed-regressed-unavailable",
+        "remediation.prevention.repair-fail-then-prevention-pr",
+    }:
+        expected_repair_outcome = "still_failed"
+    elif row_id == "remediation.prevention.pr-verification-failure-not-relabeled":
+        expected_repair_outcome = "verification_failed"
+    elif row_id == "remediation.reliability.cancellation-each-phase":
+        expected_delivery_status, expected_repair_outcome = (
+            "not_delivered",
+            "canceled",
+        )
+    elif row_id == "remediation.repair.no-progress-exhaustion":
+        expected_delivery_status, expected_repair_outcome = (
+            "not_delivered",
+            "still_failed",
+        )
+    elif row.expected_outcome == OUTCOME_DENIED:
+        expected_delivery_status, expected_repair_outcome = (
+            "denied",
+            "approval_required",
+        )
+    authority_handoff_valid = (
+        facts["approvalOutcome"] == expected_approval_outcome
+        and facts["actionRequested"]
+        == (row.is_mutation and row.authority_mode != "admin_auto")
+        and facts["remediationCreated"] == (row.authority_mode != "admin_auto")
+    )
+    action_verification_handoff_valid = (
+        facts["deliveryStatus"] == expected_delivery_status
+        and facts["repairOutcome"] == expected_repair_outcome
+    )
+
+    threshold_predicates = {
+        "contextBuildSuccessRate": (
+            facts["remediationCreated"]
+            and facts["contextBuildOutcome"] == "success"
+            and facts["evidenceOutcome"] == "available"
+            and not facts["actionRequested"]
+            and facts["deliveryStatus"] == "not_applicable"
+        ),
+        "evidenceDegradationRate": (
+            facts["contextBuildOutcome"] == "degraded"
+            and facts["evidenceOutcome"] == "degraded"
+            and not facts["actionRequested"]
+        ),
+        "reconnectCursorRecoveryRate": (
+            all_observations
+            and facts["contextBuildOutcome"] == "success"
+            and facts["evidenceOutcome"] == "available"
+        ),
+        "evidenceDenialNoLeakRate": (
+            all_observations
+            and facts["contextBuildOutcome"] == "denied"
+            and facts["evidenceOutcome"] == "denied"
+            and not facts["actionRequested"]
+            and facts["secretFindings"] == 0
+            and facts["prohibitedAuthorityFindings"] == 0
+        ),
+        "verificationResolvedRate": delivered and resolved,
+        "staleAuthorityRejectionRate": (
+            all_observations
+            and facts["approvalOutcome"] == "denied"
+            and denied_delivery
+            and facts["repairOutcome"] == "approval_required"
+        ),
+        "immutableInputPreservedRate": (
+            all_observations
+            and facts["branchCreated"]
+            and facts["immutableInputPreserved"]
+            and delivered
+        ),
+        "cumulativeProgressPreservedRate": (
+            all_observations
+            and facts["branchCreated"]
+            and delivered
+            and resolved
+        ),
+        "cumulativeAttemptExhaustionRate": (
+            facts["attemptCount"] >= 2
+            and facts["noProgressEscalated"]
+            and facts["repeatedFailure"]
+            and facts["attemptsExhausted"]
+            and facts["deliveryStatus"] == "not_delivered"
+            and facts["repairOutcome"] == "still_failed"
+        ),
+        "actionDeliveryRate": (
+            all_observations
+            and facts["approvalOutcome"] == "approved"
+            and delivered
+        ),
+        "approvalGrantRate": (
+            facts["approvalRequested"]
+            and facts["approvalOutcome"] == "approved"
+            and delivered
+        ),
+        "approvalRejectionRate": (
+            all_observations
+            and facts["approvalRequested"]
+            and facts["approvalOutcome"] == "denied"
+            and denied_delivery
+            and facts["repairOutcome"] == "approval_required"
+        ),
+        "highRiskReviewerAuthorityRate": (
+            facts["strongReviewerAuthority"]
+            and facts["approvalOutcome"] == "approved"
+            and delivered
+            and resolved
+        ),
+        "mutationLockConflictRate": (
+            all_observations
+            and facts["deliveryStatus"] == "denied"
+            and facts["actionOutcome"] == "denied"
+            and facts["repairOutcome"] == "approval_required"
+        ),
+        "duplicateSuppressionRate": (
+            all_observations
+            and facts["duplicateSuppressed"]
+            and facts["duplicateSuppressionCount"] >= 1
+            and facts["firstMessageCount"] == 1
+            and facts["deliveryStatus"] == "suppressed_idempotent"
+            and facts["actionOutcome"] == "no_op"
+            and facts["repairOutcome"] == "verified_no_change"
+        ),
+        "sessionControlDeliveryRate": all_observations and delivered and resolved,
+        "leaseReconciliationRate": (
+            facts["leaseHostReconciled"] and delivered and resolved
+        ),
+        "helperReapLinkageRate": all_observations and delivered and cleanup_complete,
+        "cleanupJanitorRate": all_observations and cleanup_complete,
+        "verificationNoChangeRate": (
+            delivered
+            and facts["repairOutcome"] == "verified_no_change"
+            and not facts["unverifiedMutation"]
+        ),
+        "verificationNonResolvedRate": (
+            all_observations
+            and delivered
+            and facts["repairOutcome"] in NON_RESOLVED_VERIFICATION_CASES
+        ),
+        "preventionPrPublishRate": (
+            all_observations
+            and delivered
+            and facts["preventionOutcome"] == "published_pr"
+        ),
+        "preventionSeparationRate": (
+            all_observations
+            and resolved
+            and facts["preventionOutcome"] == "analyzed_separately"
+        ),
+        "preventionRelabelPreventionRate": (
+            all_observations
+            and facts["repairOutcome"] == "verification_failed"
+        ),
+        "cancellationHonoredRate": (
+            all_observations
+            and facts["operatorCancelled"]
+            and facts["repairOutcome"] == "canceled"
+            and cleanup_complete
+        ),
+        "replaySafeRate": (
+            all_observations
+            and facts["replayCount"] >= len(REMEDIATION_DURABLE_PHASES)
+            and facts["replayOutcome"] == "passed"
+            and cleanup_complete
+        ),
+        "hostLifecycleReconciliationRate": (
+            facts["hostLifecycleOutcome"] == "reconciled" and cleanup_complete
+        ),
+        "egressAllowedRate": (
+            facts["egressDecision"] == "allowed"
+            and facts["egressAttestationOutcome"] == "passed"
+            and delivered
+        ),
+        "egressDenialRate": (
+            facts["egressDecision"] == "denied"
+            and facts["egressAttestationOutcome"] == "passed"
+            and denied_delivery
+        ),
+        "prohibitedAuthorityDenialRate": (
+            all_observations
+            and denied_delivery
+            and facts["secretFindings"] == 0
+            and facts["prohibitedAuthorityFindings"] == 0
+        ),
+        "providerProfileReleaseLastRate": all_observations and cleanup_complete,
+        "autonomousManualOriginRate": (
+            facts["origin"] == "autonomous"
+            and not facts["remediationCreated"]
+            and not facts["actionRequested"]
+            and facts["approvalOutcome"] == "not_required"
+            and facts["deliveryStatus"] == "denied"
+        ),
+    }
+    missing_thresholds = set(row.thresholds) - set(threshold_predicates)
+    if missing_thresholds:
+        raise RemediationMatrixError(
+            f"row {row_id!r} catalog lacks threshold predicates: "
+            f"{sorted(missing_thresholds)}"
+        )
+    threshold_predicates = {
+        threshold: predicate
+        and authority_handoff_valid
+        and action_verification_handoff_valid
+        for threshold, predicate in threshold_predicates.items()
+    }
+    samples = {
+        threshold: {
+            "passed": int(threshold_predicates[threshold]),
+            "total": 1,
+        }
+        for threshold in row.thresholds
+    }
+    qualified = all_observations and all(
+        sample["passed"] == sample["total"] for sample in samples.values()
+    )
+    observed_disposition = (
+        row.expected_outcome
+        if qualified
+        else OUTCOME_DENIED
+        if row.expected_outcome == OUTCOME_PASSED
+        else OUTCOME_PASSED
+    )
+    return observed_disposition, observations, samples
+
+
 def derive_remediation_observation_from_source_records(
     *,
     row: RemediationMatrixRow,
@@ -1358,8 +1893,9 @@ def derive_remediation_observation_from_source_records(
 
     ``scenarioObservation`` remains a useful producer summary, but it is not an
     authority: every claim in it is compared with facts owned by the browser,
-    workflow, approval, action, verification, egress, cleanup, history, and
-    audit records below.
+    workflow, approval, action, verification, publication, egress, cleanup, and
+    history records below. ``sideEffectAudit`` is checked as a second summary
+    and cannot supply a disposition, observation, or threshold count.
     """
 
     row_id = row.row_id
@@ -1519,6 +2055,65 @@ def derive_remediation_observation_from_source_records(
         raise RemediationMatrixError(
             f"row {row_id!r} phase latency dimensions are incomplete"
         )
+    resume_outcome = _required_source_string(
+        workflow, "resumeOutcome", row_id=row_id, record_type="workflowLineage"
+    )
+    if resume_outcome not in {"not_applicable", "resumed", "unavailable"}:
+        raise RemediationMatrixError(f"row {row_id!r} resume outcome is invalid")
+    resume_authority_cases = _required_source_string_set(
+        workflow,
+        "resumeAuthorityCases",
+        allowed=RESUME_AUTHORITY_CASES,
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    branch_created = _required_source_bool(
+        workflow, "branchCreated", row_id=row_id, record_type="workflowLineage"
+    )
+    new_semantic_step_execution = _required_source_bool(
+        workflow,
+        "newSemanticStepExecution",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    fresh_stock_session = _required_source_bool(
+        workflow,
+        "freshStockSession",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    immutable_input_preserved = _required_source_bool(
+        workflow,
+        "immutableInputPreserved",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    branch_changed_choices = _required_source_string_set(
+        workflow,
+        "branchChangedChoices",
+        allowed=BRANCH_CHANGED_CHOICES,
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    accepted_workspace_progress_preserved = _required_source_bool(
+        workflow,
+        "acceptedWorkspaceProgressPreserved",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    attempt_count = _required_nonnegative_int(
+        workflow, "attemptCount", row_id=row_id, record_type="workflowLineage"
+    )
+    host_lifecycle_outcome = _required_source_string(
+        workflow,
+        "hostLifecycleOutcome",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    if host_lifecycle_outcome not in {"not_applicable", "reconciled", "failed"}:
+        raise RemediationMatrixError(
+            f"row {row_id!r} host lifecycle outcome is invalid"
+        )
 
     context_build_outcome = _required_source_string(
         context, "contextBuildOutcome", row_id=row_id, record_type="contextEvidence"
@@ -1530,6 +2125,27 @@ def derive_remediation_observation_from_source_records(
         raise RemediationMatrixError(f"row {row_id!r} context build outcome is invalid")
     if evidence_outcome not in {"available", "degraded", "unavailable", "denied"}:
         raise RemediationMatrixError(f"row {row_id!r} evidence outcome is invalid")
+    context_follow_phases = _required_source_string_set(
+        context,
+        "followPhases",
+        allowed=CONTEXT_FOLLOW_PHASES,
+        row_id=row_id,
+        record_type="contextEvidence",
+    )
+    context_denial_cases = _required_source_string_set(
+        context,
+        "denialCases",
+        allowed=CONTEXT_DENIAL_CASES,
+        row_id=row_id,
+        record_type="contextEvidence",
+    )
+    context_nondisclosure_protections = _required_source_string_set(
+        context,
+        "nondisclosureProtections",
+        allowed=CONTEXT_NONDISCLOSURE_PROTECTIONS,
+        row_id=row_id,
+        record_type="contextEvidence",
+    )
 
     if (
         profile.get("authorityMode") != authority_mode
@@ -1546,6 +2162,18 @@ def derive_remediation_observation_from_source_records(
         raise RemediationMatrixError(
             f"row {row_id!r} profile/policy authority does not match the authored request"
         )
+    strong_reviewer_authority = _required_source_bool(
+        profile,
+        "strongReviewerAuthority",
+        row_id=row_id,
+        record_type="profilePolicyAuthority",
+    )
+    lease_host_reconciled = _required_source_bool(
+        profile,
+        "leaseHostReconciled",
+        row_id=row_id,
+        record_type="profilePolicyAuthority",
+    )
 
     egress_authority = _required_source_string(
         egress, "authority", row_id=row_id, record_type="egressAttestation"
@@ -1577,6 +2205,13 @@ def derive_remediation_observation_from_source_records(
     )
     if approval_outcome not in REMEDIATION_APPROVAL_OUTCOMES:
         raise RemediationMatrixError(f"row {row_id!r} approval outcome is invalid")
+    approval_outcomes_observed = _required_source_string_set(
+        approval,
+        "outcomesObserved",
+        allowed=REMEDIATION_APPROVAL_OUTCOMES,
+        row_id=row_id,
+        record_type="approvalDecision",
+    )
 
     delivery_status = _required_source_string(
         action, "deliveryStatus", row_id=row_id, record_type="actionResult"
@@ -1615,6 +2250,40 @@ def derive_remediation_observation_from_source_records(
     action_requested = _required_source_bool(
         action, "requested", row_id=row_id, record_type="actionResult"
     )
+    action_risk_cases_delivered = _required_source_string_set(
+        action,
+        "riskCasesDelivered",
+        allowed=ACTION_RISK_CASES,
+        row_id=row_id,
+        record_type="actionResult",
+    )
+    stale_authority_rejections = _required_source_string_set(
+        action,
+        "staleAuthorityRejections",
+        allowed=STALE_AUTHORITY_CASES,
+        row_id=row_id,
+        record_type="actionResult",
+    )
+    diagnosis_parallel_allowed = _required_source_bool(
+        action,
+        "diagnosisParallelAllowed",
+        row_id=row_id,
+        record_type="actionResult",
+    )
+    session_controls_delivered = _required_source_string_set(
+        action,
+        "sessionControlsDelivered",
+        allowed=SESSION_CONTROL_CASES,
+        row_id=row_id,
+        record_type="actionResult",
+    )
+    prohibited_authorities_denied = _required_source_string_set(
+        action,
+        "prohibitedAuthoritiesDenied",
+        allowed=PROHIBITED_AUTHORITY_CASES,
+        row_id=row_id,
+        record_type="actionResult",
+    )
 
     repair_outcome = _required_source_string(
         verification,
@@ -1645,15 +2314,58 @@ def derive_remediation_observation_from_source_records(
         row_id=row_id,
         record_type="verificationResult",
     )
-    _required_source_string(
+    prevention_outcome = _required_source_string(
         verification,
         "preventionOutcome",
         row_id=row_id,
         record_type="verificationResult",
     )
-    _required_source_string(
+    verification_outcomes_observed = _required_source_string_set(
+        verification,
+        "outcomesObserved",
+        allowed=tuple(REMEDIATION_REPAIR_OUTCOMES),
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    immediate_repair_outcome = _required_source_string(
+        verification,
+        "immediateRepairOutcome",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    if immediate_repair_outcome not in REMEDIATION_REPAIR_OUTCOMES:
+        raise RemediationMatrixError(
+            f"row {row_id!r} immediate repair outcome is invalid"
+        )
+    prevention_analysis_separate = _required_source_bool(
+        verification,
+        "preventionAnalysisSeparate",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    target_relabeled_repaired = _required_source_bool(
+        verification,
+        "targetRelabeledRepaired",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    publication_outcome = _required_source_string(
         publication, "outcome", row_id=row_id, record_type="publicationOutcome"
     )
+    prevention_pr_outcome = _required_source_string(
+        publication,
+        "preventionPrOutcome",
+        row_id=row_id,
+        record_type="publicationOutcome",
+    )
+    if prevention_pr_outcome not in {
+        "not_applicable",
+        "published_reviewable",
+        "verification_failed",
+    }:
+        raise RemediationMatrixError(
+            f"row {row_id!r} prevention PR outcome is invalid"
+        )
 
     cleanup_outcome = _required_source_string(
         cleanup, "outcome", row_id=row_id, record_type="cleanupOutcome"
@@ -1664,6 +2376,7 @@ def derive_remediation_observation_from_source_records(
         row_id=row_id,
         record_type="cleanupOutcome",
     )
+    cleanup_flags: dict[str, bool] = {}
     for key in (
         "terminalHarvested",
         "janitorVerified",
@@ -1671,7 +2384,21 @@ def derive_remediation_observation_from_source_records(
         "capacityReleased",
         "providerProfileReleasedLast",
     ):
-        _required_source_bool(cleanup, key, row_id=row_id, record_type="cleanupOutcome")
+        cleanup_flags[key] = _required_source_bool(
+            cleanup, key, row_id=row_id, record_type="cleanupOutcome"
+        )
+    targeted_cleanup = _required_source_bool(
+        cleanup, "targetedCleanup", row_id=row_id, record_type="cleanupOutcome"
+    )
+    helper_restarted = _required_source_bool(
+        cleanup, "helperRestarted", row_id=row_id, record_type="cleanupOutcome"
+    )
+    helper_reaped = _required_source_bool(
+        cleanup, "helperReaped", row_id=row_id, record_type="cleanupOutcome"
+    )
+    helper_target_linked = _required_source_bool(
+        cleanup, "helperTargetLinked", row_id=row_id, record_type="cleanupOutcome"
+    )
     operator_cancelled = _required_source_bool(
         cleanup, "operatorCancelled", row_id=row_id, record_type="cleanupOutcome"
     )
@@ -1682,38 +2409,43 @@ def derive_remediation_observation_from_source_records(
     replay_count = _required_nonnegative_int(
         temporal, "replayCount", row_id=row_id, record_type="temporalHistory"
     )
-    _required_source_string(
+    replay_outcome = _required_source_string(
         temporal, "replayOutcome", row_id=row_id, record_type="temporalHistory"
     )
-    _required_source_string(
-        temporal, "cancellationPhase", row_id=row_id, record_type="temporalHistory"
+    cancellation_phases = _required_source_string_set(
+        temporal,
+        "cancellationPhases",
+        allowed=REMEDIATION_DURABLE_PHASES,
+        row_id=row_id,
+        record_type="temporalHistory",
     )
-
-    observed_disposition = _required_source_string(
-        audit, "observedDisposition", row_id=row_id, record_type="sideEffectAudit"
+    replay_phases = _required_source_string_set(
+        temporal,
+        "replayPhases",
+        allowed=REMEDIATION_DURABLE_PHASES,
+        row_id=row_id,
+        record_type="temporalHistory",
     )
-    observations = dict(
-        _required_source_mapping(
-            audit, "observations", row_id=row_id, record_type="sideEffectAudit"
-        )
-    )
-    threshold_samples = dict(
-        _required_source_mapping(
-            audit,
-            "thresholdSamples",
-            row_id=row_id,
-            record_type="sideEffectAudit",
-        )
+    duplicate_effects_suppressed = _required_source_string_set(
+        temporal,
+        "duplicateEffectsSuppressed",
+        allowed=DUPLICATE_EFFECT_CASES,
+        row_id=row_id,
+        record_type="temporalHistory",
     )
     first_message_count = _required_nonnegative_int(
-        audit, "firstMessageCount", row_id=row_id, record_type="sideEffectAudit"
+        temporal,
+        "firstMessageCount",
+        row_id=row_id,
+        record_type="temporalHistory",
     )
     duplicate_suppression_count = _required_nonnegative_int(
-        audit,
+        temporal,
         "duplicateSuppressionCount",
         row_id=row_id,
-        record_type="sideEffectAudit",
+        record_type="temporalHistory",
     )
+
     secret_findings = _required_nonnegative_int(
         retained_scan,
         "secretFindings",
@@ -1734,30 +2466,116 @@ def derive_remediation_observation_from_source_records(
             f"row {row_id!r} retained evidence scan has incomplete channels"
         )
 
-    thresholds: dict[str, dict[str, Any]] = {}
-    for threshold in row.thresholds:
-        sample = threshold_samples.get(threshold)
-        if not isinstance(sample, Mapping):
-            raise RemediationMatrixError(
-                f"row {row_id!r} lacks typed threshold sample {threshold!r}"
-            )
-        passed = sample.get("passed")
-        total = sample.get("total")
-        if (
-            not isinstance(passed, int)
-            or isinstance(passed, bool)
-            or not isinstance(total, int)
-            or isinstance(total, bool)
-            or total < 1
-        ):
-            raise RemediationMatrixError(
-                f"row {row_id!r} typed threshold sample {threshold!r} is invalid"
-            )
-        thresholds[threshold] = {
-            "within": passed == total,
-            "passed": passed,
-            "total": total,
+    semantic_facts = {
+        "remediationCreated": remediation_created,
+        "contextBuildOutcome": context_build_outcome,
+        "evidenceOutcome": evidence_outcome,
+        "contextFollowPhases": context_follow_phases,
+        "contextDenialCases": context_denial_cases,
+        "contextNondisclosureProtections": context_nondisclosure_protections,
+        "resumeOutcome": resume_outcome,
+        "resumeAuthorityCases": resume_authority_cases,
+        "branchCreated": branch_created,
+        "newSemanticStepExecution": new_semantic_step_execution,
+        "freshStockSession": fresh_stock_session,
+        "immutableInputPreserved": immutable_input_preserved,
+        "branchChangedChoices": branch_changed_choices,
+        "acceptedWorkspaceProgressPreserved": accepted_workspace_progress_preserved,
+        "attemptCount": attempt_count,
+        "hostLifecycleOutcome": host_lifecycle_outcome,
+        "strongReviewerAuthority": strong_reviewer_authority,
+        "leaseHostReconciled": lease_host_reconciled,
+        "approvalRequested": approval_requested,
+        "approvalOutcome": approval_outcome,
+        "approvalOutcomesObserved": approval_outcomes_observed,
+        "actionRequested": action_requested,
+        "deliveryStatus": delivery_status,
+        "actionOutcome": action_outcome,
+        "actionRiskCasesDelivered": action_risk_cases_delivered,
+        "staleAuthorityRejections": stale_authority_rejections,
+        "diagnosisParallelAllowed": diagnosis_parallel_allowed,
+        "sessionControlsDelivered": session_controls_delivered,
+        "prohibitedAuthoritiesDenied": prohibited_authorities_denied,
+        **action_flags,
+        "repairOutcome": repair_outcome,
+        "unverifiedMutation": unverified_mutation,
+        "repeatedFailure": repeated_failure,
+        "attemptsExhausted": attempts_exhausted,
+        "verificationOutcomesObserved": verification_outcomes_observed,
+        "immediateRepairOutcome": immediate_repair_outcome,
+        "preventionOutcome": prevention_outcome,
+        "preventionAnalysisSeparate": prevention_analysis_separate,
+        "targetRelabeledRepaired": target_relabeled_repaired,
+        "publicationOutcome": publication_outcome,
+        "preventionPrOutcome": prevention_pr_outcome,
+        "cleanupOutcome": cleanup_outcome,
+        "remainingLiveResources": remaining_live_resources,
+        **cleanup_flags,
+        "targetedCleanup": targeted_cleanup,
+        "helperRestarted": helper_restarted,
+        "helperReaped": helper_reaped,
+        "helperTargetLinked": helper_target_linked,
+        "operatorCancelled": operator_cancelled,
+        "operatorTakeover": operator_takeover,
+        "replayCount": replay_count,
+        "replayOutcome": replay_outcome,
+        "cancellationPhases": cancellation_phases,
+        "replayPhases": replay_phases,
+        "duplicateEffectsSuppressed": duplicate_effects_suppressed,
+        "firstMessageCount": first_message_count,
+        "duplicateSuppressionCount": duplicate_suppression_count,
+        "egressDecision": egress_decision,
+        "egressAttestationOutcome": egress_attestation,
+        "origin": origin,
+        "secretFindings": secret_findings,
+        "prohibitedAuthorityFindings": prohibited_authority_findings,
+    }
+    observed_disposition, observations, threshold_samples = (
+        _derive_catalog_semantics(row=row, facts=semantic_facts)
+    )
+    audit_disposition = _required_source_string(
+        audit, "observedDisposition", row_id=row_id, record_type="sideEffectAudit"
+    )
+    audit_observations = dict(
+        _required_source_mapping(
+            audit, "observations", row_id=row_id, record_type="sideEffectAudit"
+        )
+    )
+    audit_threshold_samples = dict(
+        _required_source_mapping(
+            audit,
+            "thresholdSamples",
+            row_id=row_id,
+            record_type="sideEffectAudit",
+        )
+    )
+    audit_first_message_count = _required_nonnegative_int(
+        audit, "firstMessageCount", row_id=row_id, record_type="sideEffectAudit"
+    )
+    audit_duplicate_suppression_count = _required_nonnegative_int(
+        audit,
+        "duplicateSuppressionCount",
+        row_id=row_id,
+        record_type="sideEffectAudit",
+    )
+    if (
+        audit_disposition != observed_disposition
+        or audit_observations != observations
+        or audit_threshold_samples != threshold_samples
+        or audit_first_message_count != first_message_count
+        or audit_duplicate_suppression_count != duplicate_suppression_count
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} side-effect audit conflicts with authoritative typed facts"
+        )
+
+    thresholds = {
+        threshold: {
+            "within": sample["passed"] == sample["total"],
+            **sample,
         }
+        for threshold, sample in threshold_samples.items()
+    }
 
     derived: dict[str, Any] = {
         "observedDisposition": observed_disposition,

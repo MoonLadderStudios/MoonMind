@@ -21,17 +21,25 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.remediation_matrix import (
+    ACTION_RISK_CASES,
     AUTHORITY_MODES,
+    BRANCH_CHANGED_CHOICES,
+    CONTEXT_DENIAL_CASES,
+    CONTEXT_FOLLOW_PHASES,
+    CONTEXT_NONDISCLOSURE_PROTECTIONS,
+    DUPLICATE_EFFECT_CASES,
     GATE_AUTONOMOUS_ROLLOUT,
     GATE_MANUAL_DIAGNOSIS,
     GATE_MANUAL_MUTATION,
     PROHIBITED_UI_JOURNEY_MARKERS,
+    PROHIBITED_AUTHORITY_CASES,
     REMEDIATION_ARTIFACT_SCHEMA_VERSION,
     REMEDIATION_MATRIX_VERSION,
     REMEDIATION_EVIDENCE_IDENTITY_FIELDS,
     REMEDIATION_LINEAGE_REF_RECORD_TYPES,
     REMEDIATION_RELEASE_POLICY_VERSION,
     REMEDIATION_REPAIR_OUTCOMES,
+    REMEDIATION_DURABLE_PHASES,
     REMEDIATION_ROW_CATALOG,
     REMEDIATION_ROW_CATALOG_BY_ID,
     REMEDIATION_SOURCE_RECORD_SCHEMAS,
@@ -44,6 +52,9 @@ from moonmind.omnigent.remediation_matrix import (
     REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES,
     REQUIRED_REMEDIATION_TELEMETRY_GROUPS,
     REQUIRED_UI_JOURNEY_ASSERTIONS,
+    RESUME_AUTHORITY_CASES,
+    SESSION_CONTROL_CASES,
+    STALE_AUTHORITY_CASES,
     RemediationMatrixError,
     evaluate_remediation_release,
     remediation_catalog_document,
@@ -92,17 +103,52 @@ def _ui_journey(row) -> dict[str, object]:
     return journey
 
 
+def _row_delivery_and_repair(row) -> tuple[str, str]:
+    row_id = row.row_id
+    if not row.is_mutation:
+        return "not_applicable", "canceled"
+    if row_id in {
+        "remediation.idempotency.duplicate-suppression",
+        "remediation.security.duplicate-prevention-idempotency",
+    }:
+        return "suppressed_idempotent", "verified_no_change"
+    if row_id == "remediation.lock.mutation-conflict-diagnosis-parallelism":
+        return "denied", "approval_required"
+    if row_id == "remediation.verify.action-delivered-no-change":
+        return "delivered", "verified_no_change"
+    if row_id in {
+        "remediation.verify.still-failed-regressed-unavailable",
+        "remediation.prevention.repair-fail-then-prevention-pr",
+    }:
+        return "delivered", "still_failed"
+    if row_id == "remediation.prevention.pr-verification-failure-not-relabeled":
+        return "delivered", "verification_failed"
+    if row_id == "remediation.reliability.cancellation-each-phase":
+        return "not_delivered", "canceled"
+    if row_id == "remediation.repair.no-progress-exhaustion":
+        return "not_delivered", "still_failed"
+    if row.expected_outcome == "denied":
+        return "denied", "approval_required"
+    return "delivered", "verified_resolved"
+
+
+def _row_approval_outcome(row) -> str:
+    if not row.is_mutation or row.authority_mode == "admin_auto":
+        return "not_required"
+    if row.row_id in {
+        "remediation.resume.unavailable-stale-mismatch",
+        "remediation.approval.denied-expired-consumed-unauthorized-stale",
+        "remediation.staleness.generation-rejected",
+        "remediation.egress.restricted-denied",
+        "remediation.security.prohibited-authority-denied",
+    }:
+        return "denied"
+    return "approved"
+
+
 def _observed_row(row_id: str) -> dict[str, object]:
     row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
-    denied = row.expected_outcome == "denied"
-    delivery_status = (
-        "not_applicable" if not row.is_mutation else "denied" if denied else "delivered"
-    )
-    repair_outcome = (
-        "canceled" if not row.is_mutation
-        else "approval_required" if denied
-        else "verified_resolved"
-    )
+    delivery_status, repair_outcome = _row_delivery_and_repair(row)
     timings = {
         "startedAt": (NOW - timedelta(seconds=1)).isoformat(),
         "completedAt": NOW.isoformat(),
@@ -183,16 +229,9 @@ def _identity(row_id: str) -> dict[str, str]:
 def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, object]:
     row_id = str(entry["row"])
     row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
-    denied = row.expected_outcome == "denied"
     identity = _identity(row_id)
-    delivery_status = (
-        "not_applicable" if not row.is_mutation else "denied" if denied else "delivered"
-    )
-    repair_outcome = (
-        "canceled" if not row.is_mutation
-        else "approval_required" if denied
-        else "verified_resolved"
-    )
+    delivery_status, repair_outcome = _row_delivery_and_repair(row)
+    approval_outcome = _row_approval_outcome(row)
     threshold_samples = {
         key: {"passed": 1, "total": 1} for key in row.thresholds
     }
@@ -249,6 +288,53 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
             "remediationProvenance": row.remediation_provenance[0],
             "lineage": entry["lineage"],
             "timings": entry["timings"],
+            "resumeOutcome": (
+                "resumed" if row_id == "remediation.resume.evidence-gated-success"
+                else "unavailable"
+                if row_id == "remediation.resume.unavailable-stale-mismatch"
+                else "not_applicable"
+            ),
+            "resumeAuthorityCases": (
+                list(RESUME_AUTHORITY_CASES)
+                if row_id == "remediation.resume.unavailable-stale-mismatch"
+                else []
+            ),
+            "branchCreated": row_id.startswith("remediation.branch.")
+            or row_id == "remediation.repair.cumulative-multi-attempt",
+            "newSemanticStepExecution": row_id
+            == "remediation.branch.corrected-instruction-repair",
+            "freshStockSession": row_id
+            == "remediation.branch.corrected-instruction-repair",
+            "immutableInputPreserved": row_id
+            in {
+                "remediation.resume.evidence-gated-success",
+                "remediation.branch.changed-choices-require-branch",
+            },
+            "branchChangedChoices": (
+                list(BRANCH_CHANGED_CHOICES)
+                if row_id == "remediation.branch.changed-choices-require-branch"
+                else []
+            ),
+            "acceptedWorkspaceProgressPreserved": row_id
+            == "remediation.repair.cumulative-multi-attempt",
+            "attemptCount": (
+                2
+                if row_id
+                in {
+                    "remediation.repair.cumulative-multi-attempt",
+                    "remediation.repair.no-progress-exhaustion",
+                }
+                else 1
+            ),
+            "hostLifecycleOutcome": (
+                "reconciled"
+                if row_id
+                in {
+                    "remediation.host.static-lifecycle",
+                    "remediation.host.on-demand-lifecycle",
+                }
+                else "not_applicable"
+            ),
         },
         "contextEvidence": {
             "contextBuildOutcome": (
@@ -260,6 +346,21 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
                 "degraded" if "partial-historical" in row_id
                 else "denied" if "missing-unauthorized" in row_id
                 else "available"
+            ),
+            "followPhases": (
+                list(CONTEXT_FOLLOW_PHASES)
+                if row_id == "remediation.evidence.active-snapshot-follow-reconnect"
+                else []
+            ),
+            "denialCases": (
+                list(CONTEXT_DENIAL_CASES)
+                if row_id == "remediation.evidence.missing-unauthorized-denied"
+                else []
+            ),
+            "nondisclosureProtections": (
+                list(CONTEXT_NONDISCLOSURE_PROTECTIONS)
+                if row_id == "remediation.evidence.missing-unauthorized-denied"
+                else []
             ),
         },
         "profilePolicyAuthority": {
@@ -273,6 +374,10 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
             "profileValidated": True,
             "policyValidated": True,
             "credentialGenerationFresh": True,
+            "strongReviewerAuthority": row_id
+            == "remediation.action.high-risk-stronger-authority",
+            "leaseHostReconciled": row_id
+            == "remediation.lease.provider-profile-host-reconciliation",
         },
         "egressAttestation": {
             "authority": row.egress,
@@ -285,27 +390,55 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
         },
         "approvalDecision": {
             "requested": row.is_mutation and row.authority_mode == "approval_gated",
-            "outcome": (
-                "not_required" if not row.is_mutation or row.authority_mode == "admin_auto"
-                else "denied" if denied
-                else "approved"
+            "outcome": approval_outcome,
+            "outcomesObserved": (
+                ["denied", "expired", "consumed", "unauthorized", "stale"]
+                if row_id
+                == "remediation.approval.denied-expired-consumed-unauthorized-stale"
+                else [approval_outcome]
             ),
         },
         "actionResult": {
             "requested": row.is_mutation and row.authority_mode != "admin_auto",
             "deliveryStatus": delivery_status,
-            "outcome": (
-                "no_op" if not row.is_mutation
-                else "denied" if denied
-                else "delivered"
-            ),
+            "outcome": {
+                "not_applicable": "no_op",
+                "delivered": "delivered",
+                "denied": "denied",
+                "suppressed_idempotent": "no_op",
+                "not_delivered": "failure",
+            }[delivery_status],
             "actionKind": row.action_capability,
             "risk": row.action_risk,
-            "lockConflict": "mutation-lock-conflict" in row_id,
+            "lockConflict": row_id
+            == "remediation.lock.mutation-conflict-diagnosis-parallelism",
             "cooldown": False,
             "duplicateSuppressed": "idempotency" in row_id,
             "nestedRemediationDenied": False,
             "noProgressEscalated": "no-progress" in row_id,
+            "riskCasesDelivered": (
+                list(ACTION_RISK_CASES)
+                if row_id == "remediation.action.low-medium-risk-allowed"
+                else []
+            ),
+            "staleAuthorityRejections": (
+                list(STALE_AUTHORITY_CASES)
+                if row_id == "remediation.staleness.generation-rejected"
+                else []
+            ),
+            "diagnosisParallelAllowed": row_id
+            == "remediation.lock.mutation-conflict-diagnosis-parallelism",
+            "sessionControlsDelivered": (
+                list(SESSION_CONTROL_CASES)
+                if row_id
+                == "remediation.session.interrupt-clear-cancel-terminate-restart"
+                else []
+            ),
+            "prohibitedAuthoritiesDenied": (
+                list(PROHIBITED_AUTHORITY_CASES)
+                if row_id == "remediation.security.prohibited-authority-denied"
+                else []
+            ),
         },
         "verificationResult": {
             "outcome": repair_outcome,
@@ -314,9 +447,56 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
             in {"evidence_unavailable", "verification_failed"},
             "repeatedFailure": "no-progress" in row_id,
             "attemptsExhausted": "no-progress" in row_id,
-            "preventionOutcome": "not_applicable",
+            "preventionOutcome": (
+                "published_pr"
+                if row_id == "remediation.prevention.repair-fail-then-prevention-pr"
+                else "analyzed_separately"
+                if row_id
+                == "remediation.prevention.repair-success-separate-analysis"
+                else "not_applicable"
+            ),
+            "outcomesObserved": (
+                list(REMEDIATION_REPAIR_OUTCOMES & {
+                    "still_failed",
+                    "regressed",
+                    "evidence_unavailable",
+                    "verification_failed",
+                })
+                if row_id
+                == "remediation.verify.still-failed-regressed-unavailable"
+                else [repair_outcome]
+            ),
+            "immediateRepairOutcome": (
+                "still_failed"
+                if row_id
+                in {
+                    "remediation.prevention.repair-fail-then-prevention-pr",
+                    "remediation.prevention.pr-verification-failure-not-relabeled",
+                }
+                else repair_outcome
+            ),
+            "preventionAnalysisSeparate": row_id
+            == "remediation.prevention.repair-success-separate-analysis",
+            "targetRelabeledRepaired": False,
         },
-        "publicationOutcome": {"outcome": "not_applicable"},
+        "publicationOutcome": {
+            "outcome": (
+                "published"
+                if row_id == "remediation.prevention.repair-fail-then-prevention-pr"
+                else "verification_failed"
+                if row_id
+                == "remediation.prevention.pr-verification-failure-not-relabeled"
+                else "not_applicable"
+            ),
+            "preventionPrOutcome": (
+                "published_reviewable"
+                if row_id == "remediation.prevention.repair-fail-then-prevention-pr"
+                else "verification_failed"
+                if row_id
+                == "remediation.prevention.pr-verification-failure-not-relabeled"
+                else "not_applicable"
+            ),
+        },
         "cleanupOutcome": {
             "outcome": "completed",
             "remainingLiveResources": 0,
@@ -327,11 +507,42 @@ def _source_payload(entry: dict[str, object], record_type: str) -> dict[str, obj
             "providerProfileReleasedLast": True,
             "operatorCancelled": "cancellation-each-phase" in row_id,
             "operatorTakeover": False,
+            "targetedCleanup": row_id
+            in {
+                "remediation.cleanup.targeted-janitor-verification",
+                "remediation.cleanup.complete-provider-profile-release-last",
+            },
+            "helperRestarted": row_id
+            == "remediation.helper.container-restart-reap-linkage",
+            "helperReaped": row_id
+            == "remediation.helper.container-restart-reap-linkage",
+            "helperTargetLinked": row_id
+            == "remediation.helper.container-restart-reap-linkage",
         },
         "temporalHistory": {
-            "replayCount": 1 if "replay-each-phase" in row_id else 0,
+            "replayCount": (
+                len(REMEDIATION_DURABLE_PHASES)
+                if "worker-restart-temporal-replay" in row_id
+                else 0
+            ),
             "replayOutcome": "passed",
-            "cancellationPhase": "all" if "cancellation-each-phase" in row_id else "none",
+            "cancellationPhases": (
+                list(REMEDIATION_DURABLE_PHASES)
+                if "cancellation-each-phase" in row_id
+                else []
+            ),
+            "replayPhases": (
+                list(REMEDIATION_DURABLE_PHASES)
+                if "worker-restart-temporal-replay" in row_id
+                else []
+            ),
+            "duplicateEffectsSuppressed": (
+                list(DUPLICATE_EFFECT_CASES)
+                if row_id == "remediation.security.duplicate-prevention-idempotency"
+                else []
+            ),
+            "firstMessageCount": 0 if row.authority_mode == "admin_auto" else 1,
+            "duplicateSuppressionCount": 1 if "duplicate" in row_id else 0,
         },
         "sideEffectAudit": {
             "observedDisposition": row.expected_outcome,
@@ -526,7 +737,7 @@ def test_catalog_document_exposes_complete_owned_threshold_contract() -> None:
         assert row["architectures"]
         assert row["evidenceSchema"] == REMEDIATION_ARTIFACT_SCHEMA_VERSION
         assert all(
-            threshold["rule"] == "all_observations_pass"
+            threshold["rule"] == "catalog_owned_typed_fact_predicate"
             for threshold in row["thresholds"].values()
         )
 
@@ -780,6 +991,136 @@ def test_fabricated_scenario_outcome_cannot_override_action_audit(tmp_path) -> N
     )
     with pytest.raises(RemediationMatrixError, match="scenario observation conflicts"):
         _validate_staged(artifact, tmp_path, kind=kind)
+
+
+@pytest.mark.parametrize(
+    ("row_id", "record_type", "update"),
+    (
+        (
+            "remediation.action.approval-gated-approved",
+            "approvalDecision",
+            lambda payload: payload.update({"outcome": "denied"}),
+        ),
+        (
+            "remediation.verify.action-delivered-target-resolved",
+            "actionResult",
+            lambda payload: payload.update(
+                {"deliveryStatus": "denied", "outcome": "denied"}
+            ),
+        ),
+        (
+            "remediation.verify.action-delivered-target-resolved",
+            "verificationResult",
+            lambda payload: payload.update({"outcome": "verified_no_change"}),
+        ),
+        (
+            "remediation.verify.action-delivered-no-change",
+            "verificationResult",
+            lambda payload: payload.update({"outcome": "verified_resolved"}),
+        ),
+        (
+            "remediation.verify.still-failed-regressed-unavailable",
+            "verificationResult",
+            lambda payload: payload.update({"outcome": "verified_resolved"}),
+        ),
+        (
+            "remediation.reliability.cancellation-each-phase",
+            "temporalHistory",
+            lambda payload: payload.update({"cancellationPhases": []}),
+        ),
+        (
+            "remediation.reliability.worker-restart-temporal-replay",
+            "temporalHistory",
+            lambda payload: payload.update({"replayPhases": []}),
+        ),
+        (
+            "remediation.security.duplicate-prevention-idempotency",
+            "temporalHistory",
+            lambda payload: payload.update({"firstMessageCount": 2}),
+        ),
+        (
+            "remediation.cleanup.complete-provider-profile-release-last",
+            "cleanupOutcome",
+            lambda payload: payload.update({"providerProfileReleasedLast": False}),
+        ),
+    ),
+    ids=(
+        "approved-summary-denied-by-authority",
+        "delivered-summary-denied-by-action-owner",
+        "resolved-summary-no-change-verification",
+        "no-change-summary-resolved-verification",
+        "non-resolved-summary-resolved-verification",
+        "missing-cancellation-phases",
+        "missing-replay-phases",
+        "duplicate-first-message",
+        "provider-profile-not-released-last",
+    ),
+)
+def test_passing_summaries_cannot_override_typed_semantic_contradictions(
+    tmp_path, row_id, record_type, update
+) -> None:
+    row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
+    artifact = _artifact(row.evidence_kind, [row_id])
+    _stage_row_dependencies(tmp_path, artifact)
+    _rewrite_source_record(tmp_path, artifact, record_type, update)
+
+    with pytest.raises(RemediationMatrixError, match="authoritative typed facts"):
+        _validate_staged(artifact, tmp_path, kind=row.evidence_kind)
+
+
+def test_fabricated_audit_and_scenario_threshold_counts_are_rejected(tmp_path) -> None:
+    row_id = "remediation.action.approval-gated-approved"
+    row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
+    threshold = row.thresholds[0]
+    artifact = _artifact(row.evidence_kind, [row_id])
+    _stage_row_dependencies(tmp_path, artifact)
+    for record_type in ("sideEffectAudit", "scenarioObservation"):
+        _rewrite_source_record(
+            tmp_path,
+            artifact,
+            record_type,
+            lambda payload: payload["thresholdSamples"].update(
+                {threshold: {"passed": 2, "total": 2}}
+            ),
+        )
+
+    with pytest.raises(RemediationMatrixError, match="authoritative typed facts"):
+        _validate_staged(artifact, tmp_path, kind=row.evidence_kind)
+
+
+def test_combined_release_fails_closed_on_typed_approval_contradiction(tmp_path) -> None:
+    release, release_path = _stage_release(tmp_path)
+    kind = "actionApprovalEvidence"
+    artifact_path = tmp_path / f"{kind}.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    row_index = next(
+        index
+        for index, entry in enumerate(artifact["rows"])
+        if entry["row"] == "remediation.action.approval-gated-approved"
+    )
+    _rewrite_source_record(
+        tmp_path,
+        artifact,
+        "approvalDecision",
+        lambda payload: payload.update({"outcome": "denied"}),
+        row_index=row_index,
+    )
+    content = _artifact_bytes(artifact)
+    artifact_path.write_bytes(content)
+    manifest_entry = next(
+        item for item in release["evidenceManifest"] if item["kind"] == kind
+    )
+    manifest_entry["sha256"] = hashlib.sha256(content).hexdigest()
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert status.manual_mutation_supported is False
 
 
 def test_missing_architecture_coverage_is_rejected() -> None:

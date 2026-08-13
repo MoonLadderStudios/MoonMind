@@ -232,10 +232,13 @@ architecture. Every source-record type has one exact v1 schema and repeats the
 target/remediation workflow, run, Step Execution, attempt, branch, Agent
 Profile, Provider Profile, lease, host, bridge, and session identity. Lineage
 `*Ref` values must equal a resolved record in the same manifest. The row result
-is derived from the typed browser, request, input, workflow, context,
-profile/policy, egress, approval, action, verification, publication, cleanup,
-Temporal-history, side-effect-audit, and retained-scan records; the
-`scenarioObservation` summary is cross-checked and has no independent authority.
+is derived by catalog-owned predicates over the typed browser, request, input,
+workflow, context, profile/policy, egress, approval, action, verification,
+publication, cleanup, Temporal-history, and retained-scan records. Those
+predicates derive the disposition, every required sub-scenario observation, and
+the numerator and denominator for each named row threshold. Both
+`sideEffectAudit` and `scenarioObservation` are cross-checked summaries; neither
+can supply or override a verdict, observation, or threshold count.
 `evaluate_remediation_release` (mounted via
 `MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF`, published on
 `/api/omnigent/codex-catalog-readiness` as `remediationRelease`) re-resolves every

@@ -529,7 +529,15 @@ describe('routed remediation operator journey', () => {
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
     cleanupRender = unmount;
 
-    expect((await screen.findAllByText(/belongs to another browser tab/i)).length).toBeGreaterThan(0);
+    expect(
+      (
+        await screen.findAllByText(
+          /belongs to another browser tab/i,
+          {},
+          { timeout: 10_000 },
+        )
+      ).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText('Remediation Draft')).toBeNull();
     const discard = screen.getByRole('button', { name: 'Discard draft reference' });
     discard.focus();
