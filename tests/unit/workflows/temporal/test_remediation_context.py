@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -183,29 +183,42 @@ async def _create_target_and_remediation(
         initial_parameters=_valid_user_workflow_parameters(),
         idempotency_key=None,
     )
-    remediation = await execution_service.create_execution(
-        workflow_type="MoonMind.UserWorkflow",
-        owner_id=owner,
-        title="Remediate target",
-        input_artifact_ref=None,
-        plan_artifact_ref=None,
-        manifest_artifact_ref=None,
-        failure_policy=None,
-        initial_parameters={
-            "workflow": {
-                "remediation": {
-                    "target": {"workflowId": target.workflow_id},
-                    "authorityMode": authority_mode,
-                    "actionPolicyRef": action_policy_ref,
-                    "approvalPolicy": {
-                        "mode": "risk_gated",
-                        "autoAllowedRisk": "medium",
-                    },
-                }
-            }
-        },
-        idempotency_key=None,
+    # This helper owns post-admission remediation tests. Gate-denial behavior is
+    # covered separately by TemporalExecutionService tests, so explicitly open
+    # the release gate only when a caller needs an admin_auto fixture.
+    release_gate = (
+        patch.object(
+            TemporalExecutionService,
+            "_autonomous_remediation_release_authorized",
+            return_value=True,
+        )
+        if authority_mode == "admin_auto"
+        else nullcontext()
     )
+    with release_gate:
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": authority_mode,
+                        "actionPolicyRef": action_policy_ref,
+                        "approvalPolicy": {
+                            "mode": "risk_gated",
+                            "autoAllowedRisk": "medium",
+                        },
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
     return target, remediation
 
 def _admin_permissions(**overrides):
@@ -3661,26 +3674,31 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
         mock_client_adapter.start_workflow.side_effect = [
             SimpleNamespace(run_id="other-run")
         ]
-        other = await TemporalExecutionService(
-            session, client_adapter=mock_client_adapter
-        ).create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=target.owner_id,
-            title="Second remediator",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters={
-                "workflow": {
-                    "remediation": {
-                        "target": {"workflowId": target.workflow_id},
-                        "authorityMode": "admin_auto",
+        with patch.object(
+            TemporalExecutionService,
+            "_autonomous_remediation_release_authorized",
+            return_value=True,
+        ):
+            other = await TemporalExecutionService(
+                session, client_adapter=mock_client_adapter
+            ).create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=target.owner_id,
+                title="Second remediator",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        }
                     }
-                }
-            },
-            idempotency_key=None,
-        )
+                },
+                idempotency_key=None,
+            )
         now = datetime(2026, 4, 22, tzinfo=timezone.utc)
         policy = RemediationMutationGuardPolicy(
             lock_ttl_seconds=60,

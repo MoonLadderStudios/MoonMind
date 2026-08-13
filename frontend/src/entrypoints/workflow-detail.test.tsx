@@ -6921,6 +6921,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByText('Remediation create preview')).toBeTruthy();
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
+    expect((
+      within(screen.getByLabelText('Remediation authority')).getByRole('option', {
+        name: 'Administrator automatic (release gated)',
+      }) as HTMLOptionElement
+    ).disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText('Remediation mode'), {
       target: { value: 'snapshot' },

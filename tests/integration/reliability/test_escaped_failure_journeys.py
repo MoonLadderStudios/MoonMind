@@ -106,6 +106,25 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as checkpoint_branch_turn_module,
 )
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="replay-test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        validationResult="passed",
+    )
+
+
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (

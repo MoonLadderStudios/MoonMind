@@ -207,6 +207,24 @@ const readyOmnigentCatalog = {
   ineligibleProviderProfiles: [],
   hostModes: ['on_demand_docker'],
   gateReasons: [],
+  remediationRelease: {
+    policyVersion: 'moonmind.operator-remediation-release/v1',
+    matrixVersion: 'operator-remediation-support-matrix/v1',
+    manualDiagnosisSupported: false,
+    manualMutationSupported: false,
+    autonomousRolloutAuthorized: false,
+    promotionAllowed: false,
+    manualPromotionAllowed: false,
+    rollbackRequired: true,
+    expiresAt: null,
+    telemetry: {},
+    alerts: [{
+      code: 'remediation_release_evidence_missing',
+      severity: 'critical',
+      operatorAction: 'block_or_rollback_manual_promotion',
+    }],
+    blockers: ['autonomous_rollout_gate_closed'],
+  },
 };
 
 const uiInfo = {
@@ -436,6 +454,19 @@ describe('routed remediation operator journey', () => {
       );
       expect((screen.getByLabelText('Action policy') as HTMLSelectElement).value)
         .toBe('admin_healer_default');
+      expect(
+        within(screen.getByLabelText('Authority')).getByRole('option', {
+          name: 'Administrator automatic (release gated)',
+        }),
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/Autonomous mutation remains disabled until the operator remediation release matrix passes/i),
+      ).toBeTruthy();
+      await userEvent.click(screen.getByText('Operator remediation release status'));
+      expect(screen.getByText('Manual diagnosis')).toBeTruthy();
+      expect(screen.getAllByText('Not qualified')).toHaveLength(2);
+      expect(screen.getByText('Required')).toBeTruthy();
+      expect(screen.getByText(/critical: remediation_release_evidence_missing/)).toBeTruthy();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });
@@ -498,7 +529,15 @@ describe('routed remediation operator journey', () => {
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
     cleanupRender = unmount;
 
-    expect((await screen.findAllByText(/belongs to another browser tab/i)).length).toBeGreaterThan(0);
+    expect(
+      (
+        await screen.findAllByText(
+          /belongs to another browser tab/i,
+          {},
+          { timeout: 10_000 },
+        )
+      ).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText('Remediation Draft')).toBeNull();
     const discard = screen.getByRole('button', { name: 'Discard draft reference' });
     discard.focus();

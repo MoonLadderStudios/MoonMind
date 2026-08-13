@@ -13,12 +13,14 @@ import hashlib
 import json
 import os
 import platform
+import re
+import shlex
 import subprocess
 import sys
-import shlex
 import xml.etree.ElementTree as ET
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -29,10 +31,27 @@ if str(REPO_ROOT) not in sys.path:
 from moonmind.omnigent.conformance import (  # noqa: E402
     CaseResult,
     ConformanceContractError,
+    PROFILE_SHA256,
+    PROFILE_VERSION,
     assert_secret_free,
     build_report,
     load_profile,
     require_pinned_images,
+)
+from moonmind.omnigent.remediation_matrix import (  # noqa: E402
+    PROHIBITED_UI_JOURNEY_MARKERS,
+    REMEDIATION_ARTIFACT_SCHEMA_VERSION,
+    REMEDIATION_MATRIX_VERSION,
+    REMEDIATION_ROW_CATALOG,
+    REMEDIATION_SOURCE_RECORD_SCHEMAS,
+    RemediationMatrixError,
+    REQUIRED_REMEDIATION_LINEAGE_FIELDS,
+    REQUIRED_REMEDIATION_EVIDENCE_KINDS,
+    REQUIRED_REMEDIATION_RETAINED_CHANNELS,
+    REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES,
+    REQUIRED_UI_JOURNEY_ASSERTIONS,
+    derive_remediation_observation_from_source_records,
+    validate_remediation_evidence_artifact,
 )
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
@@ -42,6 +61,7 @@ LIVE_CASES = {
     "browser": {"product.normal-create-api"},
     "product": {"product.normal-create-api"},
     "cumulative": {"product.cumulative-remediation"},
+    "remediation": {"product.operator-remediation-release-matrix"},
     "stock": {
         "stock-images.proxy",
         "proxy.routes",
@@ -117,6 +137,11 @@ BROWSER_RECORD_ORDER = (
     "sideEffectAudit",
 )
 BROWSER_RECORD_TYPES = set(BROWSER_RECORD_ORDER)
+REMEDIATION_RECORD_TYPES = REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES
+PROHIBITED_RETAINED_AUTHORITY = re.compile(
+    r'(?i)"(?:rawHostShell|dockerSocket|sqlConnection|storageKey|credentialValue|'
+    r'secretRead|redactionBypass)"\s*:\s*(?!false\b|null\b|""|\[\]|\{\})'
+)
 ADMISSION_RECORD_TYPES = {"browserTrace", "sideEffectAudit"}
 BROWSER_FIELD_RECORD_TYPE = {
     "authoredWorkflowRef": "authoredWorkflow",
@@ -214,6 +239,7 @@ SCENARIOS = {
     "browser": f"{PROVIDER_TEST}::test_live_browser_release_matrix",
     "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
     "cumulative": f"{PROVIDER_TEST}::test_live_cumulative_remediation_journey",
+    "remediation": f"{PROVIDER_TEST}::test_live_operator_remediation_release_matrix",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
     "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
     "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
@@ -225,15 +251,67 @@ EVIDENCE_ENV = {
     "screenshots": "MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE",
     "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
 }
+REMEDIATION_EVIDENCE_ENV = {
+    "logs": "MOONMIND_OMNIGENT_LOG_EVIDENCE",
+    "events": "MOONMIND_OMNIGENT_EVENT_EVIDENCE",
+    "screenshotsCaptures": "MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE",
+    "diagnostics": "MOONMIND_OMNIGENT_DIAGNOSTIC_EVIDENCE",
+    "artifacts": "MOONMIND_OMNIGENT_ARTIFACT_EVIDENCE",
+    "histories": "MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE",
+    "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
+}
+if set(REMEDIATION_EVIDENCE_ENV) != set(REQUIRED_REMEDIATION_RETAINED_CHANNELS):
+    raise RuntimeError("operator-remediation retained evidence channels drifted")
 SCENARIO_EVIDENCE_ENV = {
     "browser": "MOONMIND_OMNIGENT_BROWSER_EVIDENCE",
     "product": "MOONMIND_OMNIGENT_PRODUCT_EVIDENCE",
     "cumulative": "MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE",
+    "remediation": "MOONMIND_OMNIGENT_REMEDIATION_MATRIX_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
     "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
     "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
     "failures": "MOONMIND_OMNIGENT_FAILURE_EVIDENCE",
 }
+
+
+def _validate_remediation_browser_lineage(
+    *,
+    row_id: str,
+    browser_observation: dict[str, object],
+    lineage: object,
+    target_workflow_id: str,
+    target_run_id: str,
+) -> None:
+    """Bind provider observations to the exact browser-created workflow pair."""
+
+    browser_workflow_id = str(browser_observation.get("workflowId") or "").strip()
+    if (
+        browser_observation.get("targetWorkflowId") != target_workflow_id
+        or browser_observation.get("targetRunId") != target_run_id
+        or not isinstance(lineage, dict)
+        or lineage.get("targetWorkflowId") != target_workflow_id
+        or lineage.get("targetRunId") != target_run_id
+    ):
+        raise ConformanceContractError(
+            f"remediation/{row_id} evidence is not bound to the pinned target"
+        )
+    if row_id == "remediation.autonomous.rollout-gate-closed":
+        if (
+            browser_workflow_id
+            or browser_observation.get("normalCreateRequest") is not False
+        ):
+            raise ConformanceContractError(
+                "remediation/autonomous gate evidence unexpectedly created a workflow"
+            )
+        return
+    if (
+        not browser_workflow_id
+        or lineage.get("remediationWorkflowId") != browser_workflow_id
+    ):
+        raise ConformanceContractError(
+            f"remediation/{row_id} evidence is not bound to the "
+            "browser-created remediation workflow"
+        )
 
 
 class LiveRunner:
@@ -242,6 +320,7 @@ class LiveRunner:
         self.env = env
         self.logs: list[Path] = []
         self.evidence_refs: list[str] = []
+        self._scan_generation = 0
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_STATE", str(output_dir / "backend-state.json"))
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_EVIDENCE_DIR", str(output_dir))
 
@@ -314,7 +393,7 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
-        if scenario in {"browser", "product", "cumulative", "failures"}:
+        if scenario in {"browser", "product", "cumulative", "remediation", "failures"}:
             records = [
                 record
                 for item in observations
@@ -335,6 +414,8 @@ class LiveRunner:
                 if scenario == "product"
                 else {"cumulativeRunState", "sideEffectAudit"}
                 if scenario == "cumulative"
+                else REMEDIATION_RECORD_TYPES
+                if scenario == "remediation"
                 else {"injectionControl", "terminalProjection", "sideEffectAudit"}
             )
             observed_types = {record.get("type") for record in records}
@@ -351,6 +432,14 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"{scenario}/{action} contains an invalid source record"
                     )
+                if (
+                    scenario == "remediation"
+                    and urllib.parse.urlparse(record["ref"]).scheme != "file"
+                ):
+                    raise ConformanceContractError(
+                        f"{scenario}/{action} source record is not durable local "
+                        f"evidence: {record['type']}"
+                    )
                 raw = self._resolve_ref_bytes(record["ref"])
                 if hashlib.sha256(raw).hexdigest() != record["sha256"].lower():
                     raise ConformanceContractError(
@@ -362,6 +451,20 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"{scenario}/{action} source record is not JSON: {record['type']}"
                     ) from exc
+                if scenario == "remediation":
+                    resolved_record = record["_resolved"]
+                    if (
+                        not isinstance(resolved_record, dict)
+                        or resolved_record.get("schemaVersion")
+                        != REMEDIATION_SOURCE_RECORD_SCHEMAS.get(record["type"])
+                        or not isinstance(resolved_record.get("generatedAt"), str)
+                        or not resolved_record["generatedAt"].strip()
+                    ):
+                        raise ConformanceContractError(
+                            f"{scenario}/{action} source record lacks schema/freshness: "
+                            f"{record['type']}"
+                        )
+                    record["_sizeBytes"] = len(raw)
             payload["_sourceRecordTypes"] = sorted(observed_types)
             payload["_sourceRecords"] = records
         returned_ids = {
@@ -370,6 +473,7 @@ class LiveRunner:
                 "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
                 "runId", "stepId", "bridgeId", "sourceWorkflowId",
                 "destinationWorkflowId", "continuationId", "profileRef",
+                "targetWorkflowId", "targetRunId", "remediationWorkflowId",
                 "c0Ref", "c1Ref", "c2Ref",
             }
             and value
@@ -382,6 +486,7 @@ class LiveRunner:
                     "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
                     "runId", "stepId", "bridgeId", "sourceWorkflowId",
                     "destinationWorkflowId", "continuationId", "profileRef",
+                    "targetWorkflowId", "targetRunId", "remediationWorkflowId",
                     "c0Ref", "c1Ref", "c2Ref",
                 }
                 and value
@@ -404,7 +509,14 @@ class LiveRunner:
             )
         return payload
 
-    def browser_observation(self, row: str) -> dict[str, object]:
+    def browser_observation(
+        self,
+        row: str,
+        *,
+        target_workflow_id: str | None = None,
+        target_run_id: str | None = None,
+        authority_mode: str | None = None,
+    ) -> dict[str, object]:
         """Run the fixed repository-owned Playwright journey for one matrix row."""
         browser_dir = self.output_dir / "browser"
         browser_dir.mkdir(parents=True, exist_ok=True)
@@ -413,6 +525,14 @@ class LiveRunner:
             "MOONMIND_OMNIGENT_BROWSER_ROW": row,
             "MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR": str(browser_dir),
         })
+        if target_workflow_id is not None:
+            env.update({
+                "MOONMIND_OMNIGENT_REMEDIATION_TARGET_WORKFLOW_ID": target_workflow_id,
+                "MOONMIND_OMNIGENT_REMEDIATION_TARGET_RUN_ID": str(target_run_id or ""),
+                "MOONMIND_OMNIGENT_REMEDIATION_AUTHORITY_MODE": str(
+                    authority_mode or "approval_gated"
+                ),
+            })
         result = subprocess.run(
             ["node", "tools/run_omnigent_browser_journey.mjs"],
             cwd=REPO_ROOT,
@@ -436,10 +556,14 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"browser/{row} controller returned invalid JSON"
             ) from exc
+        expected_schema = (
+            "moonmind.operator-remediation-browser-observation/v1"
+            if target_workflow_id is not None
+            else "moonmind.omnigent.browser-observation/v1"
+        )
         if (
             not isinstance(observation, dict)
-            or observation.get("schemaVersion")
-            != "moonmind.omnigent.browser-observation/v1"
+            or observation.get("schemaVersion") != expected_schema
             or observation.get("row") != row
         ):
             raise ConformanceContractError(
@@ -735,6 +859,277 @@ class LiveRunner:
         })
         self.scenario("browser")
 
+    def remediation(self, images: dict[str, str]) -> None:
+        """Drive every #3626 row through Detail -> Remediate -> normal Create.
+
+        The deployment adapter supplies source-record refs and raw observations.
+        This repository-owned controller resolves their digests and derives row
+        qualification from the catalog; it never accepts caller-owned rows or a
+        caller-supplied ``passed`` field.
+        """
+
+        policy_version = self.env.get(
+            "MOONMIND_OMNIGENT_LAUNCH_POLICY_VERSION", ""
+        ).strip()
+        agent_profile_version = self.env.get(
+            "MOONMIND_OMNIGENT_AGENT_PROFILE_VERSION", ""
+        ).strip()
+        remediation_policy_version = self.env.get(
+            "MOONMIND_OMNIGENT_REMEDIATION_POLICY_VERSION", ""
+        ).strip()
+        if not all(
+            (policy_version, agent_profile_version, remediation_policy_version)
+        ):
+            raise ConformanceContractError(
+                "remediation matrix requires launch, Agent Profile, and remediation policy versions"
+            )
+
+        captured: list[
+            tuple[
+                object,
+                dict[str, object],
+                dict[str, object],
+                list[dict[str, object]],
+            ]
+        ] = []
+        for row in REMEDIATION_ROW_CATALOG:
+            setup = self.action("browser-setup", row.row_id)
+            target_workflow_id = str(setup.get("targetWorkflowId") or "").strip()
+            target_run_id = str(setup.get("targetRunId") or "").strip()
+            if not target_workflow_id or not target_run_id:
+                raise ConformanceContractError(
+                    f"remediation setup lacks pinned target identity: {row.row_id}"
+                )
+            browser_observation = self.browser_observation(
+                row.row_id,
+                target_workflow_id=target_workflow_id,
+                target_run_id=target_run_id,
+                authority_mode=row.authority_mode,
+            )
+            result = self.action(
+                "remediation",
+                row.row_id,
+                browserObservation=browser_observation,
+            )
+            records = result.get("_sourceRecords")
+            if not isinstance(records, list):
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} lacks resolved source records"
+                )
+            scenario_records = [
+                record
+                for record in records
+                if record.get("type") == "scenarioObservation"
+            ]
+            if len(scenario_records) != 1:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} requires one scenario observation"
+                )
+            try:
+                facts = derive_remediation_observation_from_source_records(
+                    row=row,
+                    manifest_by_type={str(record["type"]): record for record in records},
+                    sources={
+                        str(record["type"]): record["_resolved"]
+                        for record in records
+                    },
+                )
+            except RemediationMatrixError as exc:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} source records are semantically invalid"
+                ) from exc
+            if facts["observedDisposition"] != row.expected_outcome:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} did not observe its required disposition"
+                )
+            if facts["hostMode"] not in row.host_modes:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} used an unsupported host mode"
+                )
+            selected = browser_observation.get("selected")
+            selected_host_mode = (
+                "static"
+                if isinstance(selected, dict)
+                and selected.get("hostMode") == "static_compose"
+                else "on_demand"
+            )
+            if selected_host_mode != facts["hostMode"]:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} browser and host evidence disagree"
+                )
+            lineage = facts["lineage"]
+            _validate_remediation_browser_lineage(
+                row_id=row.row_id,
+                browser_observation=browser_observation,
+                lineage=lineage,
+                target_workflow_id=target_workflow_id,
+                target_run_id=target_run_id,
+            )
+            if (
+                facts["architecture"] not in row.architectures
+                or facts["targetProvenance"] not in row.target_provenance
+                or facts["remediationProvenance"]
+                not in row.remediation_provenance
+            ):
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} runtime provenance is unsupported"
+                )
+            if facts["telemetryFacts"]["remainingLiveResources"] != 0:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} retained live resources after cleanup"
+                )
+
+            threshold_samples = facts["thresholds"]
+            if not isinstance(threshold_samples, dict):
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} lacks threshold samples"
+                )
+            for threshold in row.thresholds:
+                sample = threshold_samples.get(threshold)
+                if (
+                    not isinstance(sample, dict)
+                    or sample.get("within") is not True
+                    or not isinstance(sample.get("passed"), int)
+                    or not isinstance(sample.get("total"), int)
+                    or sample["total"] < 1
+                    or sample["passed"] != sample["total"]
+                ):
+                    raise ConformanceContractError(
+                        f"remediation/{row.row_id} exceeded threshold {threshold}"
+                    )
+            required_observations = facts["observations"]
+            if not isinstance(required_observations, dict) or any(
+                required_observations.get(name) is not True
+                for name in row.required_observations
+            ):
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} lacks required sub-scenario evidence"
+                )
+            if not isinstance(lineage, dict) or any(
+                not lineage.get(key)
+                for key in REQUIRED_REMEDIATION_LINEAGE_FIELDS
+            ):
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} lacks complete durable lineage"
+                )
+            captured.append((row, browser_observation, facts, records))
+
+        scans = self.scan(remediation=True)
+        architectures = sorted({str(facts["architecture"]) for _, _, facts, _ in captured})
+        artifacts: dict[str, dict[str, object]] = {
+            kind: {
+                "schemaVersion": REMEDIATION_ARTIFACT_SCHEMA_VERSION,
+                "matrixVersion": REMEDIATION_MATRIX_VERSION,
+                "kind": kind,
+                "producerVersion": "moonmind.operator-remediation-live-observer/v1",
+                "rows": [],
+            }
+            for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
+        }
+        browser_rows: dict[str, object] = {}
+        for row, browser_observation, facts, records in captured:
+            ui_journey = {
+                "journey": row.ui_journey,
+                **{
+                    assertion: browser_observation.get(assertion)
+                    for assertion in REQUIRED_UI_JOURNEY_ASSERTIONS
+                },
+                **{
+                    marker: browser_observation.get(marker)
+                    for marker in PROHIBITED_UI_JOURNEY_MARKERS
+                },
+            }
+            if row.row_id == "remediation.autonomous.rollout-gate-closed":
+                ui_journey["autonomousAdmissionDenied"] = (
+                    browser_observation.get("admissionRejected") is True
+                    and browser_observation.get("admissionReason")
+                    == "autonomous_rollout_gate"
+                )
+            entry = {
+                "row": row.row_id,
+                "gate": row.gate,
+                "observedDisposition": facts["observedDisposition"],
+                "hostMode": facts["hostMode"],
+                "architecture": facts["architecture"],
+                "images": dict(images),
+                "targetProvenance": facts["targetProvenance"],
+                "remediationProvenance": facts["remediationProvenance"],
+                "authorityMode": facts["authorityMode"],
+                "egress": facts["egress"],
+                "actionCapability": facts["actionCapability"],
+                "verificationCapability": facts["verificationCapability"],
+                "uiJourney": ui_journey,
+                "actionDelivery": facts["actionDelivery"],
+                "repairVerification": facts["repairVerification"],
+                "timings": facts["timings"],
+                "observations": {
+                    name: facts["observations"][name]
+                    for name in row.required_observations
+                },
+                "lineage": dict(facts["lineage"]),
+                "evidenceManifest": [
+                    {
+                        "type": record["type"],
+                        "ref": record["ref"],
+                        "sha256": record["sha256"],
+                        "schemaVersion": record["_resolved"]["schemaVersion"],
+                        "contentType": "application/json",
+                        "sizeBytes": record["_sizeBytes"],
+                        "generatedAt": record["_resolved"]["generatedAt"],
+                    }
+                    for record in records
+                ],
+                "thresholds": {
+                    threshold: {
+                        "within": True,
+                        "passed": facts["thresholds"][threshold]["passed"],
+                        "total": facts["thresholds"][threshold]["total"],
+                    }
+                    for threshold in row.thresholds
+                },
+                "secretScan": scans,
+                "profileVersion": PROFILE_VERSION,
+                "profileSha256": PROFILE_SHA256,
+                "launchPolicyVersion": policy_version,
+                "agentProfileVersion": agent_profile_version,
+                "remediationPolicyVersion": remediation_policy_version,
+            }
+            artifacts[row.evidence_kind]["rows"].append(entry)
+            browser_rows[row.row_id] = {
+                "browserObservation": browser_observation,
+                "sourceRecordTypes": sorted(
+                    str(record["type"]) for record in records
+                ),
+            }
+
+        artifact_refs = []
+        for kind, artifact in artifacts.items():
+            path = self.output_dir / f"operator-remediation-{kind}.json"
+            validate_remediation_evidence_artifact(
+                artifact,
+                expected_kind=kind,
+                images=images,
+                architectures=architectures,
+                profile_version=PROFILE_VERSION,
+                profile_sha256=PROFILE_SHA256,
+                policy_version=policy_version,
+                agent_profile_version=agent_profile_version,
+                remediation_policy_version=remediation_policy_version,
+                evidence_document_path=path,
+            )
+            path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+            artifact_refs.append(path.resolve().as_uri())
+
+        self.write_evidence("remediation", {
+            "issue": "MoonLadderStudios/MoonMind#3626",
+            "matrixVersion": REMEDIATION_MATRIX_VERSION,
+            "entrypoint": "workflow-detail.remediate.normal-create",
+            "rows": browser_rows,
+            "artifactRefs": artifact_refs,
+            "architectures": architectures,
+        })
+        self.scenario("remediation")
+
     def cumulative(self) -> None:
         """Prove cumulative remediation through the production action boundary."""
         state: dict[str, object] = {}
@@ -935,23 +1330,57 @@ class LiveRunner:
         # No --volumes: OAuth and unrelated state must survive this runner.
         self.run(f"{mode}-cleanup", self.compose("down", "--remove-orphans"))
 
-    def scan(self) -> dict[str, dict[str, str]]:
-        scans: dict[str, dict[str, str]] = {}
-        for channel, env_name in EVIDENCE_ENV.items():
+    def scan(self, *, remediation: bool = False) -> dict[str, dict[str, object]]:
+        self._scan_generation += 1
+        scans: dict[str, dict[str, object]] = {}
+        evidence_channels = REMEDIATION_EVIDENCE_ENV if remediation else EVIDENCE_ENV
+        for channel, env_name in evidence_channels.items():
             raw = self.env.get(env_name, "")
             paths = [Path(item) for item in raw.split(os.pathsep) if item]
             if channel == "logs":
                 paths.extend(self.logs)
-            if channel == "screenshots":
-                paths.extend(sorted(self.output_dir.glob("*-terminal.png")))
-                paths.extend(sorted(self.output_dir.glob("*-replay.png")))
+            if channel in {"screenshots", "screenshotsCaptures"}:
+                paths.extend(sorted(self.output_dir.rglob("*-terminal.png")))
+                paths.extend(sorted(self.output_dir.rglob("*-replay.png")))
+                paths.extend(sorted(self.output_dir.rglob("*-target.png")))
             if not paths or any(not path.is_file() for path in paths):
                 raise ConformanceContractError(f"{channel} evidence was not collected")
             for evidence in paths:
-                assert_secret_free(evidence.read_bytes().decode("utf-8", errors="replace"))
-            scan_path = self.output_dir / f"secret-scan-{channel}.json"
-            scan_path.write_text(json.dumps({"status": "passed", "files": [str(p) for p in paths]}) + "\n")
-            scans[channel] = {"status": "passed", "evidenceRef": str(scan_path)}
+                retained_text = evidence.read_bytes().decode("utf-8", errors="replace")
+                assert_secret_free(retained_text)
+                if PROHIBITED_RETAINED_AUTHORITY.search(retained_text):
+                    raise ConformanceContractError(
+                        f"{channel} evidence retained prohibited raw authority"
+                    )
+            scan_path = self.output_dir / (
+                f"secret-scan-{self._scan_generation:02d}-{channel}.json"
+            )
+            generated_at = datetime.now(timezone.utc).isoformat()
+            scan_content = (
+                json.dumps(
+                    {
+                        "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
+                        "generatedAt": generated_at,
+                        "channel": channel,
+                        "status": "passed",
+                        "secretFindings": 0,
+                        "prohibitedAuthorityFindings": 0,
+                        "files": [path.name for path in paths],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode()
+            scan_path.write_bytes(scan_content)
+            scans[channel] = {
+                "status": "passed",
+                "evidenceRef": scan_path.resolve().as_uri(),
+                "sha256": hashlib.sha256(scan_content).hexdigest(),
+                "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
+                "contentType": "application/json",
+                "sizeBytes": len(scan_content),
+                "generatedAt": generated_at,
+            }
         return scans
 
 
@@ -987,6 +1416,8 @@ def main() -> int:
                     runner.product()
                 elif mode == "cumulative":
                     runner.cumulative()
+                elif mode == "remediation":
+                    runner.remediation(images)
                 elif mode == "stock":
                     runner.stock(images)
                 elif mode == "static":
