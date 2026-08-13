@@ -131,6 +131,8 @@ _CORRELATION_FIELDS = (
 )
 _GLOBAL_CORRELATION_FIELDS = _CORRELATION_FIELDS[:-1]
 _TRANSPORTS = frozenset({"html", "http", "sse", "websocket"})
+_NATIVE_UI_DOCUMENT_ROUTE = "native_ui_document"
+_LINKED_CONTINUATION_RELATIONSHIP = "linked_continuation"
 _NATIVE_CONTROL_KINDS = frozenset(
     {"approval", "tool", "file", "terminal", "agent", "task"}
 )
@@ -190,6 +192,43 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def _is_scoped_path(path: str, allowed_bases: tuple[str, ...]) -> bool:
+    parsed_path = urllib.parse.urlsplit(path).path
+    return any(
+        parsed_path == base or parsed_path.startswith(base + "/")
+        for base in allowed_bases
+    )
+
+
+def _require_evidence_items(value: Any, *, field: str) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not value:
+        raise ConformanceContractError(
+            f"workflow Chat source record {field} must contain evidence items"
+        )
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_item in value:
+        item = _require_mapping(raw_item, field=f"{field}[]")
+        ref = _require_string(item.get("ref"), field=f"{field}[].ref")
+        parsed = urllib.parse.urlparse(ref)
+        if (
+            ref in seen
+            or parsed.scheme not in {"", "https"}
+            or (not parsed.scheme and Path(ref).is_absolute())
+        ):
+            raise ConformanceContractError(
+                f"workflow Chat source record {field} contains an unpackaged ref"
+            )
+        digest = _require_string(item.get("sha256"), field=f"{field}[].sha256")
+        if _SHA256.fullmatch(digest) is None:
+            raise ConformanceContractError(
+                f"workflow Chat source record {field} contains a malformed digest"
+            )
+        seen.add(ref)
+        result.append({"ref": ref, "sha256": digest})
+    return result
+
+
 def _validate_record_data(
     record_type: str,
     data: Mapping[str, Any],
@@ -227,11 +266,14 @@ def _validate_record_data(
             path = _require_string(
                 item.get("path"), field="browserTrace.networkEvents[].path"
             )
+            _require_string(
+                item.get("method"), field="browserTrace.networkEvents[].method"
+            )
             status = item.get("responseStatus")
             if (
                 request_id in event_ids
                 or transport not in _TRANSPORTS
-                or not path.startswith(allowed_prefixes)
+                or not _is_scoped_path(path, allowed_prefixes)
                 or not isinstance(status, int)
                 or not 100 <= status <= 599
                 or item.get("moonmindScoped") is not True
@@ -322,8 +364,11 @@ def _validate_record_data(
             )
         observed_ids: set[str] = set()
         transports: set[str] = set()
+        observed_route_names: set[str] = set()
         reconnect_id = data.get("reconnectRequestId")
         reconnect_reauthorized = False
+        routes = compatibility_map()["routes"]
+        expected_routes = {str(item["name"]): item for item in routes}
         for request in requests:
             item = _require_mapping(request, field="facadeRequests.data.requests[]")
             request_id = _require_string(
@@ -332,10 +377,33 @@ def _validate_record_data(
             transport = _require_string(
                 item.get("transport"), field="facadeRequests.data.requests[].transport"
             )
+            route_name = _require_string(
+                item.get("routeName"), field="facadeRequests.data.requests[].routeName"
+            )
+            method = _require_string(
+                item.get("method"), field="facadeRequests.data.requests[].method"
+            )
+            route_path = _require_string(
+                item.get("routePath"), field="facadeRequests.data.requests[].routePath"
+            )
+            route = expected_routes.get(route_name)
+            route_matches = (
+                transport == "html"
+                and route_name == _NATIVE_UI_DOCUMENT_ROUTE
+                and method == "GET"
+                and route_path == f"omnigent-ui/workflow-chat/{binding_id}"
+            ) or (
+                route is not None
+                and transport == route.get("transport")
+                and method in route.get("methods", [])
+                and re.fullmatch(str(route.get("pathPattern") or ""), route_path)
+                is not None
+            )
             if (
                 request_id in observed_ids
                 or request_id not in request_id_set
                 or transport not in _TRANSPORTS
+                or not route_matches
                 or item.get("bindingId") != binding_id
                 or item.get("providerSessionId") != provider_session_id
                 or item.get("authorized") is not True
@@ -346,19 +414,14 @@ def _validate_record_data(
                 )
             observed_ids.add(request_id)
             transports.add(transport)
+            observed_route_names.add(route_name)
             if request_id == reconnect_id:
                 reconnect_reauthorized = item.get("reauthorized") is True
-        expected_routes = {item["name"] for item in compatibility_map()["routes"]}
-        route_names = set(
-            _require_string_list(
-                data.get("coveredRouteNames"),
-                field="facadeRequests.data.coveredRouteNames",
-            )
-        )
         if (
             observed_ids != request_id_set
             or transports != set(_TRANSPORTS)
-            or route_names != expected_routes
+            or observed_route_names
+            != set(expected_routes) | {_NATIVE_UI_DOCUMENT_ROUTE}
             or data.get("compatibilityProfile")
             != WORKFLOW_CHAT_COMPATIBILITY_PROFILE
             or reconnect_id not in request_id_set
@@ -407,14 +470,17 @@ def _validate_record_data(
             raise ConformanceContractError(
                 "workflow Chat mutationReceipts requires durable receipts"
             )
+        receipt_ids: set[str] = set()
         for receipt in receipts:
             item = _require_mapping(
                 receipt, field="mutationReceipts.data.receipts[]"
             )
-            if item.get("requestId") not in request_id_set:
+            request_id = item.get("requestId")
+            if request_id not in request_id_set or request_id in receipt_ids:
                 raise ConformanceContractError(
                     "workflow Chat mutation receipt is not request-correlated"
                 )
+            receipt_ids.add(str(request_id))
             for field in (
                 "actor",
                 "idempotencyKey",
@@ -427,6 +493,10 @@ def _validate_record_data(
                     item.get(field),
                     field=f"mutationReceipts.data.receipts[].{field}",
                 )
+        if receipt_ids != request_id_set:
+            raise ConformanceContractError(
+                "workflow Chat mutation receipt coverage is incomplete"
+            )
         return
 
     if record_type == "denialAudit":
@@ -436,6 +506,7 @@ def _validate_record_data(
                 "workflow Chat denialAudit requires observed denials"
             )
         kinds: set[str] = set()
+        denial_ids: set[str] = set()
         for denial in denials:
             item = _require_mapping(denial, field="denialAudit.data.denials[]")
             kinds.add(
@@ -445,11 +516,13 @@ def _validate_record_data(
             )
             if (
                 item.get("requestId") not in request_id_set
+                or item.get("requestId") in denial_ids
                 or item.get("upstreamForwarded") is not False
             ):
                 raise ConformanceContractError(
                     "workflow Chat denialAudit is not fail-closed"
                 )
+            denial_ids.add(str(item["requestId"]))
             _require_string(
                 item.get("auditRef"), field="denialAudit.data.denials[].auditRef"
             )
@@ -511,6 +584,7 @@ def _validate_record_data(
                 "workflow Chat scanAudit requires observed scan attempts"
             )
         outcomes: set[str] = set()
+        attempt_ids: set[str] = set()
         for attempt in attempts:
             item = _require_mapping(attempt, field="scanAudit.data.attempts[]")
             outcomes.add(
@@ -520,11 +594,13 @@ def _validate_record_data(
             )
             if (
                 item.get("requestId") not in request_id_set
+                or item.get("requestId") in attempt_ids
                 or item.get("forwarded") is not False
             ):
                 raise ConformanceContractError(
                     "workflow Chat scanAudit did not fail closed"
                 )
+            attempt_ids.add(str(item["requestId"]))
             _require_string(
                 item.get("auditRef"), field="scanAudit.data.attempts[].auditRef"
             )
@@ -542,7 +618,7 @@ def _validate_record_data(
             )
         )
         if (
-            not verified.issubset(request_id_set)
+            verified != request_id_set
             or data.get("browserExposedCredentialNames") != []
             or data.get("forwardedMoonMindCredentialNames") != []
         ):
@@ -573,37 +649,78 @@ def _validate_record_data(
         return
 
     if record_type == "capturedEvidence":
-        refs = _require_string_list(
-            data.get("artifactRefs"), field="capturedEvidence.data.artifactRefs"
+        artifacts = _require_evidence_items(
+            data.get("artifacts"), field="capturedEvidence.data.artifacts"
         )
-        if (
-            any(not ref.startswith("artifact://") for ref in refs)
-            or data.get("captureManifestRef") not in refs
-            or data.get("allResolved") is not True
-        ):
+        refs = {item["ref"] for item in artifacts}
+        if data.get("captureManifestRef") not in refs:
             raise ConformanceContractError(
                 "workflow Chat capturedEvidence is not independently resolvable"
             )
         return
 
     if record_type == "continuationReceipt":
-        destination = _require_string(
-            data.get("destinationWorkflowId"),
-            field="continuationReceipt.data.destinationWorkflowId",
+        creation = _require_mapping(
+            data.get("destinationCreationReceipt"),
+            field="continuationReceipt.data.destinationCreationReceipt",
         )
+        relationship = _require_mapping(
+            data.get("durableRelationship"),
+            field="continuationReceipt.data.durableRelationship",
+        )
+        source_run_id = _require_string(
+            creation.get("sourceRunId"),
+            field="continuationReceipt.data.destinationCreationReceipt.sourceRunId",
+        )
+        destination = _require_string(
+            creation.get("destinationWorkflowId"),
+            field=(
+                "continuationReceipt.data.destinationCreationReceipt."
+                "destinationWorkflowId"
+            ),
+        )
+        destination_run_id = _require_string(
+            relationship.get("destinationRunId"),
+            field="continuationReceipt.data.durableRelationship.destinationRunId",
+        )
+        relationship_identity = {
+            "relationshipType": _LINKED_CONTINUATION_RELATIONSHIP,
+            "sourceWorkflowId": workflow_id,
+            "sourceRunId": source_run_id,
+            "destinationWorkflowId": destination,
+            "destinationRunId": destination_run_id,
+        }
         if (
-            data.get("sourceWorkflowId") != workflow_id
+            creation.get("requestId") not in request_id_set
+            or creation.get("created") is not True
+            or creation.get("relationshipType")
+            != _LINKED_CONTINUATION_RELATIONSHIP
+            or creation.get("sourceWorkflowId") != workflow_id
             or destination == workflow_id
-            or data.get("sourceUnchanged") is not True
-            or data.get("separateWorkflowAction") is not True
+            or relationship.get("requestId") not in request_id_set
+            or relationship.get("requestId") == creation.get("requestId")
+            or relationship.get("direction") != "outbound"
+            or any(
+                relationship.get(field) != value
+                for field, value in relationship_identity.items()
+            )
+            or relationship.get("relationshipDigest")
+            != _canonical_digest(relationship_identity)
+            or data.get("sourceStateBeforeSha256")
+            != data.get("sourceStateAfterSha256")
         ):
             raise ConformanceContractError(
                 "workflow Chat continuationReceipt does not prove linked continuation"
             )
-        for field in ("continuationId", "idempotencyKey"):
-            _require_string(
-                data.get(field), field=f"continuationReceipt.data.{field}"
-            )
+        _require_sha256_ref(
+            data.get("sourceStateBeforeSha256"),
+            field="continuationReceipt.data.sourceStateBeforeSha256",
+        )
+        _require_string(data.get("idempotencyKey"), field="continuationReceipt.data.idempotencyKey")
+        _timestamp(
+            relationship.get("createdAt"),
+            field="continuationReceipt.data.durableRelationship.createdAt",
+        )
         return
 
     if record_type == "replaySnapshot":
@@ -613,7 +730,14 @@ def _validate_record_data(
         if (
             data.get("hostUnavailable") is not True
             or data.get("replayedFromMoonMindArtifacts") is not True
-            or any(not ref.startswith("artifact://") for ref in replay_refs)
+            or any(
+                urllib.parse.urlparse(ref).scheme not in {"", "https"}
+                or (
+                    not urllib.parse.urlparse(ref).scheme
+                    and Path(ref).is_absolute()
+                )
+                for ref in replay_refs
+            )
         ):
             raise ConformanceContractError(
                 "workflow Chat replaySnapshot does not prove host-independent replay"
@@ -701,8 +825,112 @@ def validate_workflow_chat_source_records(
             raise ConformanceContractError(
                 f"workflow Chat source record request correlation failed: {record_type}"
             )
+    browser_events = {
+        str(item["requestId"]): item
+        for item in sources["browserTrace"]["data"]["networkEvents"]
+    }
+    expected_denial_statuses: dict[str, int] = {}
+    denial_source = sources.get("denialAudit")
+    if denial_source is not None:
+        expected_denial_statuses.update(
+            {
+                str(item["requestId"]): 403
+                for item in denial_source["data"]["denials"]
+            }
+        )
+    scan_source = sources.get("scanAudit")
+    if scan_source is not None:
+        expected_denial_statuses.update(
+            {
+                str(item["requestId"]): (
+                    503 if item["outcome"] == "enforcement_unavailable" else 403
+                )
+                for item in scan_source["data"]["attempts"]
+            }
+        )
+    terminal_source = sources.get("terminalSnapshot")
+    if terminal_source is not None:
+        expected_denial_statuses.update(
+            {
+                str(request_id): 403
+                for request_id in terminal_source["data"][
+                    "deniedMutationRequestIds"
+                ]
+            }
+        )
+    for request_id, event in browser_events.items():
+        status = event["responseStatus"]
+        expected_denial = expected_denial_statuses.get(request_id)
+        unexpected_denial = (
+            expected_denial is not None and status != expected_denial
+        )
+        unsuccessful_positive = (
+            expected_denial is None
+            and status != 101
+            and not 200 <= status < 300
+        )
+        if unexpected_denial or unsuccessful_positive:
+            raise ConformanceContractError(
+                "workflow Chat browserTrace contains an unexpected response status"
+            )
+
+    facade_source = sources.get("facadeRequests")
+    mutation_source = sources.get("mutationReceipts")
+    if facade_source is not None and mutation_source is not None:
+        route_mutations = {
+            str(item["name"]): item.get("mutation") is True
+            for item in compatibility_map()["routes"]
+        }
+        facade_requests = facade_source["data"]["requests"]
+        observed_mutation_ids = {
+            str(item["requestId"])
+            for item in facade_requests
+            if route_mutations.get(str(item["routeName"]), False)
+        }
+        receipt_ids = {
+            str(item["requestId"])
+            for item in mutation_source["data"]["receipts"]
+        }
+        def _request_matches_browser_trace(item: Mapping[str, Any]) -> bool:
+            request_id = str(item["requestId"])
+            event = browser_events[request_id]
+            observed_path = urllib.parse.urlsplit(str(event["path"])).path
+            expected_path = (
+                "/" + str(item["routePath"])
+                if item["routeName"] == _NATIVE_UI_DOCUMENT_ROUTE
+                else f"/api/workflow-chat-bindings/{row_correlation['chatBindingId']}"
+                f"/omnigent/{item['routePath']}"
+            )
+            return (
+                event["transport"] == item["transport"]
+                and event["method"] == item["method"]
+                and observed_path == expected_path
+            )
+
+        if (
+            observed_mutation_ids != receipt_ids
+            or set(mutation_source["data"]["requestIds"])
+            != observed_mutation_ids
+            or any(not _request_matches_browser_trace(item) for item in facade_requests)
+        ):
+            raise ConformanceContractError(
+                "workflow Chat mutation receipt or transport coverage is incomplete"
+            )
+
+    credential_source = sources.get("credentialBoundary")
+    if credential_source is not None and (
+        set(credential_source["data"]["verifiedRequestIds"])
+        != browser_request_ids
+        or request_ids_by_type["credentialBoundary"] != browser_request_ids
+    ):
+        raise ConformanceContractError(
+            "workflow Chat credentialBoundary does not cover the browser trace"
+        )
     if row_name == "terminal-evidence-and-continuation":
-        captured_refs = set(sources["capturedEvidence"]["data"]["artifactRefs"])
+        captured_refs = {
+            str(item["ref"])
+            for item in sources["capturedEvidence"]["data"]["artifacts"]
+        }
         replay_refs = set(sources["replaySnapshot"]["data"]["artifactRefs"])
         if not replay_refs.issubset(captured_refs):
             raise ConformanceContractError(
@@ -810,7 +1038,22 @@ def build_workflow_chat_acceptance_manifest(
         if isinstance(source_records, list):
             for record in source_records:
                 if isinstance(record, Mapping) and record.get("ref"):
-                    refs.append(str(record["ref"]))
+                    record_ref = str(record["ref"])
+                    refs.append(record_ref)
+                    source_record = _resolve_json(record_ref, evidence_root)
+                    if source_record.get("recordType") == "capturedEvidence":
+                        data = source_record.get("data")
+                        artifacts = (
+                            data.get("artifacts")
+                            if isinstance(data, Mapping)
+                            else None
+                        )
+                        if isinstance(artifacts, list):
+                            for artifact in artifacts:
+                                if isinstance(artifact, Mapping) and artifact.get(
+                                    "ref"
+                                ):
+                                    refs.append(str(artifact["ref"]))
     for scan_ref in dict.fromkeys(scan_refs):
         scan_evidence = _resolve_json(scan_ref, evidence_root)
         files = scan_evidence.get("files")
@@ -932,6 +1175,7 @@ def validate_workflow_chat_acceptance_manifest(
             "workflow Chat acceptance matrix coverage is incomplete"
         )
     used_refs: set[str] = set()
+    trace_screenshot_digests: set[str] = set()
     global_correlation: dict[str, str] | None = None
     for row_name, required_assertions in REQUIRED_WORKFLOW_CHAT_ROWS.items():
         row = rows[row_name]
@@ -1017,6 +1261,28 @@ def validate_workflow_chat_acceptance_manifest(
                     )
                 sources_by_type[record_type] = source
                 used_refs.add(record_ref)
+            browser_data = sources_by_type["browserTrace"].get("data")
+            if isinstance(browser_data, Mapping):
+                trace_screenshot_digests.add(
+                    _require_sha256_ref(
+                        browser_data.get("screenshotSha256"),
+                        field="browserTrace.data.screenshotSha256",
+                    ).removeprefix("sha256:")
+                )
+            captured_source = sources_by_type.get("capturedEvidence")
+            if captured_source is not None:
+                captured_data = _require_mapping(
+                    captured_source.get("data"), field="capturedEvidence.data"
+                )
+                for artifact in _require_evidence_items(
+                    captured_data.get("artifacts"),
+                    field="capturedEvidence.data.artifacts",
+                ):
+                    if manifest_digests.get(artifact["ref"]) != artifact["sha256"]:
+                        raise ConformanceContractError(
+                            "workflow Chat capturedEvidence artifact is unresolved"
+                        )
+                    used_refs.add(artifact["ref"])
             derived_assertions, correlation = validate_workflow_chat_source_records(
                 sources_by_type,
                 row_name=row_name,
@@ -1130,6 +1396,7 @@ def validate_workflow_chat_acceptance_manifest(
         raise ConformanceContractError(
             "workflow Chat acceptance evidence-channel scans are incomplete"
         )
+    scanned_screenshot_digests: set[str] = set()
     for channel in REQUIRED_EVIDENCE_CHANNELS:
         scan = scans[channel]
         ref = scan.get("evidenceRef") if isinstance(scan, Mapping) else None
@@ -1162,6 +1429,13 @@ def validate_workflow_chat_acceptance_manifest(
                     f"workflow Chat raw evidence scan is invalid: {channel}"
                 )
             used_refs.add(file_ref)
+            if channel == "screenshots":
+                scanned_screenshot_digests.add(digest)
+
+    if not trace_screenshot_digests.issubset(scanned_screenshot_digests):
+        raise ConformanceContractError(
+            "workflow Chat browserTrace screenshot is not scanned evidence"
+        )
 
     if used_refs != set(resolved_raw):
         raise ConformanceContractError(

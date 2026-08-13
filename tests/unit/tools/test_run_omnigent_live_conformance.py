@@ -656,7 +656,7 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     assert (tmp_path / "workflow-chat-matrix.json").is_file()
     assert (tmp_path / "workflow-chat-report.json").is_file()
     assert (tmp_path / "workflow-chat-acceptance.json").is_file()
-    assert (tmp_path / "publication-secret-scan.json").is_file()
+    assert not (tmp_path / "publication-secret-scan.json").exists()
     assert runner.env["MOONMIND_OMNIGENT_SOURCE_COMMIT"] == "commit-1"
     assert runner.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE_DIR"] == str(
         tmp_path
@@ -664,6 +664,78 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     assert runner.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE"].endswith(
         "workflow-chat-acceptance.json"
     )
+
+
+def test_all_mode_reports_workflow_chat_and_scans_after_cleanup_and_report(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    images = {
+        "server": "server@sha256:" + "1" * 64,
+        "host": "host@sha256:" + "2" * 64,
+    }
+
+    for mode in module.LIVE_CASES:
+        method_name = mode
+        if mode in {"stock", "remediation"}:
+            monkeypatch.setattr(
+                module.LiveRunner,
+                method_name,
+                lambda self, selected_images: None,
+            )
+        elif mode == "workflow_chat":
+            monkeypatch.setattr(
+                module.LiveRunner,
+                method_name,
+                lambda self, selected_images, source_commit: None,
+            )
+        else:
+            monkeypatch.setattr(module.LiveRunner, method_name, lambda self: None)
+
+    def cleanup(self, mode):
+        (self.output_dir / f"{mode}-cleanup.log").write_text(
+            "safe cleanup evidence", encoding="utf-8"
+        )
+
+    scans = {
+        channel: {"status": "passed", "evidenceRef": f"scan-{channel}.json"}
+        for channel in module.EVIDENCE_ENV
+    }
+    monkeypatch.setattr(module.LiveRunner, "cleanup", cleanup)
+    monkeypatch.setattr(module.LiveRunner, "scan", lambda self: scans)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            str(module.__file__),
+            "--mode",
+            "all",
+            "--server-image",
+            images["server"],
+            "--host-image",
+            images["host"],
+            "--source-commit",
+            "commit-1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 0
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    workflow_chat = next(
+        item
+        for item in report["cases"]
+        if item["caseId"] == "workflow-chat.native-release-matrix"
+    )
+    assert workflow_chat["status"] == "passed"
+    publication_scan = json.loads(
+        (tmp_path / "publication-secret-scan.json").read_text(encoding="utf-8")
+    )
+    scanned_refs = {item["ref"] for item in publication_scan["files"]}
+    assert "report.json" in scanned_refs
+    assert "workflow_chat-cleanup.log" in scanned_refs
 
 
 def test_workflow_chat_controller_fails_before_provider_gate_when_scan_missing(

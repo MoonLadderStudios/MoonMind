@@ -840,7 +840,6 @@ class LiveRunner:
         )
         self.env[SCENARIO_EVIDENCE_ENV["workflow_chat"]] = str(manifest_path)
         self.scenario("workflow_chat")
-        self._scan_publication_tree()
 
     def stock(self, images: dict[str, str]) -> None:
         self.run(
@@ -1744,6 +1743,8 @@ def main() -> int:
             (output_dir / "report.json").write_text(
                 json.dumps(report, indent=2) + "\n", encoding="utf-8"
             )
+        if "workflow_chat" in selected and failure is None:
+            runner._scan_publication_tree()
     except (ConformanceContractError, OSError, json.JSONDecodeError) as exc:
         failure = failure or str(exc)
     if failure:

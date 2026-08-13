@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-07-23
-**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance and MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract
+**Updated:** 2026-08-13
+**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, and MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -44,7 +44,10 @@ python tools/run_omnigent_conformance.py \
 The aggregate report command defaults to the complete live gate: a failed case
 or a skipped critical case returns nonzero. `--allow-partial` is reserved for
 the deterministic runner, where all skipped provider cases remain explicit in
-the report.
+the report. The canonical profile includes
+`workflow-chat.native-release-matrix`, so the documented/default `--mode all`
+report always carries the protected Workflow Chat result instead of leaving it
+only in the dedicated mode report.
 
 ## Live-run boundaries
 
@@ -119,7 +122,9 @@ screenshots, and archives, builds and validates the commit-bound
 `moonmind.omnigent.workflow-chat-acceptance/v1` artifact, and then invokes the
 dedicated provider gate. A missing row, source record, raw evidence channel,
 digest correlation, or provider-test result fails the mode before its evidence
-can enter the publication job.
+can enter the publication job. The final publication-tree scan runs after
+per-mode cleanup and final report generation, and therefore covers the cleanup
+logs and the exact report tree uploaded by the workflow.
 
 `--mode static` covers restart and replay; `stock`, `product`, `cumulative`,
 `ondemand`, `failures`, and `workflow_chat` can be gated independently in

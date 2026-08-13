@@ -2,7 +2,7 @@
 
 Status: Proposed design  
 Owners: MoonMind Platform  
-Last updated: 2026-08-07
+Last updated: 2026-08-13
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -1086,20 +1086,20 @@ record-specific observed facts are:
 
 | Record | Required observed facts |
 |---|---|
-| `browserTrace` | Workflow Chat route, MoonMind-scoped network events, response statuses, no direct upstream requests or provider identity exposure, screenshot digest |
+| `browserTrace` | Workflow Chat route, path-segment-scoped network events, success or operation-specific denial statuses, no direct upstream requests or provider identity exposure, and a screenshot digest owned by the scanned screenshot channel |
 | `bindingSnapshot` | authoritative binding, run/state/read-only projection, capability digest |
 | `nativeConversation` | native renderer, transcript, composer request, queued message, native application version |
 | `nativeControls` | native approval/tool/file/terminal/agent/task controls and no MoonMind composer |
-| `facadeRequests` | exact compatibility route inventory, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
+| `facadeRequests` | every compatibility route bound to an observed request path/method/transport, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
 | `resourceInventory` | request-correlated approval/tool/file/terminal/agent/task resources |
-| `mutationReceipts` | actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
+| `mutationReceipts` | exactly one receipt for every mutation derived from the compatibility map, including actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
 | `denialAudit` | alternate-binding, provider-session, hidden-control, and immutable-policy denials before upstream forwarding |
 | `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs and their recomputed intersection digest |
 | `scanAudit` | blocked-content and unavailable-enforcement sends, neither forwarded |
-| `credentialBoundary` | no upstream credential in the browser, no MoonMind credential upstream, server-side credential injection ref |
+| `credentialBoundary` | every traced request verified to expose no upstream credential in the browser and forward no MoonMind credential upstream, plus a server-side credential injection ref |
 | `terminalSnapshot` | terminal state, read-only projection, denied mutation requests |
-| `capturedEvidence` | resolved MoonMind artifact and capture-manifest refs |
-| `continuationReceipt` | distinct linked Workflow, idempotency, separate action, unchanged source |
+| `capturedEvidence` | packaged MoonMind artifact and capture-manifest refs resolved and digest-bound into the acceptance manifest |
+| `continuationReceipt` | production destination-creation receipt, pinned source run, durable outbound `linked_continuation` relationship identity, idempotency, and matching source before/after digests |
 | `replaySnapshot` | host unavailable and replay resolved from the captured MoonMind artifacts |
 
 ---
