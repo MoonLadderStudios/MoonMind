@@ -355,7 +355,7 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
         for record in records:
             lineage = record["_resolved"].get("lineage")
             if isinstance(lineage, dict):
-                for field, owner in module.REMEDIATION_LINEAGE_REF_RECORD_TYPES.items():
+                for field, owner in fixtures.REMEDIATION_LINEAGE_REF_RECORD_TYPES.items():
                     lineage[field] = ref_by_type[owner]
                 raw = json.dumps(record["_resolved"], sort_keys=True).encode()
                 Path(record["ref"].removeprefix("file://")).write_bytes(raw)

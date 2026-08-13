@@ -41,7 +41,6 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 from moonmind.omnigent.remediation_matrix import (  # noqa: E402
     PROHIBITED_UI_JOURNEY_MARKERS,
     REMEDIATION_ARTIFACT_SCHEMA_VERSION,
-    REMEDIATION_LINEAGE_REF_RECORD_TYPES,
     REMEDIATION_MATRIX_VERSION,
     REMEDIATION_ROW_CATALOG,
     REMEDIATION_SOURCE_RECORD_SCHEMAS,

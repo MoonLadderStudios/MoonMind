@@ -37,7 +37,6 @@ from moonmind.omnigent.remediation_matrix import (
     REMEDIATION_MATRIX_VERSION,
     REMEDIATION_EVIDENCE_IDENTITY_FIELDS,
     REMEDIATION_LINEAGE_REF_RECORD_TYPES,
-    REMEDIATION_RELEASE_POLICY_VERSION,
     REMEDIATION_REPAIR_OUTCOMES,
     REMEDIATION_DURABLE_PHASES,
     REMEDIATION_ROW_CATALOG,
@@ -589,14 +588,15 @@ def _stage_row_dependencies(tmp_path, artifact) -> None:
         secret_scan = entry.get("secretScan")
         if not isinstance(secret_scan, dict):
             continue
-        for channel, scan in secret_scan.items():
+        for channel in REQUIRED_REMEDIATION_RETAINED_CHANNELS:
+            scan = secret_scan[channel]
             path = tmp_path / scan["evidenceRef"]
             path.parent.mkdir(parents=True, exist_ok=True)
             content = (
                 json.dumps(
                     {
-                        "schemaVersion": scan["schemaVersion"],
-                        "generatedAt": scan["generatedAt"],
+                        "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
+                        "generatedAt": NOW.isoformat(),
                         "channel": channel,
                         "status": "passed",
                         "secretFindings": 0,
@@ -1280,6 +1280,18 @@ def test_builder_derives_complete_release_coverage_telemetry_and_thresholds(
     assert document["telemetry"]["schemaVersion"] == REMEDIATION_TELEMETRY_SCHEMA_VERSION
     assert set(document["telemetry"]["groups"]) == set(
         REQUIRED_REMEDIATION_TELEMETRY_GROUPS
+    )
+    duplicate_group = document["telemetry"]["groups"][
+        "lockCooldownDuplicateAndEscalation"
+    ]
+    expected_duplicate_suppressions = sum(
+        1 for row_id in REQUIRED_REMEDIATION_MATRIX_ROWS if "duplicate" in row_id
+    )
+    assert duplicate_group["duplicateSuppressionCount"] == (
+        expected_duplicate_suppressions
+    )
+    assert duplicate_group["duplicateSuppressionRate"] == round(
+        expected_duplicate_suppressions / len(REQUIRED_REMEDIATION_MATRIX_ROWS), 6
     )
     assert document["thresholds"]["withinLimits"] is True
     assert all(document["thresholds"]["results"].values())

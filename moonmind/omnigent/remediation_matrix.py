@@ -3155,8 +3155,7 @@ def derive_remediation_telemetry(
     lock_conflicts = sum(1 for item in facts.values() if item["lockConflict"])
     cooldowns = sum(1 for item in facts.values() if item["cooldown"])
     duplicate_suppressions = sum(
-        int(item["duplicateSuppressed"]) + int(item["duplicateSuppressionCount"])
-        for item in facts.values()
+        int(item["duplicateSuppressionCount"]) for item in facts.values()
     )
     nested_denials = sum(
         1 for item in facts.values() if item["nestedRemediationDenied"]
